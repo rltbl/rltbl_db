@@ -1,13 +1,15 @@
-use sql_json::{core::DbConnection, sqlite::SqliteConnection};
-use std::sync::Arc;
-
 use axum::{
-    Router,
     extract::State,
     response::{Html, IntoResponse},
     routing::get,
+    Router,
 };
+use sql_json::{core::DbConnection, sqlite::SqliteConnection};
+use std::sync::Arc;
 use tower_service::Service;
+
+#[cfg(feature = "postgres")]
+use sql_json::postgres::PostgresConnection;
 
 async fn get_root(State(conn): State<Arc<impl DbConnection>>) -> impl IntoResponse {
     let value = conn
@@ -22,7 +24,7 @@ async fn get_root(State(conn): State<Arc<impl DbConnection>>) -> impl IntoRespon
 
 /// Test using axum with sql_json.
 #[tokio::test]
-async fn test_axum() {
+async fn test_axum_sqlite() {
     let conn = SqliteConnection::connect("test_axum.db").await.unwrap();
     conn.execute("DROP TABLE IF EXISTS test", &[])
         .await
@@ -42,15 +44,49 @@ async fn test_axum() {
         .uri("/")
         .body(String::new())
         .unwrap();
-    println!("REQUEST {request:?}");
     let response = router.call(request).await.unwrap();
-    println!("RESPONSE {response:?}");
 
     let (_, body) = response.into_parts();
     let bytes = axum::body::to_bytes(body, usize::MAX)
         .await
         .expect("Read from response body");
     let result = String::from_utf8(bytes.to_vec()).unwrap();
-    println!("RESULT {result}");
+    assert_eq!("foo", result);
+}
+
+#[tokio::test]
+#[cfg(feature = "postgres")]
+async fn test_axum_postgres() {
+    let client = PostgresConnection::connect("postgresql:///sql_json_db")
+        .await
+        .unwrap();
+    client
+        .execute("DROP TABLE IF EXISTS test_axum", &[])
+        .await
+        .unwrap();
+    client
+        .execute("CREATE TABLE test_axum ( value TEXT )", &[])
+        .await
+        .unwrap();
+    client
+        .execute("INSERT INTO test_axum VALUES ('foo')", &[])
+        .await
+        .unwrap();
+
+    let state = Arc::new(client);
+    let mut router: Router = Router::new().route("/", get(get_root)).with_state(state);
+
+    let request = axum::http::Request::builder()
+        .method("GET")
+        .uri("/")
+        .body(String::new())
+        .unwrap();
+    let response = router.call(request).await.unwrap();
+
+    let (_, body) = response.into_parts();
+    let bytes = axum::body::to_bytes(body, usize::MAX)
+        .await
+        .expect("Read from response body");
+    let result = String::from_utf8(bytes.to_vec()).unwrap();
     assert_eq!("foo", result);
 }

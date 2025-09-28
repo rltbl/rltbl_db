@@ -4,11 +4,18 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-deadpool-sqlite = { version = "0.12.1", features = ["bundled"] }
+deadpool-postgres = { version = "0.14.1", features = ["rt_tokio_1"], optional = true }
+deadpool-sqlite = { version = "0.12.1", features = ["bundled"], optional = true }
 serde = { version = "1.0.226", features = ["derive"] }
 serde_json = { version = "1.0.145", features = ["preserve_order"] }
+tokio-postgres = { version = "0.7.14", optional = true }
 
 [dev-dependencies]
 axum = "0.8.4"
 tokio = "1.47.1"
 tower-service = "0.3.3"
+
+[features]
+default = ["sqlite"]
+sqlite = ["dep:deadpool-sqlite"]
+postgres = ["dep:deadpool-postgres", "dep:tokio-postgres"]
