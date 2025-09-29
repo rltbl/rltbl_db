@@ -3,7 +3,7 @@ use crate::core::{DbConnection, DbError, JsonRow, JsonValue};
 use deadpool_sqlite::{Config, Pool, Runtime};
 use serde_json::json;
 
-/// Represents a SQLite database connection
+/// Represents a SQLite database connection pool
 pub struct SqliteConnection {
     pool: Pool,
 }
