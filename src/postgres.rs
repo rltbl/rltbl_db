@@ -50,6 +50,7 @@ fn extract_value(row: &Row, idx: usize) -> JsonValue {
             let value: f64 = row.get(idx);
             value.into()
         }
+        // TODO: See what is required to support NUMERIC.
         _ => unimplemented!(),
     }
 }
@@ -84,6 +85,9 @@ impl DbConnection for PostgresConnection {
         let rows = client.query(sql, &[]).await.unwrap();
         if rows.is_empty() {
             panic!("No rows found");
+        }
+        if rows.len() > 1 {
+            // TODO: Write a warning to the log to say that there is more than one row.
         }
         let row = rows[0].clone();
         let mut json_row = JsonRow::new();
@@ -146,12 +150,6 @@ impl DbConnection for PostgresConnection {
                         let value = u64::try_from(value).expect("Can't convert to u64: {value}");
                         value
                     }
-                    Type::TEXT | Type::VARCHAR => {
-                        let value: &str = row.get(0);
-                        let value = value.to_string();
-                        let value = value.parse::<u64>().expect("Can't parse as u64");
-                        value
-                    }
                     _ => panic!("Cannot convert to u64: {}", column.type_()),
                 };
                 Ok(value)
@@ -179,12 +177,6 @@ impl DbConnection for PostgresConnection {
                         let value: i64 = row.get(0);
                         value
                     }
-                    Type::TEXT | Type::VARCHAR => {
-                        let value: &str = row.get(0);
-                        let value = value.to_string();
-                        let value = value.parse::<i64>().expect("Can't parse as i64");
-                        value
-                    }
                     _ => panic!("Cannot convert to i64: {}", column.type_()),
                 };
                 Ok(value)
@@ -210,12 +202,6 @@ impl DbConnection for PostgresConnection {
                     }
                     Type::FLOAT8 => {
                         let value: f64 = row.get(0);
-                        value
-                    }
-                    Type::TEXT | Type::VARCHAR => {
-                        let value: &str = row.get(0);
-                        let value = value.to_string();
-                        let value = value.parse::<f64>().expect("Can't parse as f64");
                         value
                     }
                     _ => panic!("Cannot convert to f64: {}", column.type_()),
@@ -338,31 +324,5 @@ mod tests {
 
         let rows = conn.query(select_sql, &[]).await.unwrap();
         assert_eq!(format!("{rows:?}"), r#"[{"value": Number(1.05)}]"#);
-    }
-
-    #[tokio::test]
-    async fn it_works_with_casting() {
-        let conn = PostgresConnection::connect("postgresql:///sql_json_db")
-            .await
-            .unwrap();
-        conn.execute("DROP TABLE IF EXISTS test_table_casting", &[])
-            .await
-            .unwrap();
-        conn.execute("CREATE TABLE test_table_casting ( value TEXT )", &[])
-            .await
-            .unwrap();
-        conn.execute("INSERT INTO test_table_casting VALUES ('1')", &[])
-            .await
-            .unwrap();
-
-        let select_sql = "SELECT value FROM test_table_casting LIMIT 1";
-        let value = conn.query_f64(select_sql, &[]).await.unwrap();
-        assert_eq!(1.0, value);
-
-        let value = conn.query_u64(select_sql, &[]).await.unwrap();
-        assert_eq!(1, value);
-
-        let value = conn.query_i64(select_sql, &[]).await.unwrap();
-        assert_eq!(1, value);
     }
 }

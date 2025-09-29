@@ -6,6 +6,11 @@ pub type JsonValue = serde_json::Value;
 pub type JsonRow = JsonMap<String, JsonValue>;
 pub type DbError = String;
 
+pub async fn connect(url: &str) -> Result<impl DbConnection, DbError> {
+    // TODO: Support postgresql
+    crate::sqlite::SqliteConnection::connect(url).await
+}
+
 pub trait DbConnection {
     /// Execute a SQL command, without a return value.
     fn execute(
