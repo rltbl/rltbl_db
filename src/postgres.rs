@@ -1,4 +1,7 @@
+//! PostgreSQL support for sql_json.
+
 use crate::core::{DbConnection, DbError, JsonRow, JsonValue};
+
 use deadpool_postgres::{Config, Pool, Runtime};
 use tokio_postgres::{row::Row, types::Type, NoTls};
 
@@ -14,14 +17,14 @@ impl PostgresConnection {
         match url.starts_with("postgresql:///") {
             true => {
                 let mut cfg = Config::new();
-                let db_name = url.strip_prefix("postgresql:///").expect("Invalid URL");
+                let db_name = url.strip_prefix("postgresql:///").ok_or("Invalid URL")?;
                 cfg.dbname = Some(db_name.to_string());
-                let pool = cfg.create_pool(Some(Runtime::Tokio1), NoTls).unwrap();
+                let pool = cfg
+                    .create_pool(Some(Runtime::Tokio1), NoTls)
+                    .map_err(|err| err.to_string())?;
                 Ok(Self { pool })
             }
-            // TODO: Replace panics and unwraps with proper errors, here and elsewhere in this
-            // module.
-            false => panic!("Invalid PostgreSQL database path: '{url}'"),
+            false => Err(format!("Invalid PostgreSQL database path: '{url}'")),
         }
     }
 }
@@ -50,7 +53,9 @@ fn extract_value(row: &Row, idx: usize) -> JsonValue {
             let value: f64 = row.get(idx);
             value.into()
         }
-        // TODO: See what is required to support NUMERIC.
+        Type::NUMERIC => {
+            todo!()
+        }
         _ => unimplemented!(),
     }
 }
@@ -58,15 +63,29 @@ fn extract_value(row: &Row, idx: usize) -> JsonValue {
 impl DbConnection for PostgresConnection {
     /// Implements [DbConnection::execute()] for PostgreSQL.
     async fn execute(&self, sql: &str, _params: &[JsonValue]) -> Result<(), DbError> {
-        let client = self.pool.get().await.unwrap();
-        client.execute(sql, &[]).await.unwrap();
+        let client = self
+            .pool
+            .get()
+            .await
+            .map_err(|err| format!("Unable to get pool: {err}"))?;
+        client
+            .execute(sql, &[])
+            .await
+            .map_err(|err| format!("Error in execute(): {err}"))?;
         Ok(())
     }
 
     /// Implements [DbConnection::query()] for PostgreSQL.
     async fn query(&self, sql: &str, _params: &[JsonValue]) -> Result<Vec<JsonRow>, DbError> {
-        let client = self.pool.get().await.unwrap();
-        let rows = client.query(sql, &[]).await.unwrap();
+        let client = self
+            .pool
+            .get()
+            .await
+            .map_err(|err| format!("Unable to get pool: {err}"))?;
+        let rows = client
+            .query(sql, &[])
+            .await
+            .map_err(|err| format!("Error in query(): {err}"))?;
         let mut json_rows = vec![];
         for row in &rows {
             let mut json_row = JsonRow::new();
@@ -81,13 +100,20 @@ impl DbConnection for PostgresConnection {
 
     /// Implements [DbConnection::query_row()] for PostgreSQL.
     async fn query_row(&self, sql: &str, _params: &[JsonValue]) -> Result<JsonRow, DbError> {
-        let client = self.pool.get().await.unwrap();
-        let rows = client.query(sql, &[]).await.unwrap();
+        let client = self
+            .pool
+            .get()
+            .await
+            .map_err(|err| format!("Unable to get pool: {err}"))?;
+        let rows = client
+            .query(sql, &[])
+            .await
+            .map_err(|err| format!("Error in query_row(): {err}"))?;
         if rows.is_empty() {
-            panic!("No rows found");
+            return Err("No rows found".to_string());
         }
         if rows.len() > 1 {
-            // TODO: Write a warning to the log to say that there is more than one row.
+            tracing::warn!("More than one row returned for query_row()");
         }
         let row = rows[0].clone();
         let mut json_row = JsonRow::new();
@@ -100,14 +126,21 @@ impl DbConnection for PostgresConnection {
 
     /// Implements [DbConnection::query_value()] for PostgreSQL.
     async fn query_value(&self, sql: &str, _params: &[JsonValue]) -> Result<JsonValue, DbError> {
-        let client = self.pool.get().await.unwrap();
-        let rows = client.query(sql, &[]).await.unwrap();
+        let client = self
+            .pool
+            .get()
+            .await
+            .map_err(|err| format!("Unable to get pool: {err}"))?;
+        let rows = client
+            .query(sql, &[])
+            .await
+            .map_err(|err| format!("Error in query_value(): {err}"))?;
         if rows.len() > 1 {
-            // TODO: Write a warning message to the log.
+            tracing::warn!("More than one row returned for query_value()");
         }
         match rows.iter().next() {
             Some(row) => Ok(extract_value(&row, 0)),
-            None => panic!("No rows found"),
+            None => Err("No rows found".to_string()),
         }
     }
 
@@ -117,8 +150,7 @@ impl DbConnection for PostgresConnection {
         match value.as_str() {
             Some(str_val) => Ok(str_val.to_string()),
             None => {
-                // TODO (maybe?): Write a warning to the log that the value is not actually a
-                // string and that we are forcing it.
+                tracing::warn!("Not a string: {value}");
                 Ok(value.to_string())
             }
         }
@@ -126,10 +158,17 @@ impl DbConnection for PostgresConnection {
 
     /// Implements [DbConnection::query_u64()] for PostgreSQL.
     async fn query_u64(&self, sql: &str, _params: &[JsonValue]) -> Result<u64, DbError> {
-        let client = self.pool.get().await.unwrap();
-        let rows = client.query(sql, &[]).await.unwrap();
+        let client = self
+            .pool
+            .get()
+            .await
+            .map_err(|err| format!("Unable to get pool: {err}"))?;
+        let rows = client
+            .query(sql, &[])
+            .await
+            .map_err(|err| format!("Error in query_u64(): {err}"))?;
         if rows.len() > 1 {
-            // TODO: Write a warning message to the log.
+            tracing::warn!("More than one row returned for query_u64()");
         }
         match rows.iter().next() {
             Some(row) => {
@@ -138,32 +177,40 @@ impl DbConnection for PostgresConnection {
                     Type::INT2 | Type::INT4 => {
                         let value: i32 = row.get(0);
                         if value < 0 {
-                            panic!("Invalid value: {value}");
+                            return Err(format!("Invalid value: {value}"));
                         }
                         value as u64
                     }
                     Type::INT8 => {
                         let value: i64 = row.get(0);
                         if value < 0 {
-                            panic!("Invalid value: {value}");
+                            return Err(format!("Invalid value: {value}"));
                         }
-                        let value = u64::try_from(value).expect("Can't convert to u64: {value}");
+                        let value = u64::try_from(value)
+                            .map_err(|err| format!("Can't convert to u64: {value}: {err}"))?;
                         value
                     }
-                    _ => panic!("Cannot convert to u64: {}", column.type_()),
+                    _ => return Err(format!("Cannot convert to u64: {}", column.type_())),
                 };
                 Ok(value)
             }
-            None => panic!("No rows found"),
+            None => return Err("No rows found".to_string()),
         }
     }
 
     /// Implements [DbConnection::query_i64()] for PostgreSQL.
     async fn query_i64(&self, sql: &str, _params: &[JsonValue]) -> Result<i64, DbError> {
-        let client = self.pool.get().await.unwrap();
-        let rows = client.query(sql, &[]).await.unwrap();
+        let client = self
+            .pool
+            .get()
+            .await
+            .map_err(|err| format!("Unable to get pool: {err}"))?;
+        let rows = client
+            .query(sql, &[])
+            .await
+            .map_err(|err| format!("Error in query_i64(): {err}"))?;
         if rows.len() > 1 {
-            // TODO: Write a warning message to the log.
+            tracing::warn!("More than one row returned for query_i64()");
         }
         match rows.iter().next() {
             Some(row) => {
@@ -177,20 +224,27 @@ impl DbConnection for PostgresConnection {
                         let value: i64 = row.get(0);
                         value
                     }
-                    _ => panic!("Cannot convert to i64: {}", column.type_()),
+                    _ => return Err(format!("Cannot convert to i64: {}", column.type_())),
                 };
                 Ok(value)
             }
-            None => panic!("No rows found"),
+            None => return Err("No rows found".to_string()),
         }
     }
 
     /// Implements [DbConnection::query_f64] for PostgreSQL.
     async fn query_f64(&self, sql: &str, _params: &[JsonValue]) -> Result<f64, DbError> {
-        let client = self.pool.get().await.unwrap();
-        let rows = client.query(sql, &[]).await.unwrap();
+        let client = self
+            .pool
+            .get()
+            .await
+            .map_err(|err| format!("Unable to get pool: {err}"))?;
+        let rows = client
+            .query(sql, &[])
+            .await
+            .map_err(|err| format!("Error in query_i64(): {err}"))?;
         if rows.len() > 1 {
-            // TODO: Write a warning message to the log.
+            tracing::warn!("More than one row returned for query_f64()");
         }
         match rows.iter().next() {
             Some(row) => {
@@ -204,11 +258,11 @@ impl DbConnection for PostgresConnection {
                         let value: f64 = row.get(0);
                         value
                     }
-                    _ => panic!("Cannot convert to f64: {}", column.type_()),
+                    _ => return Err(format!("Cannot convert to f64: {}", column.type_())),
                 };
                 Ok(value)
             }
-            None => panic!("No rows found"),
+            None => return Err("No rows found".to_string()),
         }
     }
 }
@@ -218,7 +272,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn it_works_with_text() {
+    async fn test_text_column_query() {
         let conn = PostgresConnection::connect("postgresql:///sql_json_db")
             .await
             .unwrap();
@@ -252,7 +306,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn it_works_with_int() {
+    async fn test_integer_column_query() {
         let conn = PostgresConnection::connect("postgresql:///sql_json_db")
             .await
             .unwrap();
@@ -291,7 +345,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn it_works_with_float() {
+    async fn test_float_column_query() {
         let conn = PostgresConnection::connect("postgresql:///sql_json_db")
             .await
             .unwrap();
