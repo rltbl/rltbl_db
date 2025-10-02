@@ -6,9 +6,10 @@ pub type JsonValue = serde_json::Value;
 pub type JsonRow = JsonMap<String, JsonValue>;
 pub type DbError = String;
 
-/// Connect to the database located at the given URL. If the postgres feature flag has been
-/// set, this is assumed to be a PostgreSQL URL, otherwise the database is assumed to be a SQLite
-/// database.
+/// Connect to the database located at the given URL. If the URL begins with 'postgresql:///',
+/// a PostgreSQL database is assumed (this requires that the 'postgres' feature flag is enabled).
+/// Otherwise a SQLite database is assumed (this requires that the 'postgres' feature flag *not*
+/// be enabled).
 pub async fn connect(url: &str) -> Result<impl DbConnection, DbError> {
     let conn = {
         #[cfg(not(feature = "postgres"))]
