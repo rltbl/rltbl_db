@@ -1,72 +1,207 @@
-use crate::core::{DbConnection, JsonRow};
+//! SQLite support for sql_json.
 
-use deadpool_sqlite::{Config, Pool, Runtime};
-use serde_json::json;
+use crate::core::{DbConnection, DbError, JsonRow, JsonValue};
 
-type JsonValue = serde_json::Value;
-type DbError = String;
+use deadpool_sqlite::{
+    rusqlite::{
+        types::ValueRef as RusqliteValueRef, Row as RusqliteRow, Statement as RusqliteStatement,
+    },
+    Config, Pool, Runtime,
+};
 
+/// Represents a SQLite database connection pool
 pub struct SqliteConnection {
     pool: Pool,
 }
 
 impl SqliteConnection {
+    /// Connect to a SQLite database using the given url.
     pub async fn connect(url: &str) -> Result<impl DbConnection, DbError> {
         let cfg = Config::new(url);
-        let pool = cfg.create_pool(Runtime::Tokio1).unwrap();
+        let pool = cfg
+            .create_pool(Runtime::Tokio1)
+            .map_err(|err| format!("Error creating pool: {err}"))?;
         Ok(Self { pool })
     }
 }
 
+// TODO: Change the type of the error from String to something custom (DbError is not appropriate,
+// however, even though that is currently implemented as a String).
+/// Extract the first value of the first row in `rows`.
+fn extract_value(rows: &Vec<JsonRow>) -> Result<JsonValue, String> {
+    match rows.iter().next() {
+        Some(row) => match row.values().next() {
+            Some(value) => Ok(value.clone()),
+            None => Err("No values found".into()),
+        },
+        None => Err("No rows found".into()),
+    }
+}
+
+fn to_json_row(column_names: &Vec<&str>, row: &RusqliteRow) -> JsonRow {
+    let mut json_row = JsonRow::new();
+    for column_name in column_names {
+        let value = match row.get_ref(*column_name) {
+            Ok(value) => match value {
+                RusqliteValueRef::Null => JsonValue::Null,
+                RusqliteValueRef::Integer(value) => JsonValue::from(value),
+                RusqliteValueRef::Real(value) => JsonValue::from(value),
+                RusqliteValueRef::Text(value) | RusqliteValueRef::Blob(value) => {
+                    let value = std::str::from_utf8(value).unwrap_or_default();
+                    JsonValue::from(value)
+                }
+            },
+            Err(_) => JsonValue::Null,
+        };
+        json_row.insert(column_name.to_string(), value);
+    }
+    json_row
+}
+
+fn query_statement(
+    stmt: &mut RusqliteStatement<'_>,
+    params: Option<&JsonValue>,
+) -> Result<Vec<JsonRow>, DbError> {
+    let column_names = stmt
+        .column_names()
+        .iter()
+        .map(|c| c.to_string())
+        .collect::<Vec<_>>();
+    let column_names = column_names.iter().map(|c| c.as_str()).collect::<Vec<_>>();
+
+    if let Some(params) = params {
+        let params = params.as_array().ok_or(format!(
+            "Parameters: {params:?} are not in the form of an array"
+        ))?;
+        for (i, param) in params.iter().enumerate() {
+            let param = match param {
+                JsonValue::String(s) => s,
+                _ => &param.to_string(),
+            };
+            // Binding must begin with 1 rather than 0:
+            stmt.raw_bind_parameter(i + 1, param)
+                .map_err(|err| format!("Error binding parameter '{param}': {err}"))?;
+        }
+    }
+    let mut rows = stmt.raw_query();
+
+    let mut result = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .map_err(|err| format!("Error getting next row: {err}"))?
+    {
+        result.push(to_json_row(&column_names, row));
+    }
+    Ok(result)
+}
+
 impl DbConnection for SqliteConnection {
+    /// Implements [DbConnection::execute()] for SQLite.
     async fn execute(&self, sql: &str, _params: &[JsonValue]) -> Result<(), DbError> {
-        let conn = self.pool.get().await.unwrap();
+        let conn = self
+            .pool
+            .get()
+            .await
+            .map_err(|err| format!("Unable to get pool: {err}"))?;
         let sql = sql.to_string();
+
         conn.interact(move |conn| {
-            let mut stmt = conn.prepare(&sql).unwrap();
-            stmt.execute([]).unwrap();
+            let mut stmt = conn.prepare(&sql).map_err(|err| {
+                <String as Into<DbError>>::into(format!("Error preparing statement: {err}"))
+            })?;
+            stmt.execute([]).map_err(|err| {
+                <String as Into<DbError>>::into(format!("Error executing statement: {err}"))
+            })?;
+            Ok::<(), DbError>(())
         })
         .await
-        .unwrap();
+        .map_err(|err| <String as Into<DbError>>::into(err.to_string()))?
+        .map_err(|err| <String as Into<DbError>>::into(err.to_string()))?;
         Ok(())
     }
 
-    async fn query(&self, _sql: &str, _params: &[JsonValue]) -> Result<Vec<JsonRow>, DbError> {
-        todo!()
-    }
-
-    async fn query_row(&self, _sql: &str, _params: &[JsonValue]) -> Result<JsonRow, DbError> {
-        todo!()
-    }
-
-    async fn query_value(&self, sql: &str, _params: &[JsonValue]) -> Result<JsonValue, DbError> {
-        let conn = self.pool.get().await.unwrap();
+    /// Implements [DbConnection::query()] for SQLite.
+    async fn query(&self, sql: &str, _params: &[JsonValue]) -> Result<Vec<JsonRow>, DbError> {
+        let conn = self
+            .pool
+            .get()
+            .await
+            .map_err(|err| format!("Unable to get pool: {err}"))?;
         let sql = sql.to_string();
-        let result: String = conn
+        let rows = conn
             .interact(move |conn| {
-                let mut stmt = conn.prepare(&sql)?;
-                stmt.query_one([], |row| row.get(0))
+                let mut stmt = conn.prepare(&sql).map_err(|err| {
+                    <String as Into<DbError>>::into(format!("Error preparing statement: {err}"))
+                })?;
+                let rows = query_statement(&mut stmt, None).map_err(|err| {
+                    <String as Into<DbError>>::into(format!("Error executing statement: {err}"))
+                })?;
+                Ok::<Vec<JsonRow>, DbError>(rows)
             })
             .await
-            .unwrap()
-            .unwrap();
-        Ok(json!(result))
+            .map_err(|err| <String as Into<DbError>>::into(err.to_string()))?
+            .map_err(|err| <String as Into<DbError>>::into(err.to_string()))?;
+        Ok(rows)
     }
 
-    async fn query_string(&self, _sql: &str, _params: &[JsonValue]) -> Result<String, DbError> {
-        todo!()
+    /// Implements [DbConnection::query_row()] for SQLite.
+    async fn query_row(&self, sql: &str, _params: &[JsonValue]) -> Result<JsonRow, DbError> {
+        let rows = self.query(&sql, &[]).await?;
+        if rows.len() > 1 {
+            tracing::warn!("More than one row returned for query_row()");
+        }
+        match rows.iter().next() {
+            Some(row) => Ok(row.clone()),
+            None => Err("No row found".to_string()),
+        }
     }
 
-    async fn query_u64(&self, _sql: &str, _params: &[JsonValue]) -> Result<u64, DbError> {
-        todo!()
+    /// Implements [DbConnection::query_value()] for SQLite.
+    async fn query_value(&self, sql: &str, _params: &[JsonValue]) -> Result<JsonValue, DbError> {
+        let rows = self.query(sql, &[]).await?;
+        if rows.len() > 1 {
+            tracing::warn!("More than one row returned for query_value()");
+        }
+        Ok(extract_value(&rows)?)
     }
 
-    async fn query_i64(&self, _sql: &str, _params: &[JsonValue]) -> Result<i64, DbError> {
-        todo!()
+    /// Implements [DbConnection::query_string()] for SQLite.
+    async fn query_string(&self, sql: &str, _params: &[JsonValue]) -> Result<String, DbError> {
+        let value = self.query_value(sql, &[]).await?;
+        match value.as_str() {
+            Some(str_val) => Ok(str_val.to_string()),
+            None => {
+                tracing::warn!("Not a string: {value}");
+                Ok(value.to_string())
+            }
+        }
     }
 
-    async fn query_f64(&self, _sql: &str, _params: &[JsonValue]) -> Result<f64, DbError> {
-        todo!()
+    /// Implements [DbConnection::query_u64()] for SQLite.
+    async fn query_u64(&self, sql: &str, _params: &[JsonValue]) -> Result<u64, DbError> {
+        let value = self.query_value(sql, &[]).await?;
+        match value.as_u64() {
+            Some(val) => Ok(val),
+            None => Err(format!("Not an unsigned integer: {value}")),
+        }
+    }
+
+    /// Implements [DbConnection::query_i64()] for SQLite.
+    async fn query_i64(&self, sql: &str, _params: &[JsonValue]) -> Result<i64, DbError> {
+        let value = self.query_value(sql, &[]).await?;
+        match value.as_i64() {
+            Some(val) => Ok(val),
+            None => Err(format!("Not an integer: {value}")),
+        }
+    }
+
+    /// Implements [DbConnection::query_f64()] for SQLite.
+    async fn query_f64(&self, sql: &str, _params: &[JsonValue]) -> Result<f64, DbError> {
+        let value = self.query_value(sql, &[]).await?;
+        match value.as_f64() {
+            Some(val) => Ok(val),
+            None => Err(format!("Not an float: {value}")),
+        }
     }
 }
 
@@ -74,25 +209,114 @@ impl DbConnection for SqliteConnection {
 mod tests {
     use super::*;
 
+    use serde_json::json;
+
     #[tokio::test]
-    async fn it_works() {
-        let conn = SqliteConnection::connect("test_axum.db").await.unwrap();
-        conn.execute("DROP TABLE IF EXISTS test", &[])
+    async fn test_text_column_query() {
+        let conn = SqliteConnection::connect("test_text_column.db")
             .await
             .unwrap();
-        conn.execute("CREATE TABLE test ( value TEXT )", &[])
+        conn.execute("DROP TABLE IF EXISTS test_table_text", &[])
             .await
             .unwrap();
-        conn.execute("INSERT INTO test VALUES ('foo')", &[])
+        conn.execute("CREATE TABLE test_table_text ( value TEXT )", &[])
             .await
             .unwrap();
+        conn.execute("INSERT INTO test_table_text VALUES ('foo')", &[])
+            .await
+            .unwrap();
+        let select_sql = "SELECT value FROM test_table_text LIMIT 1";
         let value = conn
-            .query_value("SELECT value FROM test LIMIT 1", &[])
+            .query_value(select_sql, &[])
             .await
             .unwrap()
             .as_str()
             .unwrap()
             .to_string();
         assert_eq!("foo", value);
+
+        let value = conn.query_string(select_sql, &[]).await.unwrap();
+        assert_eq!("foo", value);
+
+        let row = conn.query_row(select_sql, &[]).await.unwrap();
+        assert_eq!(json!(row), json!({"value":"foo"}));
+
+        let rows = conn.query(select_sql, &[]).await.unwrap();
+        assert_eq!(json!(rows), json!([{"value":"foo"}]));
+    }
+
+    #[tokio::test]
+    async fn test_integer_column_query() {
+        let conn = SqliteConnection::connect("test_integer_column.db")
+            .await
+            .unwrap();
+        conn.execute("DROP TABLE IF EXISTS test_table_int", &[])
+            .await
+            .unwrap();
+        conn.execute("CREATE TABLE test_table_int ( value INT )", &[])
+            .await
+            .unwrap();
+        conn.execute("INSERT INTO test_table_int VALUES (1)", &[])
+            .await
+            .unwrap();
+        let select_sql = "SELECT value FROM test_table_int LIMIT 1";
+        let value = conn
+            .query_value(select_sql, &[])
+            .await
+            .unwrap()
+            .as_i64()
+            .unwrap();
+        assert_eq!(1, value);
+
+        let value = conn.query_u64(select_sql, &[]).await.unwrap();
+        assert_eq!(1, value);
+
+        let value = conn.query_i64(select_sql, &[]).await.unwrap();
+        assert_eq!(1, value);
+
+        let value = conn.query_string(select_sql, &[]).await.unwrap();
+        assert_eq!("1", value);
+
+        let row = conn.query_row(select_sql, &[]).await.unwrap();
+        assert_eq!(json!(row), json!({"value":1}));
+
+        let rows = conn.query(select_sql, &[]).await.unwrap();
+        assert_eq!(json!(rows), json!([{"value":1}]));
+    }
+
+    #[tokio::test]
+    async fn test_float_column_query() {
+        let conn = SqliteConnection::connect("test_float_column.db")
+            .await
+            .unwrap();
+        conn.execute("DROP TABLE IF EXISTS test_table_float", &[])
+            .await
+            .unwrap();
+        conn.execute("CREATE TABLE test_table_float ( value REAL )", &[])
+            .await
+            .unwrap();
+        conn.execute("INSERT INTO test_table_float VALUES (1.05)", &[])
+            .await
+            .unwrap();
+        let select_sql = "SELECT value FROM test_table_float LIMIT 1";
+        let value = conn
+            .query_value(select_sql, &[])
+            .await
+            .unwrap()
+            .as_f64()
+            .unwrap();
+        assert_eq!("1.05", format!("{value:.2}"));
+
+        let value = conn.query_f64(select_sql, &[]).await.unwrap();
+        assert_eq!(1.05, value);
+
+        let value = conn.query_string(select_sql, &[]).await.unwrap();
+        assert_eq!("1.05", value);
+
+        let row = conn.query_row(select_sql, &[]).await.unwrap();
+        assert_eq!(json!(row), json!({"value":1.05}));
+
+        let rows = conn.query(select_sql, &[]).await.unwrap();
+        assert_eq!(json!(rows), json!([{"value":1.05}]));
     }
 }

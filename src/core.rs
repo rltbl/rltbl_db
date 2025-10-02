@@ -6,8 +6,28 @@ pub type JsonValue = serde_json::Value;
 pub type JsonRow = JsonMap<String, JsonValue>;
 pub type DbError = String;
 
+/// Connect to the database located at the given URL. If the URL begins with 'postgresql:///',
+/// a PostgreSQL database is assumed (this requires that the 'postgres' feature flag is enabled).
+/// Otherwise a SQLite database is assumed (this requires that the 'postgres' feature flag *not*
+/// be enabled).
 pub async fn connect(url: &str) -> Result<impl DbConnection, DbError> {
-    crate::sqlite::SqliteConnection::connect(url).await
+    let conn = {
+        #[cfg(not(feature = "postgres"))]
+        {
+            if url.starts_with("postgresql:///") {
+                return Err("Feature 'postgres' is not enabled".to_string());
+            }
+            crate::sqlite::SqliteConnection::connect(url).await?
+        }
+        #[cfg(feature = "postgres")]
+        {
+            if !url.starts_with("postgresql:///") {
+                return Err("URL must be of the form: postgresql:///DATABASE_NAME".to_string());
+            }
+            crate::postgres::PostgresConnection::connect(url).await?
+        }
+    };
+    Ok(conn)
 }
 
 pub trait DbConnection {
