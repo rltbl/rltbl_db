@@ -13,10 +13,16 @@ pub async fn connect(url: &str) -> Result<impl DbConnection, DbError> {
     let conn = {
         #[cfg(not(feature = "postgres"))]
         {
+            if url.starts_with("postgresql:///") {
+                panic!("Feature 'postgres' is not enabled");
+            }
             crate::sqlite::SqliteConnection::connect(url).await?
         }
         #[cfg(feature = "postgres")]
         {
+            if !url.starts_with("postgresql:///") {
+                panic!("URL must be of the form: postgresql:///DATABASE_NAME");
+            }
             crate::postgres::PostgresConnection::connect(url).await?
         }
     };

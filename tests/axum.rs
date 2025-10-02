@@ -61,15 +61,15 @@ async fn test_axum_postgres() {
         .await
         .unwrap();
     client
-        .execute("DROP TABLE IF EXISTS test_axum", &[])
+        .execute("DROP TABLE IF EXISTS test", &[])
         .await
         .unwrap();
     client
-        .execute("CREATE TABLE test_axum ( value TEXT )", &[])
+        .execute("CREATE TABLE test ( value TEXT )", &[])
         .await
         .unwrap();
     client
-        .execute("INSERT INTO test_axum VALUES ('foo')", &[])
+        .execute("INSERT INTO test VALUES ('foo')", &[])
         .await
         .unwrap();
 

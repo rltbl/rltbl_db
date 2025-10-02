@@ -209,6 +209,8 @@ impl DbConnection for SqliteConnection {
 mod tests {
     use super::*;
 
+    use serde_json::json;
+
     #[tokio::test]
     async fn test_text_column_query() {
         let conn = SqliteConnection::connect("test_text_column.db")
@@ -237,10 +239,10 @@ mod tests {
         assert_eq!("foo", value);
 
         let row = conn.query_row(select_sql, &[]).await.unwrap();
-        assert_eq!(format!("{row:?}"), r#"{"value": String("foo")}"#);
+        assert_eq!(json!(row), json!({"value":"foo"}));
 
         let rows = conn.query(select_sql, &[]).await.unwrap();
-        assert_eq!(format!("{rows:?}"), r#"[{"value": String("foo")}]"#);
+        assert_eq!(json!(rows), json!([{"value":"foo"}]));
     }
 
     #[tokio::test]
@@ -276,10 +278,10 @@ mod tests {
         assert_eq!("1", value);
 
         let row = conn.query_row(select_sql, &[]).await.unwrap();
-        assert_eq!(format!("{row:?}"), r#"{"value": Number(1)}"#);
+        assert_eq!(json!(row), json!({"value":1}));
 
         let rows = conn.query(select_sql, &[]).await.unwrap();
-        assert_eq!(format!("{rows:?}"), r#"[{"value": Number(1)}]"#);
+        assert_eq!(json!(rows), json!([{"value":1}]));
     }
 
     #[tokio::test]
@@ -312,9 +314,9 @@ mod tests {
         assert_eq!("1.05", value);
 
         let row = conn.query_row(select_sql, &[]).await.unwrap();
-        assert_eq!(format!("{row:?}"), r#"{"value": Number(1.05)}"#);
+        assert_eq!(json!(row), json!({"value":1.05}));
 
         let rows = conn.query(select_sql, &[]).await.unwrap();
-        assert_eq!(format!("{rows:?}"), r#"[{"value": Number(1.05)}]"#);
+        assert_eq!(json!(rows), json!([{"value":1.05}]));
     }
 }
