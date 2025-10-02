@@ -6,9 +6,21 @@ pub type JsonValue = serde_json::Value;
 pub type JsonRow = JsonMap<String, JsonValue>;
 pub type DbError = String;
 
+/// Connect to the database located at the given URL. If the postgres feature flag has been
+/// set, this is assumed to be a PostgreSQL URL, otherwise the database is assumed to be a SQLite
+/// database.
 pub async fn connect(url: &str) -> Result<impl DbConnection, DbError> {
-    // TODO: Support postgresql
-    crate::sqlite::SqliteConnection::connect(url).await
+    let conn = {
+        #[cfg(not(feature = "postgres"))]
+        {
+            crate::sqlite::SqliteConnection::connect(url).await?
+        }
+        #[cfg(feature = "postgres")]
+        {
+            crate::postgres::PostgresConnection::connect(url).await?
+        }
+    };
+    Ok(conn)
 }
 
 pub trait DbConnection {

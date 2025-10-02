@@ -18,19 +18,22 @@ impl SqliteConnection {
     /// Connect to a SQLite database using the given url.
     pub async fn connect(url: &str) -> Result<impl DbConnection, DbError> {
         let cfg = Config::new(url);
-        let pool = cfg.create_pool(Runtime::Tokio1).unwrap();
+        let pool = cfg
+            .create_pool(Runtime::Tokio1)
+            .map_err(|err| format!("Error creating pool: {err}"))?;
         Ok(Self { pool })
     }
 }
 
+// TODO: Change the type of the error from String to something custom.
 /// Extract the first value of the first row in `rows`.
-fn extract_value(rows: &Vec<JsonRow>) -> JsonValue {
+fn extract_value(rows: &Vec<JsonRow>) -> Result<JsonValue, String> {
     match rows.iter().next() {
         Some(row) => match row.values().next() {
-            Some(value) => value.clone(),
-            None => panic!("No values found"),
+            Some(value) => Ok(value.clone()),
+            None => Err("No values found".into()),
         },
-        None => panic!("No rows found"),
+        None => Err("No rows found".into()),
     }
 }
 
@@ -66,19 +69,26 @@ fn query_statement(
     let column_names = column_names.iter().map(|c| c.as_str()).collect::<Vec<_>>();
 
     if let Some(params) = params {
-        for (i, param) in params.as_array().unwrap().iter().enumerate() {
+        let params = params.as_array().ok_or(format!(
+            "Parameters: {params:?} are not in the form of an array"
+        ))?;
+        for (i, param) in params.iter().enumerate() {
             let param = match param {
                 JsonValue::String(s) => s,
                 _ => &param.to_string(),
             };
             // Binding must begin with 1 rather than 0:
-            stmt.raw_bind_parameter(i + 1, param).unwrap();
+            stmt.raw_bind_parameter(i + 1, param)
+                .map_err(|err| format!("Error binding parameter '{param}': {err}"))?;
         }
     }
     let mut rows = stmt.raw_query();
 
     let mut result = Vec::new();
-    while let Some(row) = rows.next().unwrap() {
+    while let Some(row) = rows
+        .next()
+        .map_err(|err| format!("Error getting next row: {err}"))?
+    {
         result.push(to_json_row(&column_names, row));
     }
     Ok(result)
@@ -93,13 +103,19 @@ impl DbConnection for SqliteConnection {
             .await
             .map_err(|err| format!("Unable to get pool: {err}"))?;
         let sql = sql.to_string();
-        // TODO: Remove panics, expects, and unwraps here and elsewhere in this file.
+
         conn.interact(move |conn| {
-            let mut stmt = conn.prepare(&sql).unwrap();
-            stmt.execute([]).unwrap();
+            let mut stmt = conn.prepare(&sql).map_err(|err| {
+                <String as Into<DbError>>::into(format!("Error preparing statement: {err}"))
+            })?;
+            stmt.execute([]).map_err(|err| {
+                <String as Into<DbError>>::into(format!("Error executing statement: {err}"))
+            })?;
+            Ok::<(), DbError>(())
         })
         .await
-        .unwrap();
+        .map_err(|err| <String as Into<DbError>>::into(err.to_string()))?
+        .map_err(|err| <String as Into<DbError>>::into(err.to_string()))?;
         Ok(())
     }
 
@@ -113,11 +129,17 @@ impl DbConnection for SqliteConnection {
         let sql = sql.to_string();
         let rows = conn
             .interact(move |conn| {
-                let mut stmt = conn.prepare(&sql).unwrap();
-                query_statement(&mut stmt, None).unwrap()
+                let mut stmt = conn.prepare(&sql).map_err(|err| {
+                    <String as Into<DbError>>::into(format!("Error preparing statement: {err}"))
+                })?;
+                let rows = query_statement(&mut stmt, None).map_err(|err| {
+                    <String as Into<DbError>>::into(format!("Error executing statement: {err}"))
+                })?;
+                Ok::<Vec<JsonRow>, DbError>(rows)
             })
             .await
-            .unwrap();
+            .map_err(|err| <String as Into<DbError>>::into(err.to_string()))?
+            .map_err(|err| <String as Into<DbError>>::into(err.to_string()))?;
         Ok(rows)
     }
 
@@ -139,7 +161,7 @@ impl DbConnection for SqliteConnection {
         if rows.len() > 1 {
             tracing::warn!("More than one row returned for query_value()");
         }
-        Ok(extract_value(&rows))
+        Ok(extract_value(&rows)?)
     }
 
     /// Implements [DbConnection::query_string()] for SQLite.
@@ -159,7 +181,7 @@ impl DbConnection for SqliteConnection {
         let value = self.query_value(sql, &[]).await?;
         match value.as_u64() {
             Some(val) => Ok(val),
-            None => panic!("Not an unsigned integer: {value}"),
+            None => Err(format!("Not an unsigned integer: {value}")),
         }
     }
 
@@ -168,7 +190,7 @@ impl DbConnection for SqliteConnection {
         let value = self.query_value(sql, &[]).await?;
         match value.as_i64() {
             Some(val) => Ok(val),
-            None => panic!("Not an integer: {value}"),
+            None => Err(format!("Not an integer: {value}")),
         }
     }
 
@@ -177,7 +199,7 @@ impl DbConnection for SqliteConnection {
         let value = self.query_value(sql, &[]).await?;
         match value.as_f64() {
             Some(val) => Ok(val),
-            None => panic!("Not an float: {value}"),
+            None => Err(format!("Not an float: {value}")),
         }
     }
 }
