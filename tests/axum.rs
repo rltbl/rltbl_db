@@ -1,17 +1,14 @@
 use axum::{
+    Router,
     extract::State,
     response::{Html, IntoResponse},
     routing::get,
-    Router,
 };
-use sql_json::{core::DbConnection, sqlite::SqliteConnection};
+use sql_json::core::{DbQuery, connect};
 use std::sync::Arc;
 use tower_service::Service;
 
-#[cfg(feature = "postgres")]
-use sql_json::postgres::PostgresConnection;
-
-async fn get_root(State(conn): State<Arc<impl DbConnection>>) -> impl IntoResponse {
+async fn get_root(State(conn): State<Arc<impl DbQuery>>) -> impl IntoResponse {
     let value = conn
         .query_value("SELECT value FROM test LIMIT 1", &[])
         .await
@@ -25,7 +22,7 @@ async fn get_root(State(conn): State<Arc<impl DbConnection>>) -> impl IntoRespon
 /// Test using axum with sql_json.
 #[tokio::test]
 async fn test_axum_sqlite() {
-    let conn = SqliteConnection::connect("test_axum.db").await.unwrap();
+    let conn = connect("test_axum.db").await.unwrap();
     conn.execute("DROP TABLE IF EXISTS test", &[])
         .await
         .unwrap();
@@ -57,9 +54,7 @@ async fn test_axum_sqlite() {
 #[tokio::test]
 #[cfg(feature = "postgres")]
 async fn test_axum_postgres() {
-    let client = PostgresConnection::connect("postgresql:///sql_json_db")
-        .await
-        .unwrap();
+    let client = connect("postgresql:///sql_json_db").await.unwrap();
     client
         .execute("DROP TABLE IF EXISTS test", &[])
         .await

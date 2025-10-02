@@ -1,12 +1,12 @@
 //! SQLite support for sql_json.
 
-use crate::core::{DbConnection, DbError, JsonRow, JsonValue};
+use crate::core::{DbError, DbQuery, JsonRow, JsonValue};
 
 use deadpool_sqlite::{
-    rusqlite::{
-        types::ValueRef as RusqliteValueRef, Row as RusqliteRow, Statement as RusqliteStatement,
-    },
     Config, Pool, Runtime,
+    rusqlite::{
+        Row as RusqliteRow, Statement as RusqliteStatement, types::ValueRef as RusqliteValueRef,
+    },
 };
 
 /// Represents a SQLite database connection pool
@@ -16,7 +16,7 @@ pub struct SqliteConnection {
 
 impl SqliteConnection {
     /// Connect to a SQLite database using the given url.
-    pub async fn connect(url: &str) -> Result<impl DbConnection, DbError> {
+    pub async fn connect(url: &str) -> Result<Self, DbError> {
         let cfg = Config::new(url);
         let pool = cfg
             .create_pool(Runtime::Tokio1)
@@ -95,7 +95,7 @@ fn query_statement(
     Ok(result)
 }
 
-impl DbConnection for SqliteConnection {
+impl DbQuery for SqliteConnection {
     /// Implements [DbConnection::execute()] for SQLite.
     async fn execute(&self, sql: &str, _params: &[JsonValue]) -> Result<(), DbError> {
         let conn = self

@@ -1,9 +1,9 @@
 //! PostgreSQL support for sql_json.
 
-use crate::core::{DbConnection, DbError, JsonRow, JsonValue};
+use crate::core::{DbError, DbQuery, JsonRow, JsonValue};
 
 use deadpool_postgres::{Config, Pool, Runtime};
-use tokio_postgres::{row::Row, types::Type, NoTls};
+use tokio_postgres::{NoTls, row::Row, types::Type};
 
 /// Represents a PostgreSQL database connection pool
 pub struct PostgresConnection {
@@ -13,7 +13,7 @@ pub struct PostgresConnection {
 impl PostgresConnection {
     /// Connect to a PostgreSQL database using the given url, which should be of the form
     /// postgresql:///DATABASE_NAME
-    pub async fn connect(url: &str) -> Result<impl DbConnection, DbError> {
+    pub async fn connect(url: &str) -> Result<Self, DbError> {
         match url.starts_with("postgresql:///") {
             true => {
                 let mut cfg = Config::new();
@@ -60,8 +60,8 @@ fn extract_value(row: &Row, idx: usize) -> JsonValue {
     }
 }
 
-impl DbConnection for PostgresConnection {
-    /// Implements [DbConnection::execute()] for PostgreSQL.
+impl DbQuery for PostgresConnection {
+    /// Implements [DbQuery::execute()] for PostgreSQL.
     async fn execute(&self, sql: &str, _params: &[JsonValue]) -> Result<(), DbError> {
         let client = self
             .pool
@@ -75,7 +75,7 @@ impl DbConnection for PostgresConnection {
         Ok(())
     }
 
-    /// Implements [DbConnection::query()] for PostgreSQL.
+    /// Implements [DbQuery::query()] for PostgreSQL.
     async fn query(&self, sql: &str, _params: &[JsonValue]) -> Result<Vec<JsonRow>, DbError> {
         let client = self
             .pool
@@ -98,7 +98,7 @@ impl DbConnection for PostgresConnection {
         Ok(json_rows)
     }
 
-    /// Implements [DbConnection::query_row()] for PostgreSQL.
+    /// Implements [DbQuery::query_row()] for PostgreSQL.
     async fn query_row(&self, sql: &str, _params: &[JsonValue]) -> Result<JsonRow, DbError> {
         let client = self
             .pool
@@ -124,7 +124,7 @@ impl DbConnection for PostgresConnection {
         Ok(json_row)
     }
 
-    /// Implements [DbConnection::query_value()] for PostgreSQL.
+    /// Implements [DbQuery::query_value()] for PostgreSQL.
     async fn query_value(&self, sql: &str, _params: &[JsonValue]) -> Result<JsonValue, DbError> {
         let client = self
             .pool
@@ -144,7 +144,7 @@ impl DbConnection for PostgresConnection {
         }
     }
 
-    /// Implements [DbConnection::query_string()] for PostgreSQL.
+    /// Implements [DbQuery::query_string()] for PostgreSQL.
     async fn query_string(&self, sql: &str, params: &[JsonValue]) -> Result<String, DbError> {
         let value = self.query_value(sql, params).await?;
         match value.as_str() {
@@ -156,7 +156,7 @@ impl DbConnection for PostgresConnection {
         }
     }
 
-    /// Implements [DbConnection::query_u64()] for PostgreSQL.
+    /// Implements [DbQuery::query_u64()] for PostgreSQL.
     async fn query_u64(&self, sql: &str, _params: &[JsonValue]) -> Result<u64, DbError> {
         let client = self
             .pool
@@ -198,7 +198,7 @@ impl DbConnection for PostgresConnection {
         }
     }
 
-    /// Implements [DbConnection::query_i64()] for PostgreSQL.
+    /// Implements [DbQuery::query_i64()] for PostgreSQL.
     async fn query_i64(&self, sql: &str, _params: &[JsonValue]) -> Result<i64, DbError> {
         let client = self
             .pool
@@ -232,7 +232,7 @@ impl DbConnection for PostgresConnection {
         }
     }
 
-    /// Implements [DbConnection::query_f64] for PostgreSQL.
+    /// Implements [DbQuery::query_f64] for PostgreSQL.
     async fn query_f64(&self, sql: &str, _params: &[JsonValue]) -> Result<f64, DbError> {
         let client = self
             .pool
