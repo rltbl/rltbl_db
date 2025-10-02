@@ -21,7 +21,7 @@ impl PostgresConnection {
                 cfg.dbname = Some(db_name.to_string());
                 let pool = cfg
                     .create_pool(Some(Runtime::Tokio1), NoTls)
-                    .map_err(|err| err.to_string())?;
+                    .map_err(|err| format!("Error creating pool: {err}"))?;
                 Ok(Self { pool })
             }
             false => Err(format!("Invalid PostgreSQL database path: '{url}'")),

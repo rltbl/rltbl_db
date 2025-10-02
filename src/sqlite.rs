@@ -25,7 +25,8 @@ impl SqliteConnection {
     }
 }
 
-// TODO: Change the type of the error from String to something custom.
+// TODO: Change the type of the error from String to something custom (DbError is not appropriate,
+// however, even though that is currently implemented as a String).
 /// Extract the first value of the first row in `rows`.
 fn extract_value(rows: &Vec<JsonRow>) -> Result<JsonValue, String> {
     match rows.iter().next() {
