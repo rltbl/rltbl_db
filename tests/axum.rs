@@ -54,7 +54,9 @@ async fn test_axum_sqlite() {
 #[tokio::test]
 #[cfg(feature = "postgres")]
 async fn test_axum_postgres() {
-    let client = connect("postgresql:///sql_json_db").await.unwrap();
+    let client = AnyConnection::connect("postgresql:///sql_json_db")
+        .await
+        .unwrap();
     client
         .execute("DROP TABLE IF EXISTS test", &[])
         .await
