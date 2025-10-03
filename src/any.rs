@@ -1,15 +1,9 @@
-use serde_json::Map as JsonMap;
-
-use crate::core::DbQuery;
+use crate::core::{DbError, DbQuery, JsonRow, JsonValue};
 
 #[cfg(feature = "postgres")]
 use crate::postgres::PostgresConnection;
 #[cfg(feature = "sqlite")]
 use crate::sqlite::SqliteConnection;
-
-pub type JsonValue = serde_json::Value;
-pub type JsonRow = JsonMap<String, JsonValue>;
-pub type DbError = String;
 
 pub enum AnyConnection {
     #[cfg(feature = "sqlite")]
@@ -19,17 +13,13 @@ pub enum AnyConnection {
 }
 
 impl AnyConnection {
-    /// Connect to the database located at the given URL. If the postgres feature flag has been
-    /// set, this is assumed to be a PostgreSQL URL, otherwise the database is assumed to be a SQLite
-    /// database.
+    /// Connect to the database located at the given URL.
     pub async fn connect(url: &str) -> Result<Self, DbError> {
         if url.starts_with("postgresql://") {
             #[cfg(feature = "postgres")]
             {
                 Ok(AnyConnection::Postgres(
-                    crate::postgres::PostgresConnection::connect(url)
-                        .await
-                        .map_err(|err| format!("postgres error {err}"))?,
+                    crate::postgres::PostgresConnection::connect(url).await?,
                 ))
             }
             #[cfg(not(feature = "postgres"))]
@@ -39,11 +29,7 @@ impl AnyConnection {
         } else {
             #[cfg(feature = "sqlite")]
             {
-                Ok(AnyConnection::Sqlite(
-                    SqliteConnection::connect(url)
-                        .await
-                        .map_err(|err| format!("postgres error {err}"))?,
-                ))
+                Ok(AnyConnection::Sqlite(SqliteConnection::connect(url).await?))
             }
             #[cfg(not(feature = "sqlite"))]
             {
