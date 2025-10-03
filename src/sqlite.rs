@@ -1,12 +1,12 @@
 //! SQLite support for sql_json.
 
-use crate::core::{DbConnection, DbError, JsonRow, JsonValue};
+use crate::core::{DbError, DbQuery, JsonRow, JsonValue};
 
 use deadpool_sqlite::{
-    rusqlite::{
-        types::ValueRef as RusqliteValueRef, Row as RusqliteRow, Statement as RusqliteStatement,
-    },
     Config, Pool, Runtime,
+    rusqlite::{
+        Row as RusqliteRow, Statement as RusqliteStatement, types::ValueRef as RusqliteValueRef,
+    },
 };
 
 /// Represents a SQLite database connection pool
@@ -16,7 +16,7 @@ pub struct SqliteConnection {
 
 impl SqliteConnection {
     /// Connect to a SQLite database using the given url.
-    pub async fn connect(url: &str) -> Result<impl DbConnection, DbError> {
+    pub async fn connect(url: &str) -> Result<Self, DbError> {
         let cfg = Config::new(url);
         let pool = cfg
             .create_pool(Runtime::Tokio1)
@@ -95,8 +95,8 @@ fn query_statement(
     Ok(result)
 }
 
-impl DbConnection for SqliteConnection {
-    /// Implements [DbConnection::execute()] for SQLite.
+impl DbQuery for SqliteConnection {
+    /// Implements [DbQuery::execute()] for SQLite.
     async fn execute(&self, sql: &str, _params: &[JsonValue]) -> Result<(), DbError> {
         let conn = self
             .pool
@@ -120,7 +120,7 @@ impl DbConnection for SqliteConnection {
         Ok(())
     }
 
-    /// Implements [DbConnection::query()] for SQLite.
+    /// Implements [DbQuery::query()] for SQLite.
     async fn query(&self, sql: &str, _params: &[JsonValue]) -> Result<Vec<JsonRow>, DbError> {
         let conn = self
             .pool
@@ -144,7 +144,7 @@ impl DbConnection for SqliteConnection {
         Ok(rows)
     }
 
-    /// Implements [DbConnection::query_row()] for SQLite.
+    /// Implements [DbQuery::query_row()] for SQLite.
     async fn query_row(&self, sql: &str, _params: &[JsonValue]) -> Result<JsonRow, DbError> {
         let rows = self.query(&sql, &[]).await?;
         if rows.len() > 1 {
@@ -156,7 +156,7 @@ impl DbConnection for SqliteConnection {
         }
     }
 
-    /// Implements [DbConnection::query_value()] for SQLite.
+    /// Implements [DbQuery::query_value()] for SQLite.
     async fn query_value(&self, sql: &str, _params: &[JsonValue]) -> Result<JsonValue, DbError> {
         let rows = self.query(sql, &[]).await?;
         if rows.len() > 1 {
@@ -165,7 +165,7 @@ impl DbConnection for SqliteConnection {
         Ok(extract_value(&rows)?)
     }
 
-    /// Implements [DbConnection::query_string()] for SQLite.
+    /// Implements [DbQuery::query_string()] for SQLite.
     async fn query_string(&self, sql: &str, _params: &[JsonValue]) -> Result<String, DbError> {
         let value = self.query_value(sql, &[]).await?;
         match value.as_str() {
@@ -177,7 +177,7 @@ impl DbConnection for SqliteConnection {
         }
     }
 
-    /// Implements [DbConnection::query_u64()] for SQLite.
+    /// Implements [DbQuery::query_u64()] for SQLite.
     async fn query_u64(&self, sql: &str, _params: &[JsonValue]) -> Result<u64, DbError> {
         let value = self.query_value(sql, &[]).await?;
         match value.as_u64() {
@@ -186,7 +186,7 @@ impl DbConnection for SqliteConnection {
         }
     }
 
-    /// Implements [DbConnection::query_i64()] for SQLite.
+    /// Implements [DbQuery::query_i64()] for SQLite.
     async fn query_i64(&self, sql: &str, _params: &[JsonValue]) -> Result<i64, DbError> {
         let value = self.query_value(sql, &[]).await?;
         match value.as_i64() {
@@ -195,7 +195,7 @@ impl DbConnection for SqliteConnection {
         }
     }
 
-    /// Implements [DbConnection::query_f64()] for SQLite.
+    /// Implements [DbQuery::query_f64()] for SQLite.
     async fn query_f64(&self, sql: &str, _params: &[JsonValue]) -> Result<f64, DbError> {
         let value = self.query_value(sql, &[]).await?;
         match value.as_f64() {
