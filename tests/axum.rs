@@ -4,7 +4,7 @@ use axum::{
     response::{Html, IntoResponse},
     routing::get,
 };
-use sql_json::core::{DbQuery, connect};
+use sql_json::{any::AnyConnection, core::DbQuery};
 use std::sync::Arc;
 use tower_service::Service;
 
@@ -22,7 +22,7 @@ async fn get_root(State(conn): State<Arc<impl DbQuery>>) -> impl IntoResponse {
 /// Test using axum with sql_json.
 #[tokio::test]
 async fn test_axum_sqlite() {
-    let conn = connect("test_axum.db").await.unwrap();
+    let conn = AnyConnection::connect("test_axum.db").await.unwrap();
     conn.execute("DROP TABLE IF EXISTS test", &[])
         .await
         .unwrap();
