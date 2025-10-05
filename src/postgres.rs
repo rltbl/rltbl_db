@@ -67,31 +67,7 @@ fn extract_value(row: &Row, idx: usize) -> JsonValue {
 impl DbQuery for PostgresConnection {
     /// Implements [DbQuery::execute()] for PostgreSQL.
     async fn execute(&self, sql: &str, params: &[JsonValue]) -> Result<(), DbError> {
-        let client = self
-            .pool
-            .get()
-            .await
-            .map_err(|err| format!("Unable to get pool: {err}"))?;
-        let params = params
-            .iter()
-            .map(|p| {
-                match p {
-                    JsonValue::String(s) => s as &(dyn ToSql + Sync),
-                    //JsonValue::Number(p) => {
-                    //    p as &(dyn tokio_postgres::types::ToSql + Sync)
-                    //},
-                    //JsonValue::Number(p) => match p.as_f64() {
-                    //    Some(p) => p.clone() as &(dyn ToSql + Sync),
-                    //    None => panic!("Ouff!"),
-                    //},
-                    _ => panic!("Ooof!"),
-                }
-            })
-            .collect::<Vec<_>>();
-        client
-            .execute(sql, params.as_ref())
-            .await
-            .map_err(|err| format!("Error in execute(): {err}"))?;
+        self.query(sql, params).await?;
         Ok(())
     }
 
@@ -102,12 +78,69 @@ impl DbQuery for PostgresConnection {
             .get()
             .await
             .map_err(|err| format!("Unable to get pool: {err}"))?;
-        let params = params
-            .iter()
-            .map(|p| p as &(dyn tokio_postgres::types::ToSql + Sync))
-            .collect::<Vec<_>>();
+
+        // The rust compiler needs the parameters to the query to explicitly be in scope when
+        // passing them to client.execute(). So we build three vectors to keep them accessible,
+        // and one more vector to represent the sequence of types, where:
+        // 0 => &str
+        // 1 => i64
+        // 2 => f64
+        let mut param_sequence: Vec<usize> = vec![];
+        let mut integer_params = vec![];
+        let mut string_params = vec![];
+        let mut float_params = vec![];
+        for param in params {
+            match param {
+                JsonValue::String(s) => {
+                    param_sequence.push(0);
+                    string_params.push(s.as_str())
+                }
+                JsonValue::Number(n) => match n.as_i64() {
+                    Some(n) => {
+                        param_sequence.push(1);
+                        integer_params.push(n);
+                    }
+                    None => match n.as_f64() {
+                        Some(n) => {
+                            param_sequence.push(2);
+                            float_params.push(n);
+                        }
+                        None => return Err(format!("Unsupported number type for {n}")),
+                    },
+                },
+                _ => return Err(format!("Unsupported JSON type: {param}")),
+            }
+        }
+
+        // Now use the three typed lists of parameters and the param_sequence to build a list of
+        // parameters that implement &(dyn ToSql + Sync), which is what client.execute() needs.
+        let mut strings_idx = 0;
+        let mut integers_idx = 0;
+        let mut floats_idx = 0;
+        let mut generic_params = vec![];
+        for param_code in &param_sequence {
+            match param_code {
+                0 => {
+                    let param = &string_params[strings_idx];
+                    strings_idx += 1;
+                    generic_params.push(param as &(dyn ToSql + Sync));
+                }
+                1 => {
+                    let param = &integer_params[integers_idx];
+                    integers_idx += 1;
+                    generic_params.push(param as &(dyn ToSql + Sync));
+                }
+                2 => {
+                    let param = &float_params[floats_idx];
+                    floats_idx += 1;
+                    generic_params.push(param as &(dyn ToSql + Sync));
+                }
+                _ => unreachable!(),
+            }
+        }
+
         let rows = client
-            .query(sql, params.as_ref())
+            .query(sql, &generic_params)
             .await
             .map_err(|err| format!("Error in query(): {err}"))?;
         let mut json_rows = vec![];
@@ -124,55 +157,22 @@ impl DbQuery for PostgresConnection {
 
     /// Implements [DbQuery::query_row()] for PostgreSQL.
     async fn query_row(&self, sql: &str, params: &[JsonValue]) -> Result<JsonRow, DbError> {
-        let client = self
-            .pool
-            .get()
-            .await
-            .map_err(|err| format!("Unable to get pool: {err}"))?;
-        let params = params
-            .iter()
-            .map(|p| p as &(dyn tokio_postgres::types::ToSql + Sync))
-            .collect::<Vec<_>>();
-        let rows = client
-            .query(sql, params.as_ref())
-            .await
-            .map_err(|err| format!("Error in query_row(): {err}"))?;
-        if rows.is_empty() {
-            return Err("No rows found".to_string());
-        }
+        let mut rows = self.query(sql, params).await?;
         if rows.len() > 1 {
             tracing::warn!("More than one row returned for query_row()");
         }
-        let row = rows[0].clone();
-        let mut json_row = JsonRow::new();
-        let columns = row.columns();
-        for (i, column) in columns.iter().enumerate() {
-            json_row.insert(column.name().to_string(), extract_value(&row, i));
+        match rows.pop() {
+            Some(row) => Ok(row),
+            None => Err("No rows found".to_string()),
         }
-        Ok(json_row)
     }
 
     /// Implements [DbQuery::query_value()] for PostgreSQL.
     async fn query_value(&self, sql: &str, params: &[JsonValue]) -> Result<JsonValue, DbError> {
-        let client = self
-            .pool
-            .get()
-            .await
-            .map_err(|err| format!("Unable to get pool: {err}"))?;
-        let params = params
-            .iter()
-            .map(|p| p as &(dyn tokio_postgres::types::ToSql + Sync))
-            .collect::<Vec<_>>();
-        let rows = client
-            .query(sql, params.as_ref())
-            .await
-            .map_err(|err| format!("Error in query_value(): {err}"))?;
-        if rows.len() > 1 {
-            tracing::warn!("More than one row returned for query_value()");
-        }
-        match rows.iter().next() {
-            Some(row) => Ok(extract_value(&row, 0)),
-            None => Err("No rows found".to_string()),
+        let row = self.query_row(sql, params).await?;
+        match row.values().next() {
+            Some(value) => Ok(value.clone()),
+            None => Err("No values found".into()),
         }
     }
 
@@ -190,123 +190,28 @@ impl DbQuery for PostgresConnection {
 
     /// Implements [DbQuery::query_u64()] for PostgreSQL.
     async fn query_u64(&self, sql: &str, params: &[JsonValue]) -> Result<u64, DbError> {
-        let client = self
-            .pool
-            .get()
-            .await
-            .map_err(|err| format!("Unable to get pool: {err}"))?;
-        let params = params
-            .iter()
-            .map(|p| p as &(dyn tokio_postgres::types::ToSql + Sync))
-            .collect::<Vec<_>>();
-        let rows = client
-            .query(sql, params.as_ref())
-            .await
-            .map_err(|err| format!("Error in query_u64(): {err}"))?;
-        if rows.len() > 1 {
-            tracing::warn!("More than one row returned for query_u64()");
-        }
-        match rows.iter().next() {
-            Some(row) => {
-                let column = &row.columns()[0];
-                let value = match *column.type_() {
-                    Type::INT2 | Type::INT4 => {
-                        let value: i32 = row.get(0);
-                        if value < 0 {
-                            return Err(format!("Invalid value: {value}"));
-                        }
-                        value as u64
-                    }
-                    Type::INT8 => {
-                        let value: i64 = row.get(0);
-                        if value < 0 {
-                            return Err(format!("Invalid value: {value}"));
-                        }
-                        let value = u64::try_from(value)
-                            .map_err(|err| format!("Can't convert to u64: {value}: {err}"))?;
-                        value
-                    }
-                    _ => return Err(format!("Cannot convert to u64: {}", column.type_())),
-                };
-                Ok(value)
-            }
-            None => return Err("No rows found".to_string()),
+        let value = self.query_value(sql, params).await?;
+        match value.as_u64() {
+            Some(val) => Ok(val),
+            None => Err(format!("Not a u64: {value}")),
         }
     }
 
     /// Implements [DbQuery::query_i64()] for PostgreSQL.
     async fn query_i64(&self, sql: &str, params: &[JsonValue]) -> Result<i64, DbError> {
-        let client = self
-            .pool
-            .get()
-            .await
-            .map_err(|err| format!("Unable to get pool: {err}"))?;
-        let params = params
-            .iter()
-            .map(|p| p as &(dyn tokio_postgres::types::ToSql + Sync))
-            .collect::<Vec<_>>();
-        let rows = client
-            .query(sql, params.as_ref())
-            .await
-            .map_err(|err| format!("Error in query_i64(): {err}"))?;
-        if rows.len() > 1 {
-            tracing::warn!("More than one row returned for query_i64()");
-        }
-        match rows.iter().next() {
-            Some(row) => {
-                let column = &row.columns()[0];
-                let value = match *column.type_() {
-                    Type::INT2 | Type::INT4 => {
-                        let value: i32 = row.get(0);
-                        value as i64
-                    }
-                    Type::INT8 => {
-                        let value: i64 = row.get(0);
-                        value
-                    }
-                    _ => return Err(format!("Cannot convert to i64: {}", column.type_())),
-                };
-                Ok(value)
-            }
-            None => return Err("No rows found".to_string()),
+        let value = self.query_value(sql, params).await?;
+        match value.as_i64() {
+            Some(val) => Ok(val),
+            None => Err(format!("Not a i64: {value}")),
         }
     }
 
     /// Implements [DbQuery::query_f64] for PostgreSQL.
     async fn query_f64(&self, sql: &str, params: &[JsonValue]) -> Result<f64, DbError> {
-        let client = self
-            .pool
-            .get()
-            .await
-            .map_err(|err| format!("Unable to get pool: {err}"))?;
-        let params = params
-            .iter()
-            .map(|p| p as &(dyn tokio_postgres::types::ToSql + Sync))
-            .collect::<Vec<_>>();
-        let rows = client
-            .query(sql, params.as_ref())
-            .await
-            .map_err(|err| format!("Error in query_i64(): {err}"))?;
-        if rows.len() > 1 {
-            tracing::warn!("More than one row returned for query_f64()");
-        }
-        match rows.iter().next() {
-            Some(row) => {
-                let column = &row.columns()[0];
-                let value = match *column.type_() {
-                    Type::FLOAT4 => {
-                        let value: f32 = row.get(0);
-                        value as f64
-                    }
-                    Type::FLOAT8 => {
-                        let value: f64 = row.get(0);
-                        value
-                    }
-                    _ => return Err(format!("Cannot convert to f64: {}", column.type_())),
-                };
-                Ok(value)
-            }
-            None => return Err("No rows found".to_string()),
+        let value = self.query_value(sql, params).await?;
+        match value.as_f64() {
+            Some(val) => Ok(val),
+            None => Err(format!("Not a f64: {value}")),
         }
     }
 }
@@ -331,30 +236,29 @@ mod tests {
         conn.execute("INSERT INTO test_table_text VALUES ($1)", &[json!("foo")])
             .await
             .unwrap();
-        // let select_sql = "SELECT value FROM test_table_text WHERE value = $1";
-        // let value = conn
-        //     .query_value(select_sql, &[json!("foo")])
-        //     .await
-        //     .unwrap()
-        //     .as_str()
-        //     .unwrap()
-        //     .to_string();
-        // assert_eq!("foo", value);
+        let select_sql = "SELECT value FROM test_table_text WHERE value = $1";
+        let value = conn
+            .query_value(select_sql, &[json!("foo")])
+            .await
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!("foo", value);
 
-        // let value = conn
-        //     .query_string(select_sql, &[json!("foo")])
-        //     .await
-        //     .unwrap();
-        // assert_eq!("foo", value);
+        let value = conn
+            .query_string(select_sql, &[json!("foo")])
+            .await
+            .unwrap();
+        assert_eq!("foo", value);
 
-        // let row = conn.query_row(select_sql, &[json!("foo")]).await.unwrap();
-        // assert_eq!(json!(row), json!({"value":"foo"}));
+        let row = conn.query_row(select_sql, &[json!("foo")]).await.unwrap();
+        assert_eq!(json!(row), json!({"value":"foo"}));
 
-        // let rows = conn.query(select_sql, &[json!("foo")]).await.unwrap();
-        // assert_eq!(json!(rows), json!([{"value":"foo"}]));
+        let rows = conn.query(select_sql, &[json!("foo")]).await.unwrap();
+        assert_eq!(json!(rows), json!([{"value":"foo"}]));
     }
 
-    #[ignore]
     #[tokio::test]
     async fn test_integer_column_query() {
         let conn = PostgresConnection::connect("postgresql:///sql_json_db")
@@ -394,7 +298,6 @@ mod tests {
         assert_eq!(json!(rows), json!([{"value":1}]));
     }
 
-    #[ignore]
     #[tokio::test]
     async fn test_float_column_query() {
         let conn = PostgresConnection::connect("postgresql:///sql_json_db")
@@ -411,23 +314,84 @@ mod tests {
             .unwrap();
         let select_sql = "SELECT value FROM test_table_float WHERE value > $1";
         let value = conn
-            .query_value(select_sql, &[json!(1)])
+            .query_value(select_sql, &[json!(1.0)])
             .await
             .unwrap()
             .as_f64()
             .unwrap();
         assert_eq!("1.05", format!("{value:.2}"));
 
-        let value = conn.query_f64(select_sql, &[json!(1)]).await.unwrap();
+        let value = conn.query_f64(select_sql, &[json!(1.0)]).await.unwrap();
         assert_eq!(1.05, value);
 
-        let value = conn.query_string(select_sql, &[json!(1)]).await.unwrap();
+        let value = conn.query_string(select_sql, &[json!(1.0)]).await.unwrap();
         assert_eq!("1.05", value);
 
-        let row = conn.query_row(select_sql, &[json!(1)]).await.unwrap();
+        let row = conn.query_row(select_sql, &[json!(1.0)]).await.unwrap();
         assert_eq!(json!(row), json!({"value":1.05}));
 
-        let rows = conn.query(select_sql, &[json!(1)]).await.unwrap();
+        let rows = conn.query(select_sql, &[json!(1.0)]).await.unwrap();
         assert_eq!(json!(rows), json!([{"value":1.05}]));
+    }
+
+    #[tokio::test]
+    async fn test_mixed_column_query() {
+        let conn = PostgresConnection::connect("postgresql:///sql_json_db")
+            .await
+            .unwrap();
+        conn.execute("DROP TABLE IF EXISTS test_table_mixed", &[])
+            .await
+            .unwrap();
+        conn.execute(
+            r#"CREATE TABLE test_table_mixed (
+                 text_value TEXT,
+                 float_value FLOAT8,
+                 int_value INT8
+               )"#,
+            &[],
+        )
+        .await
+        .unwrap();
+        conn.execute(
+            r#"INSERT INTO test_table_mixed
+               (text_value, float_value, int_value)
+               VALUES ($1, $2, $3)"#,
+            &[json!("foo"), json!(1.05), json!(1)],
+        )
+        .await
+        .unwrap();
+
+        let select_sql = r#"SELECT text_value, float_value, int_value
+                            FROM test_table_mixed
+                            WHERE text_value = $1 AND float_value > $2 AND int_value > $3"#;
+        let params = [json!("foo"), json!(1.0), json!(0)];
+        let value = conn
+            .query_value(select_sql, &params)
+            .await
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!("foo", value);
+
+        let row = conn.query_row(select_sql, &params).await.unwrap();
+        assert_eq!(
+            json!(row),
+            json!({
+                "text_value": "foo",
+                "float_value": 1.05,
+                "int_value": 1,
+            })
+        );
+
+        let rows = conn.query(select_sql, &params).await.unwrap();
+        assert_eq!(
+            json!(rows),
+            json!([{
+                "text_value": "foo",
+                "float_value": 1.05,
+                "int_value": 1,
+            }])
+        );
     }
 }
