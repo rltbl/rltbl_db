@@ -306,4 +306,65 @@ mod tests {
         let rows = conn.query(select_sql, &[json!(1)]).await.unwrap();
         assert_eq!(json!(rows), json!([{"value":1.05}]));
     }
+
+    #[tokio::test]
+    async fn test_mixed_column_query() {
+        let conn = SqliteConnection::connect("test_mixed_columns.db")
+            .await
+            .unwrap();
+        conn.execute("DROP TABLE IF EXISTS test_table_mixed", &[])
+            .await
+            .unwrap();
+        conn.execute(
+            r#"CREATE TABLE test_table_mixed (
+                 text_value TEXT,
+                 float_value FLOAT8,
+                 int_value INT8
+               )"#,
+            &[],
+        )
+        .await
+        .unwrap();
+        conn.execute(
+            r#"INSERT INTO test_table_mixed
+               (text_value, float_value, int_value)
+               VALUES ($1, $2, $3)"#,
+            &[json!("foo"), json!(1.05), json!(1)],
+        )
+        .await
+        .unwrap();
+
+        let select_sql = r#"SELECT text_value, float_value, int_value
+                            FROM test_table_mixed
+                            WHERE text_value = $1 AND float_value > $2 AND int_value > $3"#;
+        let params = [json!("foo"), json!(1.0), json!(0)];
+        let value = conn
+            .query_value(select_sql, &params)
+            .await
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!("foo", value);
+
+        let row = conn.query_row(select_sql, &params).await.unwrap();
+        assert_eq!(
+            json!(row),
+            json!({
+                "text_value": "foo",
+                "float_value": 1.05,
+                "int_value": 1,
+            })
+        );
+
+        let rows = conn.query(select_sql, &params).await.unwrap();
+        assert_eq!(
+            json!(rows),
+            json!([{
+                "text_value": "foo",
+                "float_value": 1.05,
+                "int_value": 1,
+            }])
+        );
+    }
 }
