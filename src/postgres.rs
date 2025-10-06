@@ -21,14 +21,16 @@ impl PostgresConnection {
         match url.starts_with("postgresql:///") {
             true => {
                 let mut cfg = Config::new();
-                let db_name = url.strip_prefix("postgresql:///").ok_or("Invalid URL")?;
+                let db_name = url
+                    .strip_prefix("postgresql:///")
+                    .ok_or("Invalid PostgreSQL URL")?;
                 cfg.dbname = Some(db_name.to_string());
                 let pool = cfg
                     .create_pool(Some(Runtime::Tokio1), NoTls)
                     .map_err(|err| format!("Error creating pool: {err}"))?;
                 Ok(Self { pool })
             }
-            false => Err(format!("Invalid PostgreSQL database path: '{url}'")),
+            false => Err(format!("Invalid PostgreSQL URL: '{url}'")),
         }
     }
 }
@@ -72,37 +74,39 @@ impl DbQuery for PostgresConnection {
     }
 
     /// Implements [DbQuery::query()] for PostgreSQL.
-    async fn query(&self, sql: &str, params: &[JsonValue]) -> Result<Vec<JsonRow>, DbError> {
+    async fn query(&self, sql: &str, json_params: &[JsonValue]) -> Result<Vec<JsonRow>, DbError> {
         let client = self
             .pool
             .get()
             .await
             .map_err(|err| format!("Unable to get pool: {err}"))?;
 
-        // The rust compiler needs the parameters to the query to explicitly be in scope when
-        // passing them to client.execute(). So we build three vectors to keep them accessible,
-        // and one more vector to represent the sequence of types, where:
+        // The rust compiler needs the parameters to the query, converted to their underlying
+        // primitive types (i.e., not just the JsonValues wrapping them), to be explicitly be in
+        // scope when passing them to client.execute(). So we build three vectors to keep them
+        // accessible, and one more vector to represent the ordered sequence of parameter types,
+        // where:
         // 0 => &str
         // 1 => i64
         // 2 => f64
-        let mut param_sequence: Vec<usize> = vec![];
+        let mut param_type_sequence = vec![];
         let mut integer_params = vec![];
         let mut string_params = vec![];
         let mut float_params = vec![];
-        for param in params {
+        for param in json_params {
             match param {
                 JsonValue::String(s) => {
-                    param_sequence.push(0);
+                    param_type_sequence.push(0);
                     string_params.push(s.as_str())
                 }
                 JsonValue::Number(n) => match n.as_i64() {
                     Some(n) => {
-                        param_sequence.push(1);
+                        param_type_sequence.push(1);
                         integer_params.push(n);
                     }
                     None => match n.as_f64() {
                         Some(n) => {
-                            param_sequence.push(2);
+                            param_type_sequence.push(2);
                             float_params.push(n);
                         }
                         None => return Err(format!("Unsupported number type for {n}")),
@@ -112,35 +116,35 @@ impl DbQuery for PostgresConnection {
             }
         }
 
-        // Now use the three typed lists of parameters and the param_sequence to build a list of
-        // parameters that implement &(dyn ToSql + Sync), which is what client.execute() needs.
+        // Now use the three typed lists of parameters and the param_type_sequence to build a list
+        // of parameters that implement &(dyn ToSql + Sync), which is what client.execute() needs.
         let mut strings_idx = 0;
         let mut integers_idx = 0;
         let mut floats_idx = 0;
-        let mut generic_params = vec![];
-        for param_code in &param_sequence {
+        let mut pg_params = vec![];
+        for param_code in &param_type_sequence {
             match param_code {
                 0 => {
                     let param = &string_params[strings_idx];
                     strings_idx += 1;
-                    generic_params.push(param as &(dyn ToSql + Sync));
+                    pg_params.push(param as &(dyn ToSql + Sync));
                 }
                 1 => {
                     let param = &integer_params[integers_idx];
                     integers_idx += 1;
-                    generic_params.push(param as &(dyn ToSql + Sync));
+                    pg_params.push(param as &(dyn ToSql + Sync));
                 }
                 2 => {
                     let param = &float_params[floats_idx];
                     floats_idx += 1;
-                    generic_params.push(param as &(dyn ToSql + Sync));
+                    pg_params.push(param as &(dyn ToSql + Sync));
                 }
                 _ => unreachable!(),
             }
         }
 
         let rows = client
-            .query(sql, &generic_params)
+            .query(sql, &pg_params)
             .await
             .map_err(|err| format!("Error in query(): {err}"))?;
         let mut json_rows = vec![];
@@ -157,11 +161,11 @@ impl DbQuery for PostgresConnection {
 
     /// Implements [DbQuery::query_row()] for PostgreSQL.
     async fn query_row(&self, sql: &str, params: &[JsonValue]) -> Result<JsonRow, DbError> {
-        let mut rows = self.query(sql, params).await?;
+        let rows = self.query(sql, params).await?;
         if rows.len() > 1 {
             tracing::warn!("More than one row returned for query_row()");
         }
-        match rows.pop() {
+        match rows.into_iter().nth(0) {
             Some(row) => Ok(row),
             None => Err("No rows found".to_string()),
         }
@@ -170,6 +174,9 @@ impl DbQuery for PostgresConnection {
     /// Implements [DbQuery::query_value()] for PostgreSQL.
     async fn query_value(&self, sql: &str, params: &[JsonValue]) -> Result<JsonValue, DbError> {
         let row = self.query_row(sql, params).await?;
+        if row.values().len() > 1 {
+            tracing::warn!("More than one value returned for query_value()");
+        }
         match row.values().next() {
             Some(value) => Ok(value.clone()),
             None => Err("No values found".into()),
