@@ -6,7 +6,7 @@ use deadpool_sqlite::{
     Config, Object, Pool, Runtime,
     rusqlite::{
         Row as RusqliteRow, Statement as RusqliteStatement, Transaction as RusqliteTransaction,
-        types::ValueRef as RusqliteValueRef,
+        types::{Null as RusqliteNull, ValueRef as RusqliteValueRef},
     },
 };
 use serde_json::json;
@@ -92,13 +92,33 @@ fn query_statement(
             "Parameters: {params:?} are not in the form of an array"
         ))?;
         for (i, param) in params.iter().enumerate() {
-            let param = match param {
-                JsonValue::String(s) => s,
-                _ => &param.to_string(),
+            match param {
+                JsonValue::String(s) => {
+                    stmt.raw_bind_parameter(i + 1, s)
+                        .map_err(|err| format!("Error binding parameter '{param}': {err}"))?;
+                }
+                JsonValue::Number(_) => {
+                    stmt.raw_bind_parameter(i + 1, &param.to_string())
+                        .map_err(|err| format!("Error binding parameter '{param}': {err}"))?;
+                }
+                JsonValue::Bool(flag) => match flag {
+                    // Note that SQLite's type affinity means that booleans are actually
+                    // implemented as numbers (see https://sqlite.org/datatype3.html).
+                    false => {
+                        stmt.raw_bind_parameter(i + 1, &0.to_string())
+                            .map_err(|err| format!("Error binding parameter '{param}': {err}"))?;
+                    }
+                    true => {
+                        stmt.raw_bind_parameter(i + 1, &1.to_string())
+                            .map_err(|err| format!("Error binding parameter '{param}': {err}"))?;
+                    }
+                },
+                JsonValue::Null => {
+                    stmt.raw_bind_parameter(i + 1, &RusqliteNull)
+                        .map_err(|err| format!("Error binding parameter '{param}': {err}"))?;
+                }
+                _ => return Err(format!("Unsupported JSON type: {param}")),
             };
-            // Binding must begin with 1 rather than 0:
-            stmt.raw_bind_parameter(i + 1, param)
-                .map_err(|err| format!("Error binding parameter '{param}': {err}"))?;
         }
     }
     let mut rows = stmt.raw_query();
@@ -260,10 +280,10 @@ mod tests {
         conn.execute("CREATE TABLE test_table_text ( value TEXT )", &[])
             .await
             .unwrap();
-        conn.execute("INSERT INTO test_table_text VALUES (?)", &[json!("foo")])
+        conn.execute("INSERT INTO test_table_text VALUES ($1)", &[json!("foo")])
             .await
             .unwrap();
-        let select_sql = "SELECT value FROM test_table_text WHERE value = ?";
+        let select_sql = "SELECT value FROM test_table_text WHERE value = $1";
         let value = conn
             .query_value(select_sql, &[json!("foo")])
             .await
@@ -297,10 +317,10 @@ mod tests {
         conn.execute("CREATE TABLE test_table_int ( value INT )", &[])
             .await
             .unwrap();
-        conn.execute("INSERT INTO test_table_int VALUES (?)", &[json!(1)])
+        conn.execute("INSERT INTO test_table_int VALUES ($1)", &[json!(1)])
             .await
             .unwrap();
-        let select_sql = "SELECT value FROM test_table_int WHERE value = ?";
+        let select_sql = "SELECT value FROM test_table_int WHERE value = $1";
         let value = conn
             .query_value(select_sql, &[json!(1)])
             .await
@@ -336,10 +356,10 @@ mod tests {
         conn.execute("CREATE TABLE test_table_float ( value REAL )", &[])
             .await
             .unwrap();
-        conn.execute("INSERT INTO test_table_float VALUES (?)", &[json!(1.05)])
+        conn.execute("INSERT INTO test_table_float VALUES ($1)", &[json!(1.05)])
             .await
             .unwrap();
-        let select_sql = "SELECT value FROM test_table_float WHERE value > ?";
+        let select_sql = "SELECT value FROM test_table_float WHERE value > $1";
         let value = conn
             .query_value(select_sql, &[json!(1)])
             .await
@@ -372,8 +392,10 @@ mod tests {
         conn.execute(
             r#"CREATE TABLE test_table_mixed (
                  text_value TEXT,
+                 alt_text_value TEXT,
                  float_value FLOAT8,
-                 int_value INT8
+                 int_value INT8,
+                 bool_value BOOL
                )"#,
             &[],
         )
@@ -381,17 +403,33 @@ mod tests {
         .unwrap();
         conn.execute(
             r#"INSERT INTO test_table_mixed
-               (text_value, float_value, int_value)
-               VALUES ($1, $2, $3)"#,
-            &[json!("foo"), json!(1.05), json!(1)],
+               (text_value, alt_text_value, float_value, int_value, bool_value)
+               VALUES ($1, $2, $3, $4, $5)"#,
+            &[
+                json!("foo"),
+                JsonValue::Null,
+                json!(1.05),
+                json!(1),
+                json!(true),
+            ],
         )
         .await
         .unwrap();
 
-        let select_sql = r#"SELECT text_value, float_value, int_value
+        let select_sql = r#"SELECT text_value, alt_text_value, float_value, int_value, bool_value
                             FROM test_table_mixed
-                            WHERE text_value = $1 AND float_value > $2 AND int_value > $3"#;
-        let params = [json!("foo"), json!(1.0), json!(0)];
+                            WHERE text_value = $1
+                              AND alt_text_value IS $2
+                              AND float_value > $3
+                              AND int_value > $4
+                              AND bool_value = $5"#;
+        let params = [
+            json!("foo"),
+            JsonValue::Null,
+            json!(1.0),
+            json!(0),
+            json!(true),
+        ];
         let value = conn
             .query_value(select_sql, &params)
             .await
@@ -406,8 +444,12 @@ mod tests {
             json!(row),
             json!({
                 "text_value": "foo",
+                "alt_text_value": JsonValue::Null,
                 "float_value": 1.05,
                 "int_value": 1,
+                // Note that SQLite's type affinity means that booleans are actually
+                // implemented as numbers (see https://sqlite.org/datatype3.html).
+                "bool_value": 1,
             })
         );
 
@@ -416,8 +458,12 @@ mod tests {
             json!(rows),
             json!([{
                 "text_value": "foo",
+                "alt_text_value": JsonValue::Null,
                 "float_value": 1.05,
                 "int_value": 1,
+                // Note that SQLite's type affinity means that booleans are actually
+                // implemented as numbers (see https://sqlite.org/datatype3.html).
+                "bool_value": 1,
             }])
         );
     }
