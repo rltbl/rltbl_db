@@ -51,6 +51,10 @@ fn extract_value(row: &Row, idx: usize) -> JsonValue {
             let value: i64 = row.get(idx);
             value.into()
         }
+        Type::BOOL => {
+            let value: bool = row.get(idx);
+            value.into()
+        }
         Type::FLOAT4 => {
             let value: f32 = row.get(idx);
             value.into()
@@ -89,10 +93,12 @@ impl DbQuery for PostgresConnection {
         // 0 => &str
         // 1 => i64
         // 2 => f64
+        // 3 => bool
         let mut param_type_sequence = vec![];
         let mut integer_params = vec![];
         let mut string_params = vec![];
         let mut float_params = vec![];
+        let mut bool_params = vec![];
         for param in json_params {
             match param {
                 JsonValue::String(s) => {
@@ -112,6 +118,11 @@ impl DbQuery for PostgresConnection {
                         None => return Err(format!("Unsupported number type for {n}")),
                     },
                 },
+                JsonValue::Bool(b) => {
+                    param_type_sequence.push(3);
+                    bool_params.push(b);
+                }
+                JsonValue::Null => todo!(),
                 _ => return Err(format!("Unsupported JSON type: {param}")),
             }
         }
@@ -121,6 +132,7 @@ impl DbQuery for PostgresConnection {
         let mut strings_idx = 0;
         let mut integers_idx = 0;
         let mut floats_idx = 0;
+        let mut bools_idx = 0;
         let mut pg_params = vec![];
         for param_code in &param_type_sequence {
             match param_code {
@@ -137,6 +149,11 @@ impl DbQuery for PostgresConnection {
                 2 => {
                     let param = &float_params[floats_idx];
                     floats_idx += 1;
+                    pg_params.push(param as &(dyn ToSql + Sync));
+                }
+                3 => {
+                    let param = &bool_params[bools_idx];
+                    bools_idx += 1;
                     pg_params.push(param as &(dyn ToSql + Sync));
                 }
                 _ => unreachable!(),
@@ -177,8 +194,8 @@ impl DbQuery for PostgresConnection {
         if row.values().len() > 1 {
             tracing::warn!("More than one value returned for query_value()");
         }
-        match row.values().next() {
-            Some(value) => Ok(value.clone()),
+        match row.into_iter().map(|(_, v)| v).next() {
+            Some(value) => Ok(value),
             None => Err("No values found".into()),
         }
     }
@@ -353,7 +370,8 @@ mod tests {
             r#"CREATE TABLE test_table_mixed (
                  text_value TEXT,
                  float_value FLOAT8,
-                 int_value INT8
+                 int_value INT8,
+                 bool_value BOOL
                )"#,
             &[],
         )
@@ -361,17 +379,20 @@ mod tests {
         .unwrap();
         conn.execute(
             r#"INSERT INTO test_table_mixed
-               (text_value, float_value, int_value)
-               VALUES ($1, $2, $3)"#,
-            &[json!("foo"), json!(1.05), json!(1)],
+               (text_value, float_value, int_value, bool_value)
+               VALUES ($1, $2, $3, $4)"#,
+            &[json!("foo"), json!(1.05), json!(1), json!(true)],
         )
         .await
         .unwrap();
 
-        let select_sql = r#"SELECT text_value, float_value, int_value
+        let select_sql = r#"SELECT text_value, float_value, int_value, bool_value
                             FROM test_table_mixed
-                            WHERE text_value = $1 AND float_value > $2 AND int_value > $3"#;
-        let params = [json!("foo"), json!(1.0), json!(0)];
+                            WHERE text_value = $1
+                              AND float_value > $2
+                              AND int_value > $3
+                              AND bool_value = $4"#;
+        let params = [json!("foo"), json!(1.0), json!(0), json!(true)];
         let value = conn
             .query_value(select_sql, &params)
             .await
@@ -388,6 +409,7 @@ mod tests {
                 "text_value": "foo",
                 "float_value": 1.05,
                 "int_value": 1,
+                "bool_value": true,
             })
         );
 
@@ -398,6 +420,7 @@ mod tests {
                 "text_value": "foo",
                 "float_value": 1.05,
                 "int_value": 1,
+                "bool_value": true,
             }])
         );
     }
