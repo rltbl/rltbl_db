@@ -2,11 +2,11 @@
 
 use crate::core::{DbError, DbQuery, JsonRow, JsonValue};
 
-use deadpool_postgres::{Config, Pool, Runtime};
+use deadpool_postgres::{Config, Object, Pool, Runtime, Transaction};
 use tokio_postgres::{
+    NoTls,
     row::Row,
     types::{ToSql, Type},
-    NoTls,
 };
 
 /// Represents a PostgreSQL database connection pool
@@ -32,6 +32,63 @@ impl PostgresConnection {
             }
             false => Err(format!("Invalid PostgreSQL URL: '{url}'")),
         }
+    }
+
+    pub async fn get(&self) -> Result<Object, DbError> {
+        self.pool
+            .get()
+            .await
+            .map_err(|err| format!("Error creating pool: {err}"))
+    }
+}
+
+pub struct PostgresTransaction<'a> {
+    pub tx: Transaction<'a>,
+}
+
+impl<'a> PostgresTransaction<'a> {
+    pub async fn execute(&self, sql: &str, _params: &[JsonValue]) -> Result<(), DbError> {
+        let stmt = self.tx.prepare(&sql).await.unwrap();
+        self.tx
+            .execute(&stmt, &[])
+            .await
+            .map_err(|err| format!("Error executing SQL: {err}"))?;
+        Ok(())
+    }
+
+    pub async fn query(&self, sql: &str, _params: &[JsonValue]) -> Result<Vec<JsonRow>, DbError> {
+        let stmt = self.tx.prepare(&sql).await.map_err(|err| {
+            <String as Into<DbError>>::into(format!("Error preparing statement: {err}"))
+        })?;
+        let rows = self
+            .tx
+            .query(&stmt, &[])
+            .await
+            .map_err(|err| format!("Error in query(): {err}"))?;
+        let mut json_rows = vec![];
+        for row in &rows {
+            let mut json_row = JsonRow::new();
+            let columns = row.columns();
+            for (i, column) in columns.iter().enumerate() {
+                json_row.insert(column.name().to_string(), extract_value(row, i));
+            }
+            json_rows.push(json_row);
+        }
+        Ok(json_rows)
+    }
+
+    pub async fn commit(self) -> Result<(), DbError> {
+        self.tx
+            .commit()
+            .await
+            .map_err(|err| format!("Error executing SQL: {err}"))
+    }
+
+    pub async fn rollback(self) -> Result<(), DbError> {
+        self.tx
+            .rollback()
+            .await
+            .map_err(|err| format!("Error executing SQL: {err}"))
     }
 }
 
@@ -227,6 +284,7 @@ impl DbQuery for PostgresConnection {
 mod tests {
     use super::*;
 
+    use deadpool_postgres::Transaction;
     use serde_json::json;
 
     #[tokio::test]
@@ -400,5 +458,43 @@ mod tests {
                 "int_value": 1,
             }])
         );
+    }
+
+    #[tokio::test]
+    async fn test_tx() {
+        let conn = PostgresConnection::connect("postgresql:///sql_json_db")
+            .await
+            .unwrap();
+        let mut obj = conn.pool.get().await.unwrap();
+        let tx = obj.transaction().await.unwrap();
+        let rows = select_1(&tx).await;
+        tx.commit().await.unwrap();
+        assert_eq!(json!(rows), json!([{"foo": 1}]));
+    }
+
+    async fn select_1(tx: &Transaction<'_>) -> Vec<JsonRow> {
+        let sql = "SELECT 1 AS foo";
+        let stmt = tx
+            .prepare(&sql)
+            .await
+            .map_err(|err| {
+                <String as Into<DbError>>::into(format!("Error preparing statement: {err}"))
+            })
+            .unwrap();
+        let rows = tx
+            .query(&stmt, &[])
+            .await
+            .map_err(|err| format!("Error in query(): {err}"))
+            .unwrap();
+        let mut json_rows = vec![];
+        for row in &rows {
+            let mut json_row = JsonRow::new();
+            let columns = row.columns();
+            for (i, column) in columns.iter().enumerate() {
+                json_row.insert(column.name().to_string(), extract_value(row, i));
+            }
+            json_rows.push(json_row);
+        }
+        json_rows
     }
 }

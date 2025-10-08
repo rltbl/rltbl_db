@@ -3,10 +3,11 @@
 use crate::core::{DbError, DbQuery, JsonRow, JsonValue};
 
 use deadpool_sqlite::{
+    Config, Object, Pool, Runtime,
     rusqlite::{
-        types::ValueRef as RusqliteValueRef, Row as RusqliteRow, Statement as RusqliteStatement,
+        Row as RusqliteRow, Statement as RusqliteStatement, Transaction as RusqliteTransaction,
+        types::ValueRef as RusqliteValueRef,
     },
-    Config, Pool, Runtime,
 };
 use serde_json::json;
 
@@ -24,6 +25,22 @@ impl SqliteConnection {
             .map_err(|err| format!("Error creating pool: {err}"))?;
         Ok(Self { pool })
     }
+
+    pub async fn get(&self) -> Result<Object, DbError> {
+        self.pool
+            .get()
+            .await
+            .map_err(|err| format!("Error creating pool: {err}"))
+    }
+
+    // pub async fn begin<'a>(
+    //     conn: &'a mut RusqliteConnection,
+    // ) -> Result<SqliteTransaction<'a>, DbError> {
+    //     let tx = conn
+    //         .transaction()
+    //         .map_err(|err| format!("Error creating transaction: {err}"))?;
+    //     Ok(SqliteTransaction { tx })
+    // }
 }
 
 // TODO: Change the type of the error from String to something custom (DbError is not appropriate,
@@ -94,6 +111,43 @@ fn query_statement(
         result.push(to_json_row(&column_names, row));
     }
     Ok(result)
+}
+
+pub struct SqliteTransaction<'a> {
+    pub tx: RusqliteTransaction<'a>,
+}
+
+impl<'a> SqliteTransaction<'a> {
+    pub async fn execute(&self, sql: &str, _params: &[JsonValue]) -> Result<(), DbError> {
+        self.tx
+            .execute(sql, ())
+            .map_err(|err| format!("Error executing SQL: {err}"))?;
+        Ok(())
+    }
+
+    pub async fn query(&self, sql: &str, params: &[JsonValue]) -> Result<Vec<JsonRow>, DbError> {
+        let sql = sql.to_string();
+        let params = json!(params);
+        let mut stmt = self.tx.prepare(&sql).map_err(|err| {
+            <String as Into<DbError>>::into(format!("Error preparing statement: {err}"))
+        })?;
+        let rows = query_statement(&mut stmt, Some(&params)).map_err(|err| {
+            <String as Into<DbError>>::into(format!("Error while querying: {err}"))
+        })?;
+        Ok(rows)
+    }
+
+    pub async fn commit(self) -> Result<(), DbError> {
+        self.tx
+            .commit()
+            .map_err(|err| format!("Error executing SQL: {err}"))
+    }
+
+    pub async fn rollback(self) -> Result<(), DbError> {
+        self.tx
+            .rollback()
+            .map_err(|err| format!("Error executing SQL: {err}"))
+    }
 }
 
 impl DbQuery for SqliteConnection {
@@ -366,5 +420,31 @@ mod tests {
                 "int_value": 1,
             }])
         );
+    }
+
+    #[tokio::test]
+    async fn test_tx() {
+        let conn = SqliteConnection::connect("test_mixed_columns.db")
+            .await
+            .unwrap();
+        let obj = conn.get().await.unwrap();
+        let mut lock = obj.lock().unwrap();
+        let tx = lock.transaction().unwrap();
+        let rows = select_1(&tx);
+        tx.commit().unwrap();
+        assert_eq!(json!(rows), json!([{"1": 1}]));
+    }
+
+    fn select_1(tx: &RusqliteTransaction) -> Vec<JsonRow> {
+        let sql = "SELECT 1";
+        let mut stmt = tx
+            .prepare(&sql)
+            .map_err(|err| {
+                <String as Into<DbError>>::into(format!("Error preparing statement: {err}"))
+            })
+            .unwrap();
+        query_statement(&mut stmt, None)
+            .map_err(|err| <String as Into<DbError>>::into(format!("Error while querying: {err}")))
+            .unwrap()
     }
 }
