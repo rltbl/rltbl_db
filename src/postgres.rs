@@ -3,7 +3,11 @@
 use crate::core::{DbError, DbQuery, JsonRow, JsonValue};
 
 use deadpool_postgres::{Config, Pool, Runtime};
-use tokio_postgres::{NoTls, row::Row, types::Type};
+use tokio_postgres::{
+    row::Row,
+    types::{ToSql, Type},
+    NoTls,
+};
 
 /// Represents a PostgreSQL database connection pool
 pub struct PostgresConnection {
@@ -17,14 +21,16 @@ impl PostgresConnection {
         match url.starts_with("postgresql:///") {
             true => {
                 let mut cfg = Config::new();
-                let db_name = url.strip_prefix("postgresql:///").ok_or("Invalid URL")?;
+                let db_name = url
+                    .strip_prefix("postgresql:///")
+                    .ok_or("Invalid PostgreSQL URL")?;
                 cfg.dbname = Some(db_name.to_string());
                 let pool = cfg
                     .create_pool(Some(Runtime::Tokio1), NoTls)
                     .map_err(|err| format!("Error creating pool: {err}"))?;
                 Ok(Self { pool })
             }
-            false => Err(format!("Invalid PostgreSQL database path: '{url}'")),
+            false => Err(format!("Invalid PostgreSQL URL: '{url}'")),
         }
     }
 }
@@ -45,6 +51,10 @@ fn extract_value(row: &Row, idx: usize) -> JsonValue {
             let value: i64 = row.get(idx);
             value.into()
         }
+        Type::BOOL => {
+            let value: bool = row.get(idx);
+            value.into()
+        }
         Type::FLOAT4 => {
             let value: f32 = row.get(idx);
             value.into()
@@ -62,28 +72,96 @@ fn extract_value(row: &Row, idx: usize) -> JsonValue {
 
 impl DbQuery for PostgresConnection {
     /// Implements [DbQuery::execute()] for PostgreSQL.
-    async fn execute(&self, sql: &str, _params: &[JsonValue]) -> Result<(), DbError> {
-        let client = self
-            .pool
-            .get()
-            .await
-            .map_err(|err| format!("Unable to get pool: {err}"))?;
-        client
-            .execute(sql, &[])
-            .await
-            .map_err(|err| format!("Error in execute(): {err}"))?;
+    async fn execute(&self, sql: &str, params: &[JsonValue]) -> Result<(), DbError> {
+        self.query(sql, params).await?;
         Ok(())
     }
 
     /// Implements [DbQuery::query()] for PostgreSQL.
-    async fn query(&self, sql: &str, _params: &[JsonValue]) -> Result<Vec<JsonRow>, DbError> {
+    async fn query(&self, sql: &str, json_params: &[JsonValue]) -> Result<Vec<JsonRow>, DbError> {
         let client = self
             .pool
             .get()
             .await
             .map_err(|err| format!("Unable to get pool: {err}"))?;
+
+        // The rust compiler needs the parameters to the query, converted to their underlying
+        // primitive types (i.e., not just the JsonValues wrapping them), to be explicitly be in
+        // scope when passing them to client.execute(). So we build three vectors to keep them
+        // accessible, and one more vector to represent the ordered sequence of parameter types,
+        // where:
+        // 0 => &str
+        // 1 => i64
+        // 2 => f64
+        // 3 => bool
+        let mut param_type_sequence = vec![];
+        let mut integer_params = vec![];
+        let mut string_params = vec![];
+        let mut float_params = vec![];
+        let mut bool_params = vec![];
+        for param in json_params {
+            match param {
+                JsonValue::String(s) => {
+                    param_type_sequence.push(0);
+                    string_params.push(s.as_str())
+                }
+                JsonValue::Number(n) => match n.as_i64() {
+                    Some(n) => {
+                        param_type_sequence.push(1);
+                        integer_params.push(n);
+                    }
+                    None => match n.as_f64() {
+                        Some(n) => {
+                            param_type_sequence.push(2);
+                            float_params.push(n);
+                        }
+                        None => return Err(format!("Unsupported number type for {n}")),
+                    },
+                },
+                JsonValue::Bool(b) => {
+                    param_type_sequence.push(3);
+                    bool_params.push(b);
+                }
+                JsonValue::Null => todo!(),
+                _ => return Err(format!("Unsupported JSON type: {param}")),
+            }
+        }
+
+        // Now use the three typed lists of parameters and the param_type_sequence to build a list
+        // of parameters that implement &(dyn ToSql + Sync), which is what client.execute() needs.
+        let mut strings_idx = 0;
+        let mut integers_idx = 0;
+        let mut floats_idx = 0;
+        let mut bools_idx = 0;
+        let mut pg_params = vec![];
+        for param_code in &param_type_sequence {
+            match param_code {
+                0 => {
+                    let param = &string_params[strings_idx];
+                    strings_idx += 1;
+                    pg_params.push(param as &(dyn ToSql + Sync));
+                }
+                1 => {
+                    let param = &integer_params[integers_idx];
+                    integers_idx += 1;
+                    pg_params.push(param as &(dyn ToSql + Sync));
+                }
+                2 => {
+                    let param = &float_params[floats_idx];
+                    floats_idx += 1;
+                    pg_params.push(param as &(dyn ToSql + Sync));
+                }
+                3 => {
+                    let param = &bool_params[bools_idx];
+                    bools_idx += 1;
+                    pg_params.push(param as &(dyn ToSql + Sync));
+                }
+                _ => unreachable!(),
+            }
+        }
+
         let rows = client
-            .query(sql, &[])
+            .query(sql, &pg_params)
             .await
             .map_err(|err| format!("Error in query(): {err}"))?;
         let mut json_rows = vec![];
@@ -99,48 +177,26 @@ impl DbQuery for PostgresConnection {
     }
 
     /// Implements [DbQuery::query_row()] for PostgreSQL.
-    async fn query_row(&self, sql: &str, _params: &[JsonValue]) -> Result<JsonRow, DbError> {
-        let client = self
-            .pool
-            .get()
-            .await
-            .map_err(|err| format!("Unable to get pool: {err}"))?;
-        let rows = client
-            .query(sql, &[])
-            .await
-            .map_err(|err| format!("Error in query_row(): {err}"))?;
-        if rows.is_empty() {
-            return Err("No rows found".to_string());
-        }
+    async fn query_row(&self, sql: &str, params: &[JsonValue]) -> Result<JsonRow, DbError> {
+        let rows = self.query(sql, params).await?;
         if rows.len() > 1 {
             tracing::warn!("More than one row returned for query_row()");
         }
-        let row = rows[0].clone();
-        let mut json_row = JsonRow::new();
-        let columns = row.columns();
-        for (i, column) in columns.iter().enumerate() {
-            json_row.insert(column.name().to_string(), extract_value(&row, i));
+        match rows.into_iter().nth(0) {
+            Some(row) => Ok(row),
+            None => Err("No rows found".to_string()),
         }
-        Ok(json_row)
     }
 
     /// Implements [DbQuery::query_value()] for PostgreSQL.
-    async fn query_value(&self, sql: &str, _params: &[JsonValue]) -> Result<JsonValue, DbError> {
-        let client = self
-            .pool
-            .get()
-            .await
-            .map_err(|err| format!("Unable to get pool: {err}"))?;
-        let rows = client
-            .query(sql, &[])
-            .await
-            .map_err(|err| format!("Error in query_value(): {err}"))?;
-        if rows.len() > 1 {
-            tracing::warn!("More than one row returned for query_value()");
+    async fn query_value(&self, sql: &str, params: &[JsonValue]) -> Result<JsonValue, DbError> {
+        let row = self.query_row(sql, params).await?;
+        if row.values().len() > 1 {
+            tracing::warn!("More than one value returned for query_value()");
         }
-        match rows.iter().next() {
-            Some(row) => Ok(extract_value(&row, 0)),
-            None => Err("No rows found".to_string()),
+        match row.into_iter().map(|(_, v)| v).next() {
+            Some(value) => Ok(value),
+            None => Err("No values found".into()),
         }
     }
 
@@ -157,112 +213,29 @@ impl DbQuery for PostgresConnection {
     }
 
     /// Implements [DbQuery::query_u64()] for PostgreSQL.
-    async fn query_u64(&self, sql: &str, _params: &[JsonValue]) -> Result<u64, DbError> {
-        let client = self
-            .pool
-            .get()
-            .await
-            .map_err(|err| format!("Unable to get pool: {err}"))?;
-        let rows = client
-            .query(sql, &[])
-            .await
-            .map_err(|err| format!("Error in query_u64(): {err}"))?;
-        if rows.len() > 1 {
-            tracing::warn!("More than one row returned for query_u64()");
-        }
-        match rows.iter().next() {
-            Some(row) => {
-                let column = &row.columns()[0];
-                let value = match *column.type_() {
-                    Type::INT2 | Type::INT4 => {
-                        let value: i32 = row.get(0);
-                        if value < 0 {
-                            return Err(format!("Invalid value: {value}"));
-                        }
-                        value as u64
-                    }
-                    Type::INT8 => {
-                        let value: i64 = row.get(0);
-                        if value < 0 {
-                            return Err(format!("Invalid value: {value}"));
-                        }
-                        let value = u64::try_from(value)
-                            .map_err(|err| format!("Can't convert to u64: {value}: {err}"))?;
-                        value
-                    }
-                    _ => return Err(format!("Cannot convert to u64: {}", column.type_())),
-                };
-                Ok(value)
-            }
-            None => return Err("No rows found".to_string()),
+    async fn query_u64(&self, sql: &str, params: &[JsonValue]) -> Result<u64, DbError> {
+        let value = self.query_value(sql, params).await?;
+        match value.as_u64() {
+            Some(val) => Ok(val),
+            None => Err(format!("Not a u64: {value}")),
         }
     }
 
     /// Implements [DbQuery::query_i64()] for PostgreSQL.
-    async fn query_i64(&self, sql: &str, _params: &[JsonValue]) -> Result<i64, DbError> {
-        let client = self
-            .pool
-            .get()
-            .await
-            .map_err(|err| format!("Unable to get pool: {err}"))?;
-        let rows = client
-            .query(sql, &[])
-            .await
-            .map_err(|err| format!("Error in query_i64(): {err}"))?;
-        if rows.len() > 1 {
-            tracing::warn!("More than one row returned for query_i64()");
-        }
-        match rows.iter().next() {
-            Some(row) => {
-                let column = &row.columns()[0];
-                let value = match *column.type_() {
-                    Type::INT2 | Type::INT4 => {
-                        let value: i32 = row.get(0);
-                        value as i64
-                    }
-                    Type::INT8 => {
-                        let value: i64 = row.get(0);
-                        value
-                    }
-                    _ => return Err(format!("Cannot convert to i64: {}", column.type_())),
-                };
-                Ok(value)
-            }
-            None => return Err("No rows found".to_string()),
+    async fn query_i64(&self, sql: &str, params: &[JsonValue]) -> Result<i64, DbError> {
+        let value = self.query_value(sql, params).await?;
+        match value.as_i64() {
+            Some(val) => Ok(val),
+            None => Err(format!("Not a i64: {value}")),
         }
     }
 
     /// Implements [DbQuery::query_f64] for PostgreSQL.
-    async fn query_f64(&self, sql: &str, _params: &[JsonValue]) -> Result<f64, DbError> {
-        let client = self
-            .pool
-            .get()
-            .await
-            .map_err(|err| format!("Unable to get pool: {err}"))?;
-        let rows = client
-            .query(sql, &[])
-            .await
-            .map_err(|err| format!("Error in query_i64(): {err}"))?;
-        if rows.len() > 1 {
-            tracing::warn!("More than one row returned for query_f64()");
-        }
-        match rows.iter().next() {
-            Some(row) => {
-                let column = &row.columns()[0];
-                let value = match *column.type_() {
-                    Type::FLOAT4 => {
-                        let value: f32 = row.get(0);
-                        value as f64
-                    }
-                    Type::FLOAT8 => {
-                        let value: f64 = row.get(0);
-                        value
-                    }
-                    _ => return Err(format!("Cannot convert to f64: {}", column.type_())),
-                };
-                Ok(value)
-            }
-            None => return Err("No rows found".to_string()),
+    async fn query_f64(&self, sql: &str, params: &[JsonValue]) -> Result<f64, DbError> {
+        let value = self.query_value(sql, params).await?;
+        match value.as_f64() {
+            Some(val) => Ok(val),
+            None => Err(format!("Not a f64: {value}")),
         }
     }
 }
@@ -284,12 +257,12 @@ mod tests {
         conn.execute("CREATE TABLE test_table_text ( value TEXT )", &[])
             .await
             .unwrap();
-        conn.execute("INSERT INTO test_table_text VALUES ('foo')", &[])
+        conn.execute("INSERT INTO test_table_text VALUES ($1)", &[json!("foo")])
             .await
             .unwrap();
-        let select_sql = "SELECT value FROM test_table_text LIMIT 1";
+        let select_sql = "SELECT value FROM test_table_text WHERE value = $1";
         let value = conn
-            .query_value(select_sql, &[])
+            .query_value(select_sql, &[json!("foo")])
             .await
             .unwrap()
             .as_str()
@@ -297,13 +270,16 @@ mod tests {
             .to_string();
         assert_eq!("foo", value);
 
-        let value = conn.query_string(select_sql, &[]).await.unwrap();
+        let value = conn
+            .query_string(select_sql, &[json!("foo")])
+            .await
+            .unwrap();
         assert_eq!("foo", value);
 
-        let row = conn.query_row(select_sql, &[]).await.unwrap();
+        let row = conn.query_row(select_sql, &[json!("foo")]).await.unwrap();
         assert_eq!(json!(row), json!({"value":"foo"}));
 
-        let rows = conn.query(select_sql, &[]).await.unwrap();
+        let rows = conn.query(select_sql, &[json!("foo")]).await.unwrap();
         assert_eq!(json!(rows), json!([{"value":"foo"}]));
     }
 
@@ -318,31 +294,31 @@ mod tests {
         conn.execute("CREATE TABLE test_table_int ( value INT8 )", &[])
             .await
             .unwrap();
-        conn.execute("INSERT INTO test_table_int VALUES (1)", &[])
+        conn.execute("INSERT INTO test_table_int VALUES ($1)", &[json!(1)])
             .await
             .unwrap();
-        let select_sql = "SELECT value FROM test_table_int LIMIT 1";
+        let select_sql = "SELECT value FROM test_table_int WHERE value = $1";
         let value = conn
-            .query_value(select_sql, &[])
+            .query_value(select_sql, &[json!(1)])
             .await
             .unwrap()
             .as_i64()
             .unwrap();
         assert_eq!(1, value);
 
-        let value = conn.query_u64(select_sql, &[]).await.unwrap();
+        let value = conn.query_u64(select_sql, &[json!(1)]).await.unwrap();
         assert_eq!(1, value);
 
-        let value = conn.query_i64(select_sql, &[]).await.unwrap();
+        let value = conn.query_i64(select_sql, &[json!(1)]).await.unwrap();
         assert_eq!(1, value);
 
-        let value = conn.query_string(select_sql, &[]).await.unwrap();
+        let value = conn.query_string(select_sql, &[json!(1)]).await.unwrap();
         assert_eq!("1", value);
 
-        let row = conn.query_row(select_sql, &[]).await.unwrap();
+        let row = conn.query_row(select_sql, &[json!(1)]).await.unwrap();
         assert_eq!(json!(row), json!({"value":1}));
 
-        let rows = conn.query(select_sql, &[]).await.unwrap();
+        let rows = conn.query(select_sql, &[json!(1)]).await.unwrap();
         assert_eq!(json!(rows), json!([{"value":1}]));
     }
 
@@ -357,28 +333,95 @@ mod tests {
         conn.execute("CREATE TABLE test_table_float ( value FLOAT8 )", &[])
             .await
             .unwrap();
-        conn.execute("INSERT INTO test_table_float VALUES (1.05)", &[])
+        conn.execute("INSERT INTO test_table_float VALUES ($1)", &[json!(1.05)])
             .await
             .unwrap();
-        let select_sql = "SELECT value FROM test_table_float LIMIT 1";
+        let select_sql = "SELECT value FROM test_table_float WHERE value > $1";
         let value = conn
-            .query_value(select_sql, &[])
+            .query_value(select_sql, &[json!(1.0)])
             .await
             .unwrap()
             .as_f64()
             .unwrap();
         assert_eq!("1.05", format!("{value:.2}"));
 
-        let value = conn.query_f64(select_sql, &[]).await.unwrap();
+        let value = conn.query_f64(select_sql, &[json!(1.0)]).await.unwrap();
         assert_eq!(1.05, value);
 
-        let value = conn.query_string(select_sql, &[]).await.unwrap();
+        let value = conn.query_string(select_sql, &[json!(1.0)]).await.unwrap();
         assert_eq!("1.05", value);
 
-        let row = conn.query_row(select_sql, &[]).await.unwrap();
+        let row = conn.query_row(select_sql, &[json!(1.0)]).await.unwrap();
         assert_eq!(json!(row), json!({"value":1.05}));
 
-        let rows = conn.query(select_sql, &[]).await.unwrap();
+        let rows = conn.query(select_sql, &[json!(1.0)]).await.unwrap();
         assert_eq!(json!(rows), json!([{"value":1.05}]));
+    }
+
+    #[tokio::test]
+    async fn test_mixed_column_query() {
+        let conn = PostgresConnection::connect("postgresql:///sql_json_db")
+            .await
+            .unwrap();
+        conn.execute("DROP TABLE IF EXISTS test_table_mixed", &[])
+            .await
+            .unwrap();
+        conn.execute(
+            r#"CREATE TABLE test_table_mixed (
+                 text_value TEXT,
+                 float_value FLOAT8,
+                 int_value INT8,
+                 bool_value BOOL
+               )"#,
+            &[],
+        )
+        .await
+        .unwrap();
+        conn.execute(
+            r#"INSERT INTO test_table_mixed
+               (text_value, float_value, int_value, bool_value)
+               VALUES ($1, $2, $3, $4)"#,
+            &[json!("foo"), json!(1.05), json!(1), json!(true)],
+        )
+        .await
+        .unwrap();
+
+        let select_sql = r#"SELECT text_value, float_value, int_value, bool_value
+                            FROM test_table_mixed
+                            WHERE text_value = $1
+                              AND float_value > $2
+                              AND int_value > $3
+                              AND bool_value = $4"#;
+        let params = [json!("foo"), json!(1.0), json!(0), json!(true)];
+        let value = conn
+            .query_value(select_sql, &params)
+            .await
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!("foo", value);
+
+        let row = conn.query_row(select_sql, &params).await.unwrap();
+        assert_eq!(
+            json!(row),
+            json!({
+                "text_value": "foo",
+                "float_value": 1.05,
+                "int_value": 1,
+                "bool_value": true,
+            })
+        );
+
+        let rows = conn.query(select_sql, &params).await.unwrap();
+        assert_eq!(
+            json!(rows),
+            json!([{
+                "text_value": "foo",
+                "float_value": 1.05,
+                "int_value": 1,
+                "bool_value": true,
+            }])
+        );
     }
 }

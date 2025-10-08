@@ -1,8 +1,8 @@
 use axum::{
-    Router,
     extract::State,
     response::{Html, IntoResponse},
     routing::get,
+    Router,
 };
 use sql_json::{any::AnyConnection, core::DbQuery};
 use std::sync::Arc;
