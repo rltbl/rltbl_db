@@ -4,7 +4,7 @@ use crate::core::{DbError, DbQuery, JsonRow, JsonValue};
 
 use deadpool_sqlite::{
     rusqlite::{
-        types::{Null, ValueRef as RusqliteValueRef},
+        types::{Null as RusqliteNull, ValueRef as RusqliteValueRef},
         Row as RusqliteRow, Statement as RusqliteStatement,
     },
     Config, Pool, Runtime,
@@ -98,7 +98,7 @@ fn query_statement(
                     }
                 },
                 JsonValue::Null => {
-                    stmt.raw_bind_parameter(i + 1, &Null)
+                    stmt.raw_bind_parameter(i + 1, &RusqliteNull)
                         .map_err(|err| format!("Error binding parameter '{param}': {err}"))?;
                 }
                 _ => return Err(format!("Unsupported JSON type: {param}")),
