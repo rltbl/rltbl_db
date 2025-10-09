@@ -77,6 +77,21 @@ impl DbQuery for PostgresConnection {
         Ok(())
     }
 
+    // TODO: Complete the implementation and add a unit test case:
+    /// Implements [DbQuery::execute_batch()] for PostgreSQL
+    async fn execute_batch(&self, sql: &str) -> Result<(), DbError> {
+        let client = self
+            .pool
+            .get()
+            .await
+            .map_err(|err| format!("Unable to get pool: {err}"))?;
+        client
+            .batch_execute(sql)
+            .await
+            .map_err(|err| format!("Error in query(): {err}"))?;
+        Ok(())
+    }
+
     /// Implements [DbQuery::query()] for PostgreSQL.
     async fn query(&self, sql: &str, json_params: &[JsonValue]) -> Result<Vec<JsonRow>, DbError> {
         let client = self

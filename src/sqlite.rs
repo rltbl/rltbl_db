@@ -124,6 +124,24 @@ impl DbQuery for SqliteConnection {
         Ok(())
     }
 
+    // TODO: Complete the implementation and add a unit test case:
+    /// Implements [DbQuery::execute_batch()] for PostgreSQL
+    async fn execute_batch(&self, sql: &str) -> Result<(), DbError> {
+        let conn = self
+            .pool
+            .get()
+            .await
+            .map_err(|err| format!("Unable to get pool: {err}"))?;
+        let sql = sql.to_string();
+        conn.interact(move |conn| {
+            conn.execute_batch(&sql).unwrap();
+            //.map_err(|err| format!("Error in query(): {err}"))?;
+        })
+        .await
+        .unwrap();
+        Ok(())
+    }
+
     /// Implements [DbQuery::query()] for SQLite.
     async fn query(&self, sql: &str, params: &[JsonValue]) -> Result<Vec<JsonRow>, DbError> {
         let conn = self
