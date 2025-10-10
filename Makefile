@@ -9,10 +9,10 @@ SHELL := bash
 test: test_sqlite test_postgres
 
 test_sqlite:
-	cargo test
+	cargo test -- --no-capture
 
 test_postgres:
-	cargo test --features postgres
+	cargo test --features postgres -- --no-capture
 
 crate_docs:
 	RUSTDOCFLAGS="-D warnings" cargo doc
