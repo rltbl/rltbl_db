@@ -999,6 +999,7 @@ dependencies = [
  "axum",
  "deadpool-postgres",
  "deadpool-sqlite",
+ "rusqlite",
  "serde",
  "serde_json",
  "tokio",

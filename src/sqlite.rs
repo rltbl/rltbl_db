@@ -4,8 +4,9 @@ use crate::core::{DbError, DbQuery, JsonRow, JsonValue};
 
 use deadpool_sqlite::{
     rusqlite::{
+        fallible_iterator::FallibleIterator,
         types::{Null as RusqliteNull, ValueRef as RusqliteValueRef},
-        Row as RusqliteRow, Statement as RusqliteStatement,
+        Statement as RusqliteStatement,
     },
     Config, Pool, Runtime,
 };
@@ -40,36 +41,14 @@ fn extract_value(rows: &Vec<JsonRow>) -> Result<JsonValue, String> {
     }
 }
 
-fn to_json_row(column_names: &Vec<&str>, row: &RusqliteRow) -> JsonRow {
-    let mut json_row = JsonRow::new();
-    for column_name in column_names {
-        let value = match row.get_ref(*column_name) {
-            Ok(value) => match value {
-                RusqliteValueRef::Null => JsonValue::Null,
-                RusqliteValueRef::Integer(value) => JsonValue::from(value),
-                RusqliteValueRef::Real(value) => JsonValue::from(value),
-                RusqliteValueRef::Text(value) | RusqliteValueRef::Blob(value) => {
-                    let value = std::str::from_utf8(value).unwrap_or_default();
-                    JsonValue::from(value)
-                }
-            },
-            Err(_) => JsonValue::Null,
-        };
-        json_row.insert(column_name.to_string(), value);
-    }
-    json_row
-}
-
 fn query_statement(
     stmt: &mut RusqliteStatement<'_>,
     params: Option<&JsonValue>,
 ) -> Result<Vec<JsonRow>, DbError> {
-    let column_names = stmt
-        .column_names()
-        .iter()
-        .map(|c| c.to_string())
-        .collect::<Vec<_>>();
-    let column_names = column_names.iter().map(|c| c.as_str()).collect::<Vec<_>>();
+    struct ColumnConfig {
+        name: String,
+        r#type: Option<String>,
+    }
 
     if let Some(params) = params {
         let params = params.as_array().ok_or(format!(
@@ -86,8 +65,9 @@ fn query_statement(
                         .map_err(|err| format!("Error binding parameter '{param}': {err}"))?;
                 }
                 JsonValue::Bool(flag) => match flag {
-                    // Note that SQLite's type affinity means that booleans are actually
-                    // implemented as numbers (see https://sqlite.org/datatype3.html).
+                    // Note that SQLite's type affinity means that booleans are
+                    // actually implemented as numbers
+                    // (see https://sqlite.org/datatype3.html).
                     false => {
                         stmt.raw_bind_parameter(i + 1, &0.to_string())
                             .map_err(|err| format!("Error binding parameter '{param}': {err}"))?;
@@ -105,16 +85,52 @@ fn query_statement(
             };
         }
     }
-    let mut rows = stmt.raw_query();
+    let columns = stmt.columns();
+    let columns = columns
+        .iter()
+        .map(|col| {
+            let name = col.name().to_string();
+            let r#type = col.decl_type().and_then(|s| Some(s.to_string()));
+            ColumnConfig { name, r#type }
+        })
+        .collect::<Vec<_>>();
 
-    let mut result = Vec::new();
-    while let Some(row) = rows
-        .next()
-        .map_err(|err| format!("Error getting next row: {err}"))?
-    {
-        result.push(to_json_row(&column_names, row));
-    }
-    Ok(result)
+    let result = stmt
+        .raw_query()
+        .map(|row| {
+            let mut json_row = JsonRow::new();
+            for column in &columns {
+                let column_name = &column.name;
+                let column_type = &column.r#type;
+                let value = match row.get_ref(column_name.as_str()) {
+                    Ok(value) => match value {
+                        RusqliteValueRef::Null => JsonValue::Null,
+                        RusqliteValueRef::Integer(value) => match column_type {
+                            None => todo!(),
+                            Some(ctype) if ctype.to_lowercase() == "bool" => {
+                                JsonValue::Bool(value != 0)
+                            }
+                            _ => JsonValue::from(value),
+                        },
+                        RusqliteValueRef::Real(value) => JsonValue::from(value),
+                        RusqliteValueRef::Text(value) | RusqliteValueRef::Blob(value) => {
+                            let value = std::str::from_utf8(value).unwrap_or_default();
+                            JsonValue::from(value)
+                        }
+                    },
+                    Err(err) => {
+                        tracing::warn!(
+                            "Error getting value for column '{column_name}' from row: {err}"
+                        );
+                        JsonValue::Null
+                    }
+                };
+                json_row.insert(column_name.to_string(), value);
+            }
+            Ok(json_row)
+        })
+        .collect::<Vec<_>>();
+    result.map_err(|err| err.to_string())
 }
 
 impl DbQuery for SqliteConnection {
@@ -412,9 +428,7 @@ mod tests {
                 "alt_text_value": JsonValue::Null,
                 "float_value": 1.05,
                 "int_value": 1,
-                // Note that SQLite's type affinity means that booleans are actually
-                // implemented as numbers (see https://sqlite.org/datatype3.html).
-                "bool_value": 1,
+                "bool_value": true,
             })
         );
 
@@ -426,9 +440,7 @@ mod tests {
                 "alt_text_value": JsonValue::Null,
                 "float_value": 1.05,
                 "int_value": 1,
-                // Note that SQLite's type affinity means that booleans are actually
-                // implemented as numbers (see https://sqlite.org/datatype3.html).
-                "bool_value": 1,
+                "bool_value": true,
             }])
         );
     }

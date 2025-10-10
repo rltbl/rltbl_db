@@ -130,7 +130,7 @@ impl DbQuery for PostgresConnection {
             NullBool,
         }
 
-        // The column types as reported by the database via prepare():
+        // The expected types of all of the parameters as reported by the database via prepare():
         let param_pg_types = client
             .prepare(sql)
             .await
@@ -148,7 +148,6 @@ impl DbQuery for PostgresConnection {
         let mut string_params = vec![];
         let mut float_params = vec![];
         let mut bool_params = vec![];
-        // TODO: Remove unwraps.
         for (i, param) in json_params.iter().enumerate() {
             let pg_type = &param_pg_types[i];
             match pg_type {
@@ -157,7 +156,7 @@ impl DbQuery for PostgresConnection {
                         JsonValue::Null => param_basic_types.push(BasicType::NullText),
                         _ => {
                             param_basic_types.push(BasicType::Text);
-                            string_params.push(param.as_str().unwrap());
+                            string_params.push(param.as_str().ok_or("Not a string")?);
                         }
                     };
                 }
@@ -166,7 +165,7 @@ impl DbQuery for PostgresConnection {
                         JsonValue::Null => param_basic_types.push(BasicType::NullInteger),
                         _ => {
                             param_basic_types.push(BasicType::Integer);
-                            integer_params.push(param.as_i64().unwrap());
+                            integer_params.push(param.as_i64().ok_or("Not an integer")?);
                         }
                     };
                 }
@@ -175,7 +174,7 @@ impl DbQuery for PostgresConnection {
                         JsonValue::Null => param_basic_types.push(BasicType::NullFloat),
                         _ => {
                             param_basic_types.push(BasicType::Float);
-                            float_params.push(param.as_f64().unwrap());
+                            float_params.push(param.as_f64().ok_or("Not a float")?);
                         }
                     };
                 }
@@ -184,7 +183,7 @@ impl DbQuery for PostgresConnection {
                         JsonValue::Null => param_basic_types.push(BasicType::NullBool),
                         _ => {
                             param_basic_types.push(BasicType::Bool);
-                            bool_params.push(param.as_bool().unwrap());
+                            bool_params.push(param.as_bool().ok_or("Not a bool")?);
                         }
                     };
                 }
