@@ -41,15 +41,11 @@ fn extract_value(rows: &Vec<JsonRow>) -> Result<JsonValue, String> {
     }
 }
 
+/// Query the database using the given prepared statement and json parameters.
 fn query_statement(
     stmt: &mut RusqliteStatement<'_>,
     params: Option<&JsonValue>,
 ) -> Result<Vec<JsonRow>, DbError> {
-    struct ColumnConfig {
-        name: String,
-        r#type: Option<String>,
-    }
-
     if let Some(params) = params {
         let params = params.as_array().ok_or(format!(
             "Parameters: {params:?} are not in the form of an array"
@@ -65,9 +61,9 @@ fn query_statement(
                         .map_err(|err| format!("Error binding parameter '{param}': {err}"))?;
                 }
                 JsonValue::Bool(flag) => match flag {
-                    // Note that SQLite's type affinity means that booleans are
-                    // actually implemented as numbers
-                    // (see https://sqlite.org/datatype3.html).
+                    // Note that SQLite's type affinity means that booleans are actually implemented
+                    // as numbers (see https://sqlite.org/datatype3.html). They will be converted
+                    // back to boolean when the results are read below.
                     false => {
                         stmt.raw_bind_parameter(i + 1, &0.to_string())
                             .map_err(|err| format!("Error binding parameter '{param}': {err}"))?;
@@ -85,13 +81,21 @@ fn query_statement(
             };
         }
     }
+
+    // Used to represent information about a given column:
+    struct ColumnConfig {
+        name: String,
+        datatype: Option<String>,
+    }
+
+    // Collect the column information for the query:
     let columns = stmt.columns();
     let columns = columns
         .iter()
         .map(|col| {
             let name = col.name().to_string();
-            let r#type = col.decl_type().and_then(|s| Some(s.to_string()));
-            ColumnConfig { name, r#type }
+            let datatype = col.decl_type().and_then(|s| Some(s.to_string()));
+            ColumnConfig { name, datatype }
         })
         .collect::<Vec<_>>();
 
@@ -101,15 +105,30 @@ fn query_statement(
             let mut json_row = JsonRow::new();
             for column in &columns {
                 let column_name = &column.name;
-                let column_type = &column.r#type;
+                let column_type = &column.datatype;
                 let value = match row.get_ref(column_name.as_str()) {
                     Ok(value) => match value {
                         RusqliteValueRef::Null => JsonValue::Null,
                         RusqliteValueRef::Integer(value) => match column_type {
-                            None => todo!(),
                             Some(ctype) if ctype.to_lowercase() == "bool" => {
                                 JsonValue::Bool(value != 0)
                             }
+                            // The remaining cases are (a) the column's datatype is integer, and
+                            // (b) the column is an expression. In that case it isn't clear
+                            // how it is possible to get the datatype of the expression. Note that
+                            // the methods that are used to retrieve the metadata associated with a
+                            // column or column expression
+                            // (see https://docs.rs/rusqlite/latest/rusqlite/struct.Statement.html)
+                            // do not give us any info to determine the datatype for an expression
+                            // than we get from the columns() method, which only requires that we
+                            // enable the 'column_decltype' feature. The metadata methods, which
+                            // require the 'column_metadata' feature, are useful if we would like to
+                            // know the column's table, or if the column happens to be an alias
+                            // then we can get its unaliased name (i.e., it's 'origin'). But while
+                            // aliased columns will have a datatype, expressions will not. So the
+                            // only thing to do here is just to convert the value to JSON using the
+                            // default method, and since we already know that it is an integer, the
+                            // result of the conversion will be a JSON number.
                             _ => JsonValue::from(value),
                         },
                         RusqliteValueRef::Real(value) => JsonValue::from(value),
@@ -443,5 +462,28 @@ mod tests {
                 "bool_value": true,
             }])
         );
+
+        // TODO: Add proper tests for these queries:
+        conn.query("select max(int_value) from test_table_mixed", &[])
+            .await
+            .unwrap();
+        conn.query(
+            "select max(int_value) as int_value_alias from test_table_mixed",
+            &[],
+        )
+        .await
+        .unwrap();
+        conn.query(
+            "select bool_value as bool_value_alias from test_table_mixed",
+            &[],
+        )
+        .await
+        .unwrap();
+        conn.query(
+            "select CAST(int_value AS TEXT) AS int_value_cast from test_table_mixed",
+            &[],
+        )
+        .await
+        .unwrap();
     }
 }
