@@ -13,7 +13,7 @@ pub trait DbQuery {
         sql: &str,
         params: &[JsonValue],
     ) -> impl Future<Output = Result<(), DbError>> + Send;
-    /// TODO: Add docstring
+    /// Sequentially execute a semi-colon-delimited list of statements, without parameters.
     fn execute_batch(&self, sql: &str) -> impl Future<Output = Result<(), DbError>> + Send;
     /// Execute a SQL command, returning a vector of JSON rows.
     fn query(

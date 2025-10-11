@@ -3,6 +3,7 @@
 use crate::core::{DbError, DbQuery, JsonRow, JsonValue};
 
 use deadpool_postgres::{Config, Pool, Runtime};
+use splitty::split_unquoted_char;
 use tokio_postgres::{
     row::Row,
     types::{ToSql, Type},
@@ -95,18 +96,22 @@ impl DbQuery for PostgresConnection {
         Ok(())
     }
 
-    // TODO: Complete the implementation and add a unit test case:
     /// Implements [DbQuery::execute_batch()] for PostgreSQL
     async fn execute_batch(&self, sql: &str) -> Result<(), DbError> {
+        let sqls = split_unquoted_char(sql, ';')
+            .unwrap_quotes(false)
+            .collect::<Vec<_>>();
         let client = self
             .pool
             .get()
             .await
             .map_err(|err| format!("Unable to get pool: {err}"))?;
-        client
-            .batch_execute(sql)
-            .await
-            .map_err(|err| format!("Error in query(): {err}"))?;
+        for sql in &sqls {
+            client
+                .batch_execute(sql)
+                .await
+                .map_err(|err| format!("Error in query(): {err}"))?;
+        }
         Ok(())
     }
 
@@ -322,12 +327,12 @@ mod tests {
         let conn = PostgresConnection::connect("postgresql:///sql_json_db")
             .await
             .unwrap();
-        conn.execute("DROP TABLE IF EXISTS test_table_text", &[])
-            .await
-            .unwrap();
-        conn.execute("CREATE TABLE test_table_text ( value TEXT )", &[])
-            .await
-            .unwrap();
+        conn.execute_batch(
+            "DROP TABLE IF EXISTS test_table_text;\
+             CREATE TABLE test_table_text ( value TEXT )",
+        )
+        .await
+        .unwrap();
         conn.execute("INSERT INTO test_table_text VALUES ($1)", &[json!("foo")])
             .await
             .unwrap();
@@ -359,12 +364,12 @@ mod tests {
         let conn = PostgresConnection::connect("postgresql:///sql_json_db")
             .await
             .unwrap();
-        conn.execute("DROP TABLE IF EXISTS test_table_int", &[])
-            .await
-            .unwrap();
-        conn.execute("CREATE TABLE test_table_int ( value INT8 )", &[])
-            .await
-            .unwrap();
+        conn.execute_batch(
+            "DROP TABLE IF EXISTS test_table_int;\
+             CREATE TABLE test_table_int ( value INT8 )",
+        )
+        .await
+        .unwrap();
         conn.execute("INSERT INTO test_table_int VALUES ($1)", &[json!(1)])
             .await
             .unwrap();
@@ -398,12 +403,12 @@ mod tests {
         let conn = PostgresConnection::connect("postgresql:///sql_json_db")
             .await
             .unwrap();
-        conn.execute("DROP TABLE IF EXISTS test_table_float", &[])
-            .await
-            .unwrap();
-        conn.execute("CREATE TABLE test_table_float ( value FLOAT8 )", &[])
-            .await
-            .unwrap();
+        conn.execute_batch(
+            "DROP TABLE IF EXISTS test_table_float;\
+             CREATE TABLE test_table_float ( value FLOAT8 )",
+        )
+        .await
+        .unwrap();
         conn.execute("INSERT INTO test_table_float VALUES ($1)", &[json!(1.05)])
             .await
             .unwrap();
@@ -434,21 +439,18 @@ mod tests {
         let conn = PostgresConnection::connect("postgresql:///sql_json_db")
             .await
             .unwrap();
-        conn.execute("DROP TABLE IF EXISTS test_table_mixed", &[])
-            .await
-            .unwrap();
-        conn.execute(
-            r#"CREATE TABLE test_table_mixed (
-                 text_value TEXT,
-                 alt_text_value TEXT,
-                 float_value FLOAT8,
-                 alt_float_value FLOAT8,
-                 int_value INT8,
-                 alt_int_value INT8,
-                 bool_value BOOL,
-                 alt_bool_value BOOL
-               )"#,
-            &[],
+        conn.execute_batch(
+            "DROP TABLE IF EXISTS test_table_mixed;\
+             CREATE TABLE test_table_mixed (\
+                 text_value TEXT,\
+                 alt_text_value TEXT,\
+                 float_value FLOAT8,\
+                 alt_float_value FLOAT8,\
+                 int_value INT8,\
+                 alt_int_value INT8,\
+                 bool_value BOOL,\
+                 alt_bool_value BOOL\
+             )",
         )
         .await
         .unwrap();
@@ -546,18 +548,15 @@ mod tests {
         let conn = PostgresConnection::connect("postgresql:///sql_json_db")
             .await
             .unwrap();
-        conn.execute("DROP TABLE IF EXISTS test_table_indirect", &[])
-            .await
-            .unwrap();
-        conn.execute(
-            r#"CREATE TABLE test_table_indirect (
-                 text_value TEXT,
-                 alt_text_value TEXT,
-                 float_value FLOAT8,
-                 int_value INT8,
-                 bool_value BOOL
-               )"#,
-            &[],
+        conn.execute_batch(
+            "DROP TABLE IF EXISTS test_table_indirect;\
+             CREATE TABLE test_table_indirect (\
+                 text_value TEXT,\
+                 alt_text_value TEXT,\
+                 float_value FLOAT8,\
+                 int_value INT8,\
+                 bool_value BOOL\
+             )",
         )
         .await
         .unwrap();

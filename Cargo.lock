@@ -993,6 +993,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "splitty"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2db70a1e6827e4d71c655b606caf1346862c38ae52ab4f58c32635e7c7aedd67"
+
+[[package]]
 name = "sql_json"
 version = "0.1.0"
 dependencies = [
@@ -1002,6 +1008,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "splitty",
  "tokio",
  "tokio-postgres",
  "tower-service",
