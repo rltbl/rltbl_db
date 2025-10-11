@@ -540,4 +540,88 @@ mod tests {
             }])
         );
     }
+
+    #[tokio::test]
+    async fn test_aliases_and_builtin_functions() {
+        let conn = PostgresConnection::connect("postgresql:///sql_json_db")
+            .await
+            .unwrap();
+        conn.execute("DROP TABLE IF EXISTS test_table_indirect", &[])
+            .await
+            .unwrap();
+        conn.execute(
+            r#"CREATE TABLE test_table_indirect (
+                 text_value TEXT,
+                 alt_text_value TEXT,
+                 float_value FLOAT8,
+                 int_value INT8,
+                 bool_value BOOL
+               )"#,
+            &[],
+        )
+        .await
+        .unwrap();
+        conn.execute(
+            r#"INSERT INTO test_table_indirect
+               (text_value, alt_text_value, float_value, int_value, bool_value)
+               VALUES ($1, $2, $3, $4, $5)"#,
+            &[
+                json!("foo"),
+                JsonValue::Null,
+                json!(1.05),
+                json!(1),
+                json!(true),
+            ],
+        )
+        .await
+        .unwrap();
+
+        // Test aggregate:
+        let rows = conn
+            .query("SELECT MAX(int_value) FROM test_table_indirect", &[])
+            .await
+            .unwrap();
+        assert_eq!(json!(rows), json!([{"max": 1}]));
+
+        // Test alias:
+        let rows = conn
+            .query(
+                "SELECT bool_value AS bool_value_alias FROM test_table_indirect",
+                &[],
+            )
+            .await
+            .unwrap();
+        assert_eq!(json!(rows), json!([{"bool_value_alias": true}]));
+
+        // Test aggregate with alias:
+        let rows = conn
+            .query(
+                "SELECT MAX(int_value) AS max_int_value FROM test_table_indirect",
+                &[],
+            )
+            .await
+            .unwrap();
+        // Note that the alias is not shown in the results:
+        assert_eq!(json!(rows), json!([{"max_int_value": 1}]));
+
+        // Test non-aggregate function:
+        let rows = conn
+            .query(
+                "SELECT CAST(int_value AS TEXT) FROM test_table_indirect",
+                &[],
+            )
+            .await
+            .unwrap();
+        assert_eq!(json!(rows), json!([{"int_value": "1"}]));
+
+        // Test non-aggregate function with alias:
+        let rows = conn
+            .query(
+                "SELECT CAST(int_value AS TEXT) AS int_value_cast FROM test_table_indirect",
+                &[],
+            )
+            .await
+            .unwrap();
+        assert_eq!(json!(rows), json!([{"int_value_cast": "1"}]));
+    }
 }
