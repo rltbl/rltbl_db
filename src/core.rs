@@ -1,10 +1,10 @@
+use crate::any::DbError;
 use std::future::Future;
 
 use serde_json::Map as JsonMap;
 
 pub type JsonValue = serde_json::Value;
 pub type JsonRow = JsonMap<String, JsonValue>;
-pub type DbError = String;
 
 pub trait DbQuery {
     /// Execute a SQL command, without a return value.

@@ -1,9 +1,30 @@
-use crate::core::{DbError, DbQuery, JsonRow, JsonValue};
+use crate::core::{DbQuery, JsonRow, JsonValue};
 
 #[cfg(feature = "postgres")]
-use crate::postgres::PostgresConnection;
+use crate::postgres::{PostgresConnection, PostgresError};
 #[cfg(feature = "sqlite")]
-use crate::sqlite::SqliteConnection;
+use crate::sqlite::{SqliteConnection, SqliteError};
+
+#[derive(Debug)]
+pub enum DbError {
+    Generic(String),
+    #[cfg(feature = "sqlite")]
+    Sqlite(SqliteError),
+    #[cfg(feature = "postgres")]
+    Postgres(PostgresError),
+}
+
+impl std::fmt::Display for DbError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            DbError::Generic(err) => write!(f, "Generic db error: {err}"),
+            #[cfg(feature = "sqlite")]
+            DbError::Sqlite(err) => write!(f, "Sqlite error: {err}"),
+            #[cfg(feature = "postgres")]
+            DbError::Postgres(err) => write!(f, "Postgres error: {err}"),
+        }
+    }
+}
 
 pub enum AnyConnection {
     #[cfg(feature = "sqlite")]
@@ -24,7 +45,7 @@ impl AnyConnection {
             }
             #[cfg(not(feature = "postgres"))]
             {
-                Err(format!("postgres not configured"))
+                Err(DbError::Generic("postgres not configured".to_string()))
             }
         } else {
             #[cfg(feature = "sqlite")]
@@ -33,7 +54,7 @@ impl AnyConnection {
             }
             #[cfg(not(feature = "sqlite"))]
             {
-                Err(format!("sqlite not configured"))
+                Err(DbError::Generic("sqlite not configured".to_string()))
             }
         }
     }
