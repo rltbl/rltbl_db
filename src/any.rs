@@ -49,6 +49,15 @@ impl DbQuery for AnyConnection {
         }
     }
 
+    async fn execute_batch(&self, sql: &str) -> Result<(), DbError> {
+        match self {
+            #[cfg(feature = "sqlite")]
+            AnyConnection::Sqlite(connection) => connection.execute_batch(sql).await,
+            #[cfg(feature = "postgres")]
+            AnyConnection::Postgres(connection) => connection.execute_batch(sql).await,
+        }
+    }
+
     async fn query(&self, sql: &str, params: &[JsonValue]) -> Result<Vec<JsonRow>, DbError> {
         match self {
             #[cfg(feature = "sqlite")]

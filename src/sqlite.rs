@@ -4,12 +4,12 @@ use crate::core::{DbError, DbQuery, JsonRow, JsonValue};
 
 use deadpool_sqlite::{
     rusqlite::{
+        fallible_iterator::FallibleIterator,
         types::{Null as RusqliteNull, ValueRef as RusqliteValueRef},
-        Row as RusqliteRow, Statement as RusqliteStatement,
+        Statement as RusqliteStatement,
     },
     Config, Pool, Runtime,
 };
-use serde_json::json;
 
 /// Represents a SQLite database connection pool
 pub struct SqliteConnection {
@@ -40,81 +40,102 @@ fn extract_value(rows: &Vec<JsonRow>) -> Result<JsonValue, String> {
     }
 }
 
-fn to_json_row(column_names: &Vec<&str>, row: &RusqliteRow) -> JsonRow {
-    let mut json_row = JsonRow::new();
-    for column_name in column_names {
-        let value = match row.get_ref(*column_name) {
-            Ok(value) => match value {
-                RusqliteValueRef::Null => JsonValue::Null,
-                RusqliteValueRef::Integer(value) => JsonValue::from(value),
-                RusqliteValueRef::Real(value) => JsonValue::from(value),
-                RusqliteValueRef::Text(value) | RusqliteValueRef::Blob(value) => {
-                    let value = std::str::from_utf8(value).unwrap_or_default();
-                    JsonValue::from(value)
+/// Query the database using the given prepared statement and json parameters.
+fn query_prepared(
+    stmt: &mut RusqliteStatement<'_>,
+    params: &Vec<JsonValue>,
+) -> Result<Vec<JsonRow>, DbError> {
+    // Bind the parameters to the prepared statement:
+    for (i, param) in params.iter().enumerate() {
+        match param {
+            JsonValue::String(s) => {
+                stmt.raw_bind_parameter(i + 1, s)
+                    .map_err(|err| format!("Error binding parameter '{param}': {err}"))?;
+            }
+            JsonValue::Number(_) => {
+                stmt.raw_bind_parameter(i + 1, &param.to_string())
+                    .map_err(|err| format!("Error binding parameter '{param}': {err}"))?;
+            }
+            JsonValue::Bool(flag) => match flag {
+                // Note that SQLite's type affinity means that booleans are actually implemented
+                // as numbers (see https://sqlite.org/datatype3.html). They will be converted
+                // back to boolean when the results are read below.
+                false => {
+                    stmt.raw_bind_parameter(i + 1, &0.to_string())
+                        .map_err(|err| format!("Error binding parameter '{param}': {err}"))?;
+                }
+                true => {
+                    stmt.raw_bind_parameter(i + 1, &1.to_string())
+                        .map_err(|err| format!("Error binding parameter '{param}': {err}"))?;
                 }
             },
-            Err(_) => JsonValue::Null,
+            JsonValue::Null => {
+                stmt.raw_bind_parameter(i + 1, &RusqliteNull)
+                    .map_err(|err| format!("Error binding parameter '{param}': {err}"))?;
+            }
+            _ => return Err(format!("Unsupported JSON type: {param}")),
         };
-        json_row.insert(column_name.to_string(), value);
     }
-    json_row
-}
 
-fn query_statement(
-    stmt: &mut RusqliteStatement<'_>,
-    params: Option<&JsonValue>,
-) -> Result<Vec<JsonRow>, DbError> {
-    let column_names = stmt
-        .column_names()
+    // Define the struct that we will use to represent information about a given column:
+    struct ColumnConfig {
+        name: String,
+        datatype: Option<String>,
+    }
+
+    // Collect the column information from the prepared statement:
+    let columns = stmt
+        .columns()
         .iter()
-        .map(|c| c.to_string())
+        .map(|col| {
+            let name = col.name().to_string();
+            let datatype = col.decl_type().and_then(|s| Some(s.to_string()));
+            ColumnConfig { name, datatype }
+        })
         .collect::<Vec<_>>();
-    let column_names = column_names.iter().map(|c| c.as_str()).collect::<Vec<_>>();
 
-    if let Some(params) = params {
-        let params = params.as_array().ok_or(format!(
-            "Parameters: {params:?} are not in the form of an array"
-        ))?;
-        for (i, param) in params.iter().enumerate() {
-            match param {
-                JsonValue::String(s) => {
-                    stmt.raw_bind_parameter(i + 1, s)
-                        .map_err(|err| format!("Error binding parameter '{param}': {err}"))?;
-                }
-                JsonValue::Number(_) => {
-                    stmt.raw_bind_parameter(i + 1, &param.to_string())
-                        .map_err(|err| format!("Error binding parameter '{param}': {err}"))?;
-                }
-                JsonValue::Bool(flag) => match flag {
-                    // Note that SQLite's type affinity means that booleans are actually
-                    // implemented as numbers (see https://sqlite.org/datatype3.html).
-                    false => {
-                        stmt.raw_bind_parameter(i + 1, &0.to_string())
-                            .map_err(|err| format!("Error binding parameter '{param}': {err}"))?;
+    // Execute the statement and send back the results
+    let results = stmt
+        .raw_query()
+        .map(|row| {
+            let mut json_row = JsonRow::new();
+            for column in &columns {
+                let column_name = &column.name;
+                let column_type = &column.datatype;
+                let value = match row.get_ref(column_name.as_str()) {
+                    Ok(value) => match value {
+                        RusqliteValueRef::Null => JsonValue::Null,
+                        RusqliteValueRef::Integer(value) => match column_type {
+                            Some(ctype) if ctype.to_lowercase() == "bool" => {
+                                JsonValue::Bool(value != 0)
+                            }
+                            // The remaining cases are (a) the column's datatype is integer, and
+                            // (b) the column is an expression. In the latter case it doesn't seem
+                            // possible to get the datatype of the expression from the metadata.
+                            // So the only thing to do here is just to convert the value
+                            // to JSON using the default method, and since we already know that it
+                            // is an integer, the result of the conversion will be a JSON number.
+                            _ => JsonValue::from(value),
+                        },
+                        RusqliteValueRef::Real(value) => JsonValue::from(value),
+                        RusqliteValueRef::Text(value) | RusqliteValueRef::Blob(value) => {
+                            let value = std::str::from_utf8(value).unwrap_or_default();
+                            JsonValue::from(value)
+                        }
+                    },
+                    Err(err) => {
+                        tracing::warn!(
+                            "Error getting value for column '{column_name}' from row: {err}"
+                        );
+                        JsonValue::Null
                     }
-                    true => {
-                        stmt.raw_bind_parameter(i + 1, &1.to_string())
-                            .map_err(|err| format!("Error binding parameter '{param}': {err}"))?;
-                    }
-                },
-                JsonValue::Null => {
-                    stmt.raw_bind_parameter(i + 1, &RusqliteNull)
-                        .map_err(|err| format!("Error binding parameter '{param}': {err}"))?;
-                }
-                _ => return Err(format!("Unsupported JSON type: {param}")),
-            };
-        }
-    }
-    let mut rows = stmt.raw_query();
-
-    let mut result = Vec::new();
-    while let Some(row) = rows
-        .next()
-        .map_err(|err| format!("Error getting next row: {err}"))?
-    {
-        result.push(to_json_row(&column_names, row));
-    }
-    Ok(result)
+                };
+                json_row.insert(column_name.to_string(), value);
+            }
+            Ok(json_row)
+        })
+        .collect::<Vec<_>>();
+    results.map_err(|err| err.to_string())
 }
 
 impl DbQuery for SqliteConnection {
@@ -124,22 +145,44 @@ impl DbQuery for SqliteConnection {
         Ok(())
     }
 
-    /// Implements [DbQuery::query()] for SQLite.
-    async fn query(&self, sql: &str, params: &[JsonValue]) -> Result<Vec<JsonRow>, DbError> {
+    /// Implements [DbQuery::execute_batch()] for PostgreSQL
+    async fn execute_batch(&self, sql: &str) -> Result<(), DbError> {
         let conn = self
             .pool
             .get()
             .await
             .map_err(|err| format!("Unable to get pool: {err}"))?;
         let sql = sql.to_string();
-        let params = json!(params);
+        match conn
+            .interact(move |conn| match conn.execute_batch(&sql) {
+                Err(err) => return Err(format!("Error during query: {err}")),
+                Ok(_) => Ok(()),
+            })
+            .await
+        {
+            Err(err) => Err(format!("Error during query: {err}")),
+            Ok(_) => Ok(()),
+        }
+    }
+
+    /// Implements [DbQuery::query()] for SQLite.
+    async fn query(&self, sql: &str, params: &[JsonValue]) -> Result<Vec<JsonRow>, DbError> {
+        let conn = self
+            .pool
+            .get()
+            .await
+            .map_err(|err| format!("Error getting pool: {err}"))?;
+        let sql = sql.to_string();
+        let params = params.to_vec();
         let rows = conn
             .interact(move |conn| {
                 let mut stmt = conn.prepare(&sql).map_err(|err| {
                     <String as Into<DbError>>::into(format!("Error preparing statement: {err}"))
                 })?;
-                let rows = query_statement(&mut stmt, Some(&params)).map_err(|err| {
-                    <String as Into<DbError>>::into(format!("Error while querying: {err}"))
+                let rows = query_prepared(&mut stmt, &params).map_err(|err| {
+                    <String as Into<DbError>>::into(format!(
+                        "Error querying prepared statement: {err}"
+                    ))
                 })?;
                 Ok::<Vec<JsonRow>, DbError>(rows)
             })
@@ -221,12 +264,12 @@ mod tests {
         let conn = SqliteConnection::connect("test_text_column.db")
             .await
             .unwrap();
-        conn.execute("DROP TABLE IF EXISTS test_table_text", &[])
-            .await
-            .unwrap();
-        conn.execute("CREATE TABLE test_table_text ( value TEXT )", &[])
-            .await
-            .unwrap();
+        conn.execute_batch(
+            "DROP TABLE IF EXISTS test_table_text;\
+             CREATE TABLE test_table_text ( value TEXT )",
+        )
+        .await
+        .unwrap();
         conn.execute("INSERT INTO test_table_text VALUES ($1)", &[json!("foo")])
             .await
             .unwrap();
@@ -258,12 +301,12 @@ mod tests {
         let conn = SqliteConnection::connect("test_integer_column.db")
             .await
             .unwrap();
-        conn.execute("DROP TABLE IF EXISTS test_table_int", &[])
-            .await
-            .unwrap();
-        conn.execute("CREATE TABLE test_table_int ( value INT )", &[])
-            .await
-            .unwrap();
+        conn.execute_batch(
+            "DROP TABLE IF EXISTS test_table_int;\
+             CREATE TABLE test_table_int ( value INT )",
+        )
+        .await
+        .unwrap();
         conn.execute("INSERT INTO test_table_int VALUES ($1)", &[json!(1)])
             .await
             .unwrap();
@@ -297,12 +340,12 @@ mod tests {
         let conn = SqliteConnection::connect("test_float_column.db")
             .await
             .unwrap();
-        conn.execute("DROP TABLE IF EXISTS test_table_float", &[])
-            .await
-            .unwrap();
-        conn.execute("CREATE TABLE test_table_float ( value REAL )", &[])
-            .await
-            .unwrap();
+        conn.execute_batch(
+            "DROP TABLE IF EXISTS test_table_float;\
+             CREATE TABLE test_table_float ( value REAL )",
+        )
+        .await
+        .unwrap();
         conn.execute("INSERT INTO test_table_float VALUES ($1)", &[json!(1.05)])
             .await
             .unwrap();
@@ -333,18 +376,15 @@ mod tests {
         let conn = SqliteConnection::connect("test_mixed_columns.db")
             .await
             .unwrap();
-        conn.execute("DROP TABLE IF EXISTS test_table_mixed", &[])
-            .await
-            .unwrap();
-        conn.execute(
-            r#"CREATE TABLE test_table_mixed (
-                 text_value TEXT,
-                 alt_text_value TEXT,
-                 float_value FLOAT8,
-                 int_value INT8,
-                 bool_value BOOL
-               )"#,
-            &[],
+        conn.execute_batch(
+            "DROP TABLE IF EXISTS test_table_mixed;\
+             CREATE TABLE test_table_mixed (\
+                 text_value TEXT,\
+                 alt_text_value TEXT,\
+                 float_value FLOAT8,\
+                 int_value INT8,\
+                 bool_value BOOL\
+             )",
         )
         .await
         .unwrap();
@@ -394,9 +434,7 @@ mod tests {
                 "alt_text_value": JsonValue::Null,
                 "float_value": 1.05,
                 "int_value": 1,
-                // Note that SQLite's type affinity means that booleans are actually
-                // implemented as numbers (see https://sqlite.org/datatype3.html).
-                "bool_value": 1,
+                "bool_value": true,
             })
         );
 
@@ -408,10 +446,105 @@ mod tests {
                 "alt_text_value": JsonValue::Null,
                 "float_value": 1.05,
                 "int_value": 1,
-                // Note that SQLite's type affinity means that booleans are actually
-                // implemented as numbers (see https://sqlite.org/datatype3.html).
-                "bool_value": 1,
+                "bool_value": true,
             }])
         );
+    }
+
+    #[tokio::test]
+    async fn test_aliases_and_builtin_functions() {
+        let conn = SqliteConnection::connect("test_indirect_columns.db")
+            .await
+            .unwrap();
+        conn.execute_batch(
+            "DROP TABLE IF EXISTS test_table_indirect;\
+             CREATE TABLE test_table_indirect (\
+                 text_value TEXT,\
+                 alt_text_value TEXT,\
+                 float_value FLOAT8,\
+                 int_value INT8,\
+                 bool_value BOOL\
+             )",
+        )
+        .await
+        .unwrap();
+        conn.execute(
+            r#"INSERT INTO test_table_indirect
+               (text_value, alt_text_value, float_value, int_value, bool_value)
+               VALUES ($1, $2, $3, $4, $5)"#,
+            &[
+                json!("foo"),
+                JsonValue::Null,
+                json!(1.05),
+                json!(1),
+                json!(true),
+            ],
+        )
+        .await
+        .unwrap();
+
+        // Test aggregate:
+        let rows = conn
+            .query("SELECT MAX(int_value) FROM test_table_indirect", &[])
+            .await
+            .unwrap();
+        assert_eq!(json!(rows), json!([{"MAX(int_value)": 1}]));
+
+        // Test alias:
+        let rows = conn
+            .query(
+                "SELECT bool_value AS bool_value_alias FROM test_table_indirect",
+                &[],
+            )
+            .await
+            .unwrap();
+        assert_eq!(json!(rows), json!([{"bool_value_alias": true}]));
+
+        // Test aggregate with alias:
+        let rows = conn
+            .query(
+                "SELECT MAX(int_value) AS max_int_value FROM test_table_indirect",
+                &[],
+            )
+            .await
+            .unwrap();
+        // Note that the alias is not shown in the results:
+        assert_eq!(json!(rows), json!([{"max_int_value": 1}]));
+
+        // Test non-aggregate function:
+        let rows = conn
+            .query(
+                "SELECT CAST(int_value AS TEXT) FROM test_table_indirect",
+                &[],
+            )
+            .await
+            .unwrap();
+        assert_eq!(json!(rows), json!([{"CAST(int_value AS TEXT)": "1"}]));
+
+        // Test non-aggregate function with alias:
+        let rows = conn
+            .query(
+                "SELECT CAST(int_value AS TEXT) AS int_value_cast FROM test_table_indirect",
+                &[],
+            )
+            .await
+            .unwrap();
+        assert_eq!(json!(rows), json!([{"int_value_cast": "1"}]));
+
+        // Test functions over booleans:
+        let rows = conn
+            .query("SELECT MAX(bool_value) FROM test_table_indirect", &[])
+            .await
+            .unwrap();
+        // It is not possible to represent the boolean result of an aggregate function as a
+        // boolean, since internally to sqlite it is stored as an integer, and we can't query
+        // the metadata to get the datatype of an expression. If we want to represent it as a
+        // boolean, we will need to parse the expression. Note that PostgreSQL does not support
+        // MAX(bool_value) - it gives the error:
+        //   ERROR: function max(boolean) does not exist\nHINT: No function matches the given
+        //          name and argument types. You might need to add explicit type casts.
+        // So, perhaps, this is tu quoque an argument that the behaviour below is acceptable for
+        // sqlite.
+        assert_eq!(json!(rows), json!([{"MAX(bool_value)": 1}]));
     }
 }
