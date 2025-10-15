@@ -600,7 +600,6 @@ mod tests {
             )
             .await
             .unwrap();
-        // Note that the alias is not shown in the results:
         assert_eq!(json!(rows), json!([{"max_int_value": 1}]));
 
         // Test non-aggregate function:
