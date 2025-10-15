@@ -10,7 +10,6 @@ use deadpool_sqlite::{
     },
     Config, Pool, Runtime,
 };
-use splitty::split_unquoted_char;
 
 /// Represents a SQLite database connection pool
 pub struct SqliteConnection {
@@ -148,28 +147,22 @@ impl DbQuery for SqliteConnection {
 
     /// Implements [DbQuery::execute_batch()] for PostgreSQL
     async fn execute_batch(&self, sql: &str) -> Result<(), DbError> {
-        let sqls = split_unquoted_char(sql, ';')
-            .unwrap_quotes(false)
-            .collect::<Vec<_>>();
         let conn = self
             .pool
             .get()
             .await
             .map_err(|err| format!("Unable to get pool: {err}"))?;
-        for sql in &sqls {
-            let sql = sql.to_string();
-            match conn
-                .interact(move |conn| match conn.execute_batch(&sql) {
-                    Err(err) => return Err(format!("Error during query: {err}")),
-                    Ok(_) => Ok(()),
-                })
-                .await
-            {
+        let sql = sql.to_string();
+        match conn
+            .interact(move |conn| match conn.execute_batch(&sql) {
                 Err(err) => return Err(format!("Error during query: {err}")),
-                Ok(_) => (),
-            };
+                Ok(_) => Ok(()),
+            })
+            .await
+        {
+            Err(err) => Err(format!("Error during query: {err}")),
+            Ok(_) => Ok(()),
         }
-        Ok(())
     }
 
     /// Implements [DbQuery::query()] for SQLite.

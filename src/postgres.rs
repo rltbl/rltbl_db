@@ -3,7 +3,6 @@
 use crate::core::{DbError, DbQuery, JsonRow, JsonValue};
 
 use deadpool_postgres::{Config, Pool, Runtime};
-use splitty::split_unquoted_char;
 use tokio_postgres::{
     row::Row,
     types::{ToSql, Type},
@@ -98,20 +97,15 @@ impl DbQuery for PostgresConnection {
 
     /// Implements [DbQuery::execute_batch()] for PostgreSQL
     async fn execute_batch(&self, sql: &str) -> Result<(), DbError> {
-        let sqls = split_unquoted_char(sql, ';')
-            .unwrap_quotes(false)
-            .collect::<Vec<_>>();
         let client = self
             .pool
             .get()
             .await
             .map_err(|err| format!("Unable to get pool: {err}"))?;
-        for sql in &sqls {
-            client
-                .batch_execute(sql)
-                .await
-                .map_err(|err| format!("Error in query(): {err}"))?;
-        }
+        client
+            .batch_execute(sql)
+            .await
+            .map_err(|err| format!("Error in query(): {err}"))?;
         Ok(())
     }
 
@@ -600,7 +594,6 @@ mod tests {
             )
             .await
             .unwrap();
-        // Note that the alias is not shown in the results:
         assert_eq!(json!(rows), json!([{"max_int_value": 1}]));
 
         // Test non-aggregate function:
