@@ -4,9 +4,9 @@ use crate::core::{DbError, DbQuery, JsonRow, JsonValue};
 
 use deadpool_postgres::{Config, Pool, Runtime};
 use tokio_postgres::{
+    NoTls,
     row::Row,
     types::{ToSql, Type},
-    NoTls,
 };
 
 /// Represents a PostgreSQL database connection pool
@@ -46,7 +46,14 @@ fn extract_value(row: &Row, idx: usize) -> Result<JsonValue, DbError> {
             Some(value) => Ok(value.into()),
             None => Ok(JsonValue::Null),
         },
-        Type::INT2 | Type::INT4 => match row
+        Type::INT2 => match row
+            .try_get::<usize, Option<i16>>(idx)
+            .map_err(|err| err.to_string())?
+        {
+            Some(value) => Ok(value.into()),
+            None => Ok(JsonValue::Null),
+        },
+        Type::INT4 => match row
             .try_get::<usize, Option<i32>>(idx)
             .map_err(|err| err.to_string())?
         {
@@ -117,18 +124,6 @@ impl DbQuery for PostgresConnection {
             .await
             .map_err(|err| format!("Unable to get pool: {err}"))?;
 
-        // Represents a basic parameter type:
-        enum BasicType {
-            Text,
-            NullText,
-            Integer,
-            NullInteger,
-            Float,
-            NullFloat,
-            Bool,
-            NullBool,
-        }
-
         // The expected types of all of the parameters as reported by the database via prepare():
         let param_pg_types = client
             .prepare(sql)
@@ -137,52 +132,78 @@ impl DbQuery for PostgresConnection {
             .params()
             .to_vec();
 
-        // The rust compiler needs the parameters to the query, converted to their underlying
-        // primitive types (i.e., not just the JsonValues wrapping them), to be explicitly be in
-        // scope when passing them to client.execute(). So we build three vectors to keep them
-        // accessible, and one more vector to represent the ordered sequence of rust parameter
-        // types.
-        let mut param_basic_types = vec![];
-        let mut integer_params = vec![];
-        let mut string_params = vec![];
-        let mut float_params = vec![];
-        let mut bool_params = vec![];
+        let mut params: Vec<Box<dyn ToSql + Sync + Send>> = Vec::new();
+
         for (i, param) in json_params.iter().enumerate() {
             let pg_type = &param_pg_types[i];
             match pg_type {
                 &Type::TEXT | &Type::VARCHAR => {
                     match param {
-                        JsonValue::Null => param_basic_types.push(BasicType::NullText),
+                        JsonValue::Null => params.push(Box::new(None::<String>)),
                         _ => {
-                            param_basic_types.push(BasicType::Text);
-                            string_params.push(param.as_str().ok_or("Not a string")?);
+                            params.push(Box::new(param.as_str().ok_or("Not a string")?));
                         }
                     };
                 }
-                &Type::INT2 | &Type::INT4 | &Type::INT8 => {
+                &Type::INT2 => {
                     match param {
-                        JsonValue::Null => param_basic_types.push(BasicType::NullInteger),
+                        JsonValue::Null => params.push(Box::new(None::<i16>)),
                         _ => {
-                            param_basic_types.push(BasicType::Integer);
-                            integer_params.push(param.as_i64().ok_or("Not an integer")?);
+                            let value: i16 = param
+                                .as_i64()
+                                .ok_or("Not an integer")?
+                                .try_into()
+                                .map_err(|e| format!("Not an i16: {e}"))?;
+                            params.push(Box::new(value));
                         }
                     };
                 }
-                &Type::FLOAT4 | &Type::FLOAT8 => {
+                &Type::INT4 => {
                     match param {
-                        JsonValue::Null => param_basic_types.push(BasicType::NullFloat),
+                        JsonValue::Null => params.push(Box::new(None::<i32>)),
                         _ => {
-                            param_basic_types.push(BasicType::Float);
-                            float_params.push(param.as_f64().ok_or("Not a float")?);
+                            let value: i32 = param
+                                .as_i64()
+                                .ok_or("Not an integer")?
+                                .try_into()
+                                .map_err(|e| format!("Not an i32: {e}"))?;
+                            params.push(Box::new(value));
+                        }
+                    };
+                }
+                &Type::INT8 => {
+                    match param {
+                        JsonValue::Null => params.push(Box::new(None::<i64>)),
+                        _ => {
+                            let value: i64 = param.as_i64().ok_or("Not an integer")?;
+                            params.push(Box::new(value));
+                        }
+                    };
+                }
+                &Type::FLOAT4 => {
+                    match param {
+                        JsonValue::Null => params.push(Box::new(None::<f32>)),
+                        _ => {
+                            let value: f32 = param.as_f64().ok_or("Not a float")? as f32;
+                            params.push(Box::new(value));
+                        }
+                    };
+                }
+                &Type::FLOAT8 => {
+                    match param {
+                        JsonValue::Null => params.push(Box::new(None::<f64>)),
+                        _ => {
+                            let value: f64 = param.as_f64().ok_or("Not a float")?;
+                            params.push(Box::new(value));
                         }
                     };
                 }
                 &Type::BOOL => {
                     match param {
-                        JsonValue::Null => param_basic_types.push(BasicType::NullBool),
+                        JsonValue::Null => params.push(Box::new(None::<bool>)),
                         _ => {
-                            param_basic_types.push(BasicType::Bool);
-                            bool_params.push(param.as_bool().ok_or("Not a bool")?);
+                            let value: bool = param.as_bool().ok_or("Not a boolean")?;
+                            params.push(Box::new(value));
                         }
                     };
                 }
@@ -193,45 +214,13 @@ impl DbQuery for PostgresConnection {
             }
         }
 
-        // Now use the three typed lists of parameters and param_basic_types to build a list of
-        // parameters that implement &(dyn ToSql + Sync), which is what client.execute() needs.
-        let mut strings_idx = 0;
-        let mut integers_idx = 0;
-        let mut floats_idx = 0;
-        let mut bools_idx = 0;
-        let mut pg_params = vec![];
-        for basic_type in &param_basic_types {
-            match basic_type {
-                BasicType::Text => {
-                    let param = &string_params[strings_idx];
-                    strings_idx += 1;
-                    pg_params.push(param as &(dyn ToSql + Sync));
-                }
-                BasicType::Integer => {
-                    let param = &integer_params[integers_idx];
-                    integers_idx += 1;
-                    pg_params.push(param as &(dyn ToSql + Sync));
-                }
-                BasicType::Float => {
-                    let param = &float_params[floats_idx];
-                    floats_idx += 1;
-                    pg_params.push(param as &(dyn ToSql + Sync));
-                }
-                BasicType::Bool => {
-                    let param = &bool_params[bools_idx];
-                    bools_idx += 1;
-                    pg_params.push(param as &(dyn ToSql + Sync));
-                }
-                BasicType::NullText => pg_params.push(&None::<String> as &(dyn ToSql + Sync)),
-                BasicType::NullInteger => pg_params.push(&None::<i64> as &(dyn ToSql + Sync)),
-                BasicType::NullFloat => pg_params.push(&None::<f64> as &(dyn ToSql + Sync)),
-                BasicType::NullBool => pg_params.push(&None::<bool> as &(dyn ToSql + Sync)),
-            }
-        }
-
         // Finally, execute the query and return the results:
+        let query_params: Vec<&(dyn ToSql + Sync)> = params
+            .iter()
+            .map(|p| p.as_ref() as &(dyn ToSql + Sync))
+            .collect();
         let rows = client
-            .query(sql, &pg_params)
+            .query(sql, &query_params)
             .await
             .map_err(|err| format!("Error in query(): {err}"))?;
         let mut json_rows = vec![];
@@ -358,38 +347,43 @@ mod tests {
         let conn = PostgresConnection::connect("postgresql:///sql_json_db")
             .await
             .unwrap();
-        conn.execute_batch(
-            "DROP TABLE IF EXISTS test_table_int;\
-             CREATE TABLE test_table_int ( value INT8 )",
-        )
-        .await
-        .unwrap();
-        conn.execute("INSERT INTO test_table_int VALUES ($1)", &[json!(1)])
+
+        let sql_types = vec!["INT2", "INT4", "INT8"];
+
+        for sql_type in sql_types {
+            conn.execute_batch(&format!(
+                "DROP TABLE IF EXISTS test_table_int;\
+             CREATE TABLE test_table_int ( value {sql_type} )",
+            ))
             .await
             .unwrap();
-        let select_sql = "SELECT value FROM test_table_int WHERE value = $1";
-        let value = conn
-            .query_value(select_sql, &[json!(1)])
-            .await
-            .unwrap()
-            .as_i64()
-            .unwrap();
-        assert_eq!(1, value);
+            conn.execute("INSERT INTO test_table_int VALUES ($1)", &[json!(1)])
+                .await
+                .unwrap();
+            let select_sql = "SELECT value FROM test_table_int WHERE value = $1";
+            let value = conn
+                .query_value(select_sql, &[json!(1)])
+                .await
+                .unwrap()
+                .as_i64()
+                .unwrap();
+            assert_eq!(1, value);
 
-        let value = conn.query_u64(select_sql, &[json!(1)]).await.unwrap();
-        assert_eq!(1, value);
+            let value = conn.query_u64(select_sql, &[json!(1)]).await.unwrap();
+            assert_eq!(1, value);
 
-        let value = conn.query_i64(select_sql, &[json!(1)]).await.unwrap();
-        assert_eq!(1, value);
+            let value = conn.query_i64(select_sql, &[json!(1)]).await.unwrap();
+            assert_eq!(1, value);
 
-        let value = conn.query_string(select_sql, &[json!(1)]).await.unwrap();
-        assert_eq!("1", value);
+            let value = conn.query_string(select_sql, &[json!(1)]).await.unwrap();
+            assert_eq!("1", value);
 
-        let row = conn.query_row(select_sql, &[json!(1)]).await.unwrap();
-        assert_eq!(json!(row), json!({"value":1}));
+            let row = conn.query_row(select_sql, &[json!(1)]).await.unwrap();
+            assert_eq!(json!(row), json!({"value":1}));
 
-        let rows = conn.query(select_sql, &[json!(1)]).await.unwrap();
-        assert_eq!(json!(rows), json!([{"value":1}]));
+            let rows = conn.query(select_sql, &[json!(1)]).await.unwrap();
+            assert_eq!(json!(rows), json!([{"value":1}]));
+        }
     }
 
     #[tokio::test]
@@ -397,6 +391,8 @@ mod tests {
         let conn = PostgresConnection::connect("postgresql:///sql_json_db")
             .await
             .unwrap();
+
+        // FLOAT8
         conn.execute_batch(
             "DROP TABLE IF EXISTS test_table_float;\
              CREATE TABLE test_table_float ( value FLOAT8 )",
@@ -426,6 +422,25 @@ mod tests {
 
         let rows = conn.query(select_sql, &[json!(1.0)]).await.unwrap();
         assert_eq!(json!(rows), json!([{"value":1.05}]));
+
+        // FLOAT4 is harder to test
+        conn.execute_batch(
+            "DROP TABLE IF EXISTS test_table_float;\
+             CREATE TABLE test_table_float ( value FLOAT4 )",
+        )
+        .await
+        .unwrap();
+        conn.execute("INSERT INTO test_table_float VALUES ($1)", &[json!(1.05)])
+            .await
+            .unwrap();
+        let select_sql = "SELECT value FROM test_table_float WHERE value > $1";
+        let value = conn
+            .query_value(select_sql, &[json!(1.0)])
+            .await
+            .unwrap()
+            .as_f64()
+            .unwrap();
+        assert_eq!("1.05", format!("{value:.2}"));
     }
 
     #[tokio::test]
