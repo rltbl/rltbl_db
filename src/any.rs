@@ -5,6 +5,7 @@ use crate::postgres::PostgresConnection;
 #[cfg(feature = "sqlite")]
 use crate::sqlite::SqliteConnection;
 
+#[derive(Debug)]
 pub enum AnyConnection {
     #[cfg(feature = "sqlite")]
     Sqlite(SqliteConnection),
@@ -24,7 +25,7 @@ impl AnyConnection {
             }
             #[cfg(not(feature = "postgres"))]
             {
-                Err(format!("postgres not configured"))
+                Err(DbError::ConnectError("postgres not configured".to_string()))
             }
         } else {
             #[cfg(feature = "sqlite")]
@@ -33,7 +34,7 @@ impl AnyConnection {
             }
             #[cfg(not(feature = "sqlite"))]
             {
-                Err(format!("sqlite not configured"))
+                Err(DbError::ConnectError("sqlite not configured".to_string()))
             }
         }
     }

@@ -10,6 +10,7 @@ use tokio_postgres::{
 };
 
 /// Represents a PostgreSQL database connection pool
+#[derive(Debug)]
 pub struct PostgresConnection {
     pool: Pool,
 }
@@ -23,14 +24,16 @@ impl PostgresConnection {
                 let mut cfg = Config::new();
                 let db_name = url
                     .strip_prefix("postgresql:///")
-                    .ok_or("Invalid PostgreSQL URL")?;
+                    .ok_or(DbError::ConnectError("Invalid PostgreSQL URL".to_string()))?;
                 cfg.dbname = Some(db_name.to_string());
                 let pool = cfg
                     .create_pool(Some(Runtime::Tokio1), NoTls)
-                    .map_err(|err| format!("Error creating pool: {err}"))?;
+                    .map_err(|err| DbError::ConnectError(format!("Error creating pool: {err}")))?;
                 Ok(Self { pool })
             }
-            false => Err(format!("Invalid PostgreSQL URL: '{url}'")),
+            false => Err(DbError::ConnectError(format!(
+                "Invalid PostgreSQL URL: '{url}'"
+            ))),
         }
     }
 }
@@ -41,49 +44,49 @@ fn extract_value(row: &Row, idx: usize) -> Result<JsonValue, DbError> {
     match *column.type_() {
         Type::TEXT | Type::VARCHAR => match row
             .try_get::<usize, Option<&str>>(idx)
-            .map_err(|err| err.to_string())?
+            .map_err(|err| DbError::DataError(err.to_string()))?
         {
             Some(value) => Ok(value.into()),
             None => Ok(JsonValue::Null),
         },
         Type::INT2 => match row
             .try_get::<usize, Option<i16>>(idx)
-            .map_err(|err| err.to_string())?
+            .map_err(|err| DbError::DataError(err.to_string()))?
         {
             Some(value) => Ok(value.into()),
             None => Ok(JsonValue::Null),
         },
         Type::INT4 => match row
             .try_get::<usize, Option<i32>>(idx)
-            .map_err(|err| err.to_string())?
+            .map_err(|err| DbError::DataError(err.to_string()))?
         {
             Some(value) => Ok(value.into()),
             None => Ok(JsonValue::Null),
         },
         Type::INT8 => match row
             .try_get::<usize, Option<i64>>(idx)
-            .map_err(|err| err.to_string())?
+            .map_err(|err| DbError::DataError(err.to_string()))?
         {
             Some(value) => Ok(value.into()),
             None => Ok(JsonValue::Null),
         },
         Type::BOOL => match row
             .try_get::<usize, Option<bool>>(idx)
-            .map_err(|err| err.to_string())?
+            .map_err(|err| DbError::DataError(err.to_string()))?
         {
             Some(value) => Ok(value.into()),
             None => Ok(JsonValue::Null),
         },
         Type::FLOAT4 => match row
             .try_get::<usize, Option<f32>>(idx)
-            .map_err(|err| err.to_string())?
+            .map_err(|err| DbError::DataError(err.to_string()))?
         {
             Some(value) => Ok(value.into()),
             None => Ok(JsonValue::Null),
         },
         Type::FLOAT8 => match row
             .try_get::<usize, Option<f64>>(idx)
-            .map_err(|err| err.to_string())?
+            .map_err(|err| DbError::DataError(err.to_string()))?
         {
             Some(value) => Ok(value.into()),
             None => Ok(JsonValue::Null),
@@ -108,11 +111,11 @@ impl DbQuery for PostgresConnection {
             .pool
             .get()
             .await
-            .map_err(|err| format!("Unable to get pool: {err}"))?;
+            .map_err(|err| DbError::ConnectError(format!("Unable to get pool: {err}")))?;
         client
             .batch_execute(sql)
             .await
-            .map_err(|err| format!("Error in query(): {err}"))?;
+            .map_err(|err| DbError::DatabaseError(format!("Error in query(): {err}")))?;
         Ok(())
     }
 
@@ -122,13 +125,13 @@ impl DbQuery for PostgresConnection {
             .pool
             .get()
             .await
-            .map_err(|err| format!("Unable to get pool: {err}"))?;
+            .map_err(|err| DbError::ConnectError(format!("Unable to get pool: {err}")))?;
 
         // The expected types of all of the parameters as reported by the database via prepare():
         let param_pg_types = client
             .prepare(sql)
             .await
-            .map_err(|err| format!("Error retrieving parameter types: {err}"))?
+            .map_err(|err| DbError::DatabaseError(format!("Error preparing statement: {err}")))?
             .params()
             .to_vec();
 
@@ -141,7 +144,11 @@ impl DbQuery for PostgresConnection {
                     match param {
                         JsonValue::Null => params.push(Box::new(None::<String>)),
                         _ => {
-                            params.push(Box::new(param.as_str().ok_or("Not a string")?));
+                            params.push(Box::new(
+                                param
+                                    .as_str()
+                                    .ok_or(DbError::InputError("Not a string".to_string()))?,
+                            ));
                         }
                     };
                 }
@@ -151,9 +158,9 @@ impl DbQuery for PostgresConnection {
                         _ => {
                             let value: i16 = param
                                 .as_i64()
-                                .ok_or("Not an integer")?
+                                .ok_or(DbError::InputError("Not an integer".to_string()))?
                                 .try_into()
-                                .map_err(|e| format!("Not an i16: {e}"))?;
+                                .map_err(|e| DbError::InputError(format!("Not an i16: {e}")))?;
                             params.push(Box::new(value));
                         }
                     };
@@ -164,9 +171,9 @@ impl DbQuery for PostgresConnection {
                         _ => {
                             let value: i32 = param
                                 .as_i64()
-                                .ok_or("Not an integer")?
+                                .ok_or(DbError::InputError("Not an integer".to_string()))?
                                 .try_into()
-                                .map_err(|e| format!("Not an i32: {e}"))?;
+                                .map_err(|e| DbError::InputError(format!("Not an i32: {e}")))?;
                             params.push(Box::new(value));
                         }
                     };
@@ -175,7 +182,9 @@ impl DbQuery for PostgresConnection {
                     match param {
                         JsonValue::Null => params.push(Box::new(None::<i64>)),
                         _ => {
-                            let value: i64 = param.as_i64().ok_or("Not an integer")?;
+                            let value: i64 = param
+                                .as_i64()
+                                .ok_or(DbError::InputError("Not an integer".to_string()))?;
                             params.push(Box::new(value));
                         }
                     };
@@ -184,7 +193,10 @@ impl DbQuery for PostgresConnection {
                     match param {
                         JsonValue::Null => params.push(Box::new(None::<f32>)),
                         _ => {
-                            let value: f32 = param.as_f64().ok_or("Not a float")? as f32;
+                            let value: f32 = param
+                                .as_f64()
+                                .ok_or(DbError::InputError("Not a float".to_string()))?
+                                as f32;
                             params.push(Box::new(value));
                         }
                     };
@@ -193,7 +205,9 @@ impl DbQuery for PostgresConnection {
                     match param {
                         JsonValue::Null => params.push(Box::new(None::<f64>)),
                         _ => {
-                            let value: f64 = param.as_f64().ok_or("Not a float")?;
+                            let value: f64 = param
+                                .as_f64()
+                                .ok_or(DbError::InputError("Not a float".to_string()))?;
                             params.push(Box::new(value));
                         }
                     };
@@ -202,7 +216,9 @@ impl DbQuery for PostgresConnection {
                     match param {
                         JsonValue::Null => params.push(Box::new(None::<bool>)),
                         _ => {
-                            let value: bool = param.as_bool().ok_or("Not a boolean")?;
+                            let value: bool = param
+                                .as_bool()
+                                .ok_or(DbError::InputError("Not a boolean".to_string()))?;
                             params.push(Box::new(value));
                         }
                     };
@@ -222,7 +238,7 @@ impl DbQuery for PostgresConnection {
         let rows = client
             .query(sql, &query_params)
             .await
-            .map_err(|err| format!("Error in query(): {err}"))?;
+            .map_err(|err| DbError::DatabaseError(format!("Error in query(): {err}")))?;
         let mut json_rows = vec![];
         for row in &rows {
             let mut json_row = JsonRow::new();
@@ -243,7 +259,7 @@ impl DbQuery for PostgresConnection {
         }
         match rows.into_iter().nth(0) {
             Some(row) => Ok(row),
-            None => Err("No rows found".to_string()),
+            None => Err(DbError::DataError("No rows found".to_string())),
         }
     }
 
@@ -255,7 +271,7 @@ impl DbQuery for PostgresConnection {
         }
         match row.into_iter().map(|(_, v)| v).next() {
             Some(value) => Ok(value),
-            None => Err("No values found".into()),
+            None => Err(DbError::DataError("No values found".into())),
         }
     }
 
@@ -276,7 +292,7 @@ impl DbQuery for PostgresConnection {
         let value = self.query_value(sql, params).await?;
         match value.as_u64() {
             Some(val) => Ok(val),
-            None => Err(format!("Not a u64: {value}")),
+            None => Err(DbError::DataError(format!("Not a u64: {value}"))),
         }
     }
 
@@ -285,7 +301,7 @@ impl DbQuery for PostgresConnection {
         let value = self.query_value(sql, params).await?;
         match value.as_i64() {
             Some(val) => Ok(val),
-            None => Err(format!("Not a i64: {value}")),
+            None => Err(DbError::DataError(format!("Not a i64: {value}"))),
         }
     }
 
@@ -294,7 +310,7 @@ impl DbQuery for PostgresConnection {
         let value = self.query_value(sql, params).await?;
         match value.as_f64() {
             Some(val) => Ok(val),
-            None => Err(format!("Not a f64: {value}")),
+            None => Err(DbError::DataError(format!("Not a f64: {value}"))),
         }
     }
 }
