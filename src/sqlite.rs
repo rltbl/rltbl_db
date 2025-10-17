@@ -6,8 +6,8 @@ use crate::core::{DbQuery, JsonRow, JsonValue};
 use deadpool_sqlite::{
     rusqlite::{
         fallible_iterator::FallibleIterator,
-        types::{Null as RusqliteNull, ValueRef as RusqliteValueRef},
-        Statement as RusqliteStatement,
+        types::{Null, ValueRef},
+        Statement, Transaction,
     },
     Config, Pool, Runtime,
 };
@@ -30,6 +30,10 @@ impl SqliteConnection {
     }
 }
 
+pub struct SqliteTransaction<'a> {
+    tx: Transaction<'a>,
+}
+
 /// Extract the first value of the first row in `rows`.
 fn extract_value(rows: &Vec<JsonRow>) -> Result<JsonValue, AnyError> {
     match rows.iter().next() {
@@ -43,7 +47,7 @@ fn extract_value(rows: &Vec<JsonRow>) -> Result<JsonValue, AnyError> {
 
 /// Query the database using the given prepared statement and json parameters.
 fn query_prepared(
-    stmt: &mut RusqliteStatement<'_>,
+    stmt: &mut Statement<'_>,
     params: &Vec<JsonValue>,
 ) -> Result<Vec<JsonRow>, AnyError> {
     // Bind the parameters to the prepared statement:
@@ -82,10 +86,9 @@ fn query_prepared(
                 }
             },
             JsonValue::Null => {
-                stmt.raw_bind_parameter(i + 1, &RusqliteNull)
-                    .map_err(|err| {
-                        AnyError::InputError(format!("Error binding parameter '{param}': {err}"))
-                    })?;
+                stmt.raw_bind_parameter(i + 1, &Null).map_err(|err| {
+                    AnyError::InputError(format!("Error binding parameter '{param}': {err}"))
+                })?;
             }
             _ => {
                 return Err(AnyError::InputError(format!(
@@ -122,8 +125,8 @@ fn query_prepared(
                 let column_type = &column.datatype;
                 let value = match row.get_ref(column_name.as_str()) {
                     Ok(value) => match value {
-                        RusqliteValueRef::Null => JsonValue::Null,
-                        RusqliteValueRef::Integer(value) => match column_type {
+                        ValueRef::Null => JsonValue::Null,
+                        ValueRef::Integer(value) => match column_type {
                             Some(ctype) if ctype.to_lowercase() == "bool" => {
                                 JsonValue::Bool(value != 0)
                             }
@@ -135,8 +138,8 @@ fn query_prepared(
                             // is an integer, the result of the conversion will be a JSON number.
                             _ => JsonValue::from(value),
                         },
-                        RusqliteValueRef::Real(value) => JsonValue::from(value),
-                        RusqliteValueRef::Text(value) | RusqliteValueRef::Blob(value) => {
+                        ValueRef::Real(value) => JsonValue::from(value),
+                        ValueRef::Text(value) | ValueRef::Blob(value) => {
                             let value = std::str::from_utf8(value).unwrap_or_default();
                             JsonValue::from(value)
                         }

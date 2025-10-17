@@ -3,7 +3,7 @@
 use crate::any::AnyError;
 use crate::core::{DbQuery, JsonRow, JsonValue};
 
-use deadpool_postgres::{Config, Pool, Runtime};
+use deadpool_postgres::{Config, Pool, Runtime, Transaction};
 use tokio_postgres::{
     row::Row,
     types::{ToSql, Type},
@@ -38,6 +38,10 @@ impl PostgresConnection {
             ))),
         }
     }
+}
+
+pub struct PostgresTransaction {
+    tx: Transaction<'a>,
 }
 
 /// Extracts the value at the given index from the given [Row].

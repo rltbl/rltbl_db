@@ -1,9 +1,9 @@
 use crate::core::{DbQuery, JsonRow, JsonValue};
 
 #[cfg(feature = "postgres")]
-use crate::postgres::{PostgresConnection, PostgresError};
+use crate::postgres::{PostgresConnection, PostgresError, PostgresTransaction};
 #[cfg(feature = "sqlite")]
-use crate::sqlite::{SqliteConnection, SqliteError};
+use crate::sqlite::{SqliteConnection, SqliteError, SqliteTransaction};
 
 #[derive(Debug)]
 pub enum AnyError {
@@ -68,6 +68,14 @@ impl AnyConnection {
                 Err(AnyError::ConnectError("sqlite not configured".to_string()))
             }
         }
+    }
+
+    /// TODO: Add docstring
+    pub async fn transact(
+        &self,
+        func: impl AsyncFnOnce(&AnyTransaction) -> Result<Vec<JsonRow>, AnyError>,
+    ) -> Result<Vec<JsonRow>, AnyError> {
+        todo!()
     }
 }
 
@@ -152,4 +160,11 @@ impl DbQuery for AnyConnection {
             AnyConnection::Postgres(connection) => connection.query_f64(sql, params).await,
         }
     }
+}
+
+pub enum AnyTransaction<'a> {
+    #[cfg(feature = "sqlite")]
+    Sqlite(SqliteTransaction<'a>),
+    #[cfg(feature = "postgres")]
+    Postgres(PostgresTransaction<'a>),
 }
