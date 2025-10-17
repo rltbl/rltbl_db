@@ -2,11 +2,6 @@ use std::future::Future;
 
 use serde_json::Map as JsonMap;
 
-#[cfg(feature = "postgres")]
-use crate::postgres::PostgresError;
-#[cfg(feature = "sqlite")]
-use crate::sqlite::SqliteError;
-
 pub type JsonValue = serde_json::Value;
 pub type JsonRow = JsonMap<String, JsonValue>;
 
@@ -18,12 +13,8 @@ pub enum DbError {
     InputError(String),
     /// An error in the data retrieved from the database.
     DataError(String),
-    #[cfg(feature = "sqlite")]
-    /// An error that originated with a sqlite database.
-    SqliteError(SqliteError),
-    #[cfg(feature = "postgres")]
-    /// An error that originated with a postgres database.
-    PostgresError(PostgresError),
+    /// An error that originated from the database.
+    DatabaseError(String),
 }
 
 impl std::error::Error for DbError {}
@@ -31,13 +22,10 @@ impl std::error::Error for DbError {}
 impl std::fmt::Display for DbError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            DbError::ConnectError(err) | DbError::DataError(err) | DbError::InputError(err) => {
-                write!(f, "{err}")
-            }
-            #[cfg(feature = "sqlite")]
-            DbError::SqliteError(err) => write!(f, "{err}"),
-            #[cfg(feature = "postgres")]
-            DbError::PostgresError(err) => write!(f, "{err}"),
+            DbError::ConnectError(err)
+            | DbError::DataError(err)
+            | DbError::InputError(err)
+            | DbError::DatabaseError(err) => write!(f, "{err}"),
         }
     }
 }

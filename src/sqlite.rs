@@ -11,8 +11,6 @@ use deadpool_sqlite::{
     },
 };
 
-pub type SqliteError = String;
-
 /// Represents a SQLite database connection pool
 #[derive(Debug)]
 pub struct SqliteConnection {
@@ -149,7 +147,7 @@ fn query_prepared(
             Ok(json_row)
         })
         .collect::<Vec<_>>();
-    results.map_err(|err| DbError::SqliteError(err.to_string()))
+    results.map_err(|err| DbError::DatabaseError(err.to_string()))
 }
 
 impl DbQuery for SqliteConnection {
@@ -170,13 +168,13 @@ impl DbQuery for SqliteConnection {
         match conn
             .interact(move |conn| match conn.execute_batch(&sql) {
                 Err(err) => {
-                    return Err(DbError::SqliteError(format!("Error during query: {err}")));
+                    return Err(DbError::DatabaseError(format!("Error during query: {err}")));
                 }
                 Ok(_) => Ok(()),
             })
             .await
         {
-            Err(err) => Err(DbError::SqliteError(format!("Error during query: {err}"))),
+            Err(err) => Err(DbError::DatabaseError(format!("Error during query: {err}"))),
             Ok(_) => Ok(()),
         }
     }
@@ -193,16 +191,16 @@ impl DbQuery for SqliteConnection {
         let rows = conn
             .interact(move |conn| {
                 let mut stmt = conn.prepare(&sql).map_err(|err| {
-                    DbError::SqliteError(format!("Error preparing statement: {err}"))
+                    DbError::DatabaseError(format!("Error preparing statement: {err}"))
                 })?;
                 let rows = query_prepared(&mut stmt, &params).map_err(|err| {
-                    DbError::SqliteError(format!("Error querying prepared statement: {err}"))
+                    DbError::DatabaseError(format!("Error querying prepared statement: {err}"))
                 })?;
                 Ok::<Vec<JsonRow>, DbError>(rows)
             })
             .await
-            .map_err(|err| DbError::SqliteError(err.to_string()))?
-            .map_err(|err| DbError::SqliteError(err.to_string()))?;
+            .map_err(|err| DbError::DatabaseError(err.to_string()))?
+            .map_err(|err| DbError::DatabaseError(err.to_string()))?;
         Ok(rows)
     }
 

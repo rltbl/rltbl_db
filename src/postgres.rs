@@ -9,8 +9,6 @@ use tokio_postgres::{
     types::{ToSql, Type},
 };
 
-pub type PostgresError = String;
-
 /// Represents a PostgreSQL database connection pool
 #[derive(Debug)]
 pub struct PostgresConnection {
@@ -117,7 +115,7 @@ impl DbQuery for PostgresConnection {
         client
             .batch_execute(sql)
             .await
-            .map_err(|err| DbError::PostgresError(format!("Error in query(): {err}")))?;
+            .map_err(|err| DbError::DatabaseError(format!("Error in query(): {err}")))?;
         Ok(())
     }
 
@@ -133,7 +131,7 @@ impl DbQuery for PostgresConnection {
         let param_pg_types = client
             .prepare(sql)
             .await
-            .map_err(|err| DbError::PostgresError(format!("Error preparing statement: {err}")))?
+            .map_err(|err| DbError::DatabaseError(format!("Error preparing statement: {err}")))?
             .params()
             .to_vec();
 
@@ -240,7 +238,7 @@ impl DbQuery for PostgresConnection {
         let rows = client
             .query(sql, &query_params)
             .await
-            .map_err(|err| DbError::PostgresError(format!("Error in query(): {err}")))?;
+            .map_err(|err| DbError::DatabaseError(format!("Error in query(): {err}")))?;
         let mut json_rows = vec![];
         for row in &rows {
             let mut json_row = JsonRow::new();
