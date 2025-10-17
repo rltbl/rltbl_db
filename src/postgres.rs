@@ -5,14 +5,15 @@ use crate::core::{DbQuery, JsonRow, JsonValue};
 
 use deadpool_postgres::{Config, Pool, Runtime};
 use tokio_postgres::{
+    NoTls,
     row::Row,
     types::{ToSql, Type},
-    NoTls,
 };
 
 pub type PostgresError = String;
 
 /// Represents a PostgreSQL database connection pool
+#[derive(Debug)]
 pub struct PostgresConnection {
     pool: Pool,
 }

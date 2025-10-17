@@ -5,7 +5,7 @@ use crate::postgres::{PostgresConnection, PostgresError};
 #[cfg(feature = "sqlite")]
 use crate::sqlite::{SqliteConnection, SqliteError};
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum AnyError {
     /// An error that occurred while connecting to a database.
     ConnectError(String),
@@ -21,6 +21,8 @@ pub enum AnyError {
     PostgresError(PostgresError),
 }
 
+impl std::error::Error for AnyError {}
+
 impl std::fmt::Display for AnyError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
@@ -35,6 +37,7 @@ impl std::fmt::Display for AnyError {
     }
 }
 
+#[derive(Debug)]
 pub enum AnyConnection {
     #[cfg(feature = "sqlite")]
     Sqlite(SqliteConnection),

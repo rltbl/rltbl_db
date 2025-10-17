@@ -4,17 +4,18 @@ use crate::any::AnyError;
 use crate::core::{DbQuery, JsonRow, JsonValue};
 
 use deadpool_sqlite::{
+    Config, Pool, Runtime,
     rusqlite::{
+        Statement as RusqliteStatement,
         fallible_iterator::FallibleIterator,
         types::{Null as RusqliteNull, ValueRef as RusqliteValueRef},
-        Statement as RusqliteStatement,
     },
-    Config, Pool, Runtime,
 };
 
 pub type SqliteError = String;
 
 /// Represents a SQLite database connection pool
+#[derive(Debug)]
 pub struct SqliteConnection {
     pool: Pool,
 }
@@ -90,7 +91,7 @@ fn query_prepared(
             _ => {
                 return Err(AnyError::InputError(format!(
                     "Unsupported JSON type: {param}"
-                )))
+                )));
             }
         };
     }
@@ -174,7 +175,7 @@ impl DbQuery for SqliteConnection {
         match conn
             .interact(move |conn| match conn.execute_batch(&sql) {
                 Err(err) => {
-                    return Err(AnyError::SqliteError(format!("Error during query: {err}")))
+                    return Err(AnyError::SqliteError(format!("Error during query: {err}")));
                 }
                 Ok(_) => Ok(()),
             })
