@@ -5,9 +5,9 @@ use crate::core::{DbQuery, JsonRow, JsonValue};
 
 use deadpool_postgres::{Config, Pool, Runtime, Transaction};
 use tokio_postgres::{
+    NoTls,
     row::Row,
     types::{ToSql, Type},
-    NoTls,
 };
 
 pub type PostgresError = String;
@@ -40,7 +40,7 @@ impl PostgresConnection {
     }
 }
 
-pub struct PostgresTransaction {
+pub struct PostgresTransaction<'a> {
     tx: Transaction<'a>,
 }
 
@@ -318,6 +318,52 @@ impl DbQuery for PostgresConnection {
             Some(val) => Ok(val),
             None => Err(AnyError::DataError(format!("Not a f64: {value}"))),
         }
+    }
+}
+
+impl<'a> PostgresTransaction<'a> {
+    pub async fn execute(&self, sql: &str, _params: &[JsonValue]) -> Result<(), AnyError> {
+        let stmt = self.tx.prepare(&sql).await.unwrap();
+        self.tx
+            .execute(&stmt, &[])
+            .await
+            .map_err(|err| AnyError::PostgresError(format!("Error executing SQL: {err}")))?;
+        Ok(())
+    }
+
+    pub async fn query(&self, sql: &str, _params: &[JsonValue]) -> Result<Vec<JsonRow>, AnyError> {
+        let stmt =
+            self.tx.prepare(&sql).await.map_err(|err| {
+                AnyError::PostgresError(format!("Error preparing statement: {err}"))
+            })?;
+        let rows = self
+            .tx
+            .query(&stmt, &[])
+            .await
+            .map_err(|err| AnyError::PostgresError(format!("Error running query: {err}")))?;
+        let mut json_rows = vec![];
+        for row in &rows {
+            let mut json_row = JsonRow::new();
+            let columns = row.columns();
+            for (i, column) in columns.iter().enumerate() {
+                json_row.insert(column.name().to_string(), extract_value(row, i)?);
+            }
+            json_rows.push(json_row);
+        }
+        Ok(json_rows)
+    }
+
+    pub async fn commit(self) -> Result<(), AnyError> {
+        self.tx
+            .commit()
+            .await
+            .map_err(|err| AnyError::PostgresError(format!("Error committing transaction: {err}")))
+    }
+
+    pub async fn rollback(self) -> Result<(), AnyError> {
+        self.tx.rollback().await.map_err(|err| {
+            AnyError::PostgresError(format!("Error rolling back transaction: {err}"))
+        })
     }
 }
 

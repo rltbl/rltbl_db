@@ -168,3 +168,14 @@ pub enum AnyTransaction<'a> {
     #[cfg(feature = "postgres")]
     Postgres(PostgresTransaction<'a>),
 }
+
+impl<'a> AnyTransaction<'a> {
+    pub async fn execute(&self, sql: &str, params: &[JsonValue]) -> Result<(), AnyError> {
+        match self {
+            #[cfg(feature = "sqlite")]
+            AnyTransaction::Sqlite(tx) => tx.execute(sql, params).await,
+            #[cfg(feature = "postgres")]
+            AnyTransaction::Postgres(tx) => tx.execute(sql, params).await,
+        }
+    }
+}

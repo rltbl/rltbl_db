@@ -2,14 +2,13 @@
 
 use crate::any::AnyError;
 use crate::core::{DbQuery, JsonRow, JsonValue};
-
 use deadpool_sqlite::{
+    Config, Pool, Runtime,
     rusqlite::{
+        Statement, Transaction,
         fallible_iterator::FallibleIterator,
         types::{Null, ValueRef},
-        Statement, Transaction,
     },
-    Config, Pool, Runtime,
 };
 
 pub type SqliteError = String;
@@ -93,7 +92,7 @@ fn query_prepared(
             _ => {
                 return Err(AnyError::InputError(format!(
                     "Unsupported JSON type: {param}"
-                )))
+                )));
             }
         };
     }
@@ -177,7 +176,7 @@ impl DbQuery for SqliteConnection {
         match conn
             .interact(move |conn| match conn.execute_batch(&sql) {
                 Err(err) => {
-                    return Err(AnyError::SqliteError(format!("Error during query: {err}")))
+                    return Err(AnyError::SqliteError(format!("Error during query: {err}")));
                 }
                 Ok(_) => Ok(()),
             })
@@ -273,6 +272,39 @@ impl DbQuery for SqliteConnection {
             Some(val) => Ok(val),
             None => Err(AnyError::DataError(format!("Not an float: {value}"))),
         }
+    }
+}
+
+impl<'a> SqliteTransaction<'a> {
+    pub async fn execute(&self, sql: &str, _params: &[JsonValue]) -> Result<(), AnyError> {
+        self.tx
+            .execute(sql, ())
+            .map_err(|err| AnyError::SqliteError(format!("Error executing SQL: {err}")))?;
+        Ok(())
+    }
+
+    pub async fn query(&self, sql: &str, params: &[JsonValue]) -> Result<Vec<JsonRow>, AnyError> {
+        let sql = sql.to_string();
+        let params = params.to_vec();
+        let mut stmt = self
+            .tx
+            .prepare(&sql)
+            .map_err(|err| AnyError::SqliteError(format!("Error preparing statement: {err}")))?;
+        let rows = query_prepared(&mut stmt, &params)
+            .map_err(|err| AnyError::SqliteError(format!("Error running query: {err}")))?;
+        Ok(rows)
+    }
+
+    pub async fn commit(self) -> Result<(), AnyError> {
+        self.tx
+            .commit()
+            .map_err(|err| AnyError::SqliteError(format!("Error committing transaction: {err}")))
+    }
+
+    pub async fn rollback(self) -> Result<(), AnyError> {
+        self.tx
+            .rollback()
+            .map_err(|err| AnyError::SqliteError(format!("Error rolling back transaction: {err}")))
     }
 }
 
