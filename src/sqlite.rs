@@ -3,15 +3,16 @@
 use crate::core::{DbError, DbQuery, JsonRow, JsonValue};
 
 use deadpool_sqlite::{
+    Config, Pool, Runtime,
     rusqlite::{
+        Statement as RusqliteStatement,
         fallible_iterator::FallibleIterator,
         types::{Null as RusqliteNull, ValueRef as RusqliteValueRef},
-        Statement as RusqliteStatement,
     },
-    Config, Pool, Runtime,
 };
 
 /// Represents a SQLite database connection pool
+#[derive(Debug)]
 pub struct SqliteConnection {
     pool: Pool,
 }

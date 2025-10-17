@@ -3,6 +3,8 @@
 use crate::core::{DbError, DbQuery, JsonRow, JsonValue};
 
 use deadpool_postgres::{Config, Pool, Runtime};
+use rust_decimal::Decimal;
+use serde_json::json;
 use tokio_postgres::{
     NoTls,
     row::Row,
@@ -10,6 +12,7 @@ use tokio_postgres::{
 };
 
 /// Represents a PostgreSQL database connection pool
+#[derive(Debug)]
 pub struct PostgresConnection {
     pool: Pool,
 }
@@ -88,9 +91,13 @@ fn extract_value(row: &Row, idx: usize) -> Result<JsonValue, DbError> {
             Some(value) => Ok(value.into()),
             None => Ok(JsonValue::Null),
         },
-        Type::NUMERIC => {
-            todo!()
-        }
+        Type::NUMERIC => match row
+            .try_get::<usize, Option<Decimal>>(idx)
+            .map_err(|err| err.to_string())?
+        {
+            Some(value) => Ok(json!(value)),
+            None => Ok(JsonValue::Null),
+        },
         _ => unimplemented!(),
     }
 }
@@ -222,7 +229,7 @@ impl DbQuery for PostgresConnection {
         let rows = client
             .query(sql, &query_params)
             .await
-            .map_err(|err| format!("Error in query(): {err}"))?;
+            .map_err(|err| format!("Error in query(): {err}, {err:?}"))?;
         let mut json_rows = vec![];
         for row in &rows {
             let mut json_row = JsonRow::new();

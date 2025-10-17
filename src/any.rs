@@ -5,6 +5,7 @@ use crate::postgres::PostgresConnection;
 #[cfg(feature = "sqlite")]
 use crate::sqlite::SqliteConnection;
 
+#[derive(Debug)]
 pub enum AnyConnection {
     #[cfg(feature = "sqlite")]
     Sqlite(SqliteConnection),
