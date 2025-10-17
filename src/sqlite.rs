@@ -1,6 +1,6 @@
 //! SQLite support for sql_json.
 
-use crate::any::DbError;
+use crate::any::AnyError;
 use crate::core::{DbQuery, JsonRow, JsonValue};
 
 use deadpool_sqlite::{
@@ -21,25 +21,23 @@ pub struct SqliteConnection {
 
 impl SqliteConnection {
     /// Connect to a SQLite database using the given url.
-    pub async fn connect(url: &str) -> Result<Self, DbError> {
+    pub async fn connect(url: &str) -> Result<Self, AnyError> {
         let cfg = Config::new(url);
         let pool = cfg
             .create_pool(Runtime::Tokio1)
-            .map_err(|err| DbError::Sqlite(format!("Error creating pool: {err}")))?;
+            .map_err(|err| AnyError::ConnectError(format!("Error creating pool: {err}")))?;
         Ok(Self { pool })
     }
 }
 
-// TODO: Change the type of the error from String to something custom (DbError is not appropriate,
-// however, even though that is currently implemented as a String).
 /// Extract the first value of the first row in `rows`.
-fn extract_value(rows: &Vec<JsonRow>) -> Result<JsonValue, String> {
+fn extract_value(rows: &Vec<JsonRow>) -> Result<JsonValue, AnyError> {
     match rows.iter().next() {
         Some(row) => match row.values().next() {
             Some(value) => Ok(value.clone()),
-            None => Err("No values found".into()),
+            None => Err(AnyError::DataError("No values found".to_string())),
         },
-        None => Err("No rows found".into()),
+        None => Err(AnyError::DataError("No rows found".to_string())),
     }
 }
 
@@ -47,19 +45,19 @@ fn extract_value(rows: &Vec<JsonRow>) -> Result<JsonValue, String> {
 fn query_prepared(
     stmt: &mut RusqliteStatement<'_>,
     params: &Vec<JsonValue>,
-) -> Result<Vec<JsonRow>, DbError> {
+) -> Result<Vec<JsonRow>, AnyError> {
     // Bind the parameters to the prepared statement:
     for (i, param) in params.iter().enumerate() {
         match param {
             JsonValue::String(s) => {
                 stmt.raw_bind_parameter(i + 1, s).map_err(|err| {
-                    DbError::Sqlite(format!("Error binding parameter '{param}': {err}"))
+                    AnyError::InputError(format!("Error binding parameter '{param}': {err}"))
                 })?;
             }
             JsonValue::Number(_) => {
                 stmt.raw_bind_parameter(i + 1, &param.to_string())
                     .map_err(|err| {
-                        DbError::Sqlite(format!("Error binding parameter '{param}': {err}"))
+                        AnyError::InputError(format!("Error binding parameter '{param}': {err}"))
                     })?;
             }
             JsonValue::Bool(flag) => match flag {
@@ -69,23 +67,31 @@ fn query_prepared(
                 false => {
                     stmt.raw_bind_parameter(i + 1, &0.to_string())
                         .map_err(|err| {
-                            DbError::Sqlite(format!("Error binding parameter '{param}': {err}"))
+                            AnyError::InputError(format!(
+                                "Error binding parameter '{param}': {err}"
+                            ))
                         })?;
                 }
                 true => {
                     stmt.raw_bind_parameter(i + 1, &1.to_string())
                         .map_err(|err| {
-                            DbError::Sqlite(format!("Error binding parameter '{param}': {err}"))
+                            AnyError::InputError(format!(
+                                "Error binding parameter '{param}': {err}"
+                            ))
                         })?;
                 }
             },
             JsonValue::Null => {
                 stmt.raw_bind_parameter(i + 1, &RusqliteNull)
                     .map_err(|err| {
-                        DbError::Sqlite(format!("Error binding parameter '{param}': {err}"))
+                        AnyError::InputError(format!("Error binding parameter '{param}': {err}"))
                     })?;
             }
-            _ => return Err(DbError::Sqlite(format!("Unsupported JSON type: {param}"))),
+            _ => {
+                return Err(AnyError::InputError(format!(
+                    "Unsupported JSON type: {param}"
+                )))
+            }
         };
     }
 
@@ -147,85 +153,86 @@ fn query_prepared(
             Ok(json_row)
         })
         .collect::<Vec<_>>();
-    results.map_err(|err| DbError::Sqlite(err.to_string()))
+    results.map_err(|err| AnyError::SqliteError(err.to_string()))
 }
 
 impl DbQuery for SqliteConnection {
     /// Implements [DbQuery::execute()] for SQLite.
-    async fn execute(&self, sql: &str, params: &[JsonValue]) -> Result<(), DbError> {
+    async fn execute(&self, sql: &str, params: &[JsonValue]) -> Result<(), AnyError> {
         self.query(sql, params).await?;
         Ok(())
     }
 
     /// Implements [DbQuery::execute_batch()] for PostgreSQL
-    async fn execute_batch(&self, sql: &str) -> Result<(), DbError> {
+    async fn execute_batch(&self, sql: &str) -> Result<(), AnyError> {
         let conn = self
             .pool
             .get()
             .await
-            .map_err(|err| DbError::Sqlite(format!("Unable to get pool: {err}")))?;
+            .map_err(|err| AnyError::ConnectError(format!("Unable to get pool: {err}")))?;
         let sql = sql.to_string();
         match conn
             .interact(move |conn| match conn.execute_batch(&sql) {
-                Err(err) => return Err(DbError::Sqlite(format!("Error during query: {err}"))),
+                Err(err) => {
+                    return Err(AnyError::SqliteError(format!("Error during query: {err}")))
+                }
                 Ok(_) => Ok(()),
             })
             .await
         {
-            Err(err) => Err(DbError::Sqlite(format!("Error during query: {err}"))),
+            Err(err) => Err(AnyError::SqliteError(format!("Error during query: {err}"))),
             Ok(_) => Ok(()),
         }
     }
 
     /// Implements [DbQuery::query()] for SQLite.
-    async fn query(&self, sql: &str, params: &[JsonValue]) -> Result<Vec<JsonRow>, DbError> {
+    async fn query(&self, sql: &str, params: &[JsonValue]) -> Result<Vec<JsonRow>, AnyError> {
         let conn = self
             .pool
             .get()
             .await
-            .map_err(|err| DbError::Sqlite(format!("Error getting pool: {err}")))?;
+            .map_err(|err| AnyError::ConnectError(format!("Error getting pool: {err}")))?;
         let sql = sql.to_string();
         let params = params.to_vec();
         let rows = conn
             .interact(move |conn| {
-                let mut stmt = conn
-                    .prepare(&sql)
-                    .map_err(|err| DbError::Sqlite(format!("Error preparing statement: {err}")))?;
-                let rows = query_prepared(&mut stmt, &params).map_err(|err| {
-                    DbError::Sqlite(format!("Error querying prepared statement: {err}"))
+                let mut stmt = conn.prepare(&sql).map_err(|err| {
+                    AnyError::SqliteError(format!("Error preparing statement: {err}"))
                 })?;
-                Ok::<Vec<JsonRow>, DbError>(rows)
+                let rows = query_prepared(&mut stmt, &params).map_err(|err| {
+                    AnyError::SqliteError(format!("Error querying prepared statement: {err}"))
+                })?;
+                Ok::<Vec<JsonRow>, AnyError>(rows)
             })
             .await
-            .map_err(|err| DbError::Sqlite(err.to_string()))?
-            .map_err(|err| DbError::Sqlite(err.to_string()))?;
+            .map_err(|err| AnyError::SqliteError(err.to_string()))?
+            .map_err(|err| AnyError::SqliteError(err.to_string()))?;
         Ok(rows)
     }
 
     /// Implements [DbQuery::query_row()] for SQLite.
-    async fn query_row(&self, sql: &str, params: &[JsonValue]) -> Result<JsonRow, DbError> {
+    async fn query_row(&self, sql: &str, params: &[JsonValue]) -> Result<JsonRow, AnyError> {
         let rows = self.query(&sql, params).await?;
         if rows.len() > 1 {
             tracing::warn!("More than one row returned for query_row()");
         }
         match rows.iter().next() {
             Some(row) => Ok(row.clone()),
-            None => Err(DbError::Sqlite("No row found".to_string())),
+            None => Err(AnyError::DataError("No row found".to_string())),
         }
     }
 
     /// Implements [DbQuery::query_value()] for SQLite.
-    async fn query_value(&self, sql: &str, params: &[JsonValue]) -> Result<JsonValue, DbError> {
+    async fn query_value(&self, sql: &str, params: &[JsonValue]) -> Result<JsonValue, AnyError> {
         let rows = self.query(sql, params).await?;
         if rows.len() > 1 {
             tracing::warn!("More than one row returned for query_value()");
         }
-        let value = extract_value(&rows).map_err(|err| DbError::Sqlite(err.to_string()))?;
-        Ok(value)
+        extract_value(&rows)
     }
 
     /// Implements [DbQuery::query_string()] for SQLite.
-    async fn query_string(&self, sql: &str, params: &[JsonValue]) -> Result<String, DbError> {
+    async fn query_string(&self, sql: &str, params: &[JsonValue]) -> Result<String, AnyError> {
         let value = self.query_value(sql, params).await?;
         match value.as_str() {
             Some(str_val) => Ok(str_val.to_string()),
@@ -237,29 +244,31 @@ impl DbQuery for SqliteConnection {
     }
 
     /// Implements [DbQuery::query_u64()] for SQLite.
-    async fn query_u64(&self, sql: &str, params: &[JsonValue]) -> Result<u64, DbError> {
+    async fn query_u64(&self, sql: &str, params: &[JsonValue]) -> Result<u64, AnyError> {
         let value = self.query_value(sql, params).await?;
         match value.as_u64() {
             Some(val) => Ok(val),
-            None => Err(DbError::Sqlite(format!("Not an unsigned integer: {value}"))),
+            None => Err(AnyError::DataError(format!(
+                "Not an unsigned integer: {value}"
+            ))),
         }
     }
 
     /// Implements [DbQuery::query_i64()] for SQLite.
-    async fn query_i64(&self, sql: &str, params: &[JsonValue]) -> Result<i64, DbError> {
+    async fn query_i64(&self, sql: &str, params: &[JsonValue]) -> Result<i64, AnyError> {
         let value = self.query_value(sql, params).await?;
         match value.as_i64() {
             Some(val) => Ok(val),
-            None => Err(DbError::Sqlite(format!("Not an integer: {value}"))),
+            None => Err(AnyError::DataError(format!("Not an integer: {value}"))),
         }
     }
 
     /// Implements [DbQuery::query_f64()] for SQLite.
-    async fn query_f64(&self, sql: &str, params: &[JsonValue]) -> Result<f64, DbError> {
+    async fn query_f64(&self, sql: &str, params: &[JsonValue]) -> Result<f64, AnyError> {
         let value = self.query_value(sql, params).await?;
         match value.as_f64() {
             Some(val) => Ok(val),
-            None => Err(DbError::Sqlite(format!("Not an float: {value}"))),
+            None => Err(AnyError::DataError(format!("Not an float: {value}"))),
         }
     }
 }

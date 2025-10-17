@@ -6,22 +6,31 @@ use crate::postgres::{PostgresConnection, PostgresError};
 use crate::sqlite::{SqliteConnection, SqliteError};
 
 #[derive(Debug)]
-pub enum DbError {
-    Generic(String),
+pub enum AnyError {
+    /// An error that occurred while connecting to a database.
+    ConnectError(String),
+    /// An error in the arguments to a function.
+    InputError(String),
+    /// An error in the data retrieved from the database.
+    DataError(String),
     #[cfg(feature = "sqlite")]
-    Sqlite(SqliteError),
+    /// An error that originated with a sqlite database.
+    SqliteError(SqliteError),
     #[cfg(feature = "postgres")]
-    Postgres(PostgresError),
+    /// An error that originated with a postgres database.
+    PostgresError(PostgresError),
 }
 
-impl std::fmt::Display for DbError {
+impl std::fmt::Display for AnyError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match self {
-            DbError::Generic(err) => write!(f, "Generic db error: {err}"),
+            AnyError::ConnectError(err) | AnyError::DataError(err) | AnyError::InputError(err) => {
+                write!(f, "{err}")
+            }
             #[cfg(feature = "sqlite")]
-            DbError::Sqlite(err) => write!(f, "Sqlite error: {err}"),
+            AnyError::SqliteError(err) => write!(f, "{err}"),
             #[cfg(feature = "postgres")]
-            DbError::Postgres(err) => write!(f, "Postgres error: {err}"),
+            AnyError::PostgresError(err) => write!(f, "{err}"),
         }
     }
 }
@@ -35,7 +44,7 @@ pub enum AnyConnection {
 
 impl AnyConnection {
     /// Connect to the database located at the given URL.
-    pub async fn connect(url: &str) -> Result<Self, DbError> {
+    pub async fn connect(url: &str) -> Result<Self, AnyError> {
         if url.starts_with("postgresql://") {
             #[cfg(feature = "postgres")]
             {
@@ -45,7 +54,9 @@ impl AnyConnection {
             }
             #[cfg(not(feature = "postgres"))]
             {
-                Err(DbError::Generic("postgres not configured".to_string()))
+                Err(AnyError::ConnectError(
+                    "postgres not configured".to_string(),
+                ))
             }
         } else {
             #[cfg(feature = "sqlite")]
@@ -54,14 +65,14 @@ impl AnyConnection {
             }
             #[cfg(not(feature = "sqlite"))]
             {
-                Err(DbError::Generic("sqlite not configured".to_string()))
+                Err(AnyError::ConnectError("sqlite not configured".to_string()))
             }
         }
     }
 }
 
 impl DbQuery for AnyConnection {
-    async fn execute(&self, sql: &str, params: &[JsonValue]) -> Result<(), DbError> {
+    async fn execute(&self, sql: &str, params: &[JsonValue]) -> Result<(), AnyError> {
         match self {
             #[cfg(feature = "sqlite")]
             AnyConnection::Sqlite(connection) => connection.execute(sql, params).await,
@@ -70,7 +81,7 @@ impl DbQuery for AnyConnection {
         }
     }
 
-    async fn execute_batch(&self, sql: &str) -> Result<(), DbError> {
+    async fn execute_batch(&self, sql: &str) -> Result<(), AnyError> {
         match self {
             #[cfg(feature = "sqlite")]
             AnyConnection::Sqlite(connection) => connection.execute_batch(sql).await,
@@ -79,7 +90,7 @@ impl DbQuery for AnyConnection {
         }
     }
 
-    async fn query(&self, sql: &str, params: &[JsonValue]) -> Result<Vec<JsonRow>, DbError> {
+    async fn query(&self, sql: &str, params: &[JsonValue]) -> Result<Vec<JsonRow>, AnyError> {
         match self {
             #[cfg(feature = "sqlite")]
             AnyConnection::Sqlite(connection) => connection.query(sql, params).await,
@@ -88,7 +99,7 @@ impl DbQuery for AnyConnection {
         }
     }
 
-    async fn query_row(&self, sql: &str, params: &[JsonValue]) -> Result<JsonRow, DbError> {
+    async fn query_row(&self, sql: &str, params: &[JsonValue]) -> Result<JsonRow, AnyError> {
         match self {
             #[cfg(feature = "sqlite")]
             AnyConnection::Sqlite(connection) => connection.query_row(sql, params).await,
@@ -97,7 +108,7 @@ impl DbQuery for AnyConnection {
         }
     }
 
-    async fn query_value(&self, sql: &str, params: &[JsonValue]) -> Result<JsonValue, DbError> {
+    async fn query_value(&self, sql: &str, params: &[JsonValue]) -> Result<JsonValue, AnyError> {
         match self {
             #[cfg(feature = "sqlite")]
             AnyConnection::Sqlite(connection) => connection.query_value(sql, params).await,
@@ -106,7 +117,7 @@ impl DbQuery for AnyConnection {
         }
     }
 
-    async fn query_string(&self, sql: &str, params: &[JsonValue]) -> Result<String, DbError> {
+    async fn query_string(&self, sql: &str, params: &[JsonValue]) -> Result<String, AnyError> {
         match self {
             #[cfg(feature = "sqlite")]
             AnyConnection::Sqlite(connection) => connection.query_string(sql, params).await,
@@ -115,7 +126,7 @@ impl DbQuery for AnyConnection {
         }
     }
 
-    async fn query_u64(&self, sql: &str, params: &[JsonValue]) -> Result<u64, DbError> {
+    async fn query_u64(&self, sql: &str, params: &[JsonValue]) -> Result<u64, AnyError> {
         match self {
             #[cfg(feature = "sqlite")]
             AnyConnection::Sqlite(connection) => connection.query_u64(sql, params).await,
@@ -124,7 +135,7 @@ impl DbQuery for AnyConnection {
         }
     }
 
-    async fn query_i64(&self, sql: &str, params: &[JsonValue]) -> Result<i64, DbError> {
+    async fn query_i64(&self, sql: &str, params: &[JsonValue]) -> Result<i64, AnyError> {
         match self {
             #[cfg(feature = "sqlite")]
             AnyConnection::Sqlite(connection) => connection.query_i64(sql, params).await,
@@ -133,7 +144,7 @@ impl DbQuery for AnyConnection {
         }
     }
 
-    async fn query_f64(&self, sql: &str, params: &[JsonValue]) -> Result<f64, DbError> {
+    async fn query_f64(&self, sql: &str, params: &[JsonValue]) -> Result<f64, AnyError> {
         match self {
             #[cfg(feature = "sqlite")]
             AnyConnection::Sqlite(connection) => connection.query_f64(sql, params).await,
