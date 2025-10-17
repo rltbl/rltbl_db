@@ -4,7 +4,32 @@ use serde_json::Map as JsonMap;
 
 pub type JsonValue = serde_json::Value;
 pub type JsonRow = JsonMap<String, JsonValue>;
-pub type DbError = String;
+
+#[derive(Clone, Debug)]
+#[non_exhaustive] // We may add more specific error types in the future.
+pub enum DbError {
+    /// An error that occurred while connecting to a database.
+    ConnectError(String),
+    /// An error in the arguments to a function.
+    InputError(String),
+    /// An error in the data retrieved from the database.
+    DataError(String),
+    /// An error that originated from the database.
+    DatabaseError(String),
+}
+
+impl std::error::Error for DbError {}
+
+impl std::fmt::Display for DbError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            DbError::ConnectError(err)
+            | DbError::DataError(err)
+            | DbError::InputError(err)
+            | DbError::DatabaseError(err) => write!(f, "{err}"),
+        }
+    }
+}
 
 pub trait DbQuery {
     /// Execute a SQL command, without a return value.
