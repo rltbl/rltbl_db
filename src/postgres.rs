@@ -1,7 +1,6 @@
 //! PostgreSQL support for sql_json.
 
-use crate::any::AnyError;
-use crate::core::{DbQuery, JsonRow, JsonValue};
+use crate::core::{DbError, DbQuery, JsonRow, JsonValue};
 
 use deadpool_postgres::{Config, Pool, Runtime, Transaction};
 use tokio_postgres::{
@@ -10,9 +9,8 @@ use tokio_postgres::{
     types::{ToSql, Type},
 };
 
-pub type PostgresError = String;
-
 /// Represents a PostgreSQL database connection pool
+#[derive(Debug)]
 pub struct PostgresConnection {
     pool: Pool,
 }
@@ -20,20 +18,20 @@ pub struct PostgresConnection {
 impl PostgresConnection {
     /// Connect to a PostgreSQL database using the given url, which should be of the form
     /// postgresql:///DATABASE_NAME
-    pub async fn connect(url: &str) -> Result<Self, AnyError> {
+    pub async fn connect(url: &str) -> Result<Self, DbError> {
         match url.starts_with("postgresql:///") {
             true => {
                 let mut cfg = Config::new();
                 let db_name = url
                     .strip_prefix("postgresql:///")
-                    .ok_or(AnyError::ConnectError("Invalid PostgreSQL URL".to_string()))?;
+                    .ok_or(DbError::ConnectError("Invalid PostgreSQL URL".to_string()))?;
                 cfg.dbname = Some(db_name.to_string());
                 let pool = cfg
                     .create_pool(Some(Runtime::Tokio1), NoTls)
-                    .map_err(|err| AnyError::ConnectError(format!("Error creating pool: {err}")))?;
+                    .map_err(|err| DbError::ConnectError(format!("Error creating pool: {err}")))?;
                 Ok(Self { pool })
             }
-            false => Err(AnyError::ConnectError(format!(
+            false => Err(DbError::ConnectError(format!(
                 "Invalid PostgreSQL URL: '{url}'"
             ))),
         }
@@ -45,54 +43,54 @@ pub struct PostgresTransaction<'a> {
 }
 
 /// Extracts the value at the given index from the given [Row].
-fn extract_value(row: &Row, idx: usize) -> Result<JsonValue, AnyError> {
+fn extract_value(row: &Row, idx: usize) -> Result<JsonValue, DbError> {
     let column = &row.columns()[idx];
     match *column.type_() {
         Type::TEXT | Type::VARCHAR => match row
             .try_get::<usize, Option<&str>>(idx)
-            .map_err(|err| AnyError::DataError(err.to_string()))?
+            .map_err(|err| DbError::DataError(err.to_string()))?
         {
             Some(value) => Ok(value.into()),
             None => Ok(JsonValue::Null),
         },
         Type::INT2 => match row
             .try_get::<usize, Option<i16>>(idx)
-            .map_err(|err| AnyError::DataError(err.to_string()))?
+            .map_err(|err| DbError::DataError(err.to_string()))?
         {
             Some(value) => Ok(value.into()),
             None => Ok(JsonValue::Null),
         },
         Type::INT4 => match row
             .try_get::<usize, Option<i32>>(idx)
-            .map_err(|err| AnyError::DataError(err.to_string()))?
+            .map_err(|err| DbError::DataError(err.to_string()))?
         {
             Some(value) => Ok(value.into()),
             None => Ok(JsonValue::Null),
         },
         Type::INT8 => match row
             .try_get::<usize, Option<i64>>(idx)
-            .map_err(|err| AnyError::DataError(err.to_string()))?
+            .map_err(|err| DbError::DataError(err.to_string()))?
         {
             Some(value) => Ok(value.into()),
             None => Ok(JsonValue::Null),
         },
         Type::BOOL => match row
             .try_get::<usize, Option<bool>>(idx)
-            .map_err(|err| AnyError::DataError(err.to_string()))?
+            .map_err(|err| DbError::DataError(err.to_string()))?
         {
             Some(value) => Ok(value.into()),
             None => Ok(JsonValue::Null),
         },
         Type::FLOAT4 => match row
             .try_get::<usize, Option<f32>>(idx)
-            .map_err(|err| AnyError::DataError(err.to_string()))?
+            .map_err(|err| DbError::DataError(err.to_string()))?
         {
             Some(value) => Ok(value.into()),
             None => Ok(JsonValue::Null),
         },
         Type::FLOAT8 => match row
             .try_get::<usize, Option<f64>>(idx)
-            .map_err(|err| AnyError::DataError(err.to_string()))?
+            .map_err(|err| DbError::DataError(err.to_string()))?
         {
             Some(value) => Ok(value.into()),
             None => Ok(JsonValue::Null),
@@ -106,38 +104,38 @@ fn extract_value(row: &Row, idx: usize) -> Result<JsonValue, AnyError> {
 
 impl DbQuery for PostgresConnection {
     /// Implements [DbQuery::execute()] for PostgreSQL.
-    async fn execute(&self, sql: &str, params: &[JsonValue]) -> Result<(), AnyError> {
+    async fn execute(&self, sql: &str, params: &[JsonValue]) -> Result<(), DbError> {
         self.query(sql, params).await?;
         Ok(())
     }
 
     /// Implements [DbQuery::execute_batch()] for PostgreSQL
-    async fn execute_batch(&self, sql: &str) -> Result<(), AnyError> {
+    async fn execute_batch(&self, sql: &str) -> Result<(), DbError> {
         let client = self
             .pool
             .get()
             .await
-            .map_err(|err| AnyError::ConnectError(format!("Unable to get pool: {err}")))?;
+            .map_err(|err| DbError::ConnectError(format!("Unable to get pool: {err}")))?;
         client
             .batch_execute(sql)
             .await
-            .map_err(|err| AnyError::PostgresError(format!("Error in query(): {err}")))?;
+            .map_err(|err| DbError::DatabaseError(format!("Error in query(): {err}")))?;
         Ok(())
     }
 
     /// Implements [DbQuery::query()] for PostgreSQL.
-    async fn query(&self, sql: &str, json_params: &[JsonValue]) -> Result<Vec<JsonRow>, AnyError> {
+    async fn query(&self, sql: &str, json_params: &[JsonValue]) -> Result<Vec<JsonRow>, DbError> {
         let client = self
             .pool
             .get()
             .await
-            .map_err(|err| AnyError::ConnectError(format!("Unable to get pool: {err}")))?;
+            .map_err(|err| DbError::ConnectError(format!("Unable to get pool: {err}")))?;
 
         // The expected types of all of the parameters as reported by the database via prepare():
         let param_pg_types = client
             .prepare(sql)
             .await
-            .map_err(|err| AnyError::PostgresError(format!("Error preparing statement: {err}")))?
+            .map_err(|err| DbError::DatabaseError(format!("Error preparing statement: {err}")))?
             .params()
             .to_vec();
 
@@ -153,7 +151,7 @@ impl DbQuery for PostgresConnection {
                             params.push(Box::new(
                                 param
                                     .as_str()
-                                    .ok_or(AnyError::InputError("Not a string".to_string()))?,
+                                    .ok_or(DbError::InputError("Not a string".to_string()))?,
                             ));
                         }
                     };
@@ -164,9 +162,9 @@ impl DbQuery for PostgresConnection {
                         _ => {
                             let value: i16 = param
                                 .as_i64()
-                                .ok_or(AnyError::InputError("Not an integer".to_string()))?
+                                .ok_or(DbError::InputError("Not an integer".to_string()))?
                                 .try_into()
-                                .map_err(|e| AnyError::InputError(format!("Not an i16: {e}")))?;
+                                .map_err(|e| DbError::InputError(format!("Not an i16: {e}")))?;
                             params.push(Box::new(value));
                         }
                     };
@@ -177,9 +175,9 @@ impl DbQuery for PostgresConnection {
                         _ => {
                             let value: i32 = param
                                 .as_i64()
-                                .ok_or(AnyError::InputError("Not an integer".to_string()))?
+                                .ok_or(DbError::InputError("Not an integer".to_string()))?
                                 .try_into()
-                                .map_err(|e| AnyError::InputError(format!("Not an i32: {e}")))?;
+                                .map_err(|e| DbError::InputError(format!("Not an i32: {e}")))?;
                             params.push(Box::new(value));
                         }
                     };
@@ -190,7 +188,7 @@ impl DbQuery for PostgresConnection {
                         _ => {
                             let value: i64 = param
                                 .as_i64()
-                                .ok_or(AnyError::InputError("Not an integer".to_string()))?;
+                                .ok_or(DbError::InputError("Not an integer".to_string()))?;
                             params.push(Box::new(value));
                         }
                     };
@@ -201,7 +199,7 @@ impl DbQuery for PostgresConnection {
                         _ => {
                             let value: f32 = param
                                 .as_f64()
-                                .ok_or(AnyError::InputError("Not a float".to_string()))?
+                                .ok_or(DbError::InputError("Not a float".to_string()))?
                                 as f32;
                             params.push(Box::new(value));
                         }
@@ -213,7 +211,7 @@ impl DbQuery for PostgresConnection {
                         _ => {
                             let value: f64 = param
                                 .as_f64()
-                                .ok_or(AnyError::InputError("Not a float".to_string()))?;
+                                .ok_or(DbError::InputError("Not a float".to_string()))?;
                             params.push(Box::new(value));
                         }
                     };
@@ -224,7 +222,7 @@ impl DbQuery for PostgresConnection {
                         _ => {
                             let value: bool = param
                                 .as_bool()
-                                .ok_or(AnyError::InputError("Not a boolean".to_string()))?;
+                                .ok_or(DbError::InputError("Not a boolean".to_string()))?;
                             params.push(Box::new(value));
                         }
                     };
@@ -244,7 +242,7 @@ impl DbQuery for PostgresConnection {
         let rows = client
             .query(sql, &query_params)
             .await
-            .map_err(|err| AnyError::PostgresError(format!("Error in query(): {err}")))?;
+            .map_err(|err| DbError::DatabaseError(format!("Error in query(): {err}")))?;
         let mut json_rows = vec![];
         for row in &rows {
             let mut json_row = JsonRow::new();
@@ -258,31 +256,31 @@ impl DbQuery for PostgresConnection {
     }
 
     /// Implements [DbQuery::query_row()] for PostgreSQL.
-    async fn query_row(&self, sql: &str, params: &[JsonValue]) -> Result<JsonRow, AnyError> {
+    async fn query_row(&self, sql: &str, params: &[JsonValue]) -> Result<JsonRow, DbError> {
         let rows = self.query(sql, params).await?;
         if rows.len() > 1 {
             tracing::warn!("More than one row returned for query_row()");
         }
         match rows.into_iter().nth(0) {
             Some(row) => Ok(row),
-            None => Err(AnyError::DataError("No rows found".to_string())),
+            None => Err(DbError::DataError("No rows found".to_string())),
         }
     }
 
     /// Implements [DbQuery::query_value()] for PostgreSQL.
-    async fn query_value(&self, sql: &str, params: &[JsonValue]) -> Result<JsonValue, AnyError> {
+    async fn query_value(&self, sql: &str, params: &[JsonValue]) -> Result<JsonValue, DbError> {
         let row = self.query_row(sql, params).await?;
         if row.values().len() > 1 {
             tracing::warn!("More than one value returned for query_value()");
         }
         match row.into_iter().map(|(_, v)| v).next() {
             Some(value) => Ok(value),
-            None => Err(AnyError::DataError("No values found".into())),
+            None => Err(DbError::DataError("No values found".into())),
         }
     }
 
     /// Implements [DbQuery::query_string()] for PostgreSQL.
-    async fn query_string(&self, sql: &str, params: &[JsonValue]) -> Result<String, AnyError> {
+    async fn query_string(&self, sql: &str, params: &[JsonValue]) -> Result<String, DbError> {
         let value = self.query_value(sql, params).await?;
         match value.as_str() {
             Some(str_val) => Ok(str_val.to_string()),
@@ -294,53 +292,53 @@ impl DbQuery for PostgresConnection {
     }
 
     /// Implements [DbQuery::query_u64()] for PostgreSQL.
-    async fn query_u64(&self, sql: &str, params: &[JsonValue]) -> Result<u64, AnyError> {
+    async fn query_u64(&self, sql: &str, params: &[JsonValue]) -> Result<u64, DbError> {
         let value = self.query_value(sql, params).await?;
         match value.as_u64() {
             Some(val) => Ok(val),
-            None => Err(AnyError::DataError(format!("Not a u64: {value}"))),
+            None => Err(DbError::DataError(format!("Not a u64: {value}"))),
         }
     }
 
     /// Implements [DbQuery::query_i64()] for PostgreSQL.
-    async fn query_i64(&self, sql: &str, params: &[JsonValue]) -> Result<i64, AnyError> {
+    async fn query_i64(&self, sql: &str, params: &[JsonValue]) -> Result<i64, DbError> {
         let value = self.query_value(sql, params).await?;
         match value.as_i64() {
             Some(val) => Ok(val),
-            None => Err(AnyError::DataError(format!("Not a i64: {value}"))),
+            None => Err(DbError::DataError(format!("Not a i64: {value}"))),
         }
     }
 
     /// Implements [DbQuery::query_f64] for PostgreSQL.
-    async fn query_f64(&self, sql: &str, params: &[JsonValue]) -> Result<f64, AnyError> {
+    async fn query_f64(&self, sql: &str, params: &[JsonValue]) -> Result<f64, DbError> {
         let value = self.query_value(sql, params).await?;
         match value.as_f64() {
             Some(val) => Ok(val),
-            None => Err(AnyError::DataError(format!("Not a f64: {value}"))),
+            None => Err(DbError::DataError(format!("Not a f64: {value}"))),
         }
     }
 }
 
 impl<'a> PostgresTransaction<'a> {
-    pub async fn execute(&self, sql: &str, _params: &[JsonValue]) -> Result<(), AnyError> {
+    pub async fn execute(&self, sql: &str, _params: &[JsonValue]) -> Result<(), DbError> {
         let stmt = self.tx.prepare(&sql).await.unwrap();
         self.tx
             .execute(&stmt, &[])
             .await
-            .map_err(|err| AnyError::PostgresError(format!("Error executing SQL: {err}")))?;
+            .map_err(|err| DbError::DatabaseError(format!("Error executing SQL: {err}")))?;
         Ok(())
     }
 
-    pub async fn query(&self, sql: &str, _params: &[JsonValue]) -> Result<Vec<JsonRow>, AnyError> {
+    pub async fn query(&self, sql: &str, _params: &[JsonValue]) -> Result<Vec<JsonRow>, DbError> {
         let stmt =
             self.tx.prepare(&sql).await.map_err(|err| {
-                AnyError::PostgresError(format!("Error preparing statement: {err}"))
+                DbError::DatabaseError(format!("Error preparing statement: {err}"))
             })?;
         let rows = self
             .tx
             .query(&stmt, &[])
             .await
-            .map_err(|err| AnyError::PostgresError(format!("Error running query: {err}")))?;
+            .map_err(|err| DbError::DatabaseError(format!("Error running query: {err}")))?;
         let mut json_rows = vec![];
         for row in &rows {
             let mut json_row = JsonRow::new();
@@ -353,17 +351,18 @@ impl<'a> PostgresTransaction<'a> {
         Ok(json_rows)
     }
 
-    pub async fn commit(self) -> Result<(), AnyError> {
+    pub async fn commit(self) -> Result<(), DbError> {
         self.tx
             .commit()
             .await
-            .map_err(|err| AnyError::PostgresError(format!("Error committing transaction: {err}")))
+            .map_err(|err| DbError::DatabaseError(format!("Error committing transaction: {err}")))
     }
 
-    pub async fn rollback(self) -> Result<(), AnyError> {
-        self.tx.rollback().await.map_err(|err| {
-            AnyError::PostgresError(format!("Error rolling back transaction: {err}"))
-        })
+    pub async fn rollback(self) -> Result<(), DbError> {
+        self.tx
+            .rollback()
+            .await
+            .map_err(|err| DbError::DatabaseError(format!("Error rolling back transaction: {err}")))
     }
 }
 
