@@ -3,11 +3,11 @@
 use crate::core::{DbError, DbQuery, JsonRow, JsonValue};
 
 use deadpool_sqlite::{
-    Config, Pool, Runtime,
+    Config, Object, Pool, Runtime,
     rusqlite::{
-        Statement, Transaction,
+        Statement as RusqliteStatement, Transaction,
         fallible_iterator::FallibleIterator,
-        types::{Null, ValueRef},
+        types::{Null as RusqliteNull, ValueRef as RusqliteValueRef},
     },
 };
 
@@ -26,10 +26,17 @@ impl SqliteConnection {
             .map_err(|err| DbError::ConnectError(format!("Error creating pool: {err}")))?;
         Ok(Self { pool })
     }
+
+    /// Retrieves a new connection object from the connection pool.
+    pub async fn get(&self) -> Result<Object, DbError> {
+        self.pool.get().await.map_err(|err| {
+            DbError::ConnectError(format!("Error retrieving connection object: {err}"))
+        })
+    }
 }
 
 pub struct SqliteTransaction<'a> {
-    tx: Transaction<'a>,
+    pub tx: Transaction<'a>,
 }
 
 /// Extract the first value of the first row in `rows`.
@@ -45,7 +52,7 @@ fn extract_value(rows: &Vec<JsonRow>) -> Result<JsonValue, DbError> {
 
 /// Query the database using the given prepared statement and json parameters.
 fn query_prepared(
-    stmt: &mut Statement<'_>,
+    stmt: &mut RusqliteStatement<'_>,
     params: &Vec<JsonValue>,
 ) -> Result<Vec<JsonRow>, DbError> {
     // Bind the parameters to the prepared statement:
@@ -80,9 +87,10 @@ fn query_prepared(
                 }
             },
             JsonValue::Null => {
-                stmt.raw_bind_parameter(i + 1, &Null).map_err(|err| {
-                    DbError::InputError(format!("Error binding parameter '{param}': {err}"))
-                })?;
+                stmt.raw_bind_parameter(i + 1, &RusqliteNull)
+                    .map_err(|err| {
+                        DbError::InputError(format!("Error binding parameter '{param}': {err}"))
+                    })?;
             }
             _ => {
                 return Err(DbError::InputError(format!(
@@ -119,8 +127,8 @@ fn query_prepared(
                 let column_type = &column.datatype;
                 let value = match row.get_ref(column_name.as_str()) {
                     Ok(value) => match value {
-                        ValueRef::Null => JsonValue::Null,
-                        ValueRef::Integer(value) => match column_type {
+                        RusqliteValueRef::Null => JsonValue::Null,
+                        RusqliteValueRef::Integer(value) => match column_type {
                             Some(ctype) if ctype.to_lowercase() == "bool" => {
                                 JsonValue::Bool(value != 0)
                             }
@@ -132,8 +140,8 @@ fn query_prepared(
                             // is an integer, the result of the conversion will be a JSON number.
                             _ => JsonValue::from(value),
                         },
-                        ValueRef::Real(value) => JsonValue::from(value),
-                        ValueRef::Text(value) | ValueRef::Blob(value) => {
+                        RusqliteValueRef::Real(value) => JsonValue::from(value),
+                        RusqliteValueRef::Text(value) | RusqliteValueRef::Blob(value) => {
                             let value = std::str::from_utf8(value).unwrap_or_default();
                             JsonValue::from(value)
                         }
@@ -596,5 +604,29 @@ mod tests {
         // So, perhaps, this is tu quoque an argument that the behaviour below is acceptable for
         // sqlite.
         assert_eq!(json!(rows), json!([{"MAX(bool_value)": 1}]));
+    }
+
+    #[tokio::test]
+    async fn test_tx() {
+        let conn = SqliteConnection::connect("test_mixed_columns.db")
+            .await
+            .unwrap();
+        let obj = conn.get().await.unwrap();
+        let mut lock = obj.lock().unwrap();
+        let tx = lock.transaction().unwrap();
+        let rows = select_1(&tx);
+        tx.commit().unwrap();
+        assert_eq!(json!(rows), json!([{"1": 1}]));
+    }
+
+    fn select_1(tx: &Transaction) -> Vec<JsonRow> {
+        let sql = "SELECT 1";
+        let mut stmt = tx
+            .prepare(&sql)
+            .map_err(|err| DbError::DatabaseError(format!("Error preparing statement: {err}")))
+            .unwrap();
+        query_prepared(&mut stmt, &vec![])
+            .map_err(|err| DbError::DatabaseError(format!("Error while querying: {err}")))
+            .unwrap()
     }
 }

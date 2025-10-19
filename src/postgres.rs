@@ -2,7 +2,7 @@
 
 use crate::core::{DbError, DbQuery, JsonRow, JsonValue};
 
-use deadpool_postgres::{Config, Pool, Runtime, Transaction};
+use deadpool_postgres::{Config, Object, Pool, Runtime, Transaction};
 use tokio_postgres::{
     NoTls,
     row::Row,
@@ -36,10 +36,17 @@ impl PostgresConnection {
             ))),
         }
     }
+
+    /// Retrieves a new connection object from the connection pool.
+    pub async fn get(&self) -> Result<Object, DbError> {
+        self.pool.get().await.map_err(|err| {
+            DbError::ConnectError(format!("Error retrieving connection object: {err}"))
+        })
+    }
 }
 
 pub struct PostgresTransaction<'a> {
-    tx: Transaction<'a>,
+    pub tx: Transaction<'a>,
 }
 
 /// Extracts the value at the given index from the given [Row].
@@ -370,6 +377,7 @@ impl<'a> PostgresTransaction<'a> {
 mod tests {
     use super::*;
 
+    use deadpool_postgres::Transaction;
     use serde_json::json;
 
     #[tokio::test]
@@ -697,5 +705,41 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(json!(rows), json!([{"int_value_cast": "1"}]));
+    }
+
+    #[tokio::test]
+    async fn test_tx() {
+        let conn = PostgresConnection::connect("postgresql:///sql_json_db")
+            .await
+            .unwrap();
+        let mut obj = conn.get().await.unwrap();
+        let tx = obj.transaction().await.unwrap();
+        let rows = select_1(&tx).await;
+        tx.commit().await.unwrap();
+        assert_eq!(json!(rows), json!([{"foo": 1}]));
+    }
+
+    async fn select_1(tx: &Transaction<'_>) -> Vec<JsonRow> {
+        let sql = "SELECT 1 AS foo";
+        let stmt = tx
+            .prepare(&sql)
+            .await
+            .map_err(|err| DbError::DatabaseError(format!("Error preparing statement: {err}")))
+            .unwrap();
+        let rows = tx
+            .query(&stmt, &[])
+            .await
+            .map_err(|err| DbError::DatabaseError(format!("Error in query(): {err}")))
+            .unwrap();
+        let mut json_rows = vec![];
+        for row in &rows {
+            let mut json_row = JsonRow::new();
+            let columns = row.columns();
+            for (i, column) in columns.iter().enumerate() {
+                json_row.insert(column.name().to_string(), extract_value(row, i).unwrap());
+            }
+            json_rows.push(json_row);
+        }
+        json_rows
     }
 }
