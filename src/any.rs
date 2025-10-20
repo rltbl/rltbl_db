@@ -122,3 +122,52 @@ impl DbQuery for AnyConnection {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn test_match() {
+        let conn = SqliteConnection::connect("test_match_columns.db")
+            .await
+            .unwrap();
+        conn.execute_batch(
+            "DROP TABLE IF EXISTS test_table_match;\
+             CREATE TABLE test_table_match (\
+                 text_value TEXT,\
+                 alt_text_value TEXT,\
+                 float_value FLOAT8,\
+                 int_value INT8,\
+                 bool_value BOOL\
+             )",
+        )
+        .await
+        .unwrap();
+        conn.execute(
+            r#"INSERT INTO test_table_match
+               (text_value, alt_text_value, float_value, int_value, bool_value)
+               VALUES ($1, $2, $3, $4, $5)"#,
+            &[
+                json!("foo"),
+                JsonValue::Null,
+                json!(1.05),
+                json!(1),
+                json!(true),
+            ],
+        )
+        .await
+        .unwrap();
+
+        let value = conn
+            .query_string(
+                "SELECT text_value from test_table_match WHERE regexp_match(text_value, $1) = 1",
+                &[json!("foo")],
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(value, "foo");
+    }
+}
