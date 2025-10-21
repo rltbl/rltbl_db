@@ -8,7 +8,7 @@ use sql_json::{any::AnyConnection, core::DbQuery};
 use std::sync::Arc;
 use tower_service::Service;
 
-async fn get_root(State(conn): State<Arc<impl DbQuery>>) -> impl IntoResponse {
+async fn get_root(State(conn): State<Arc<AnyConnection>>) -> impl IntoResponse {
     let value = conn
         .query_value("SELECT value FROM test LIMIT 1", &[])
         .await
@@ -17,6 +17,13 @@ async fn get_root(State(conn): State<Arc<impl DbQuery>>) -> impl IntoResponse {
         .unwrap()
         .to_string();
     Html(value)
+}
+
+async fn use_tx(State(conn): State<Arc<AnyConnection>>) -> impl IntoResponse {
+    conn.transact(async |tx| tx.query("SELECT 1", &[]).await)
+        .await
+        .unwrap();
+    Html(String::new())
 }
 
 /// Test using axum with sql_json.
@@ -34,7 +41,10 @@ async fn test_axum_sqlite() {
         .unwrap();
 
     let state = Arc::new(conn);
-    let mut router: Router = Router::new().route("/", get(get_root)).with_state(state);
+    let mut router: Router = Router::new()
+        .route("/", get(get_root))
+        .route("/tx", get(use_tx)) // WARN: the compiler complains about a trait bound
+        .with_state(state);
 
     let request = axum::http::Request::builder()
         .method("GET")
