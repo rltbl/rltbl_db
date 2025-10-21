@@ -532,8 +532,10 @@ mod tests {
         let tx = conn.transaction().await.unwrap();
         use_tx(&tx).await;
 
+        // Test regex.
+        // See https://github.com/nalgeon/sqlean/blob/main/docs/regexp.md
         let mut rows = conn
-            .query(r"SELECT regex_match('\d', 'foo')", ())
+            .query(r"select true where 'the year is 2021' regexp '[0-9]+';", ())
             .await
             .unwrap();
         let row = rows.next().await.unwrap().unwrap();
