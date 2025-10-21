@@ -22,4 +22,3 @@ tower-service = "0.3.3"
 default = ["sqlite"]
 sqlite = ["dep:deadpool-libsql"]
 postgres = ["dep:deadpool-postgres", "dep:tokio-postgres"]
-deadpool-libsql = ["dep:deadpool-libsql"]

@@ -25,6 +25,7 @@ impl SqliteConnection {
         let pool = Pool::builder(manager)
             .build()
             .map_err(|err| DbError::ConnectError(format!("Error creating pool: {err}")))?;
+
         Ok(Self { pool })
     }
 }
@@ -497,7 +498,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_transactions() {
-        let pool = SqliteConnection::connect("test_indirect_columns.db")
+        let pool = SqliteConnection::connect("test_transactions.db")
             .await
             .unwrap();
         pool.execute_batch(
@@ -530,6 +531,14 @@ mod tests {
         let conn = pool.pool.get().await.unwrap();
         let tx = conn.transaction().await.unwrap();
         use_tx(&tx).await;
+
+        let mut rows = conn
+            .query(r"SELECT regex_match('\d', 'foo')", ())
+            .await
+            .unwrap();
+        let row = rows.next().await.unwrap().unwrap();
+        let value = row.get_str(0).unwrap();
+        assert_eq!(value, "FOO");
     }
 
     async fn use_tx(tx: &deadpool_libsql::libsql::Transaction) -> u64 {
