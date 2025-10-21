@@ -2,13 +2,9 @@
 
 use crate::core::{DbError, DbQuery, JsonRow, JsonValue};
 
-use deadpool_sqlite::{
-    Config, Pool, Runtime,
-    rusqlite::{
-        Statement as RusqliteStatement,
-        fallible_iterator::FallibleIterator,
-        types::{Null as RusqliteNull, ValueRef as RusqliteValueRef},
-    },
+use deadpool_libsql::{
+    Manager, Pool,
+    libsql::{Builder, Value},
 };
 
 /// Represents a SQLite database connection pool
@@ -20,9 +16,14 @@ pub struct SqliteConnection {
 impl SqliteConnection {
     /// Connect to a SQLite database using the given url.
     pub async fn connect(url: &str) -> Result<Self, DbError> {
-        let cfg = Config::new(url);
-        let pool = cfg
-            .create_pool(Runtime::Tokio1)
+        let db = Builder::new_local(url)
+            .build()
+            .await
+            .map_err(|err| DbError::ConnectError(format!("Error creating pool: {err}")))?;
+
+        let manager = Manager::from_libsql_database(db);
+        let pool = Pool::builder(manager)
+            .build()
             .map_err(|err| DbError::ConnectError(format!("Error creating pool: {err}")))?;
         Ok(Self { pool })
     }
@@ -37,117 +38,6 @@ fn extract_value(rows: &Vec<JsonRow>) -> Result<JsonValue, DbError> {
         },
         None => Err(DbError::DataError("No rows found".to_string())),
     }
-}
-
-/// Query the database using the given prepared statement and json parameters.
-fn query_prepared(
-    stmt: &mut RusqliteStatement<'_>,
-    params: &Vec<JsonValue>,
-) -> Result<Vec<JsonRow>, DbError> {
-    // Bind the parameters to the prepared statement:
-    for (i, param) in params.iter().enumerate() {
-        match param {
-            JsonValue::String(s) => {
-                stmt.raw_bind_parameter(i + 1, s).map_err(|err| {
-                    DbError::InputError(format!("Error binding parameter '{param}': {err}"))
-                })?;
-            }
-            JsonValue::Number(_) => {
-                stmt.raw_bind_parameter(i + 1, &param.to_string())
-                    .map_err(|err| {
-                        DbError::InputError(format!("Error binding parameter '{param}': {err}"))
-                    })?;
-            }
-            JsonValue::Bool(flag) => match flag {
-                // Note that SQLite's type affinity means that booleans are actually implemented
-                // as numbers (see https://sqlite.org/datatype3.html). They will be converted
-                // back to boolean when the results are read below.
-                false => {
-                    stmt.raw_bind_parameter(i + 1, &0.to_string())
-                        .map_err(|err| {
-                            DbError::InputError(format!("Error binding parameter '{param}': {err}"))
-                        })?;
-                }
-                true => {
-                    stmt.raw_bind_parameter(i + 1, &1.to_string())
-                        .map_err(|err| {
-                            DbError::InputError(format!("Error binding parameter '{param}': {err}"))
-                        })?;
-                }
-            },
-            JsonValue::Null => {
-                stmt.raw_bind_parameter(i + 1, &RusqliteNull)
-                    .map_err(|err| {
-                        DbError::InputError(format!("Error binding parameter '{param}': {err}"))
-                    })?;
-            }
-            _ => {
-                return Err(DbError::InputError(format!(
-                    "Unsupported JSON type: {param}"
-                )));
-            }
-        };
-    }
-
-    // Define the struct that we will use to represent information about a given column:
-    struct ColumnConfig {
-        name: String,
-        datatype: Option<String>,
-    }
-
-    // Collect the column information from the prepared statement:
-    let columns = stmt
-        .columns()
-        .iter()
-        .map(|col| {
-            let name = col.name().to_string();
-            let datatype = col.decl_type().and_then(|s| Some(s.to_string()));
-            ColumnConfig { name, datatype }
-        })
-        .collect::<Vec<_>>();
-
-    // Execute the statement and send back the results
-    let results = stmt
-        .raw_query()
-        .map(|row| {
-            let mut json_row = JsonRow::new();
-            for column in &columns {
-                let column_name = &column.name;
-                let column_type = &column.datatype;
-                let value = match row.get_ref(column_name.as_str()) {
-                    Ok(value) => match value {
-                        RusqliteValueRef::Null => JsonValue::Null,
-                        RusqliteValueRef::Integer(value) => match column_type {
-                            Some(ctype) if ctype.to_lowercase() == "bool" => {
-                                JsonValue::Bool(value != 0)
-                            }
-                            // The remaining cases are (a) the column's datatype is integer, and
-                            // (b) the column is an expression. In the latter case it doesn't seem
-                            // possible to get the datatype of the expression from the metadata.
-                            // So the only thing to do here is just to convert the value
-                            // to JSON using the default method, and since we already know that it
-                            // is an integer, the result of the conversion will be a JSON number.
-                            _ => JsonValue::from(value),
-                        },
-                        RusqliteValueRef::Real(value) => JsonValue::from(value),
-                        RusqliteValueRef::Text(value) | RusqliteValueRef::Blob(value) => {
-                            let value = std::str::from_utf8(value).unwrap_or_default();
-                            JsonValue::from(value)
-                        }
-                    },
-                    Err(err) => {
-                        tracing::warn!(
-                            "Error getting value for column '{column_name}' from row: {err}"
-                        );
-                        JsonValue::Null
-                    }
-                };
-                json_row.insert(column_name.to_string(), value);
-            }
-            Ok(json_row)
-        })
-        .collect::<Vec<_>>();
-    results.map_err(|err| DbError::DatabaseError(err.to_string()))
 }
 
 impl DbQuery for SqliteConnection {
@@ -165,18 +55,10 @@ impl DbQuery for SqliteConnection {
             .await
             .map_err(|err| DbError::ConnectError(format!("Unable to get pool: {err}")))?;
         let sql = sql.to_string();
-        match conn
-            .interact(move |conn| match conn.execute_batch(&sql) {
-                Err(err) => {
-                    return Err(DbError::DatabaseError(format!("Error during query: {err}")));
-                }
-                Ok(_) => Ok(()),
-            })
+        conn.execute_batch(&sql)
             .await
-        {
-            Err(err) => Err(DbError::DatabaseError(format!("Error during query: {err}"))),
-            Ok(_) => Ok(()),
-        }
+            .map_err(|err| DbError::DatabaseError(format!("Error during query: {err}")))?;
+        Ok(())
     }
 
     /// Implements [DbQuery::query()] for SQLite.
@@ -187,21 +69,72 @@ impl DbQuery for SqliteConnection {
             .await
             .map_err(|err| DbError::ConnectError(format!("Error getting pool: {err}")))?;
         let sql = sql.to_string();
-        let params = params.to_vec();
-        let rows = conn
-            .interact(move |conn| {
-                let mut stmt = conn.prepare(&sql).map_err(|err| {
-                    DbError::DatabaseError(format!("Error preparing statement: {err}"))
-                })?;
-                let rows = query_prepared(&mut stmt, &params).map_err(|err| {
-                    DbError::DatabaseError(format!("Error querying prepared statement: {err}"))
-                })?;
-                Ok::<Vec<JsonRow>, DbError>(rows)
-            })
+        let stmt = conn
+            .prepare(&sql)
             .await
-            .map_err(|err| DbError::DatabaseError(err.to_string()))?
-            .map_err(|err| DbError::DatabaseError(err.to_string()))?;
-        Ok(rows)
+            .map_err(|err| DbError::DatabaseError(format!("Error preparing statement: {err}")))?;
+        let libsql_params: Vec<Value> = params
+            .iter()
+            .map(|param| match param {
+                serde_json::Value::Null => Value::Null,
+                serde_json::Value::Bool(bool) => match bool {
+                    true => Value::Integer(1),
+                    false => Value::Integer(0),
+                },
+                serde_json::Value::Number(number) => {
+                    if number.is_f64() {
+                        Value::Real(number.as_f64().unwrap())
+                    } else {
+                        Value::Integer(number.as_i64().unwrap())
+                    }
+                }
+                serde_json::Value::String(string) => Value::Text(string.clone()),
+                serde_json::Value::Array(_) => Value::Null,
+                serde_json::Value::Object(_) => Value::Null,
+            })
+            .collect();
+        let mut rows = stmt.query(libsql_params).await.map_err(|err| {
+            DbError::DatabaseError(format!("Error querying prepared statement: {err}"))
+        })?;
+        let columns = stmt.columns();
+        let mut json_rows = Vec::new();
+        loop {
+            match rows
+                .next()
+                .await
+                .map_err(|err| DbError::DatabaseError(format!("Error retrieving row: {err}")))?
+            {
+                Some(row) => {
+                    let mut json_row = serde_json::Map::new();
+                    for i in 0..row.column_count() {
+                        let name = row.column_name(i).unwrap();
+                        let value = match row.get_value(i).unwrap() {
+                            Value::Null => serde_json::Value::Null,
+                            Value::Integer(number) => {
+                                match columns.get(i as usize).unwrap().decl_type() {
+                                    Some(t) => match t.to_lowercase().as_str() {
+                                        "bool" => match number {
+                                            0 => serde_json::Value::Bool(false),
+                                            _ => serde_json::Value::Bool(true),
+                                        },
+                                        _ => serde_json::Value::Number(number.into()),
+                                    },
+                                    None => serde_json::Value::Number(number.into()),
+                                }
+                            }
+
+                            Value::Real(number) => serde_json::Value::from(number),
+                            Value::Text(text) => serde_json::Value::String(text),
+                            Value::Blob(_) => todo!(),
+                        };
+                        json_row.insert(name.to_string(), value);
+                    }
+                    json_rows.push(json_row);
+                }
+                None => break,
+            }
+        }
+        Ok(json_rows)
     }
 
     /// Implements [DbQuery::query_row()] for SQLite.
@@ -560,5 +493,54 @@ mod tests {
         // So, perhaps, this is tu quoque an argument that the behaviour below is acceptable for
         // sqlite.
         assert_eq!(json!(rows), json!([{"MAX(bool_value)": 1}]));
+    }
+
+    #[tokio::test]
+    async fn test_transactions() {
+        let pool = SqliteConnection::connect("test_indirect_columns.db")
+            .await
+            .unwrap();
+        pool.execute_batch(
+            "DROP TABLE IF EXISTS test_table_indirect;\
+             CREATE TABLE test_table_indirect (\
+                 text_value TEXT,\
+                 alt_text_value TEXT,\
+                 float_value FLOAT8,\
+                 int_value INT8,\
+                 bool_value BOOL\
+             )",
+        )
+        .await
+        .unwrap();
+        pool.execute(
+            r#"INSERT INTO test_table_indirect
+               (text_value, alt_text_value, float_value, int_value, bool_value)
+               VALUES ($1, $2, $3, $4, $5)"#,
+            &[
+                json!("foo"),
+                JsonValue::Null,
+                json!(1.05),
+                json!(1),
+                json!(true),
+            ],
+        )
+        .await
+        .unwrap();
+
+        let conn = pool.pool.get().await.unwrap();
+        let tx = conn.transaction().await.unwrap();
+        use_tx(&tx).await;
+    }
+
+    async fn use_tx(tx: &deadpool_libsql::libsql::Transaction) -> u64 {
+        tx.query("SELECT 1", ())
+            .await
+            .unwrap()
+            .next()
+            .await
+            .unwrap()
+            .unwrap()
+            .get::<u64>(0)
+            .unwrap()
     }
 }
