@@ -280,7 +280,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_text_column_query() {
-        let conn = RusqlitePool::connect("test_text_column.db").await.unwrap();
+        let conn = RusqlitePool::connect(":memory:").await.unwrap();
         conn.execute_batch(
             "DROP TABLE IF EXISTS test_table_text;\
              CREATE TABLE test_table_text ( value TEXT )",
@@ -315,9 +315,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_integer_column_query() {
-        let conn = RusqlitePool::connect("test_integer_column.db")
-            .await
-            .unwrap();
+        let conn = RusqlitePool::connect(":memory:").await.unwrap();
         conn.execute_batch(
             "DROP TABLE IF EXISTS test_table_int;\
              CREATE TABLE test_table_int ( value INT )",
@@ -354,7 +352,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_float_column_query() {
-        let conn = RusqlitePool::connect("test_float_column.db").await.unwrap();
+        let conn = RusqlitePool::connect(":memory:").await.unwrap();
         conn.execute_batch(
             "DROP TABLE IF EXISTS test_table_float;\
              CREATE TABLE test_table_float ( value REAL )",
@@ -388,9 +386,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_mixed_column_query() {
-        let conn = RusqlitePool::connect("test_mixed_columns.db")
-            .await
-            .unwrap();
+        let conn = RusqlitePool::connect(":memory:").await.unwrap();
         conn.execute_batch(
             "DROP TABLE IF EXISTS test_table_mixed;\
              CREATE TABLE test_table_mixed (\
@@ -474,9 +470,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_aliases_and_builtin_functions() {
-        let conn = RusqlitePool::connect("test_indirect_columns.db")
-            .await
-            .unwrap();
+        let conn = RusqlitePool::connect(":memory:").await.unwrap();
         conn.execute_batch(
             "DROP TABLE IF EXISTS test_table_indirect;\
              CREATE TABLE test_table_indirect (\

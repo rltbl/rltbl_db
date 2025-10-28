@@ -23,7 +23,7 @@ async fn get_root(State(conn): State<Arc<impl DbQuery>>) -> impl IntoResponse {
 #[tokio::test]
 #[cfg(feature = "rusqlite")]
 async fn test_axum_sqlite() {
-    let conn = AnyConnection::connect("test_axum.db").await.unwrap();
+    let conn = AnyConnection::connect(":memory:").await.unwrap();
     conn.execute("DROP TABLE IF EXISTS test", &[])
         .await
         .unwrap();
