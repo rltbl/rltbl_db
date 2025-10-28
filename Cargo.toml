@@ -21,6 +21,6 @@ tokio = "1.47.1"
 tower-service = "0.3.3"
 
 [features]
-default = ["sqlite", "postgres"]
-sqlite = ["dep:deadpool-sqlite"]
-postgres = ["dep:deadpool-postgres", "dep:tokio-postgres"]
+default = ["rusqlite", "tokio-postgres"]
+rusqlite = ["dep:deadpool-sqlite"]
+tokio-postgres = ["dep:deadpool-postgres", "dep:tokio-postgres"]

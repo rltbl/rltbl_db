@@ -2,8 +2,8 @@ pub mod core;
 
 pub mod any;
 
-#[cfg(feature = "sqlite")]
-pub mod sqlite;
+#[cfg(feature = "rusqlite")]
+pub mod rusqlite;
 
-#[cfg(feature = "postgres")]
-pub mod postgres;
+#[cfg(feature = "tokio-postgres")]
+pub mod tokio_postgres;

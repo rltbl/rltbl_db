@@ -5,20 +5,20 @@ use crate::core::{DbError, DbQuery, JsonRow, JsonValue};
 use deadpool_sqlite::{
     Config, Pool, Runtime,
     rusqlite::{
-        Statement as RusqliteStatement,
+        Statement,
         fallible_iterator::FallibleIterator,
-        types::{Null as RusqliteNull, ValueRef as RusqliteValueRef},
+        types::{Null, ValueRef},
     },
 };
 use serde_json::json;
 
 /// Represents a SQLite database connection pool
 #[derive(Debug)]
-pub struct SqliteConnection {
+pub struct RusqlitePool {
     pool: Pool,
 }
 
-impl SqliteConnection {
+impl RusqlitePool {
     /// Connect to a SQLite database using the given url.
     pub async fn connect(url: &str) -> Result<Self, DbError> {
         let cfg = Config::new(url);
@@ -42,7 +42,7 @@ fn extract_value(rows: &Vec<JsonRow>) -> Result<JsonValue, DbError> {
 
 /// Query the database using the given prepared statement and json parameters.
 fn query_prepared(
-    stmt: &mut RusqliteStatement<'_>,
+    stmt: &mut Statement<'_>,
     params: &Vec<JsonValue>,
 ) -> Result<Vec<JsonRow>, DbError> {
     // Bind the parameters to the prepared statement:
@@ -77,10 +77,9 @@ fn query_prepared(
                 }
             },
             JsonValue::Null => {
-                stmt.raw_bind_parameter(i + 1, &RusqliteNull)
-                    .map_err(|err| {
-                        DbError::InputError(format!("Error binding parameter '{param}': {err}"))
-                    })?;
+                stmt.raw_bind_parameter(i + 1, &Null).map_err(|err| {
+                    DbError::InputError(format!("Error binding parameter '{param}': {err}"))
+                })?;
             }
             _ => {
                 return Err(DbError::InputError(format!(
@@ -117,8 +116,8 @@ fn query_prepared(
                 let column_type = &column.datatype;
                 let value = match row.get_ref(column_name.as_str()) {
                     Ok(value) => match value {
-                        RusqliteValueRef::Null => JsonValue::Null,
-                        RusqliteValueRef::Integer(value) => match column_type {
+                        ValueRef::Null => JsonValue::Null,
+                        ValueRef::Integer(value) => match column_type {
                             Some(ctype) if ctype.to_lowercase() == "bool" => {
                                 JsonValue::Bool(value != 0)
                             }
@@ -130,18 +129,16 @@ fn query_prepared(
                             // is an integer, the result of the conversion will be a JSON number.
                             _ => JsonValue::from(value),
                         },
-                        RusqliteValueRef::Real(value) => JsonValue::from(value),
-                        RusqliteValueRef::Text(value) | RusqliteValueRef::Blob(value) => {
-                            match column_type {
-                                Some(ctype) if ctype.to_lowercase() == "numeric" => {
-                                    json!(value)
-                                }
-                                _ => {
-                                    let value = std::str::from_utf8(value).unwrap_or_default();
-                                    JsonValue::String(value.to_string())
-                                }
+                        ValueRef::Real(value) => JsonValue::from(value),
+                        ValueRef::Text(value) | ValueRef::Blob(value) => match column_type {
+                            Some(ctype) if ctype.to_lowercase() == "numeric" => {
+                                json!(value)
                             }
-                        }
+                            _ => {
+                                let value = std::str::from_utf8(value).unwrap_or_default();
+                                JsonValue::String(value.to_string())
+                            }
+                        },
                     },
                     Err(err) => {
                         tracing::warn!(
@@ -158,7 +155,7 @@ fn query_prepared(
     results.map_err(|err| DbError::DatabaseError(err.to_string()))
 }
 
-impl DbQuery for SqliteConnection {
+impl DbQuery for RusqlitePool {
     /// Implements [DbQuery::execute()] for SQLite.
     async fn execute(&self, sql: &str, params: &[JsonValue]) -> Result<(), DbError> {
         self.query(sql, params).await?;
@@ -283,9 +280,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_text_column_query() {
-        let conn = SqliteConnection::connect("test_text_column.db")
-            .await
-            .unwrap();
+        let conn = RusqlitePool::connect("test_text_column.db").await.unwrap();
         conn.execute_batch(
             "DROP TABLE IF EXISTS test_table_text;\
              CREATE TABLE test_table_text ( value TEXT )",
@@ -320,7 +315,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_integer_column_query() {
-        let conn = SqliteConnection::connect("test_integer_column.db")
+        let conn = RusqlitePool::connect("test_integer_column.db")
             .await
             .unwrap();
         conn.execute_batch(
@@ -359,9 +354,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_float_column_query() {
-        let conn = SqliteConnection::connect("test_float_column.db")
-            .await
-            .unwrap();
+        let conn = RusqlitePool::connect("test_float_column.db").await.unwrap();
         conn.execute_batch(
             "DROP TABLE IF EXISTS test_table_float;\
              CREATE TABLE test_table_float ( value REAL )",
@@ -395,7 +388,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_mixed_column_query() {
-        let conn = SqliteConnection::connect("test_mixed_columns.db")
+        let conn = RusqlitePool::connect("test_mixed_columns.db")
             .await
             .unwrap();
         conn.execute_batch(
@@ -481,7 +474,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_aliases_and_builtin_functions() {
-        let conn = SqliteConnection::connect("test_indirect_columns.db")
+        let conn = RusqlitePool::connect("test_indirect_columns.db")
             .await
             .unwrap();
         conn.execute_batch(

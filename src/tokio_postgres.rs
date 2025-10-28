@@ -12,11 +12,11 @@ use tokio_postgres::{
 
 /// Represents a PostgreSQL database connection pool
 #[derive(Debug)]
-pub struct PostgresConnection {
+pub struct TokioPostgresPool {
     pool: Pool,
 }
 
-impl PostgresConnection {
+impl TokioPostgresPool {
     /// Connect to a PostgreSQL database using the given url, which should be of the form
     /// postgresql:///DATABASE_NAME
     pub async fn connect(url: &str) -> Result<Self, DbError> {
@@ -116,7 +116,7 @@ fn extract_value(row: &Row, idx: usize) -> Result<JsonValue, DbError> {
     }
 }
 
-impl DbQuery for PostgresConnection {
+impl DbQuery for TokioPostgresPool {
     /// Implements [DbQuery::execute()] for PostgreSQL.
     async fn execute(&self, sql: &str, params: &[JsonValue]) -> Result<(), DbError> {
         self.query(sql, params).await?;
@@ -349,7 +349,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_text_column_query() {
-        let conn = PostgresConnection::connect("postgresql:///sql_json_db")
+        let conn = TokioPostgresPool::connect("postgresql:///sql_json_db")
             .await
             .unwrap();
         conn.execute_batch(
@@ -386,7 +386,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_integer_column_query() {
-        let conn = PostgresConnection::connect("postgresql:///sql_json_db")
+        let conn = TokioPostgresPool::connect("postgresql:///sql_json_db")
             .await
             .unwrap();
 
@@ -430,7 +430,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_float_column_query() {
-        let conn = PostgresConnection::connect("postgresql:///sql_json_db")
+        let conn = TokioPostgresPool::connect("postgresql:///sql_json_db")
             .await
             .unwrap();
 
@@ -487,7 +487,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_mixed_column_query() {
-        let conn = PostgresConnection::connect("postgresql:///sql_json_db")
+        let conn = TokioPostgresPool::connect("postgresql:///sql_json_db")
             .await
             .unwrap();
         conn.execute_batch(
@@ -610,7 +610,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_aliases_and_builtin_functions() {
-        let conn = PostgresConnection::connect("postgresql:///sql_json_db")
+        let conn = TokioPostgresPool::connect("postgresql:///sql_json_db")
             .await
             .unwrap();
         conn.execute_batch(

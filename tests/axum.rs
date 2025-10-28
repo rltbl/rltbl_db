@@ -21,6 +21,7 @@ async fn get_root(State(conn): State<Arc<impl DbQuery>>) -> impl IntoResponse {
 
 /// Test using axum with sql_json.
 #[tokio::test]
+#[cfg(feature = "rusqlite")]
 async fn test_axum_sqlite() {
     let conn = AnyConnection::connect("test_axum.db").await.unwrap();
     conn.execute("DROP TABLE IF EXISTS test", &[])
@@ -52,7 +53,7 @@ async fn test_axum_sqlite() {
 }
 
 #[tokio::test]
-#[cfg(feature = "postgres")]
+#[cfg(feature = "tokio-postgres")]
 async fn test_axum_postgres() {
     let client = AnyConnection::connect("postgresql:///sql_json_db")
         .await
