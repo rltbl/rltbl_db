@@ -19,20 +19,15 @@ async fn get_root(State(conn): State<Arc<impl DbQuery>>) -> impl IntoResponse {
     Html(value)
 }
 
-/// Test using axum with sql_json.
-#[tokio::test]
-#[cfg(feature = "rusqlite")]
-async fn test_axum_sqlite() {
-    let conn = AnyConnection::connect(":memory:").await.unwrap();
-    conn.execute("DROP TABLE IF EXISTS test", &[])
-        .await
-        .unwrap();
-    conn.execute("CREATE TABLE test ( value TEXT )", &[])
-        .await
-        .unwrap();
-    conn.execute("INSERT INTO test VALUES ('foo')", &[])
-        .await
-        .unwrap();
+async fn run_axum(url: &str) {
+    let conn = AnyConnection::connect(url).await.unwrap();
+    conn.execute_batch(
+        "DROP TABLE IF EXISTS test;\
+         CREATE TABLE test ( value TEXT );\
+         INSERT INTO test VALUES ('foo');",
+    )
+    .await
+    .unwrap();
 
     let state = Arc::new(conn);
     let mut router: Router = Router::new().route("/", get(get_root)).with_state(state);
@@ -52,39 +47,11 @@ async fn test_axum_sqlite() {
     assert_eq!("foo", result);
 }
 
+/// Test using axum with sql_json.
 #[tokio::test]
-#[cfg(feature = "tokio-postgres")]
-async fn test_axum_postgres() {
-    let client = AnyConnection::connect("postgresql:///sql_json_db")
-        .await
-        .unwrap();
-    client
-        .execute("DROP TABLE IF EXISTS test", &[])
-        .await
-        .unwrap();
-    client
-        .execute("CREATE TABLE test ( value TEXT )", &[])
-        .await
-        .unwrap();
-    client
-        .execute("INSERT INTO test VALUES ('foo')", &[])
-        .await
-        .unwrap();
-
-    let state = Arc::new(client);
-    let mut router: Router = Router::new().route("/", get(get_root)).with_state(state);
-
-    let request = axum::http::Request::builder()
-        .method("GET")
-        .uri("/")
-        .body(String::new())
-        .unwrap();
-    let response = router.call(request).await.unwrap();
-
-    let (_, body) = response.into_parts();
-    let bytes = axum::body::to_bytes(body, usize::MAX)
-        .await
-        .expect("Read from response body");
-    let result = String::from_utf8(bytes.to_vec()).unwrap();
-    assert_eq!("foo", result);
+async fn test_axum() {
+    #[cfg(feature = "rusqlite")]
+    run_axum(":memory:").await;
+    #[cfg(feature = "tokio-postgres")]
+    run_axum("postgresql:///sql_json_db").await;
 }
