@@ -4,7 +4,6 @@ use crate::core::{DbError, DbQuery, JsonRow, JsonValue};
 
 use deadpool_postgres::{Config, Pool, Runtime};
 use rust_decimal::Decimal;
-use serde_json::json;
 use tokio_postgres::{
     NoTls,
     row::Row,
@@ -93,11 +92,24 @@ fn extract_value(row: &Row, idx: usize) -> Result<JsonValue, DbError> {
             Some(value) => Ok(value.into()),
             None => Ok(JsonValue::Null),
         },
+        // WARN: This downcasts a Postgres NUMERIC to a 64 bit JSON Number.
         Type::NUMERIC => match row
             .try_get::<usize, Option<Decimal>>(idx)
             .map_err(|err| DbError::DataError(err.to_string()))?
         {
-            Some(value) => Ok(json!(value)),
+            Some(value) => {
+                println!("NMERIC {value}");
+                let v = value.to_string();
+                if let Ok(number) = v.parse::<u64>() {
+                    Ok(number.into())
+                } else if let Ok(number) = v.parse::<i64>() {
+                    Ok(number.into())
+                } else if let Ok(number) = v.parse::<f64>() {
+                    Ok(number.into())
+                } else {
+                    panic!("Not a u64, i64, or f64: {value}");
+                }
+            }
             None => Ok(JsonValue::Null),
         },
         _ => unimplemented!(),
@@ -332,6 +344,7 @@ impl DbQuery for PostgresConnection {
 mod tests {
     use super::*;
 
+    use pretty_assertions::assert_eq;
     use serde_json::json;
 
     #[tokio::test]
@@ -572,7 +585,7 @@ mod tests {
                 "alt_int_value": JsonValue::Null,
                 "bool_value": true,
                 "alt_bool_value": JsonValue::Null,
-                "numeric_value": Decimal::from(1_000_000),
+                "numeric_value": 1_000_000,
                 "alt_numeric_value": JsonValue::Null,
             })
         );
@@ -589,7 +602,7 @@ mod tests {
                 "alt_int_value": JsonValue::Null,
                 "bool_value": true,
                 "alt_bool_value": JsonValue::Null,
-                "numeric_value": Decimal::from(1_000_000),
+                "numeric_value": 1_000_000,
                 "alt_numeric_value": JsonValue::Null,
             }])
         );

@@ -122,3 +122,138 @@ impl DbQuery for AnyConnection {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn test_mixed_column_query() {
+        #[cfg(feature = "sqlite")]
+        mixed_column_query("test_any_sqlite.db").await;
+        #[cfg(feature = "postgres")]
+        mixed_column_query("postgresql:///sql_json_db").await;
+    }
+
+    async fn mixed_column_query(url: &str) {
+        let conn = AnyConnection::connect(url).await.unwrap();
+        conn.execute_batch(
+            "DROP TABLE IF EXISTS test_any_table_mixed;\
+             CREATE TABLE test_any_table_mixed (\
+                 text_value TEXT,\
+                 alt_text_value TEXT,\
+                 float_value FLOAT8,\
+                 alt_float_value FLOAT8,\
+                 int_value INT8,\
+                 alt_int_value INT8,\
+                 bool_value BOOL,\
+                 alt_bool_value BOOL,\
+                 numeric_value NUMERIC,\
+                 alt_numeric_value NUMERIC\
+             )",
+        )
+        .await
+        .unwrap();
+        conn.execute(
+            r#"INSERT INTO test_any_table_mixed
+               (
+                 text_value,
+                 alt_text_value,
+                 float_value,
+                 alt_float_value,
+                 int_value,
+                 alt_int_value,
+                 bool_value,
+                 alt_bool_value,
+                 numeric_value,
+                 alt_numeric_value
+               )
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"#,
+            &[
+                json!("foo"),
+                JsonValue::Null,
+                json!(1.05),
+                JsonValue::Null,
+                json!(1),
+                JsonValue::Null,
+                json!(true),
+                JsonValue::Null,
+                json!(1_000_000),
+                JsonValue::Null,
+            ],
+        )
+        .await
+        .unwrap();
+
+        let select_sql = r#"SELECT
+                              text_value,
+                              alt_text_value,
+                              float_value,
+                              alt_float_value,
+                              int_value,
+                              alt_int_value,
+                              bool_value,
+                              alt_bool_value,
+                              numeric_value,
+                              alt_numeric_value
+                            FROM test_any_table_mixed
+                            WHERE text_value = $1
+                              AND alt_text_value IS NOT DISTINCT FROM $2
+                              AND float_value > $3
+                              AND int_value > $4
+                              AND bool_value = $5
+                              AND numeric_value > $6"#;
+        let params = [
+            json!("foo"),
+            JsonValue::Null,
+            json!(1.0),
+            json!(0),
+            json!(true),
+            json!(999_999),
+        ];
+        let value = conn
+            .query_value(select_sql, &params)
+            .await
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!("foo", value);
+
+        let row = conn.query_row(select_sql, &params).await.unwrap();
+        assert_eq!(
+            json!(row),
+            json!({
+                "text_value": "foo",
+                "alt_text_value": JsonValue::Null,
+                "float_value": 1.05,
+                "alt_float_value": JsonValue::Null,
+                "int_value": 1,
+                "alt_int_value": JsonValue::Null,
+                "bool_value": true,
+                "alt_bool_value": JsonValue::Null,
+                "numeric_value": 1_000_000,
+                "alt_numeric_value": JsonValue::Null,
+            })
+        );
+
+        let rows = conn.query(select_sql, &params).await.unwrap();
+        assert_eq!(
+            json!(rows),
+            json!([{
+                "text_value": "foo",
+                "alt_text_value": JsonValue::Null,
+                "float_value": 1.05,
+                "alt_float_value": JsonValue::Null,
+                "int_value": 1,
+                "alt_int_value": JsonValue::Null,
+                "bool_value": true,
+                "alt_bool_value": JsonValue::Null,
+                "numeric_value": 1_000_000,
+                "alt_numeric_value": JsonValue::Null,
+            }])
+        );
+    }
+}

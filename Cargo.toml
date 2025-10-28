@@ -6,9 +6,9 @@ edition = "2024"
 [dependencies]
 deadpool-postgres = { version = "0.14.1", features = ["rt_tokio_1"], optional = true }
 deadpool-sqlite = { version = "0.12.1", features = ["bundled", "column_decltype"], optional = true }
-rust_decimal = { version = "1.39.0", features = ["db-tokio-postgres", "serde-with-arbitrary-precision"] }
+rust_decimal = { version = "1.39.0", features = ["db-tokio-postgres"] }
 serde = { version = "1.0.226", features = ["derive"] }
-serde_json = { version = "1.0.145", features = ["preserve_order", "arbitrary_precision"] }
+serde_json = { version = "1.0.145", features = ["preserve_order"] }
 tokio-postgres = { version = "0.7.14", optional = true }
 tracing = "0.1.41"
 tracing-subscriber = "0.3.19"
@@ -16,6 +16,7 @@ tracing-subscriber = "0.3.19"
 [dev-dependencies]
 anyhow = "1.0.100"
 axum = "0.8.4"
+pretty_assertions = "1.4.1"
 tokio = "1.47.1"
 tower-service = "0.3.3"
 
