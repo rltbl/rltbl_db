@@ -1,3 +1,19 @@
+/// Connect to any supported database using a URL.
+///
+/// ```
+/// use rltbl_db::{any::AnyConnection, core::{DbError, DbQuery}};
+///
+/// async fn example() -> Result<String, DbError> {
+///     let conn = AnyConnection::connect("test.db").await?;
+///     conn.execute_batch(
+///         "DROP TABLE IF EXISTS test;\
+///          CREATE TABLE test ( value TEXT );\
+///          INSERT INTO test VALUES ('foo');",
+///     ).await?;
+///     let value = conn.query_string("SELECT value FROM test;", &[]).await?;
+///     Ok(value)
+/// }
+/// ```
 use crate::core::{DbError, DbQuery, JsonRow, JsonValue};
 
 #[cfg(feature = "rusqlite")]
