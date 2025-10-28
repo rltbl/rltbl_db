@@ -3,6 +3,8 @@
 use crate::core::{DbError, DbQuery, JsonRow, JsonValue};
 
 use deadpool_postgres::{Config, Pool, Runtime};
+use rust_decimal::Decimal;
+use serde_json::json;
 use tokio_postgres::{
     NoTls,
     row::Row,
@@ -91,9 +93,13 @@ fn extract_value(row: &Row, idx: usize) -> Result<JsonValue, DbError> {
             Some(value) => Ok(value.into()),
             None => Ok(JsonValue::Null),
         },
-        Type::NUMERIC => {
-            todo!()
-        }
+        Type::NUMERIC => match row
+            .try_get::<usize, Option<Decimal>>(idx)
+            .map_err(|err| DbError::DataError(err.to_string()))?
+        {
+            Some(value) => Ok(json!(value)),
+            None => Ok(JsonValue::Null),
+        },
         _ => unimplemented!(),
     }
 }
@@ -224,7 +230,14 @@ impl DbQuery for PostgresConnection {
                     };
                 }
                 &Type::NUMERIC => {
-                    todo!()
+                    match param {
+                        JsonValue::Null => params.push(Box::new(None::<Decimal>)),
+                        _ => {
+                            let value: Decimal = serde_json::from_value(param.clone())
+                                .map_err(|err| DbError::DataError(err.to_string()))?;
+                            params.push(Box::new(value));
+                        }
+                    };
                 }
                 _ => unimplemented!(),
             }
@@ -474,7 +487,9 @@ mod tests {
                  int_value INT8,\
                  alt_int_value INT8,\
                  bool_value BOOL,\
-                 alt_bool_value BOOL\
+                 alt_bool_value BOOL,\
+                 numeric_value NUMERIC,\
+                 alt_numeric_value NUMERIC\
              )",
         )
         .await
@@ -489,9 +504,11 @@ mod tests {
                  int_value,
                  alt_int_value,
                  bool_value,
-                 alt_bool_value
+                 alt_bool_value,
+                 numeric_value,
+                 alt_numeric_value
                )
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"#,
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"#,
             &[
                 json!("foo"),
                 JsonValue::Null,
@@ -500,6 +517,8 @@ mod tests {
                 json!(1),
                 JsonValue::Null,
                 json!(true),
+                JsonValue::Null,
+                json!(1_000_000),
                 JsonValue::Null,
             ],
         )
@@ -514,19 +533,23 @@ mod tests {
                               int_value,
                               alt_int_value,
                               bool_value,
-                              alt_bool_value
+                              alt_bool_value,
+                              numeric_value,
+                              alt_numeric_value
                             FROM test_table_mixed
                             WHERE text_value = $1
                               AND alt_text_value IS NOT DISTINCT FROM $2
                               AND float_value > $3
                               AND int_value > $4
-                              AND bool_value = $5"#;
+                              AND bool_value = $5
+                              AND numeric_value > $6"#;
         let params = [
             json!("foo"),
             JsonValue::Null,
             json!(1.0),
             json!(0),
             json!(true),
+            json!(999_999),
         ];
         let value = conn
             .query_value(select_sql, &params)
@@ -549,6 +572,8 @@ mod tests {
                 "alt_int_value": JsonValue::Null,
                 "bool_value": true,
                 "alt_bool_value": JsonValue::Null,
+                "numeric_value": Decimal::from(1_000_000),
+                "alt_numeric_value": JsonValue::Null,
             })
         );
 
@@ -564,6 +589,8 @@ mod tests {
                 "alt_int_value": JsonValue::Null,
                 "bool_value": true,
                 "alt_bool_value": JsonValue::Null,
+                "numeric_value": Decimal::from(1_000_000),
+                "alt_numeric_value": JsonValue::Null,
             }])
         );
     }

@@ -10,6 +10,7 @@ use deadpool_sqlite::{
         types::{Null as RusqliteNull, ValueRef as RusqliteValueRef},
     },
 };
+use serde_json::json;
 
 /// Represents a SQLite database connection pool
 #[derive(Debug)]
@@ -131,8 +132,15 @@ fn query_prepared(
                         },
                         RusqliteValueRef::Real(value) => JsonValue::from(value),
                         RusqliteValueRef::Text(value) | RusqliteValueRef::Blob(value) => {
-                            let value = std::str::from_utf8(value).unwrap_or_default();
-                            JsonValue::from(value)
+                            match column_type {
+                                Some(ctype) if ctype.to_lowercase() == "numeric" => {
+                                    json!(value)
+                                }
+                                _ => {
+                                    let value = std::str::from_utf8(value).unwrap_or_default();
+                                    JsonValue::String(value.to_string())
+                                }
+                            }
                         }
                     },
                     Err(err) => {
@@ -397,39 +405,43 @@ mod tests {
                  alt_text_value TEXT,\
                  float_value FLOAT8,\
                  int_value INT8,\
-                 bool_value BOOL\
+                 bool_value BOOL,
+                 numeric_value NUMERIC\
              )",
         )
         .await
         .unwrap();
         conn.execute(
             r#"INSERT INTO test_table_mixed
-               (text_value, alt_text_value, float_value, int_value, bool_value)
-               VALUES ($1, $2, $3, $4, $5)"#,
+               (text_value, alt_text_value, float_value, int_value, bool_value, numeric_value)
+               VALUES ($1, $2, $3, $4, $5, $6)"#,
             &[
                 json!("foo"),
                 JsonValue::Null,
                 json!(1.05),
                 json!(1),
                 json!(true),
+                json!(1_000_000),
             ],
         )
         .await
         .unwrap();
 
-        let select_sql = r#"SELECT text_value, alt_text_value, float_value, int_value, bool_value
+        let select_sql = r#"SELECT text_value, alt_text_value, float_value, int_value, bool_value, numeric_value
                             FROM test_table_mixed
                             WHERE text_value = $1
                               AND alt_text_value IS $2
                               AND float_value > $3
                               AND int_value > $4
-                              AND bool_value = $5"#;
+                              AND bool_value = $5
+                              AND numeric_value > $6"#;
         let params = [
             json!("foo"),
             JsonValue::Null,
             json!(1.0),
             json!(0),
             json!(true),
+            json!(999_999),
         ];
         let value = conn
             .query_value(select_sql, &params)
@@ -449,6 +461,7 @@ mod tests {
                 "float_value": 1.05,
                 "int_value": 1,
                 "bool_value": true,
+                "numeric_value": 1_000_000,
             })
         );
 
@@ -461,6 +474,7 @@ mod tests {
                 "float_value": 1.05,
                 "int_value": 1,
                 "bool_value": true,
+                "numeric_value": 1_000_000,
             }])
         );
     }

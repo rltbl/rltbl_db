@@ -10,7 +10,7 @@ pub type JsonRow = JsonMap<String, JsonValue>;
 pub enum DbError {
     /// An error that occurred while connecting to a database.
     ConnectError(String),
-    /// An error in the arguments to a function.
+    /// An error in the arguments to a function that accessed the database.
     InputError(String),
     /// An error in the data retrieved from the database.
     DataError(String),
