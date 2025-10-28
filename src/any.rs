@@ -134,7 +134,7 @@ mod tests {
         #[cfg(feature = "rusqlite")]
         mixed_column_query("test_any_sqlite.db").await;
         #[cfg(feature = "tokio-postgres")]
-        mixed_column_query("postgresql:///sql_json_db").await;
+        mixed_column_query("postgresql:///rltbl_db").await;
     }
 
     async fn mixed_column_query(url: &str) {
@@ -187,6 +187,17 @@ mod tests {
         .await
         .unwrap();
 
+        let select_sql = "SELECT text_value FROM test_any_table_mixed WHERE text_value = $1";
+        let params = [json!("foo")];
+        let value = conn
+            .query_value(select_sql, &params)
+            .await
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!("foo", value);
+
         let select_sql = r#"SELECT
                               text_value,
                               alt_text_value,
@@ -213,14 +224,6 @@ mod tests {
             json!(true),
             json!(999_999),
         ];
-        let value = conn
-            .query_value(select_sql, &params)
-            .await
-            .unwrap()
-            .as_str()
-            .unwrap()
-            .to_string();
-        assert_eq!("foo", value);
 
         let row = conn.query_row(select_sql, &params).await.unwrap();
         assert_eq!(

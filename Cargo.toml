@@ -1,17 +1,20 @@
 [package]
-name = "sql_json"
+name = "rltbl_db"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
+description = "rltbl_db is the database layer for the Relatable project."
+repository = "https://github.com/rltbl/rltbl_db"
+categories = ["database"]
+readme = "README.md"
 
 [dependencies]
 deadpool-postgres = { version = "0.14.1", features = ["rt_tokio_1"], optional = true }
 deadpool-sqlite = { version = "0.12.1", features = ["bundled", "column_decltype"], optional = true }
-rust_decimal = { version = "1.39.0", features = ["db-tokio-postgres"] }
+rust_decimal = { version = "1.39.0", features = ["db-tokio-postgres"], optional = true }
 serde = { version = "1.0.226", features = ["derive"] }
 serde_json = { version = "1.0.145", features = ["preserve_order"] }
 tokio-postgres = { version = "0.7.14", optional = true }
-tracing = "0.1.41"
-tracing-subscriber = "0.3.19"
 
 [dev-dependencies]
 anyhow = "1.0.100"
@@ -23,4 +26,4 @@ tower-service = "0.3.3"
 [features]
 default = ["rusqlite", "tokio-postgres"]
 rusqlite = ["dep:deadpool-sqlite"]
-tokio-postgres = ["dep:deadpool-postgres", "dep:tokio-postgres"]
+tokio-postgres = ["dep:deadpool-postgres", "dep:tokio-postgres", "dep:rust_decimal"]

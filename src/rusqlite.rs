@@ -1,4 +1,4 @@
-//! SQLite support for sql_json.
+//! rusqlite implementation for rltbl_db.
 
 use crate::core::{DbError, DbQuery, JsonRow, JsonValue};
 
@@ -26,17 +26,6 @@ impl RusqlitePool {
             .create_pool(Runtime::Tokio1)
             .map_err(|err| DbError::ConnectError(format!("Error creating pool: {err}")))?;
         Ok(Self { pool })
-    }
-}
-
-/// Extract the first value of the first row in `rows`.
-fn extract_value(rows: &Vec<JsonRow>) -> Result<JsonValue, DbError> {
-    match rows.iter().next() {
-        Some(row) => match row.values().next() {
-            Some(value) => Ok(value.clone()),
-            None => Err(DbError::DataError("No values found".to_string())),
-        },
-        None => Err(DbError::DataError("No rows found".to_string())),
     }
 }
 
@@ -114,38 +103,31 @@ fn query_prepared(
             for column in &columns {
                 let column_name = &column.name;
                 let column_type = &column.datatype;
-                let value = match row.get_ref(column_name.as_str()) {
-                    Ok(value) => match value {
-                        ValueRef::Null => JsonValue::Null,
-                        ValueRef::Integer(value) => match column_type {
-                            Some(ctype) if ctype.to_lowercase() == "bool" => {
-                                JsonValue::Bool(value != 0)
-                            }
-                            // The remaining cases are (a) the column's datatype is integer, and
-                            // (b) the column is an expression. In the latter case it doesn't seem
-                            // possible to get the datatype of the expression from the metadata.
-                            // So the only thing to do here is just to convert the value
-                            // to JSON using the default method, and since we already know that it
-                            // is an integer, the result of the conversion will be a JSON number.
-                            _ => JsonValue::from(value),
-                        },
-                        ValueRef::Real(value) => JsonValue::from(value),
-                        ValueRef::Text(value) | ValueRef::Blob(value) => match column_type {
-                            Some(ctype) if ctype.to_lowercase() == "numeric" => {
-                                json!(value)
-                            }
-                            _ => {
-                                let value = std::str::from_utf8(value).unwrap_or_default();
-                                JsonValue::String(value.to_string())
-                            }
-                        },
+                let value = row.get_ref(column_name.as_str())?;
+                let value = match value {
+                    ValueRef::Null => JsonValue::Null,
+                    ValueRef::Integer(value) => match column_type {
+                        Some(ctype) if ctype.to_lowercase() == "bool" => {
+                            JsonValue::Bool(value != 0)
+                        }
+                        // The remaining cases are (a) the column's datatype is integer, and
+                        // (b) the column is an expression. In the latter case it doesn't seem
+                        // possible to get the datatype of the expression from the metadata.
+                        // So the only thing to do here is just to convert the value
+                        // to JSON using the default method, and since we already know that it
+                        // is an integer, the result of the conversion will be a JSON number.
+                        _ => JsonValue::from(value),
                     },
-                    Err(err) => {
-                        tracing::warn!(
-                            "Error getting value for column '{column_name}' from row: {err}"
-                        );
-                        JsonValue::Null
-                    }
+                    ValueRef::Real(value) => JsonValue::from(value),
+                    ValueRef::Text(value) | ValueRef::Blob(value) => match column_type {
+                        Some(ctype) if ctype.to_lowercase() == "numeric" => {
+                            json!(value)
+                        }
+                        _ => {
+                            let value = std::str::from_utf8(value).unwrap_or_default();
+                            JsonValue::String(value.to_string())
+                        }
+                    },
                 };
                 json_row.insert(column_name.to_string(), value);
             }
@@ -213,7 +195,9 @@ impl DbQuery for RusqlitePool {
     async fn query_row(&self, sql: &str, params: &[JsonValue]) -> Result<JsonRow, DbError> {
         let rows = self.query(&sql, params).await?;
         if rows.len() > 1 {
-            tracing::warn!("More than one row returned for query_row()");
+            return Err(DbError::DataError(
+                "More than one row returned for query_row()".to_string(),
+            ));
         }
         match rows.iter().next() {
             Some(row) => Ok(row.clone()),
@@ -223,11 +207,16 @@ impl DbQuery for RusqlitePool {
 
     /// Implements [DbQuery::query_value()] for SQLite.
     async fn query_value(&self, sql: &str, params: &[JsonValue]) -> Result<JsonValue, DbError> {
-        let rows = self.query(sql, params).await?;
-        if rows.len() > 1 {
-            tracing::warn!("More than one row returned for query_value()");
+        let row = self.query_row(sql, params).await?;
+        if row.len() > 1 {
+            return Err(DbError::DataError(
+                "More than one value returned for query_value()".to_string(),
+            ));
         }
-        extract_value(&rows)
+        match row.values().next() {
+            Some(value) => Ok(value.clone()),
+            None => Err(DbError::DataError("No values found".to_string())),
+        }
     }
 
     /// Implements [DbQuery::query_string()] for SQLite.
@@ -236,7 +225,7 @@ impl DbQuery for RusqlitePool {
         match value.as_str() {
             Some(str_val) => Ok(str_val.to_string()),
             None => {
-                tracing::warn!("Not a string: {value}");
+                // tracing::warn!("Not a string: {value}");
                 Ok(value.to_string())
             }
         }
@@ -416,6 +405,17 @@ mod tests {
         .await
         .unwrap();
 
+        let select_sql = "SELECT text_value FROM test_table_mixed WHERE text_value = $1";
+        let params = [json!("foo")];
+        let value = conn
+            .query_value(select_sql, &params)
+            .await
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!("foo", value);
+
         let select_sql = r#"SELECT text_value, alt_text_value, float_value, int_value, bool_value, numeric_value
                             FROM test_table_mixed
                             WHERE text_value = $1
@@ -432,14 +432,6 @@ mod tests {
             json!(true),
             json!(999_999),
         ];
-        let value = conn
-            .query_value(select_sql, &params)
-            .await
-            .unwrap()
-            .as_str()
-            .unwrap()
-            .to_string();
-        assert_eq!("foo", value);
 
         let row = conn.query_row(select_sql, &params).await.unwrap();
         assert_eq!(

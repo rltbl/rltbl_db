@@ -4,7 +4,7 @@ use axum::{
     response::{Html, IntoResponse},
     routing::get,
 };
-use sql_json::{any::AnyConnection, core::DbQuery};
+use rltbl_db::{any::AnyConnection, core::DbQuery};
 use std::sync::Arc;
 use tower_service::Service;
 
@@ -47,11 +47,11 @@ async fn run_axum(url: &str) {
     assert_eq!("foo", result);
 }
 
-/// Test using axum with sql_json.
+/// Test using axum with rltbl_db.
 #[tokio::test]
 async fn test_axum() {
     #[cfg(feature = "rusqlite")]
     run_axum(":memory:").await;
     #[cfg(feature = "tokio-postgres")]
-    run_axum("postgresql:///sql_json_db").await;
+    run_axum("postgresql:///rltbl_db").await;
 }

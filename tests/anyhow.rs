@@ -1,5 +1,5 @@
 use anyhow::Result;
-use sql_json::{any::AnyConnection, core::DbQuery};
+use rltbl_db::{any::AnyConnection, core::DbQuery};
 
 #[tokio::test]
 async fn test_anyhow() {

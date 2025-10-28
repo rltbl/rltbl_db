@@ -1,4 +1,4 @@
-//! PostgreSQL support for sql_json.
+//! tokio-postgres implementation for rltbl_db.
 
 use crate::core::{DbError, DbQuery, JsonRow, JsonValue};
 
@@ -98,7 +98,6 @@ fn extract_value(row: &Row, idx: usize) -> Result<JsonValue, DbError> {
             .map_err(|err| DbError::DataError(err.to_string()))?
         {
             Some(value) => {
-                println!("NMERIC {value}");
                 let v = value.to_string();
                 if let Ok(number) = v.parse::<u64>() {
                     Ok(number.into())
@@ -280,7 +279,9 @@ impl DbQuery for TokioPostgresPool {
     async fn query_row(&self, sql: &str, params: &[JsonValue]) -> Result<JsonRow, DbError> {
         let rows = self.query(sql, params).await?;
         if rows.len() > 1 {
-            tracing::warn!("More than one row returned for query_row()");
+            return Err(DbError::DataError(
+                "More than one row returned for query_row()".to_string(),
+            ));
         }
         match rows.into_iter().nth(0) {
             Some(row) => Ok(row),
@@ -292,7 +293,9 @@ impl DbQuery for TokioPostgresPool {
     async fn query_value(&self, sql: &str, params: &[JsonValue]) -> Result<JsonValue, DbError> {
         let row = self.query_row(sql, params).await?;
         if row.values().len() > 1 {
-            tracing::warn!("More than one value returned for query_value()");
+            return Err(DbError::DataError(
+                "More than one value returned for query_value()".to_string(),
+            ));
         }
         match row.into_iter().map(|(_, v)| v).next() {
             Some(value) => Ok(value),
@@ -305,10 +308,7 @@ impl DbQuery for TokioPostgresPool {
         let value = self.query_value(sql, params).await?;
         match value.as_str() {
             Some(str_val) => Ok(str_val.to_string()),
-            None => {
-                tracing::warn!("Not a string: {value}");
-                Ok(value.to_string())
-            }
+            None => Ok(value.to_string()),
         }
     }
 
@@ -349,7 +349,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_text_column_query() {
-        let conn = TokioPostgresPool::connect("postgresql:///sql_json_db")
+        let conn = TokioPostgresPool::connect("postgresql:///rltbl_db")
             .await
             .unwrap();
         conn.execute_batch(
@@ -386,7 +386,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_integer_column_query() {
-        let conn = TokioPostgresPool::connect("postgresql:///sql_json_db")
+        let conn = TokioPostgresPool::connect("postgresql:///rltbl_db")
             .await
             .unwrap();
 
@@ -430,7 +430,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_float_column_query() {
-        let conn = TokioPostgresPool::connect("postgresql:///sql_json_db")
+        let conn = TokioPostgresPool::connect("postgresql:///rltbl_db")
             .await
             .unwrap();
 
@@ -487,7 +487,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_mixed_column_query() {
-        let conn = TokioPostgresPool::connect("postgresql:///sql_json_db")
+        let conn = TokioPostgresPool::connect("postgresql:///rltbl_db")
             .await
             .unwrap();
         conn.execute_batch(
@@ -538,6 +538,17 @@ mod tests {
         .await
         .unwrap();
 
+        let select_sql = "SELECT text_value FROM test_table_mixed WHERE text_value = $1";
+        let params = [json!("foo")];
+        let value = conn
+            .query_value(select_sql, &params)
+            .await
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!("foo", value);
+
         let select_sql = r#"SELECT
                               text_value,
                               alt_text_value,
@@ -564,14 +575,6 @@ mod tests {
             json!(true),
             json!(999_999),
         ];
-        let value = conn
-            .query_value(select_sql, &params)
-            .await
-            .unwrap()
-            .as_str()
-            .unwrap()
-            .to_string();
-        assert_eq!("foo", value);
 
         let row = conn.query_row(select_sql, &params).await.unwrap();
         assert_eq!(
@@ -610,7 +613,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_aliases_and_builtin_functions() {
-        let conn = TokioPostgresPool::connect("postgresql:///sql_json_db")
+        let conn = TokioPostgresPool::connect("postgresql:///rltbl_db")
             .await
             .unwrap();
         conn.execute_batch(
