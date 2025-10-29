@@ -1,4 +1,4 @@
-# sql_json
+# rltbl_db
 
 `rltbl_db` is the database layer for [`rltbl`](https://github.com/rltbl/relatable).
 It provides an async abstraction over multiple database libraries, currently
