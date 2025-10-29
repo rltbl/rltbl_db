@@ -9,16 +9,16 @@ SHELL := bash
 test: test_sqlite test_postgres
 
 test_sqlite:
-	cargo test -- --no-capture
+	cargo test --features rusqlite -- --no-capture
 
 test_postgres:
-	cargo test --features postgres -- --no-capture
+	cargo test --features tokio-postgres -- --no-capture
 
 crate_docs:
 	RUSTDOCFLAGS="-D warnings" cargo doc
 
 crate_docs_postgres:
-	RUSTDOCFLAGS="-D warnings" cargo doc --features postgres
+	RUSTDOCFLAGS="-D warnings" cargo doc --features tokio-postgres
 
 postgres:
-	cargo build --features postgres
+	cargo build --features tokio-postgres
