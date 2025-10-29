@@ -224,10 +224,7 @@ impl DbQuery for RusqlitePool {
         let value = self.query_value(sql, params).await?;
         match value.as_str() {
             Some(str_val) => Ok(str_val.to_string()),
-            None => {
-                // tracing::warn!("Not a string: {value}");
-                Ok(value.to_string())
-            }
+            None => Ok(value.to_string()),
         }
     }
 
