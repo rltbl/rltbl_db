@@ -5,6 +5,11 @@ use serde_json::Map as JsonMap;
 pub type JsonValue = serde_json::Value;
 pub type JsonRow = JsonMap<String, JsonValue>;
 
+pub enum DbKind {
+    SQLite,
+    PostgreSQL,
+}
+
 #[derive(Clone, Debug)]
 #[non_exhaustive] // We may add more specific error types in the future.
 pub enum DbError {

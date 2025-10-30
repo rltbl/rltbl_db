@@ -19,7 +19,7 @@ use crate::core::{DbError, DbQuery, JsonRow, JsonValue};
 #[cfg(feature = "rusqlite")]
 use crate::rusqlite::RusqlitePool;
 #[cfg(feature = "tokio-postgres")]
-use crate::tokio_postgres::TokioPostgresPool;
+use crate::{core::DbKind, tokio_postgres::TokioPostgresPool};
 
 #[derive(Debug)]
 pub enum AnyConnection {
@@ -52,6 +52,15 @@ impl AnyConnection {
             {
                 Err(DbError::ConnectError("sqlite not configured".to_string()))
             }
+        }
+    }
+
+    pub fn kind(&self) -> DbKind {
+        match self {
+            #[cfg(feature = "rusqlite")]
+            AnyConnection::Sqlite(_) => DbKind::SQLite,
+            #[cfg(feature = "tokio-postgres")]
+            AnyConnection::Postgres(_) => DbKind::PostgreSQL,
         }
     }
 }
