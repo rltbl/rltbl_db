@@ -14,19 +14,19 @@
 ///     Ok(value)
 /// }
 /// ```
-use crate::core::{DbError, DbQuery, JsonRow, JsonValue};
+use crate::core::{DbError, DbKind, DbQuery, JsonRow, JsonValue};
 
 #[cfg(feature = "rusqlite")]
 use crate::rusqlite::RusqlitePool;
 #[cfg(feature = "tokio-postgres")]
-use crate::{core::DbKind, tokio_postgres::TokioPostgresPool};
+use crate::tokio_postgres::TokioPostgresPool;
 
 #[derive(Debug)]
 pub enum AnyConnection {
     #[cfg(feature = "rusqlite")]
-    Sqlite(RusqlitePool),
+    Rusqlite(RusqlitePool),
     #[cfg(feature = "tokio-postgres")]
-    Postgres(TokioPostgresPool),
+    TokioPostgres(TokioPostgresPool),
 }
 
 impl AnyConnection {
@@ -35,7 +35,7 @@ impl AnyConnection {
         if url.starts_with("postgresql://") {
             #[cfg(feature = "tokio-postgres")]
             {
-                Ok(AnyConnection::Postgres(
+                Ok(AnyConnection::TokioPostgres(
                     TokioPostgresPool::connect(url).await?,
                 ))
             }
@@ -46,7 +46,7 @@ impl AnyConnection {
         } else {
             #[cfg(feature = "rusqlite")]
             {
-                Ok(AnyConnection::Sqlite(RusqlitePool::connect(url).await?))
+                Ok(AnyConnection::Rusqlite(RusqlitePool::connect(url).await?))
             }
             #[cfg(not(feature = "rusqlite"))]
             {
@@ -58,9 +58,9 @@ impl AnyConnection {
     pub fn kind(&self) -> DbKind {
         match self {
             #[cfg(feature = "rusqlite")]
-            AnyConnection::Sqlite(_) => DbKind::SQLite,
+            AnyConnection::Rusqlite(_) => DbKind::SQLite,
             #[cfg(feature = "tokio-postgres")]
-            AnyConnection::Postgres(_) => DbKind::PostgreSQL,
+            AnyConnection::TokioPostgres(_) => DbKind::PostgreSQL,
         }
     }
 }
@@ -69,81 +69,81 @@ impl DbQuery for AnyConnection {
     async fn execute(&self, sql: &str, params: &[JsonValue]) -> Result<(), DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
-            AnyConnection::Sqlite(connection) => connection.execute(sql, params).await,
+            AnyConnection::Rusqlite(connection) => connection.execute(sql, params).await,
             #[cfg(feature = "tokio-postgres")]
-            AnyConnection::Postgres(connection) => connection.execute(sql, params).await,
+            AnyConnection::TokioPostgres(connection) => connection.execute(sql, params).await,
         }
     }
 
     async fn execute_batch(&self, sql: &str) -> Result<(), DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
-            AnyConnection::Sqlite(connection) => connection.execute_batch(sql).await,
+            AnyConnection::Rusqlite(connection) => connection.execute_batch(sql).await,
             #[cfg(feature = "tokio-postgres")]
-            AnyConnection::Postgres(connection) => connection.execute_batch(sql).await,
+            AnyConnection::TokioPostgres(connection) => connection.execute_batch(sql).await,
         }
     }
 
     async fn query(&self, sql: &str, params: &[JsonValue]) -> Result<Vec<JsonRow>, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
-            AnyConnection::Sqlite(connection) => connection.query(sql, params).await,
+            AnyConnection::Rusqlite(connection) => connection.query(sql, params).await,
             #[cfg(feature = "tokio-postgres")]
-            AnyConnection::Postgres(connection) => connection.query(sql, params).await,
+            AnyConnection::TokioPostgres(connection) => connection.query(sql, params).await,
         }
     }
 
     async fn query_row(&self, sql: &str, params: &[JsonValue]) -> Result<JsonRow, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
-            AnyConnection::Sqlite(connection) => connection.query_row(sql, params).await,
+            AnyConnection::Rusqlite(connection) => connection.query_row(sql, params).await,
             #[cfg(feature = "tokio-postgres")]
-            AnyConnection::Postgres(connection) => connection.query_row(sql, params).await,
+            AnyConnection::TokioPostgres(connection) => connection.query_row(sql, params).await,
         }
     }
 
     async fn query_value(&self, sql: &str, params: &[JsonValue]) -> Result<JsonValue, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
-            AnyConnection::Sqlite(connection) => connection.query_value(sql, params).await,
+            AnyConnection::Rusqlite(connection) => connection.query_value(sql, params).await,
             #[cfg(feature = "tokio-postgres")]
-            AnyConnection::Postgres(connection) => connection.query_value(sql, params).await,
+            AnyConnection::TokioPostgres(connection) => connection.query_value(sql, params).await,
         }
     }
 
     async fn query_string(&self, sql: &str, params: &[JsonValue]) -> Result<String, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
-            AnyConnection::Sqlite(connection) => connection.query_string(sql, params).await,
+            AnyConnection::Rusqlite(connection) => connection.query_string(sql, params).await,
             #[cfg(feature = "tokio-postgres")]
-            AnyConnection::Postgres(connection) => connection.query_string(sql, params).await,
+            AnyConnection::TokioPostgres(connection) => connection.query_string(sql, params).await,
         }
     }
 
     async fn query_u64(&self, sql: &str, params: &[JsonValue]) -> Result<u64, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
-            AnyConnection::Sqlite(connection) => connection.query_u64(sql, params).await,
+            AnyConnection::Rusqlite(connection) => connection.query_u64(sql, params).await,
             #[cfg(feature = "tokio-postgres")]
-            AnyConnection::Postgres(connection) => connection.query_u64(sql, params).await,
+            AnyConnection::TokioPostgres(connection) => connection.query_u64(sql, params).await,
         }
     }
 
     async fn query_i64(&self, sql: &str, params: &[JsonValue]) -> Result<i64, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
-            AnyConnection::Sqlite(connection) => connection.query_i64(sql, params).await,
+            AnyConnection::Rusqlite(connection) => connection.query_i64(sql, params).await,
             #[cfg(feature = "tokio-postgres")]
-            AnyConnection::Postgres(connection) => connection.query_i64(sql, params).await,
+            AnyConnection::TokioPostgres(connection) => connection.query_i64(sql, params).await,
         }
     }
 
     async fn query_f64(&self, sql: &str, params: &[JsonValue]) -> Result<f64, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
-            AnyConnection::Sqlite(connection) => connection.query_f64(sql, params).await,
+            AnyConnection::Rusqlite(connection) => connection.query_f64(sql, params).await,
             #[cfg(feature = "tokio-postgres")]
-            AnyConnection::Postgres(connection) => connection.query_f64(sql, params).await,
+            AnyConnection::TokioPostgres(connection) => connection.query_f64(sql, params).await,
         }
     }
 }
