@@ -26,10 +26,10 @@ cargo add rltbl_db --git 'https://github.com/rltbl/rltbl_db'
 # Usage
 
 ```rust
-use rltbl_db::{any::AnyConnection, core::{DbError, DbQuery}};
+use rltbl_db::{any::AnyPool, core::{DbError, DbQuery}};
 
 async fn example() -> Result<String, DbError> {
-    let conn = AnyConnection::connect("test.db").await?;
+    let conn = AnyPool::connect("test.db").await?;
     conn.execute_batch(
         "DROP TABLE IF EXISTS test;\
          CREATE TABLE test ( value TEXT );\

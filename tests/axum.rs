@@ -4,7 +4,7 @@ use axum::{
     response::{Html, IntoResponse},
     routing::get,
 };
-use rltbl_db::{any::AnyConnection, core::DbQuery};
+use rltbl_db::{any::AnyPool, core::DbQuery};
 use std::sync::Arc;
 use tower_service::Service;
 
@@ -20,7 +20,7 @@ async fn get_root(State(conn): State<Arc<impl DbQuery>>) -> impl IntoResponse {
 }
 
 async fn run_axum(url: &str) {
-    let conn = AnyConnection::connect(url).await.unwrap();
+    let conn = AnyPool::connect(url).await.unwrap();
     conn.execute_batch(
         "DROP TABLE IF EXISTS test;\
          CREATE TABLE test ( value TEXT );\
