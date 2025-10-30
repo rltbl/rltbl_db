@@ -3,11 +3,11 @@ use rltbl_db::{any::AnyPool, core::DbQuery};
 
 #[tokio::test]
 async fn test_anyhow() {
-    let conn = AnyPool::connect(":memory:").await.unwrap();
-    let value = query_u64(conn).await.expect("1");
+    let pool = AnyPool::connect(":memory:").await.unwrap();
+    let value = query_u64(pool).await.expect("1");
     assert_eq!(value, 1);
 }
 
-async fn query_u64(conn: AnyPool) -> Result<u64> {
-    Ok(conn.query_u64("SELECT 1", &[]).await?)
+async fn query_u64(pool: AnyPool) -> Result<u64> {
+    Ok(pool.query_u64("SELECT 1", &[]).await?)
 }

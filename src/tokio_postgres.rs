@@ -349,20 +349,20 @@ mod tests {
 
     #[tokio::test]
     async fn test_text_column_query() {
-        let conn = TokioPostgresPool::connect("postgresql:///rltbl_db")
+        let pool = TokioPostgresPool::connect("postgresql:///rltbl_db")
             .await
             .unwrap();
-        conn.execute_batch(
+        pool.execute_batch(
             "DROP TABLE IF EXISTS test_table_text;\
              CREATE TABLE test_table_text ( value TEXT )",
         )
         .await
         .unwrap();
-        conn.execute("INSERT INTO test_table_text VALUES ($1)", &[json!("foo")])
+        pool.execute("INSERT INTO test_table_text VALUES ($1)", &[json!("foo")])
             .await
             .unwrap();
         let select_sql = "SELECT value FROM test_table_text WHERE value = $1";
-        let value = conn
+        let value = pool
             .query_value(select_sql, &[json!("foo")])
             .await
             .unwrap()
@@ -371,39 +371,39 @@ mod tests {
             .to_string();
         assert_eq!("foo", value);
 
-        let value = conn
+        let value = pool
             .query_string(select_sql, &[json!("foo")])
             .await
             .unwrap();
         assert_eq!("foo", value);
 
-        let row = conn.query_row(select_sql, &[json!("foo")]).await.unwrap();
+        let row = pool.query_row(select_sql, &[json!("foo")]).await.unwrap();
         assert_eq!(json!(row), json!({"value":"foo"}));
 
-        let rows = conn.query(select_sql, &[json!("foo")]).await.unwrap();
+        let rows = pool.query(select_sql, &[json!("foo")]).await.unwrap();
         assert_eq!(json!(rows), json!([{"value":"foo"}]));
     }
 
     #[tokio::test]
     async fn test_integer_column_query() {
-        let conn = TokioPostgresPool::connect("postgresql:///rltbl_db")
+        let pool = TokioPostgresPool::connect("postgresql:///rltbl_db")
             .await
             .unwrap();
 
         let sql_types = vec!["INT2", "INT4", "INT8"];
 
         for sql_type in sql_types {
-            conn.execute_batch(&format!(
+            pool.execute_batch(&format!(
                 "DROP TABLE IF EXISTS test_table_int;\
              CREATE TABLE test_table_int ( value {sql_type} )",
             ))
             .await
             .unwrap();
-            conn.execute("INSERT INTO test_table_int VALUES ($1)", &[json!(1)])
+            pool.execute("INSERT INTO test_table_int VALUES ($1)", &[json!(1)])
                 .await
                 .unwrap();
             let select_sql = "SELECT value FROM test_table_int WHERE value = $1";
-            let value = conn
+            let value = pool
                 .query_value(select_sql, &[json!(1)])
                 .await
                 .unwrap()
@@ -411,41 +411,41 @@ mod tests {
                 .unwrap();
             assert_eq!(1, value);
 
-            let value = conn.query_u64(select_sql, &[json!(1)]).await.unwrap();
+            let value = pool.query_u64(select_sql, &[json!(1)]).await.unwrap();
             assert_eq!(1, value);
 
-            let value = conn.query_i64(select_sql, &[json!(1)]).await.unwrap();
+            let value = pool.query_i64(select_sql, &[json!(1)]).await.unwrap();
             assert_eq!(1, value);
 
-            let value = conn.query_string(select_sql, &[json!(1)]).await.unwrap();
+            let value = pool.query_string(select_sql, &[json!(1)]).await.unwrap();
             assert_eq!("1", value);
 
-            let row = conn.query_row(select_sql, &[json!(1)]).await.unwrap();
+            let row = pool.query_row(select_sql, &[json!(1)]).await.unwrap();
             assert_eq!(json!(row), json!({"value":1}));
 
-            let rows = conn.query(select_sql, &[json!(1)]).await.unwrap();
+            let rows = pool.query(select_sql, &[json!(1)]).await.unwrap();
             assert_eq!(json!(rows), json!([{"value":1}]));
         }
     }
 
     #[tokio::test]
     async fn test_float_column_query() {
-        let conn = TokioPostgresPool::connect("postgresql:///rltbl_db")
+        let pool = TokioPostgresPool::connect("postgresql:///rltbl_db")
             .await
             .unwrap();
 
         // FLOAT8
-        conn.execute_batch(
+        pool.execute_batch(
             "DROP TABLE IF EXISTS test_table_float;\
              CREATE TABLE test_table_float ( value FLOAT8 )",
         )
         .await
         .unwrap();
-        conn.execute("INSERT INTO test_table_float VALUES ($1)", &[json!(1.05)])
+        pool.execute("INSERT INTO test_table_float VALUES ($1)", &[json!(1.05)])
             .await
             .unwrap();
         let select_sql = "SELECT value FROM test_table_float WHERE value > $1";
-        let value = conn
+        let value = pool
             .query_value(select_sql, &[json!(1.0)])
             .await
             .unwrap()
@@ -453,30 +453,30 @@ mod tests {
             .unwrap();
         assert_eq!("1.05", format!("{value:.2}"));
 
-        let value = conn.query_f64(select_sql, &[json!(1.0)]).await.unwrap();
+        let value = pool.query_f64(select_sql, &[json!(1.0)]).await.unwrap();
         assert_eq!(1.05, value);
 
-        let value = conn.query_string(select_sql, &[json!(1.0)]).await.unwrap();
+        let value = pool.query_string(select_sql, &[json!(1.0)]).await.unwrap();
         assert_eq!("1.05", value);
 
-        let row = conn.query_row(select_sql, &[json!(1.0)]).await.unwrap();
+        let row = pool.query_row(select_sql, &[json!(1.0)]).await.unwrap();
         assert_eq!(json!(row), json!({"value":1.05}));
 
-        let rows = conn.query(select_sql, &[json!(1.0)]).await.unwrap();
+        let rows = pool.query(select_sql, &[json!(1.0)]).await.unwrap();
         assert_eq!(json!(rows), json!([{"value":1.05}]));
 
         // FLOAT4 is harder to test
-        conn.execute_batch(
+        pool.execute_batch(
             "DROP TABLE IF EXISTS test_table_float;\
              CREATE TABLE test_table_float ( value FLOAT4 )",
         )
         .await
         .unwrap();
-        conn.execute("INSERT INTO test_table_float VALUES ($1)", &[json!(1.05)])
+        pool.execute("INSERT INTO test_table_float VALUES ($1)", &[json!(1.05)])
             .await
             .unwrap();
         let select_sql = "SELECT value FROM test_table_float WHERE value > $1";
-        let value = conn
+        let value = pool
             .query_value(select_sql, &[json!(1.0)])
             .await
             .unwrap()
@@ -487,10 +487,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_mixed_column_query() {
-        let conn = TokioPostgresPool::connect("postgresql:///rltbl_db")
+        let pool = TokioPostgresPool::connect("postgresql:///rltbl_db")
             .await
             .unwrap();
-        conn.execute_batch(
+        pool.execute_batch(
             "DROP TABLE IF EXISTS test_table_mixed;\
              CREATE TABLE test_table_mixed (\
                  text_value TEXT,\
@@ -507,7 +507,7 @@ mod tests {
         )
         .await
         .unwrap();
-        conn.execute(
+        pool.execute(
             r#"INSERT INTO test_table_mixed
                (
                  text_value,
@@ -540,7 +540,7 @@ mod tests {
 
         let select_sql = "SELECT text_value FROM test_table_mixed WHERE text_value = $1";
         let params = [json!("foo")];
-        let value = conn
+        let value = pool
             .query_value(select_sql, &params)
             .await
             .unwrap()
@@ -576,7 +576,7 @@ mod tests {
             json!(999_999),
         ];
 
-        let row = conn.query_row(select_sql, &params).await.unwrap();
+        let row = pool.query_row(select_sql, &params).await.unwrap();
         assert_eq!(
             json!(row),
             json!({
@@ -593,7 +593,7 @@ mod tests {
             })
         );
 
-        let rows = conn.query(select_sql, &params).await.unwrap();
+        let rows = pool.query(select_sql, &params).await.unwrap();
         assert_eq!(
             json!(rows),
             json!([{
@@ -613,10 +613,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_aliases_and_builtin_functions() {
-        let conn = TokioPostgresPool::connect("postgresql:///rltbl_db")
+        let pool = TokioPostgresPool::connect("postgresql:///rltbl_db")
             .await
             .unwrap();
-        conn.execute_batch(
+        pool.execute_batch(
             "DROP TABLE IF EXISTS test_table_indirect;\
              CREATE TABLE test_table_indirect (\
                  text_value TEXT,\
@@ -628,7 +628,7 @@ mod tests {
         )
         .await
         .unwrap();
-        conn.execute(
+        pool.execute(
             r#"INSERT INTO test_table_indirect
                (text_value, alt_text_value, float_value, int_value, bool_value)
                VALUES ($1, $2, $3, $4, $5)"#,
@@ -644,14 +644,14 @@ mod tests {
         .unwrap();
 
         // Test aggregate:
-        let rows = conn
+        let rows = pool
             .query("SELECT MAX(int_value) FROM test_table_indirect", &[])
             .await
             .unwrap();
         assert_eq!(json!(rows), json!([{"max": 1}]));
 
         // Test alias:
-        let rows = conn
+        let rows = pool
             .query(
                 "SELECT bool_value AS bool_value_alias FROM test_table_indirect",
                 &[],
@@ -661,7 +661,7 @@ mod tests {
         assert_eq!(json!(rows), json!([{"bool_value_alias": true}]));
 
         // Test aggregate with alias:
-        let rows = conn
+        let rows = pool
             .query(
                 "SELECT MAX(int_value) AS max_int_value FROM test_table_indirect",
                 &[],
@@ -671,7 +671,7 @@ mod tests {
         assert_eq!(json!(rows), json!([{"max_int_value": 1}]));
 
         // Test non-aggregate function:
-        let rows = conn
+        let rows = pool
             .query(
                 "SELECT CAST(int_value AS TEXT) FROM test_table_indirect",
                 &[],
@@ -681,7 +681,7 @@ mod tests {
         assert_eq!(json!(rows), json!([{"int_value": "1"}]));
 
         // Test non-aggregate function with alias:
-        let rows = conn
+        let rows = pool
             .query(
                 "SELECT CAST(int_value AS TEXT) AS int_value_cast FROM test_table_indirect",
                 &[],

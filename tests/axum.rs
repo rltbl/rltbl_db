@@ -8,8 +8,8 @@ use rltbl_db::{any::AnyPool, core::DbQuery};
 use std::sync::Arc;
 use tower_service::Service;
 
-async fn get_root(State(conn): State<Arc<impl DbQuery>>) -> impl IntoResponse {
-    let value = conn
+async fn get_root(State(pool): State<Arc<impl DbQuery>>) -> impl IntoResponse {
+    let value = pool
         .query_value("SELECT value FROM test LIMIT 1", &[])
         .await
         .unwrap()
@@ -20,8 +20,8 @@ async fn get_root(State(conn): State<Arc<impl DbQuery>>) -> impl IntoResponse {
 }
 
 async fn run_axum(url: &str) {
-    let conn = AnyPool::connect(url).await.unwrap();
-    conn.execute_batch(
+    let pool = AnyPool::connect(url).await.unwrap();
+    pool.execute_batch(
         "DROP TABLE IF EXISTS test;\
          CREATE TABLE test ( value TEXT );\
          INSERT INTO test VALUES ('foo');",
@@ -29,7 +29,7 @@ async fn run_axum(url: &str) {
     .await
     .unwrap();
 
-    let state = Arc::new(conn);
+    let state = Arc::new(pool);
     let mut router: Router = Router::new().route("/", get(get_root)).with_state(state);
 
     let request = axum::http::Request::builder()

@@ -4,13 +4,13 @@
 /// use rltbl_db::{any::AnyPool, core::{DbError, DbQuery}};
 ///
 /// async fn example() -> Result<String, DbError> {
-///     let conn = AnyPool::connect("test.db").await?;
-///     conn.execute_batch(
+///     let pool = AnyPool::connect("test.db").await?;
+///     pool.execute_batch(
 ///         "DROP TABLE IF EXISTS test;\
 ///          CREATE TABLE test ( value TEXT );\
 ///          INSERT INTO test VALUES ('foo');",
 ///     ).await?;
-///     let value = conn.query_string("SELECT value FROM test;", &[]).await?;
+///     let value = pool.query_string("SELECT value FROM test;", &[]).await?;
 ///     Ok(value)
 /// }
 /// ```
@@ -69,81 +69,81 @@ impl DbQuery for AnyPool {
     async fn execute(&self, sql: &str, params: &[JsonValue]) -> Result<(), DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
-            AnyPool::Rusqlite(connection) => connection.execute(sql, params).await,
+            AnyPool::Rusqlite(pool) => pool.execute(sql, params).await,
             #[cfg(feature = "tokio-postgres")]
-            AnyPool::TokioPostgres(connection) => connection.execute(sql, params).await,
+            AnyPool::TokioPostgres(pool) => pool.execute(sql, params).await,
         }
     }
 
     async fn execute_batch(&self, sql: &str) -> Result<(), DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
-            AnyPool::Rusqlite(connection) => connection.execute_batch(sql).await,
+            AnyPool::Rusqlite(pool) => pool.execute_batch(sql).await,
             #[cfg(feature = "tokio-postgres")]
-            AnyPool::TokioPostgres(connection) => connection.execute_batch(sql).await,
+            AnyPool::TokioPostgres(pool) => pool.execute_batch(sql).await,
         }
     }
 
     async fn query(&self, sql: &str, params: &[JsonValue]) -> Result<Vec<JsonRow>, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
-            AnyPool::Rusqlite(connection) => connection.query(sql, params).await,
+            AnyPool::Rusqlite(pool) => pool.query(sql, params).await,
             #[cfg(feature = "tokio-postgres")]
-            AnyPool::TokioPostgres(connection) => connection.query(sql, params).await,
+            AnyPool::TokioPostgres(pool) => pool.query(sql, params).await,
         }
     }
 
     async fn query_row(&self, sql: &str, params: &[JsonValue]) -> Result<JsonRow, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
-            AnyPool::Rusqlite(connection) => connection.query_row(sql, params).await,
+            AnyPool::Rusqlite(pool) => pool.query_row(sql, params).await,
             #[cfg(feature = "tokio-postgres")]
-            AnyPool::TokioPostgres(connection) => connection.query_row(sql, params).await,
+            AnyPool::TokioPostgres(pool) => pool.query_row(sql, params).await,
         }
     }
 
     async fn query_value(&self, sql: &str, params: &[JsonValue]) -> Result<JsonValue, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
-            AnyPool::Rusqlite(connection) => connection.query_value(sql, params).await,
+            AnyPool::Rusqlite(pool) => pool.query_value(sql, params).await,
             #[cfg(feature = "tokio-postgres")]
-            AnyPool::TokioPostgres(connection) => connection.query_value(sql, params).await,
+            AnyPool::TokioPostgres(pool) => pool.query_value(sql, params).await,
         }
     }
 
     async fn query_string(&self, sql: &str, params: &[JsonValue]) -> Result<String, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
-            AnyPool::Rusqlite(connection) => connection.query_string(sql, params).await,
+            AnyPool::Rusqlite(pool) => pool.query_string(sql, params).await,
             #[cfg(feature = "tokio-postgres")]
-            AnyPool::TokioPostgres(connection) => connection.query_string(sql, params).await,
+            AnyPool::TokioPostgres(pool) => pool.query_string(sql, params).await,
         }
     }
 
     async fn query_u64(&self, sql: &str, params: &[JsonValue]) -> Result<u64, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
-            AnyPool::Rusqlite(connection) => connection.query_u64(sql, params).await,
+            AnyPool::Rusqlite(pool) => pool.query_u64(sql, params).await,
             #[cfg(feature = "tokio-postgres")]
-            AnyPool::TokioPostgres(connection) => connection.query_u64(sql, params).await,
+            AnyPool::TokioPostgres(pool) => pool.query_u64(sql, params).await,
         }
     }
 
     async fn query_i64(&self, sql: &str, params: &[JsonValue]) -> Result<i64, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
-            AnyPool::Rusqlite(connection) => connection.query_i64(sql, params).await,
+            AnyPool::Rusqlite(pool) => pool.query_i64(sql, params).await,
             #[cfg(feature = "tokio-postgres")]
-            AnyPool::TokioPostgres(connection) => connection.query_i64(sql, params).await,
+            AnyPool::TokioPostgres(pool) => pool.query_i64(sql, params).await,
         }
     }
 
     async fn query_f64(&self, sql: &str, params: &[JsonValue]) -> Result<f64, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
-            AnyPool::Rusqlite(connection) => connection.query_f64(sql, params).await,
+            AnyPool::Rusqlite(pool) => pool.query_f64(sql, params).await,
             #[cfg(feature = "tokio-postgres")]
-            AnyPool::TokioPostgres(connection) => connection.query_f64(sql, params).await,
+            AnyPool::TokioPostgres(pool) => pool.query_f64(sql, params).await,
         }
     }
 }
@@ -163,8 +163,8 @@ mod tests {
     }
 
     async fn mixed_column_query(url: &str) {
-        let conn = AnyPool::connect(url).await.unwrap();
-        conn.execute_batch(
+        let pool = AnyPool::connect(url).await.unwrap();
+        pool.execute_batch(
             "DROP TABLE IF EXISTS test_any_table_mixed;\
              CREATE TABLE test_any_table_mixed (\
                  text_value TEXT,\
@@ -181,7 +181,7 @@ mod tests {
         )
         .await
         .unwrap();
-        conn.execute(
+        pool.execute(
             r#"INSERT INTO test_any_table_mixed
                (
                  text_value,
@@ -214,7 +214,7 @@ mod tests {
 
         let select_sql = "SELECT text_value FROM test_any_table_mixed WHERE text_value = $1";
         let params = [json!("foo")];
-        let value = conn
+        let value = pool
             .query_value(select_sql, &params)
             .await
             .unwrap()
@@ -250,7 +250,7 @@ mod tests {
             json!(999_999),
         ];
 
-        let row = conn.query_row(select_sql, &params).await.unwrap();
+        let row = pool.query_row(select_sql, &params).await.unwrap();
         assert_eq!(
             json!(row),
             json!({
@@ -267,7 +267,7 @@ mod tests {
             })
         );
 
-        let rows = conn.query(select_sql, &params).await.unwrap();
+        let rows = pool.query(select_sql, &params).await.unwrap();
         assert_eq!(
             json!(rows),
             json!([{

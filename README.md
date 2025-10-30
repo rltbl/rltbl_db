@@ -29,13 +29,13 @@ cargo add rltbl_db --git 'https://github.com/rltbl/rltbl_db'
 use rltbl_db::{any::AnyPool, core::{DbError, DbQuery}};
 
 async fn example() -> Result<String, DbError> {
-    let conn = AnyPool::connect("test.db").await?;
-    conn.execute_batch(
+    let pool = AnyPool::connect("test.db").await?;
+    pool.execute_batch(
         "DROP TABLE IF EXISTS test;\
          CREATE TABLE test ( value TEXT );\
          INSERT INTO test VALUES ('foo');",
     ).await?;
-    let value = conn.query_string("SELECT value FROM test;", &[]).await?;
+    let value = pool.query_string("SELECT value FROM test;", &[]).await?;
     Ok(value)
 }
 ```
