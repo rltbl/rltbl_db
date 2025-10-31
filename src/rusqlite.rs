@@ -1,6 +1,6 @@
 //! rusqlite implementation for rltbl_db.
 
-use crate::core::{DbError, DbQuery, JsonRow, JsonValue};
+use crate::core::{DbError, DbQuery, IntoParams, JsonRow, JsonValue, Params};
 
 use deadpool_sqlite::{
     Config, Pool, Runtime,
@@ -141,6 +141,15 @@ impl DbQuery for RusqlitePool {
     /// Implements [DbQuery::execute()] for SQLite.
     async fn execute(&self, sql: &str, params: &[JsonValue]) -> Result<(), DbError> {
         self.query(sql, params).await?;
+        Ok(())
+    }
+
+    /// Implements [DbQuery::execute()] for SQLite.
+    async fn execute_new(&self, sql: &str, params: impl IntoParams + Send) -> Result<(), DbError> {
+        match params.into_params()? {
+            Params::None => self.query(sql, &[]).await?,
+            _ => todo!(),
+        };
         Ok(())
     }
 
@@ -550,5 +559,16 @@ mod tests {
         // So, perhaps, this is tu quoque an argument that the behaviour below is acceptable for
         // sqlite.
         assert_eq!(json!(rows), json!([{"MAX(bool_value)": 1}]));
+    }
+
+    #[tokio::test]
+    async fn test_new_functions() {
+        let pool = RusqlitePool::connect("output/test.db").await.unwrap();
+        pool.execute_new("DROP TABLE IF EXISTS foo", ())
+            .await
+            .unwrap();
+        pool.execute_new("CREATE TABLE foo (bar INT)", ())
+            .await
+            .unwrap();
     }
 }

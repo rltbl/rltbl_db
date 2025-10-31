@@ -36,12 +36,50 @@ impl std::fmt::Display for DbError {
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum Params {
+    None,
+    Positional(Vec<ParamValue>),
+    Named(Vec<(String, ParamValue)>),
+}
+
+#[derive(Debug, Clone)]
+pub enum ParamValue {
+    Null,
+    Integer(i64),
+    Real(f64),
+    Text(String),
+    Blob(Vec<u8>),
+}
+
+pub trait IntoParams {
+    fn into_params(self) -> Result<Params, DbError>;
+
+    fn len(self) -> usize;
+}
+
+impl IntoParams for () {
+    fn into_params(self) -> Result<Params, DbError> {
+        Ok(Params::None)
+    }
+
+    fn len(self) -> usize {
+        0
+    }
+}
+
 pub trait DbQuery {
     /// Execute a SQL command, without a return value.
     fn execute(
         &self,
         sql: &str,
         params: &[JsonValue],
+    ) -> impl Future<Output = Result<(), DbError>> + Send;
+    /// Execute a SQL command, without a return value.
+    fn execute_new(
+        &self,
+        sql: &str,
+        params: impl IntoParams + Send,
     ) -> impl Future<Output = Result<(), DbError>> + Send;
     /// Sequentially execute a semicolon-delimited list of statements, without parameters.
     fn execute_batch(&self, sql: &str) -> impl Future<Output = Result<(), DbError>> + Send;

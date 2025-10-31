@@ -1,6 +1,6 @@
 //! tokio-postgres implementation for rltbl_db.
 
-use crate::core::{DbError, DbQuery, JsonRow, JsonValue};
+use crate::core::{DbError, DbQuery, IntoParams, JsonRow, JsonValue, Params};
 
 use deadpool_postgres::{Config, Pool, Runtime};
 use rust_decimal::Decimal;
@@ -119,6 +119,15 @@ impl DbQuery for TokioPostgresPool {
     /// Implements [DbQuery::execute()] for PostgreSQL.
     async fn execute(&self, sql: &str, params: &[JsonValue]) -> Result<(), DbError> {
         self.query(sql, params).await?;
+        Ok(())
+    }
+
+    /// Implements [DbQuery::execute()] for PostgreSQL.
+    async fn execute_new(&self, sql: &str, params: impl IntoParams + Send) -> Result<(), DbError> {
+        match params.into_params()? {
+            Params::None => self.query(sql, &[]).await?,
+            _ => todo!(),
+        };
         Ok(())
     }
 
@@ -689,5 +698,18 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(json!(rows), json!([{"int_value_cast": "1"}]));
+    }
+
+    #[tokio::test]
+    async fn test_new_functions() {
+        let pool = TokioPostgresPool::connect("postgresql:///rltbl_db")
+            .await
+            .unwrap();
+        pool.execute_new("DROP TABLE IF EXISTS foo", ())
+            .await
+            .unwrap();
+        pool.execute_new("CREATE TABLE foo (bar INT)", ())
+            .await
+            .unwrap();
     }
 }

@@ -14,7 +14,7 @@
 ///     Ok(value)
 /// }
 /// ```
-use crate::core::{DbError, DbKind, DbQuery, JsonRow, JsonValue};
+use crate::core::{DbError, DbKind, DbQuery, IntoParams, JsonRow, JsonValue};
 
 #[cfg(feature = "rusqlite")]
 use crate::rusqlite::RusqlitePool;
@@ -72,6 +72,15 @@ impl DbQuery for AnyPool {
             AnyPool::Rusqlite(pool) => pool.execute(sql, params).await,
             #[cfg(feature = "tokio-postgres")]
             AnyPool::TokioPostgres(pool) => pool.execute(sql, params).await,
+        }
+    }
+
+    async fn execute_new(&self, sql: &str, params: impl IntoParams + Send) -> Result<(), DbError> {
+        match self {
+            #[cfg(feature = "rusqlite")]
+            AnyPool::Rusqlite(pool) => pool.execute_new(sql, params).await,
+            #[cfg(feature = "tokio-postgres")]
+            AnyPool::TokioPostgres(pool) => pool.execute_new(sql, params).await,
         }
     }
 
@@ -283,5 +292,23 @@ mod tests {
                 "alt_numeric_value": JsonValue::Null,
             }])
         );
+    }
+
+    #[tokio::test]
+    async fn test_new_functions() {
+        #[cfg(feature = "rusqlite")]
+        new_functions("test_any_sqlite.db").await;
+        #[cfg(feature = "tokio-postgres")]
+        new_functions("postgresql:///rltbl_db").await;
+    }
+
+    async fn new_functions(url: &str) {
+        let pool = AnyPool::connect(url).await.unwrap();
+        pool.execute_new("DROP TABLE IF EXISTS foo", ())
+            .await
+            .unwrap();
+        pool.execute_new("CREATE TABLE foo (bar INT)", ())
+            .await
+            .unwrap();
     }
 }
