@@ -256,6 +256,41 @@ impl DbQuery for RusqlitePool {
             None => Err(DbError::DataError(format!("Not an float: {value}"))),
         }
     }
+
+    async fn insert(&self, table: &str, rows: &[&JsonRow]) -> Result<Vec<JsonRow>, DbError> {
+        let columns = self
+            .query("SELECT name FROM PRAGMA_TABLE_INFO($1)", &[json!(table)])
+            .await?;
+        let columns: Vec<String> = columns
+            .iter()
+            .map(|row| row.get("name").unwrap().as_str().unwrap().to_string())
+            .collect();
+        let mut lines: Vec<String> = Vec::new();
+        let mut params: Vec<JsonValue> = Vec::new();
+        let mut i = 0;
+        for row in rows {
+            let mut cells: Vec<String> = Vec::new();
+            for column in &columns {
+                if row.contains_key(column) {
+                    i += 1;
+                    cells.push(format!("${i}"));
+                    params.push(row.get(column).unwrap().clone());
+                } else {
+                    cells.push(String::from("NULL"))
+                }
+            }
+            let line = format!("({})", cells.join(", "));
+            lines.push(line);
+        }
+        // WARN: This allows SQL injection.
+        let sql = format!(
+            r#"INSERT INTO "{table}" VALUES
+            {}
+            RETURNING *;"#,
+            lines.join(",\n")
+        );
+        self.query(&sql, &params).await
+    }
 }
 
 #[cfg(test)]
@@ -550,5 +585,50 @@ mod tests {
         // So, perhaps, this is tu quoque an argument that the behaviour below is acceptable for
         // sqlite.
         assert_eq!(json!(rows), json!([{"MAX(bool_value)": 1}]));
+    }
+
+    #[tokio::test]
+    async fn test_insert() {
+        let pool = RusqlitePool::connect(":memory:").await.unwrap();
+        pool.execute_batch(
+            "DROP TABLE IF EXISTS test_insert;\
+             CREATE TABLE test_insert (\
+                 text_value TEXT,\
+                 alt_text_value TEXT,\
+                 float_value FLOAT8,\
+                 int_value INT8,\
+                 bool_value BOOL\
+             )",
+        )
+        .await
+        .unwrap();
+        let rows = pool
+            .insert(
+                "test_insert",
+                &[
+                    &json!({"text_value": "TEXT"}).as_object().unwrap(),
+                    &json!({"int_value": 1, "bool_value": true})
+                        .as_object()
+                        .unwrap(),
+                ],
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            json!(rows),
+            json!([{
+                "text_value": "TEXT",
+                "alt_text_value": JsonValue::Null,
+                "float_value": JsonValue::Null,
+                "int_value": JsonValue::Null,
+                "bool_value": JsonValue::Null,
+            },{
+                "text_value": JsonValue::Null,
+                "alt_text_value": JsonValue::Null,
+                "float_value": JsonValue::Null,
+                "int_value": 1,
+                "bool_value": true,
+            }])
+        );
     }
 }

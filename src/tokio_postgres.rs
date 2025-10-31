@@ -338,6 +338,12 @@ impl DbQuery for TokioPostgresPool {
             None => Err(DbError::DataError(format!("Not a f64: {value}"))),
         }
     }
+
+    async fn insert(&self, table: &str, rows: &[&JsonRow]) -> Result<Vec<JsonRow>, DbError> {
+        let _ = table;
+        let _ = rows;
+        todo!();
+    }
 }
 
 #[cfg(test)]

@@ -87,4 +87,11 @@ pub trait DbQuery {
         sql: &str,
         params: &[JsonValue],
     ) -> impl Future<Output = Result<f64, DbError>> + Send;
+    /// Insert JSON rows into a table, returning the inserted rows.
+    /// If a row does not have a key for a column, we treat it as NULL.
+    fn insert(
+        &self,
+        table: &str,
+        rows: &[&JsonRow],
+    ) -> impl Future<Output = Result<Vec<JsonRow>, DbError>>;
 }

@@ -146,6 +146,15 @@ impl DbQuery for AnyPool {
             AnyPool::TokioPostgres(pool) => pool.query_f64(sql, params).await,
         }
     }
+
+    async fn insert(&self, table: &str, rows: &[&JsonRow]) -> Result<Vec<JsonRow>, DbError> {
+        match self {
+            #[cfg(feature = "rusqlite")]
+            AnyPool::Rusqlite(pool) => pool.insert(table, rows).await,
+            #[cfg(feature = "tokio-postgres")]
+            AnyPool::TokioPostgres(_) => todo!(),
+        }
+    }
 }
 
 #[cfg(test)]
