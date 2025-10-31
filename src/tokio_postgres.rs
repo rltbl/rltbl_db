@@ -148,8 +148,9 @@ impl DbQuery for TokioPostgresPool {
     async fn query_new(
         &self,
         sql: &str,
-        params: impl IntoParams + Send,
+        into_params: impl IntoParams + Send,
     ) -> Result<Vec<JsonRow>, DbError> {
+        let into_params = into_params.into_params()?;
         let client = self
             .pool
             .get()
@@ -164,24 +165,80 @@ impl DbQuery for TokioPostgresPool {
             .params()
             .to_vec();
 
-        let query_params = match params.into_params()? {
-            Params::None => vec![],
-            Params::Positional(params) => {
-                let mut query_params = vec![];
-                for (i, param) in params.iter().enumerate() {
-                    match param {
-                        ParamValue::Text(text) => todo!(),
-                        ParamValue::Integer(num) => todo!(),
-                        ParamValue::Real(num) => todo!(),
-                        ParamValue::Null => todo!(),
+        let mut params: Vec<Box<dyn ToSql + Sync + Send>> = Vec::new();
+
+        match into_params {
+            Params::None => (),
+            Params::Positional(plist) => {
+                for (i, param) in plist.iter().enumerate() {
+                    let pg_type = &param_pg_types[i];
+                    match pg_type {
+                        &Type::TEXT | &Type::VARCHAR => {
+                            match param {
+                                ParamValue::Null => params.push(Box::new(None::<String>)),
+                                ParamValue::Text(text) => params.push(Box::new(text.to_string())),
+                                _ => panic!("TODO: Return a proper error here"),
+                            };
+                        }
+                        &Type::INT2 => {
+                            match param {
+                                ParamValue::Null => params.push(Box::new(None::<i16>)),
+                                ParamValue::Integer(num) => params.push(Box::new(*num)),
+                                _ => panic!("TODO: Return a proper error here"),
+                            };
+                        }
+                        &Type::INT4 => {
+                            match param {
+                                ParamValue::Null => params.push(Box::new(None::<i32>)),
+                                ParamValue::Integer(num) => params.push(Box::new(*num)),
+                                _ => panic!("TODO: Return a proper error here"),
+                            };
+                        }
+                        &Type::INT8 => {
+                            match param {
+                                ParamValue::Null => params.push(Box::new(None::<i64>)),
+                                ParamValue::Integer(num) => params.push(Box::new(*num)),
+                                _ => panic!("TODO: Return a proper error here"),
+                            };
+                        }
+                        &Type::FLOAT4 => {
+                            match param {
+                                ParamValue::Null => params.push(Box::new(None::<f32>)),
+                                ParamValue::Integer(num) => params.push(Box::new(*num)),
+                                _ => panic!("TODO: Return a proper error here"),
+                            };
+                        }
+                        &Type::FLOAT8 => {
+                            match param {
+                                ParamValue::Null => params.push(Box::new(None::<f64>)),
+                                ParamValue::Integer(num) => params.push(Box::new(*num)),
+                                _ => panic!("TODO: Return a proper error here"),
+                            };
+                        }
+                        &Type::BOOL => {
+                            match param {
+                                ParamValue::Null => params.push(Box::new(None::<bool>)),
+                                _ => todo!(),
+                            };
+                        }
+                        &Type::NUMERIC => {
+                            match param {
+                                ParamValue::Null => params.push(Box::new(None::<Decimal>)),
+                                _ => todo!(),
+                            };
+                        }
+                        _ => unimplemented!(),
                     };
                 }
-                query_params
             }
             Params::Named(_) => todo!(),
         };
 
         // Finally, execute the query and return the results:
+        let query_params: Vec<&(dyn ToSql + Sync)> = params
+            .iter()
+            .map(|p| p.as_ref() as &(dyn ToSql + Sync))
+            .collect();
         let rows = client
             .query(sql, &query_params)
             .await

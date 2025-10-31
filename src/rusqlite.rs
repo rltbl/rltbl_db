@@ -38,10 +38,36 @@ fn query_prepared_new(
         Params::Positional(params) => {
             for (i, param) in params.iter().enumerate() {
                 match param {
-                    ParamValue::Text(text) => todo!(),
-                    ParamValue::Integer(num) => todo!(),
-                    ParamValue::Real(num) => todo!(),
-                    ParamValue::Null => todo!(),
+                    ParamValue::Text(text) => {
+                        stmt.raw_bind_parameter(i + 1, text).map_err(|err| {
+                            DbError::InputError(format!(
+                                "Error binding parameter '{param:?}': {err}"
+                            ))
+                        })?;
+                    }
+                    ParamValue::Integer(num) => {
+                        stmt.raw_bind_parameter(i + 1, num.to_string())
+                            .map_err(|err| {
+                                DbError::InputError(format!(
+                                    "Error binding parameter '{param:?}': {err}"
+                                ))
+                            })?;
+                    }
+                    ParamValue::Real(num) => {
+                        stmt.raw_bind_parameter(i + 1, num.to_string())
+                            .map_err(|err| {
+                                DbError::InputError(format!(
+                                    "Error binding parameter '{param:?}': {err}"
+                                ))
+                            })?;
+                    }
+                    ParamValue::Null => {
+                        stmt.raw_bind_parameter(i + 1, &Null).map_err(|err| {
+                            DbError::InputError(format!(
+                                "Error binding parameter '{param:?}': {err}"
+                            ))
+                        })?;
+                    }
                 };
             }
         }
@@ -528,7 +554,13 @@ mod tests {
             .to_string();
         assert_eq!("foo", value);
 
-        let select_sql = r#"SELECT text_value, alt_text_value, float_value, int_value, bool_value, numeric_value
+        let select_sql = r#"SELECT
+                              text_value,
+                              alt_text_value,
+                              float_value,
+                              int_value,
+                              bool_value,
+                              numeric_value
                             FROM test_table_mixed
                             WHERE text_value = $1
                               AND alt_text_value IS $2
