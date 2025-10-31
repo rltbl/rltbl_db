@@ -54,18 +54,17 @@ impl AnyPool {
             }
         }
     }
-
-    pub fn kind(&self) -> DbKind {
-        match self {
-            #[cfg(feature = "rusqlite")]
-            AnyPool::Rusqlite(_) => DbKind::SQLite,
-            #[cfg(feature = "tokio-postgres")]
-            AnyPool::TokioPostgres(_) => DbKind::PostgreSQL,
-        }
-    }
 }
 
 impl DbQuery for AnyPool {
+    fn kind(&self) -> DbKind {
+        match self {
+            #[cfg(feature = "rusqlite")]
+            AnyPool::Rusqlite(pool) => pool.kind(),
+            #[cfg(feature = "tokio-postgres")]
+            AnyPool::TokioPostgres(pool) => pool.kind(),
+        }
+    }
     async fn execute(&self, sql: &str, params: &[JsonValue]) -> Result<(), DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
