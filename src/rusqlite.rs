@@ -1,6 +1,6 @@
 //! rusqlite implementation for rltbl_db.
 
-use crate::core::{DbError, DbQuery, IntoParams, JsonRow, JsonValue, Params};
+use crate::core::{DbError, DbQuery, IntoParams, JsonRow, JsonValue, ParamValue, Params};
 
 use deadpool_sqlite::{
     Config, Pool, Runtime,
@@ -27,6 +27,84 @@ impl RusqlitePool {
             .map_err(|err| DbError::ConnectError(format!("Error creating pool: {err}")))?;
         Ok(Self { pool })
     }
+}
+
+fn query_prepared_new(
+    stmt: &mut Statement<'_>,
+    params: impl IntoParams + Send,
+) -> Result<Vec<JsonRow>, DbError> {
+    match params.into_params()? {
+        Params::None => (),
+        Params::Positional(params) => {
+            for (i, param) in params.iter().enumerate() {
+                match param {
+                    ParamValue::Text(text) => todo!(),
+                    ParamValue::Integer(num) => todo!(),
+                    ParamValue::Real(num) => todo!(),
+                    ParamValue::Null => todo!(),
+                };
+            }
+        }
+        Params::Named(_) => todo!(),
+    };
+
+    // Define the struct that we will use to represent information about a given column:
+    struct ColumnConfig {
+        name: String,
+        datatype: Option<String>,
+    }
+
+    // Collect the column information from the prepared statement:
+    let columns = stmt
+        .columns()
+        .iter()
+        .map(|col| {
+            let name = col.name().to_string();
+            let datatype = col.decl_type().and_then(|s| Some(s.to_string()));
+            ColumnConfig { name, datatype }
+        })
+        .collect::<Vec<_>>();
+
+    // Execute the statement and send back the results
+    let results = stmt
+        .raw_query()
+        .map(|row| {
+            let mut json_row = JsonRow::new();
+            for column in &columns {
+                let column_name = &column.name;
+                let column_type = &column.datatype;
+                let value = row.get_ref(column_name.as_str())?;
+                let value = match value {
+                    ValueRef::Null => JsonValue::Null,
+                    ValueRef::Integer(value) => match column_type {
+                        Some(ctype) if ctype.to_lowercase() == "bool" => {
+                            JsonValue::Bool(value != 0)
+                        }
+                        // The remaining cases are (a) the column's datatype is integer, and
+                        // (b) the column is an expression. In the latter case it doesn't seem
+                        // possible to get the datatype of the expression from the metadata.
+                        // So the only thing to do here is just to convert the value
+                        // to JSON using the default method, and since we already know that it
+                        // is an integer, the result of the conversion will be a JSON number.
+                        _ => JsonValue::from(value),
+                    },
+                    ValueRef::Real(value) => JsonValue::from(value),
+                    ValueRef::Text(value) | ValueRef::Blob(value) => match column_type {
+                        Some(ctype) if ctype.to_lowercase() == "numeric" => {
+                            json!(value)
+                        }
+                        _ => {
+                            let value = std::str::from_utf8(value).unwrap_or_default();
+                            JsonValue::String(value.to_string())
+                        }
+                    },
+                };
+                json_row.insert(column_name.to_string(), value);
+            }
+            Ok(json_row)
+        })
+        .collect::<Vec<_>>();
+    results.map_err(|err| DbError::DatabaseError(err.to_string()))
 }
 
 /// Query the database using the given prepared statement and json parameters.
@@ -147,7 +225,7 @@ impl DbQuery for RusqlitePool {
     /// Implements [DbQuery::execute()] for SQLite.
     async fn execute_new(&self, sql: &str, params: impl IntoParams + Send) -> Result<(), DbError> {
         match params.into_params()? {
-            Params::None => self.query(sql, &[]).await?,
+            Params::None => self.query_new(sql, ()).await?,
             _ => todo!(),
         };
         Ok(())
@@ -173,6 +251,34 @@ impl DbQuery for RusqlitePool {
             Err(err) => Err(DbError::DatabaseError(format!("Error during query: {err}"))),
             Ok(_) => Ok(()),
         }
+    }
+
+    /// Implements [DbQuery::query()] for SQLite.
+    async fn query_new(
+        &self,
+        sql: &str,
+        params: impl IntoParams + Send + 'static,
+    ) -> Result<Vec<JsonRow>, DbError> {
+        let conn = self
+            .pool
+            .get()
+            .await
+            .map_err(|err| DbError::ConnectError(format!("Error getting pool: {err}")))?;
+        let sql = sql.to_string();
+        let rows = conn
+            .interact(move |conn| {
+                let mut stmt = conn.prepare(&sql).map_err(|err| {
+                    DbError::DatabaseError(format!("Error preparing statement: {err}"))
+                })?;
+                let rows = query_prepared_new(&mut stmt, params).map_err(|err| {
+                    DbError::DatabaseError(format!("Error querying prepared statement: {err}"))
+                })?;
+                Ok::<Vec<JsonRow>, DbError>(rows)
+            })
+            .await
+            .map_err(|err| DbError::DatabaseError(err.to_string()))?
+            .map_err(|err| DbError::DatabaseError(err.to_string()))?;
+        Ok(rows)
     }
 
     /// Implements [DbQuery::query()] for SQLite.

@@ -37,34 +37,77 @@ impl std::fmt::Display for DbError {
 }
 
 #[derive(Debug, Clone)]
+pub enum ParamValue {
+    Null,
+    Integer(i64),
+    Real(f64),
+    Text(String),
+}
+
+#[derive(Debug, Clone)]
 pub enum Params {
     None,
     Positional(Vec<ParamValue>),
     Named(Vec<(String, ParamValue)>),
 }
 
-#[derive(Debug, Clone)]
-pub enum ParamValue {
-    Null,
-    Integer(i64),
-    Real(f64),
-    Text(String),
-    Blob(Vec<u8>),
+pub trait IntoParamValue {
+    fn into_param_value(self) -> Result<ParamValue, DbError>;
+}
+
+impl<T> IntoParamValue for T
+where
+    T: TryInto<ParamValue>,
+    T::Error: Into<DbError>,
+{
+    fn into_param_value(self) -> Result<ParamValue, DbError> {
+        self.try_into()
+            .map_err(|e| DbError::DataError(e.into().to_string()))
+    }
+}
+
+impl IntoParamValue for Result<ParamValue, DbError> {
+    fn into_param_value(self) -> Result<ParamValue, DbError> {
+        self
+    }
 }
 
 pub trait IntoParams {
+    /// TODO: Add docstring here.
     fn into_params(self) -> Result<Params, DbError>;
-
-    fn len(self) -> usize;
 }
 
 impl IntoParams for () {
     fn into_params(self) -> Result<Params, DbError> {
         Ok(Params::None)
     }
+}
 
-    fn len(self) -> usize {
-        0
+impl IntoParams for Params {
+    fn into_params(self) -> Result<Params, DbError> {
+        Ok(self)
+    }
+}
+
+impl IntoParams for &Params {
+    fn into_params(self) -> Result<Params, DbError> {
+        Ok(self.clone())
+    }
+}
+
+impl<T: IntoParamValue, const N: usize> IntoParams for [T; N] {
+    fn into_params(self) -> Result<Params, DbError> {
+        self.into_iter().collect::<Vec<_>>().into_params()
+    }
+}
+
+impl<T: IntoParamValue> IntoParams for Vec<T> {
+    fn into_params(self) -> Result<Params, DbError> {
+        let values = self
+            .into_iter()
+            .map(|i| i.into_param_value())
+            .collect::<Result<Vec<_>, DbError>>()?;
+        Ok(Params::Positional(values))
     }
 }
 
@@ -88,6 +131,12 @@ pub trait DbQuery {
         &self,
         sql: &str,
         params: &[JsonValue],
+    ) -> impl Future<Output = Result<Vec<JsonRow>, DbError>> + Send;
+    /// Execute a SQL command, returning a vector of JSON rows.
+    fn query_new(
+        &self,
+        sql: &str,
+        params: impl IntoParams + Send + 'static,
     ) -> impl Future<Output = Result<Vec<JsonRow>, DbError>> + Send;
     /// Execute a SQL command, returning a single JSON row.
     fn query_row(

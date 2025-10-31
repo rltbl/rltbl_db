@@ -102,6 +102,19 @@ impl DbQuery for AnyPool {
         }
     }
 
+    async fn query_new(
+        &self,
+        sql: &str,
+        params: impl IntoParams + Send + 'static,
+    ) -> Result<Vec<JsonRow>, DbError> {
+        match self {
+            #[cfg(feature = "rusqlite")]
+            AnyPool::Rusqlite(pool) => pool.query_new(sql, params).await,
+            #[cfg(feature = "tokio-postgres")]
+            AnyPool::TokioPostgres(pool) => pool.query_new(sql, params).await,
+        }
+    }
+
     async fn query_row(&self, sql: &str, params: &[JsonValue]) -> Result<JsonRow, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]

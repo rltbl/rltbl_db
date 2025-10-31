@@ -1,6 +1,6 @@
 //! tokio-postgres implementation for rltbl_db.
 
-use crate::core::{DbError, DbQuery, IntoParams, JsonRow, JsonValue, Params};
+use crate::core::{DbError, DbQuery, IntoParams, JsonRow, JsonValue, ParamValue, Params};
 
 use deadpool_postgres::{Config, Pool, Runtime};
 use rust_decimal::Decimal;
@@ -125,7 +125,7 @@ impl DbQuery for TokioPostgresPool {
     /// Implements [DbQuery::execute()] for PostgreSQL.
     async fn execute_new(&self, sql: &str, params: impl IntoParams + Send) -> Result<(), DbError> {
         match params.into_params()? {
-            Params::None => self.query(sql, &[]).await?,
+            Params::None => self.query_new(sql, ()).await?,
             _ => todo!(),
         };
         Ok(())
@@ -143,6 +143,59 @@ impl DbQuery for TokioPostgresPool {
             .await
             .map_err(|err| DbError::DatabaseError(format!("Error in query(): {err}")))?;
         Ok(())
+    }
+
+    async fn query_new(
+        &self,
+        sql: &str,
+        params: impl IntoParams + Send,
+    ) -> Result<Vec<JsonRow>, DbError> {
+        let client = self
+            .pool
+            .get()
+            .await
+            .map_err(|err| DbError::ConnectError(format!("Unable to get pool: {err}")))?;
+
+        // The expected types of all of the parameters as reported by the database via prepare():
+        let param_pg_types = client
+            .prepare(sql)
+            .await
+            .map_err(|err| DbError::DatabaseError(format!("Error preparing statement: {err}")))?
+            .params()
+            .to_vec();
+
+        let query_params = match params.into_params()? {
+            Params::None => vec![],
+            Params::Positional(params) => {
+                let mut query_params = vec![];
+                for (i, param) in params.iter().enumerate() {
+                    match param {
+                        ParamValue::Text(text) => todo!(),
+                        ParamValue::Integer(num) => todo!(),
+                        ParamValue::Real(num) => todo!(),
+                        ParamValue::Null => todo!(),
+                    };
+                }
+                query_params
+            }
+            Params::Named(_) => todo!(),
+        };
+
+        // Finally, execute the query and return the results:
+        let rows = client
+            .query(sql, &query_params)
+            .await
+            .map_err(|err| DbError::DatabaseError(format!("Error in query(): {err}")))?;
+        let mut json_rows = vec![];
+        for row in &rows {
+            let mut json_row = JsonRow::new();
+            let columns = row.columns();
+            for (i, column) in columns.iter().enumerate() {
+                json_row.insert(column.name().to_string(), extract_value(row, i)?);
+            }
+            json_rows.push(json_row);
+        }
+        Ok(json_rows)
     }
 
     /// Implements [DbQuery::query()] for PostgreSQL.
