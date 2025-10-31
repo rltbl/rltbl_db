@@ -123,10 +123,15 @@ impl DbQuery for TokioPostgresPool {
     }
 
     /// Implements [DbQuery::execute()] for PostgreSQL.
-    async fn execute_new(&self, sql: &str, params: impl IntoParams + Send) -> Result<(), DbError> {
+    async fn execute_new(
+        &self,
+        sql: &str,
+        params: impl IntoParams + Send + Clone + 'static,
+    ) -> Result<(), DbError> {
+        let params2 = params.clone();
         match params.into_params()? {
             Params::None => self.query_new(sql, ()).await?,
-            _ => todo!(),
+            _ => self.query_new(sql, params2).await?,
         };
         Ok(())
     }
@@ -815,11 +820,32 @@ mod tests {
         let pool = TokioPostgresPool::connect("postgresql:///rltbl_db")
             .await
             .unwrap();
-        pool.execute_new("DROP TABLE IF EXISTS foo", ())
+        pool.execute_new("DROP TABLE IF EXISTS foo_pg", ())
             .await
             .unwrap();
-        pool.execute_new("CREATE TABLE foo (bar INT)", ())
+        pool.execute_new("CREATE TABLE foo_pg (bar TEXT, jar TEXT)", ())
             .await
             .unwrap();
+        pool.execute_new("INSERT INTO foo_pg (bar) VALUES ($1)", &["array_ref"])
+            .await
+            .unwrap();
+        pool.execute_new("INSERT INTO foo_pg (bar) VALUES ($1)", ["array"])
+            .await
+            .unwrap();
+        pool.execute_new("INSERT INTO foo_pg (bar) VALUES ($1)", vec!["vector"])
+            .await
+            .unwrap();
+        pool.execute_new(
+            "INSERT INTO foo_pg (bar, jar) VALUES ($1, $2)",
+            &["array_ref_1", "array_ref_2"],
+        )
+        .await
+        .unwrap();
+        pool.execute_new(
+            "INSERT INTO foo_pg (bar, jar) VALUES ($1, $2)",
+            ["array_1", "array_2"],
+        )
+        .await
+        .unwrap();
     }
 }

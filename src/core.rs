@@ -44,6 +44,14 @@ pub enum ParamValue {
     Text(String),
 }
 
+impl TryFrom<&str> for ParamValue {
+    type Error = DbError;
+
+    fn try_from(item: &str) -> Result<Self, DbError> {
+        Ok(ParamValue::Text(item.to_string()))
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Params {
     None,
@@ -101,6 +109,12 @@ impl<T: IntoParamValue, const N: usize> IntoParams for [T; N] {
     }
 }
 
+impl<T: IntoParamValue + Clone, const N: usize> IntoParams for &[T; N] {
+    fn into_params(self) -> Result<Params, DbError> {
+        self.iter().cloned().collect::<Vec<_>>().into_params()
+    }
+}
+
 impl<T: IntoParamValue> IntoParams for Vec<T> {
     fn into_params(self) -> Result<Params, DbError> {
         let values = self
@@ -122,7 +136,7 @@ pub trait DbQuery {
     fn execute_new(
         &self,
         sql: &str,
-        params: impl IntoParams + Send,
+        params: impl IntoParams + Send + Clone + 'static,
     ) -> impl Future<Output = Result<(), DbError>> + Send;
     /// Sequentially execute a semicolon-delimited list of statements, without parameters.
     fn execute_batch(&self, sql: &str) -> impl Future<Output = Result<(), DbError>> + Send;

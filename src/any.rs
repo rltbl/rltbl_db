@@ -75,7 +75,11 @@ impl DbQuery for AnyPool {
         }
     }
 
-    async fn execute_new(&self, sql: &str, params: impl IntoParams + Send) -> Result<(), DbError> {
+    async fn execute_new(
+        &self,
+        sql: &str,
+        params: impl IntoParams + Send + Clone + 'static,
+    ) -> Result<(), DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.execute_new(sql, params).await,
@@ -317,11 +321,32 @@ mod tests {
 
     async fn new_functions(url: &str) {
         let pool = AnyPool::connect(url).await.unwrap();
-        pool.execute_new("DROP TABLE IF EXISTS foo", ())
+        pool.execute_new("DROP TABLE IF EXISTS foo_any", ())
             .await
             .unwrap();
-        pool.execute_new("CREATE TABLE foo (bar INT)", ())
+        pool.execute_new("CREATE TABLE foo_any (bar TEXT, jar TEXT)", ())
             .await
             .unwrap();
+        pool.execute_new("INSERT INTO foo_any (bar) VALUES ($1)", &["array_ref"])
+            .await
+            .unwrap();
+        pool.execute_new("INSERT INTO foo_any (bar) VALUES ($1)", ["array"])
+            .await
+            .unwrap();
+        pool.execute_new("INSERT INTO foo_any (bar) VALUES ($1)", vec!["vector"])
+            .await
+            .unwrap();
+        pool.execute_new(
+            "INSERT INTO foo_any (bar, jar) VALUES ($1, $2)",
+            &["array_ref_1", "array_ref_2"],
+        )
+        .await
+        .unwrap();
+        pool.execute_new(
+            "INSERT INTO foo_any (bar, jar) VALUES ($1, $2)",
+            ["array_1", "array_2"],
+        )
+        .await
+        .unwrap();
     }
 }
