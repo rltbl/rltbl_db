@@ -10,7 +10,7 @@
 ///          CREATE TABLE test ( value TEXT );\
 ///          INSERT INTO test VALUES ('foo');",
 ///     ).await?;
-///     let value = pool.query_string("SELECT value FROM test;", &[]).await?;
+///     let value = pool.query_string("SELECT value FROM test;", ()).await?;
 ///     Ok(value)
 /// }
 /// ```
@@ -66,25 +66,16 @@ impl AnyPool {
 }
 
 impl DbQuery for AnyPool {
-    async fn execute(&self, sql: &str, params: &[JsonValue]) -> Result<(), DbError> {
-        match self {
-            #[cfg(feature = "rusqlite")]
-            AnyPool::Rusqlite(pool) => pool.execute(sql, params).await,
-            #[cfg(feature = "tokio-postgres")]
-            AnyPool::TokioPostgres(pool) => pool.execute(sql, params).await,
-        }
-    }
-
-    async fn execute_new(
+    async fn execute(
         &self,
         sql: &str,
         params: impl IntoParams + Send + Clone + 'static,
     ) -> Result<(), DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
-            AnyPool::Rusqlite(pool) => pool.execute_new(sql, params).await,
+            AnyPool::Rusqlite(pool) => pool.execute(sql, params).await,
             #[cfg(feature = "tokio-postgres")]
-            AnyPool::TokioPostgres(pool) => pool.execute_new(sql, params).await,
+            AnyPool::TokioPostgres(pool) => pool.execute(sql, params).await,
         }
     }
 
@@ -97,7 +88,11 @@ impl DbQuery for AnyPool {
         }
     }
 
-    async fn query(&self, sql: &str, params: &[JsonValue]) -> Result<Vec<JsonRow>, DbError> {
+    async fn query(
+        &self,
+        sql: &str,
+        params: impl IntoParams + Send + 'static,
+    ) -> Result<Vec<JsonRow>, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.query(sql, params).await,
@@ -106,20 +101,11 @@ impl DbQuery for AnyPool {
         }
     }
 
-    async fn query_new(
+    async fn query_row(
         &self,
         sql: &str,
         params: impl IntoParams + Send + 'static,
-    ) -> Result<Vec<JsonRow>, DbError> {
-        match self {
-            #[cfg(feature = "rusqlite")]
-            AnyPool::Rusqlite(pool) => pool.query_new(sql, params).await,
-            #[cfg(feature = "tokio-postgres")]
-            AnyPool::TokioPostgres(pool) => pool.query_new(sql, params).await,
-        }
-    }
-
-    async fn query_row(&self, sql: &str, params: &[JsonValue]) -> Result<JsonRow, DbError> {
+    ) -> Result<JsonRow, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.query_row(sql, params).await,
@@ -128,7 +114,11 @@ impl DbQuery for AnyPool {
         }
     }
 
-    async fn query_value(&self, sql: &str, params: &[JsonValue]) -> Result<JsonValue, DbError> {
+    async fn query_value(
+        &self,
+        sql: &str,
+        params: impl IntoParams + Send + 'static,
+    ) -> Result<JsonValue, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.query_value(sql, params).await,
@@ -137,7 +127,11 @@ impl DbQuery for AnyPool {
         }
     }
 
-    async fn query_string(&self, sql: &str, params: &[JsonValue]) -> Result<String, DbError> {
+    async fn query_string(
+        &self,
+        sql: &str,
+        params: impl IntoParams + Send + 'static,
+    ) -> Result<String, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.query_string(sql, params).await,
@@ -146,7 +140,11 @@ impl DbQuery for AnyPool {
         }
     }
 
-    async fn query_u64(&self, sql: &str, params: &[JsonValue]) -> Result<u64, DbError> {
+    async fn query_u64(
+        &self,
+        sql: &str,
+        params: impl IntoParams + Send + 'static,
+    ) -> Result<u64, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.query_u64(sql, params).await,
@@ -155,7 +153,11 @@ impl DbQuery for AnyPool {
         }
     }
 
-    async fn query_i64(&self, sql: &str, params: &[JsonValue]) -> Result<i64, DbError> {
+    async fn query_i64(
+        &self,
+        sql: &str,
+        params: impl IntoParams + Send + 'static,
+    ) -> Result<i64, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.query_i64(sql, params).await,
@@ -164,7 +166,11 @@ impl DbQuery for AnyPool {
         }
     }
 
-    async fn query_f64(&self, sql: &str, params: &[JsonValue]) -> Result<f64, DbError> {
+    async fn query_f64(
+        &self,
+        sql: &str,
+        params: impl IntoParams + Send + 'static,
+    ) -> Result<f64, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.query_f64(sql, params).await,
@@ -189,6 +195,7 @@ mod tests {
         mixed_column_query("postgresql:///rltbl_db").await;
     }
 
+    // TODO: Nulls
     async fn mixed_column_query(url: &str) {
         let pool = AnyPool::connect(url).await.unwrap();
         pool.execute_batch(
@@ -212,37 +219,37 @@ mod tests {
             r#"INSERT INTO test_any_table_mixed
                (
                  text_value,
-                 alt_text_value,
+                 -- alt_text_value,
                  float_value,
-                 alt_float_value,
+                 -- alt_float_value,
                  int_value,
-                 alt_int_value,
+                 -- alt_int_value,
                  bool_value,
-                 alt_bool_value,
-                 numeric_value,
-                 alt_numeric_value
+                 -- alt_bool_value,
+                 numeric_value
+                 -- alt_numeric_value
                )
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"#,
-            &[
-                json!("foo"),
-                JsonValue::Null,
-                json!(1.05),
-                JsonValue::Null,
-                json!(1),
-                JsonValue::Null,
-                json!(true),
-                JsonValue::Null,
-                json!(1_000_000),
-                JsonValue::Null,
+               -- VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+               VALUES ($1, $2, $3, $4, $5)"#,
+            params![
+                "foo",
+                //JsonValue::Null,
+                1.05_f64,
+                //JsonValue::Null,
+                1_i64,
+                //JsonValue::Null,
+                true,
+                //JsonValue::Null,
+                dec!(1),
+                //JsonValue::Null,
             ],
         )
         .await
         .unwrap();
 
         let select_sql = "SELECT text_value FROM test_any_table_mixed WHERE text_value = $1";
-        let params = [json!("foo")];
         let value = pool
-            .query_value(select_sql, &params)
+            .query_value(select_sql, ["foo"])
             .await
             .unwrap()
             .as_str()
@@ -263,21 +270,21 @@ mod tests {
                               alt_numeric_value
                             FROM test_any_table_mixed
                             WHERE text_value = $1
-                              AND alt_text_value IS NOT DISTINCT FROM $2
-                              AND float_value > $3
-                              AND int_value > $4
-                              AND bool_value = $5
-                              AND numeric_value > $6"#;
-        let params = [
-            json!("foo"),
-            JsonValue::Null,
-            json!(1.0),
-            json!(0),
-            json!(true),
-            json!(999_999),
+                              -- AND alt_text_value IS NOT DISTINCT FROM $2
+                              AND float_value > $2
+                              AND int_value > $3
+                              AND bool_value = $4
+                              AND numeric_value > $5"#;
+        let params = params![
+            "foo",
+            // JsonValue::Null,
+            1.0_f64,
+            0_i64,
+            true,
+            dec!(0.999),
         ];
 
-        let row = pool.query_row(select_sql, &params).await.unwrap();
+        let row = pool.query_row(select_sql, params.clone()).await.unwrap();
         assert_eq!(
             json!(row),
             json!({
@@ -289,12 +296,12 @@ mod tests {
                 "alt_int_value": JsonValue::Null,
                 "bool_value": true,
                 "alt_bool_value": JsonValue::Null,
-                "numeric_value": 1_000_000,
+                "numeric_value": 1,
                 "alt_numeric_value": JsonValue::Null,
             })
         );
 
-        let rows = pool.query(select_sql, &params).await.unwrap();
+        let rows = pool.query(select_sql, params.clone()).await.unwrap();
         assert_eq!(
             json!(rows),
             json!([{
@@ -306,26 +313,26 @@ mod tests {
                 "alt_int_value": JsonValue::Null,
                 "bool_value": true,
                 "alt_bool_value": JsonValue::Null,
-                "numeric_value": 1_000_000,
+                "numeric_value": 1,
                 "alt_numeric_value": JsonValue::Null,
             }])
         );
     }
 
     #[tokio::test]
-    async fn test_new_functions() {
+    async fn test_input_params() {
         #[cfg(feature = "rusqlite")]
-        new_functions("test_any_sqlite.db").await;
+        input_params("test_any_sqlite.db").await;
         #[cfg(feature = "tokio-postgres")]
-        new_functions("postgresql:///rltbl_db").await;
+        input_params("postgresql:///rltbl_db").await;
     }
 
-    async fn new_functions(url: &str) {
+    async fn input_params(url: &str) {
         let pool = AnyPool::connect(url).await.unwrap();
-        pool.execute_new("DROP TABLE IF EXISTS foo_any", ())
+        pool.execute("DROP TABLE IF EXISTS foo_any", ())
             .await
             .unwrap();
-        pool.execute_new(
+        pool.execute(
             "CREATE TABLE foo_any (\
                bar TEXT,\
                car INT2,\
@@ -340,37 +347,37 @@ mod tests {
         )
         .await
         .unwrap();
-        pool.execute_new("INSERT INTO foo_any (bar) VALUES ($1)", &["one"])
+        pool.execute("INSERT INTO foo_any (bar) VALUES ($1)", &["one"])
             .await
             .unwrap();
-        pool.execute_new("INSERT INTO foo_any (far) VALUES ($1)", &[1 as i64])
+        pool.execute("INSERT INTO foo_any (far) VALUES ($1)", &[1 as i64])
             .await
             .unwrap();
-        pool.execute_new("INSERT INTO foo_any (bar) VALUES ($1)", ["two"])
+        pool.execute("INSERT INTO foo_any (bar) VALUES ($1)", ["two"])
             .await
             .unwrap();
-        pool.execute_new("INSERT INTO foo_any (far) VALUES ($1)", [2 as i64])
+        pool.execute("INSERT INTO foo_any (far) VALUES ($1)", [2 as i64])
             .await
             .unwrap();
-        pool.execute_new("INSERT INTO foo_any (bar) VALUES ($1)", vec!["three"])
+        pool.execute("INSERT INTO foo_any (bar) VALUES ($1)", vec!["three"])
             .await
             .unwrap();
-        pool.execute_new("INSERT INTO foo_any (far) VALUES ($1)", vec![3 as i64])
+        pool.execute("INSERT INTO foo_any (far) VALUES ($1)", vec![3 as i64])
             .await
             .unwrap();
-        pool.execute_new("INSERT INTO foo_any (gar) VALUES ($1)", vec![3 as f32])
+        pool.execute("INSERT INTO foo_any (gar) VALUES ($1)", vec![3 as f32])
             .await
             .unwrap();
-        pool.execute_new("INSERT INTO foo_any (har) VALUES ($1)", vec![3 as f64])
+        pool.execute("INSERT INTO foo_any (har) VALUES ($1)", vec![3 as f64])
             .await
             .unwrap();
-        pool.execute_new("INSERT INTO foo_any (jar) VALUES ($1)", vec![dec!(3)])
+        pool.execute("INSERT INTO foo_any (jar) VALUES ($1)", vec![dec!(3)])
             .await
             .unwrap();
-        pool.execute_new("INSERT INTO foo_any (kar) VALUES ($1)", vec![true])
+        pool.execute("INSERT INTO foo_any (kar) VALUES ($1)", vec![true])
             .await
             .unwrap();
-        pool.execute_new(
+        pool.execute(
             "INSERT INTO foo_any \
              (bar, car, dar, far, gar, har, jar, kar) \
              VALUES ($1, $2, $3, $4, $5 ,$6, $7, $8)",

@@ -9,5 +9,5 @@ async fn test_anyhow() {
 }
 
 async fn query_u64(pool: AnyPool) -> Result<u64> {
-    Ok(pool.query_u64("SELECT 1", &[]).await?)
+    Ok(pool.query_u64("SELECT 1", ()).await?)
 }

@@ -10,7 +10,7 @@ use tower_service::Service;
 
 async fn get_root(State(pool): State<Arc<impl DbQuery>>) -> impl IntoResponse {
     let value = pool
-        .query_value("SELECT value FROM test LIMIT 1", &[])
+        .query_value("SELECT value FROM test LIMIT 1", ())
         .await
         .unwrap()
         .as_str()

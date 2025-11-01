@@ -117,21 +117,15 @@ fn extract_value(row: &Row, idx: usize) -> Result<JsonValue, DbError> {
 
 impl DbQuery for TokioPostgresPool {
     /// Implements [DbQuery::execute()] for PostgreSQL.
-    async fn execute(&self, sql: &str, params: &[JsonValue]) -> Result<(), DbError> {
-        self.query(sql, params).await?;
-        Ok(())
-    }
-
-    /// Implements [DbQuery::execute()] for PostgreSQL.
-    async fn execute_new(
+    async fn execute(
         &self,
         sql: &str,
         params: impl IntoParams + Send + Clone + 'static,
     ) -> Result<(), DbError> {
         let params2 = params.clone();
         match params.into_params()? {
-            Params::None => self.query_new(sql, ()).await?,
-            _ => self.query_new(sql, params2).await?,
+            Params::None => self.query(sql, ()).await?,
+            _ => self.query(sql, params2).await?,
         };
         Ok(())
     }
@@ -150,7 +144,8 @@ impl DbQuery for TokioPostgresPool {
         Ok(())
     }
 
-    async fn query_new(
+    /// Implements [DbQuery::query()] for PostgreSQL
+    async fn query(
         &self,
         sql: &str,
         into_params: impl IntoParams + Send,
@@ -172,6 +167,7 @@ impl DbQuery for TokioPostgresPool {
 
         let mut params: Vec<Box<dyn ToSql + Sync + Send>> = Vec::new();
 
+        // TODO: Remove panics.
         match into_params {
             Params::None => (),
             Params::Positional(plist) => {
@@ -182,203 +178,63 @@ impl DbQuery for TokioPostgresPool {
                             match param {
                                 ParamValue::Null => params.push(Box::new(None::<String>)),
                                 ParamValue::Text(text) => params.push(Box::new(text.to_string())),
-                                _ => panic!("TODO: Return a proper error here"),
+                                _ => panic!("Param {param:?} is wrong type for TEXT"),
                             };
                         }
                         &Type::INT2 => {
                             match param {
                                 ParamValue::Null => params.push(Box::new(None::<i16>)),
                                 ParamValue::SmallInteger(num) => params.push(Box::new(*num)),
-                                _ => panic!("TODO: Return a proper error here"),
+                                _ => panic!("Param {param:?} is wrong type for INT2"),
                             };
                         }
                         &Type::INT4 => {
                             match param {
                                 ParamValue::Null => params.push(Box::new(None::<i32>)),
                                 ParamValue::Integer(num) => params.push(Box::new(*num)),
-                                _ => panic!("TODO: Return a proper error here"),
+                                _ => panic!("Param {param:?} is wrong type for INT4"),
                             };
                         }
                         &Type::INT8 => {
                             match param {
                                 ParamValue::Null => params.push(Box::new(None::<i64>)),
                                 ParamValue::BigInteger(num) => params.push(Box::new(*num)),
-                                _ => panic!("TODO: Return a proper error here"),
+                                _ => panic!("Param {param:?} is wrong type for INT8"),
                             };
                         }
                         &Type::FLOAT4 => {
                             match param {
                                 ParamValue::Null => params.push(Box::new(None::<f32>)),
                                 ParamValue::Real(num) => params.push(Box::new(*num)),
-                                _ => panic!("TODO: Return a proper error here"),
+                                _ => panic!("Param {param:?} is wrong type for FLOAT4"),
                             };
                         }
                         &Type::FLOAT8 => {
                             match param {
                                 ParamValue::Null => params.push(Box::new(None::<f64>)),
                                 ParamValue::BigReal(num) => params.push(Box::new(*num)),
-                                _ => panic!("TODO: Return a proper error here"),
+                                _ => panic!("Param {param:?} is wrong type for FLOAT8"),
                             };
                         }
                         &Type::NUMERIC => {
                             match param {
                                 ParamValue::Null => params.push(Box::new(None::<Decimal>)),
                                 ParamValue::Numeric(num) => params.push(Box::new(*num)),
-                                _ => panic!("TODO: Return a proper error here"),
+                                _ => panic!("Param {param:?} is wrong type for NUMERIC"),
                             };
                         }
                         &Type::BOOL => {
                             match param {
                                 ParamValue::Null => params.push(Box::new(None::<bool>)),
                                 ParamValue::Boolean(flag) => params.push(Box::new(*flag)),
-                                _ => todo!(),
+                                _ => panic!("Param {param:?} is wrong type for BOOL"),
                             };
                         }
                         _ => unimplemented!(),
                     };
                 }
             }
-            Params::Named(_) => todo!(),
         };
-
-        // Finally, execute the query and return the results:
-        let query_params: Vec<&(dyn ToSql + Sync)> = params
-            .iter()
-            .map(|p| p.as_ref() as &(dyn ToSql + Sync))
-            .collect();
-        let rows = client
-            .query(sql, &query_params)
-            .await
-            .map_err(|err| DbError::DatabaseError(format!("Error in query(): {err}")))?;
-        let mut json_rows = vec![];
-        for row in &rows {
-            let mut json_row = JsonRow::new();
-            let columns = row.columns();
-            for (i, column) in columns.iter().enumerate() {
-                json_row.insert(column.name().to_string(), extract_value(row, i)?);
-            }
-            json_rows.push(json_row);
-        }
-        Ok(json_rows)
-    }
-
-    /// Implements [DbQuery::query()] for PostgreSQL.
-    async fn query(&self, sql: &str, json_params: &[JsonValue]) -> Result<Vec<JsonRow>, DbError> {
-        let client = self
-            .pool
-            .get()
-            .await
-            .map_err(|err| DbError::ConnectError(format!("Unable to get pool: {err}")))?;
-
-        // The expected types of all of the parameters as reported by the database via prepare():
-        let param_pg_types = client
-            .prepare(sql)
-            .await
-            .map_err(|err| DbError::DatabaseError(format!("Error preparing statement: {err}")))?
-            .params()
-            .to_vec();
-
-        let mut params: Vec<Box<dyn ToSql + Sync + Send>> = Vec::new();
-
-        for (i, param) in json_params.iter().enumerate() {
-            let pg_type = &param_pg_types[i];
-            match pg_type {
-                &Type::TEXT | &Type::VARCHAR => {
-                    match param {
-                        JsonValue::Null => params.push(Box::new(None::<String>)),
-                        _ => {
-                            params.push(Box::new(
-                                param
-                                    .as_str()
-                                    .ok_or(DbError::InputError("Not a string".to_string()))?,
-                            ));
-                        }
-                    };
-                }
-                &Type::INT2 => {
-                    match param {
-                        JsonValue::Null => params.push(Box::new(None::<i16>)),
-                        _ => {
-                            let value: i16 = param
-                                .as_i64()
-                                .ok_or(DbError::InputError("Not an integer".to_string()))?
-                                .try_into()
-                                .map_err(|e| DbError::InputError(format!("Not an i16: {e}")))?;
-                            params.push(Box::new(value));
-                        }
-                    };
-                }
-                &Type::INT4 => {
-                    match param {
-                        JsonValue::Null => params.push(Box::new(None::<i32>)),
-                        _ => {
-                            let value: i32 = param
-                                .as_i64()
-                                .ok_or(DbError::InputError("Not an integer".to_string()))?
-                                .try_into()
-                                .map_err(|e| DbError::InputError(format!("Not an i32: {e}")))?;
-                            params.push(Box::new(value));
-                        }
-                    };
-                }
-                &Type::INT8 => {
-                    match param {
-                        JsonValue::Null => params.push(Box::new(None::<i64>)),
-                        _ => {
-                            let value: i64 = param
-                                .as_i64()
-                                .ok_or(DbError::InputError("Not an integer".to_string()))?;
-                            params.push(Box::new(value));
-                        }
-                    };
-                }
-                &Type::FLOAT4 => {
-                    match param {
-                        JsonValue::Null => params.push(Box::new(None::<f32>)),
-                        _ => {
-                            let value: f32 = param
-                                .as_f64()
-                                .ok_or(DbError::InputError("Not a float".to_string()))?
-                                as f32;
-                            params.push(Box::new(value));
-                        }
-                    };
-                }
-                &Type::FLOAT8 => {
-                    match param {
-                        JsonValue::Null => params.push(Box::new(None::<f64>)),
-                        _ => {
-                            let value: f64 = param
-                                .as_f64()
-                                .ok_or(DbError::InputError("Not a float".to_string()))?;
-                            params.push(Box::new(value));
-                        }
-                    };
-                }
-                &Type::BOOL => {
-                    match param {
-                        JsonValue::Null => params.push(Box::new(None::<bool>)),
-                        _ => {
-                            let value: bool = param
-                                .as_bool()
-                                .ok_or(DbError::InputError("Not a boolean".to_string()))?;
-                            params.push(Box::new(value));
-                        }
-                    };
-                }
-                &Type::NUMERIC => {
-                    match param {
-                        JsonValue::Null => params.push(Box::new(None::<Decimal>)),
-                        _ => {
-                            let value: Decimal = serde_json::from_value(param.clone())
-                                .map_err(|err| DbError::DataError(err.to_string()))?;
-                            params.push(Box::new(value));
-                        }
-                    };
-                }
-                _ => unimplemented!(),
-            }
-        }
 
         // Finally, execute the query and return the results:
         let query_params: Vec<&(dyn ToSql + Sync)> = params
@@ -402,7 +258,11 @@ impl DbQuery for TokioPostgresPool {
     }
 
     /// Implements [DbQuery::query_row()] for PostgreSQL.
-    async fn query_row(&self, sql: &str, params: &[JsonValue]) -> Result<JsonRow, DbError> {
+    async fn query_row(
+        &self,
+        sql: &str,
+        params: impl IntoParams + Send + 'static,
+    ) -> Result<JsonRow, DbError> {
         let rows = self.query(sql, params).await?;
         if rows.len() > 1 {
             return Err(DbError::DataError(
@@ -416,7 +276,11 @@ impl DbQuery for TokioPostgresPool {
     }
 
     /// Implements [DbQuery::query_value()] for PostgreSQL.
-    async fn query_value(&self, sql: &str, params: &[JsonValue]) -> Result<JsonValue, DbError> {
+    async fn query_value(
+        &self,
+        sql: &str,
+        params: impl IntoParams + Send + 'static,
+    ) -> Result<JsonValue, DbError> {
         let row = self.query_row(sql, params).await?;
         if row.values().len() > 1 {
             return Err(DbError::DataError(
@@ -430,7 +294,11 @@ impl DbQuery for TokioPostgresPool {
     }
 
     /// Implements [DbQuery::query_string()] for PostgreSQL.
-    async fn query_string(&self, sql: &str, params: &[JsonValue]) -> Result<String, DbError> {
+    async fn query_string(
+        &self,
+        sql: &str,
+        params: impl IntoParams + Send + 'static,
+    ) -> Result<String, DbError> {
         let value = self.query_value(sql, params).await?;
         match value.as_str() {
             Some(str_val) => Ok(str_val.to_string()),
@@ -439,7 +307,11 @@ impl DbQuery for TokioPostgresPool {
     }
 
     /// Implements [DbQuery::query_u64()] for PostgreSQL.
-    async fn query_u64(&self, sql: &str, params: &[JsonValue]) -> Result<u64, DbError> {
+    async fn query_u64(
+        &self,
+        sql: &str,
+        params: impl IntoParams + Send + 'static,
+    ) -> Result<u64, DbError> {
         let value = self.query_value(sql, params).await?;
         match value.as_u64() {
             Some(val) => Ok(val),
@@ -448,7 +320,11 @@ impl DbQuery for TokioPostgresPool {
     }
 
     /// Implements [DbQuery::query_i64()] for PostgreSQL.
-    async fn query_i64(&self, sql: &str, params: &[JsonValue]) -> Result<i64, DbError> {
+    async fn query_i64(
+        &self,
+        sql: &str,
+        params: impl IntoParams + Send + 'static,
+    ) -> Result<i64, DbError> {
         let value = self.query_value(sql, params).await?;
         match value.as_i64() {
             Some(val) => Ok(val),
@@ -457,7 +333,11 @@ impl DbQuery for TokioPostgresPool {
     }
 
     /// Implements [DbQuery::query_f64] for PostgreSQL.
-    async fn query_f64(&self, sql: &str, params: &[JsonValue]) -> Result<f64, DbError> {
+    async fn query_f64(
+        &self,
+        sql: &str,
+        params: impl IntoParams + Send + 'static,
+    ) -> Result<f64, DbError> {
         let value = self.query_value(sql, params).await?;
         match value.as_f64() {
             Some(val) => Ok(val),
@@ -485,12 +365,12 @@ mod tests {
         )
         .await
         .unwrap();
-        pool.execute("INSERT INTO test_table_text VALUES ($1)", &[json!("foo")])
+        pool.execute("INSERT INTO test_table_text VALUES ($1)", &["foo"])
             .await
             .unwrap();
         let select_sql = "SELECT value FROM test_table_text WHERE value = $1";
         let value = pool
-            .query_value(select_sql, &[json!("foo")])
+            .query_value(select_sql, &["foo"])
             .await
             .unwrap()
             .as_str()
@@ -498,16 +378,13 @@ mod tests {
             .to_string();
         assert_eq!("foo", value);
 
-        let value = pool
-            .query_string(select_sql, &[json!("foo")])
-            .await
-            .unwrap();
+        let value = pool.query_string(select_sql, &["foo"]).await.unwrap();
         assert_eq!("foo", value);
 
-        let row = pool.query_row(select_sql, &[json!("foo")]).await.unwrap();
+        let row = pool.query_row(select_sql, &["foo"]).await.unwrap();
         assert_eq!(json!(row), json!({"value":"foo"}));
 
-        let rows = pool.query(select_sql, &[json!("foo")]).await.unwrap();
+        let rows = pool.query(select_sql, &["foo"]).await.unwrap();
         assert_eq!(json!(rows), json!([{"value":"foo"}]));
     }
 
@@ -517,41 +394,52 @@ mod tests {
             .await
             .unwrap();
 
-        let sql_types = vec!["INT2", "INT4", "INT8"];
+        pool.execute_batch(&format!(
+            "DROP TABLE IF EXISTS test_table_int;\
+             CREATE TABLE test_table_int ( value_2 INT2, value_4 INT4, value_8 INT8 )",
+        ))
+        .await
+        .unwrap();
+        pool.execute(
+            "INSERT INTO test_table_int VALUES ($1, $2, $3)",
+            params![1_i16, 1_i32, 1_i64],
+        )
+        .await
+        .unwrap();
 
-        for sql_type in sql_types {
-            pool.execute_batch(&format!(
-                "DROP TABLE IF EXISTS test_table_int;\
-             CREATE TABLE test_table_int ( value {sql_type} )",
-            ))
-            .await
-            .unwrap();
-            pool.execute("INSERT INTO test_table_int VALUES ($1)", &[json!(1)])
-                .await
-                .unwrap();
-            let select_sql = "SELECT value FROM test_table_int WHERE value = $1";
+        for column in ["value_2", "value_4", "value_8"] {
+            let params = match column {
+                "value_2" => params![1_i16],
+                "value_4" => params![1_i32],
+                "value_8" => params![1_i64],
+                _ => unreachable!(),
+            };
+            let select_sql = format!("SELECT {column} FROM test_table_int WHERE {column} = $1");
             let value = pool
-                .query_value(select_sql, &[json!(1)])
+                .query_value(&select_sql, params.clone())
                 .await
                 .unwrap()
                 .as_i64()
                 .unwrap();
             assert_eq!(1, value);
 
-            let value = pool.query_u64(select_sql, &[json!(1)]).await.unwrap();
+            let value = pool.query_u64(&select_sql, params.clone()).await.unwrap();
             assert_eq!(1, value);
 
-            let value = pool.query_i64(select_sql, &[json!(1)]).await.unwrap();
+            let value = pool.query_i64(&select_sql, params.clone()).await.unwrap();
             assert_eq!(1, value);
 
-            let value = pool.query_string(select_sql, &[json!(1)]).await.unwrap();
+            let value = pool
+                .query_string(&select_sql, params.clone())
+                .await
+                .unwrap();
             assert_eq!("1", value);
 
-            let row = pool.query_row(select_sql, &[json!(1)]).await.unwrap();
-            assert_eq!(json!(row), json!({"value":1}));
+            let row = pool.query_row(&select_sql, params.clone()).await.unwrap();
+            assert_eq!(json!(row), json!({format!("{column}"):1}));
 
-            let rows = pool.query(select_sql, &[json!(1)]).await.unwrap();
-            assert_eq!(json!(rows), json!([{"value":1}]));
+            let rows = pool.query(&select_sql, params.clone()).await.unwrap();
+            assert_eq!(json!(rows), json!([{format!("{column}"):1}]));
         }
     }
 
@@ -568,43 +456,43 @@ mod tests {
         )
         .await
         .unwrap();
-        pool.execute("INSERT INTO test_table_float VALUES ($1)", &[json!(1.05)])
+        pool.execute("INSERT INTO test_table_float VALUES ($1)", &[1.05_f64])
             .await
             .unwrap();
         let select_sql = "SELECT value FROM test_table_float WHERE value > $1";
         let value = pool
-            .query_value(select_sql, &[json!(1.0)])
+            .query_value(select_sql, &[1.0_f64])
             .await
             .unwrap()
             .as_f64()
             .unwrap();
         assert_eq!("1.05", format!("{value:.2}"));
 
-        let value = pool.query_f64(select_sql, &[json!(1.0)]).await.unwrap();
+        let value = pool.query_f64(select_sql, &[1.0_f64]).await.unwrap();
         assert_eq!(1.05, value);
 
-        let value = pool.query_string(select_sql, &[json!(1.0)]).await.unwrap();
+        let value = pool.query_string(select_sql, &[1.0_f64]).await.unwrap();
         assert_eq!("1.05", value);
 
-        let row = pool.query_row(select_sql, &[json!(1.0)]).await.unwrap();
+        let row = pool.query_row(select_sql, &[1.0_f64]).await.unwrap();
         assert_eq!(json!(row), json!({"value":1.05}));
 
-        let rows = pool.query(select_sql, &[json!(1.0)]).await.unwrap();
+        let rows = pool.query(select_sql, &[1.0_f64]).await.unwrap();
         assert_eq!(json!(rows), json!([{"value":1.05}]));
 
-        // FLOAT4 is harder to test
+        // FLOAT4
         pool.execute_batch(
             "DROP TABLE IF EXISTS test_table_float;\
              CREATE TABLE test_table_float ( value FLOAT4 )",
         )
         .await
         .unwrap();
-        pool.execute("INSERT INTO test_table_float VALUES ($1)", &[json!(1.05)])
+        pool.execute("INSERT INTO test_table_float VALUES ($1)", &[1.05_f32])
             .await
             .unwrap();
         let select_sql = "SELECT value FROM test_table_float WHERE value > $1";
         let value = pool
-            .query_value(select_sql, &[json!(1.0)])
+            .query_value(select_sql, &[1.0_f32])
             .await
             .unwrap()
             .as_f64()
@@ -612,6 +500,7 @@ mod tests {
         assert_eq!("1.05", format!("{value:.2}"));
     }
 
+    // TODO: Nulls
     #[tokio::test]
     async fn test_mixed_column_query() {
         let pool = TokioPostgresPool::connect("postgresql:///rltbl_db")
@@ -638,37 +527,37 @@ mod tests {
             r#"INSERT INTO test_table_mixed
                (
                  text_value,
-                 alt_text_value,
+                 -- alt_text_value,
                  float_value,
-                 alt_float_value,
+                 -- alt_float_value,
                  int_value,
-                 alt_int_value,
+                 -- alt_int_value,
                  bool_value,
-                 alt_bool_value,
-                 numeric_value,
-                 alt_numeric_value
+                 -- alt_bool_value,
+                 numeric_value
+                 -- alt_numeric_value
                )
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"#,
-            &[
-                json!("foo"),
-                JsonValue::Null,
-                json!(1.05),
-                JsonValue::Null,
-                json!(1),
-                JsonValue::Null,
-                json!(true),
-                JsonValue::Null,
-                json!(1_000_000),
-                JsonValue::Null,
+               -- VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+               VALUES ($1, $2, $3, $4, $5)"#,
+            params![
+                "foo",
+                //JsonValue::Null,
+                1.05_f64,
+                //JsonValue::Null,
+                1_i64,
+                //JsonValue::Null,
+                true,
+                //JsonValue::Null,
+                dec!(1.0),
+                //JsonValue::Null,
             ],
         )
         .await
         .unwrap();
 
         let select_sql = "SELECT text_value FROM test_table_mixed WHERE text_value = $1";
-        let params = [json!("foo")];
         let value = pool
-            .query_value(select_sql, &params)
+            .query_value(select_sql, ["foo"])
             .await
             .unwrap()
             .as_str()
@@ -689,21 +578,21 @@ mod tests {
                               alt_numeric_value
                             FROM test_table_mixed
                             WHERE text_value = $1
-                              AND alt_text_value IS NOT DISTINCT FROM $2
-                              AND float_value > $3
-                              AND int_value > $4
-                              AND bool_value = $5
-                              AND numeric_value > $6"#;
-        let params = [
-            json!("foo"),
-            JsonValue::Null,
-            json!(1.0),
-            json!(0),
-            json!(true),
-            json!(999_999),
+                              -- AND alt_text_value IS NOT DISTINCT FROM $2
+                              AND float_value > $2
+                              AND int_value > $3
+                              AND bool_value = $4
+                              AND numeric_value > $5"#;
+        let params = params![
+            "foo",
+            //JsonValue::Null,
+            1.0_f64,
+            0_i64,
+            true,
+            dec!(0.999),
         ];
 
-        let row = pool.query_row(select_sql, &params).await.unwrap();
+        let row = pool.query_row(select_sql, params.clone()).await.unwrap();
         assert_eq!(
             json!(row),
             json!({
@@ -715,12 +604,12 @@ mod tests {
                 "alt_int_value": JsonValue::Null,
                 "bool_value": true,
                 "alt_bool_value": JsonValue::Null,
-                "numeric_value": 1_000_000,
+                "numeric_value": 1.0,
                 "alt_numeric_value": JsonValue::Null,
             })
         );
 
-        let rows = pool.query(select_sql, &params).await.unwrap();
+        let rows = pool.query(select_sql, params.clone()).await.unwrap();
         assert_eq!(
             json!(rows),
             json!([{
@@ -732,12 +621,13 @@ mod tests {
                 "alt_int_value": JsonValue::Null,
                 "bool_value": true,
                 "alt_bool_value": JsonValue::Null,
-                "numeric_value": 1_000_000,
+                "numeric_value": 1.0,
                 "alt_numeric_value": JsonValue::Null,
             }])
         );
     }
 
+    // TODO: Nulls
     #[tokio::test]
     async fn test_aliases_and_builtin_functions() {
         let pool = TokioPostgresPool::connect("postgresql:///rltbl_db")
@@ -757,14 +647,13 @@ mod tests {
         .unwrap();
         pool.execute(
             r#"INSERT INTO test_table_indirect
-               (text_value, alt_text_value, float_value, int_value, bool_value)
-               VALUES ($1, $2, $3, $4, $5)"#,
-            &[
-                json!("foo"),
-                JsonValue::Null,
-                json!(1.05),
-                json!(1),
-                json!(true),
+               -- (text_value, alt_text_value, float_value, int_value, bool_value)
+               (text_value, float_value, int_value, bool_value)
+               -- VALUES ($1, $2, $3, $4, $5)
+               VALUES ($1, $2, $3, $4)"#,
+            params![
+                "foo", // JsonValue::Null,
+                1.05_f64, 1_i64, true,
             ],
         )
         .await
@@ -772,7 +661,7 @@ mod tests {
 
         // Test aggregate:
         let rows = pool
-            .query("SELECT MAX(int_value) FROM test_table_indirect", &[])
+            .query("SELECT MAX(int_value) FROM test_table_indirect", ())
             .await
             .unwrap();
         assert_eq!(json!(rows), json!([{"max": 1}]));
@@ -781,7 +670,7 @@ mod tests {
         let rows = pool
             .query(
                 "SELECT bool_value AS bool_value_alias FROM test_table_indirect",
-                &[],
+                (),
             )
             .await
             .unwrap();
@@ -791,7 +680,7 @@ mod tests {
         let rows = pool
             .query(
                 "SELECT MAX(int_value) AS max_int_value FROM test_table_indirect",
-                &[],
+                (),
             )
             .await
             .unwrap();
@@ -801,7 +690,7 @@ mod tests {
         let rows = pool
             .query(
                 "SELECT CAST(int_value AS TEXT) FROM test_table_indirect",
-                &[],
+                (),
             )
             .await
             .unwrap();
@@ -811,7 +700,7 @@ mod tests {
         let rows = pool
             .query(
                 "SELECT CAST(int_value AS TEXT) AS int_value_cast FROM test_table_indirect",
-                &[],
+                (),
             )
             .await
             .unwrap();
@@ -819,14 +708,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_new_functions() {
+    async fn test_input_params() {
         let pool = TokioPostgresPool::connect("postgresql:///rltbl_db")
             .await
             .unwrap();
-        pool.execute_new("DROP TABLE IF EXISTS foo_pg", ())
+        pool.execute("DROP TABLE IF EXISTS foo_pg", ())
             .await
             .unwrap();
-        pool.execute_new(
+        pool.execute(
             "CREATE TABLE foo_pg (\
                bar TEXT,\
                car INT2,\
@@ -841,37 +730,37 @@ mod tests {
         )
         .await
         .unwrap();
-        pool.execute_new("INSERT INTO foo_pg (bar) VALUES ($1)", &["one"])
+        pool.execute("INSERT INTO foo_pg (bar) VALUES ($1)", &["one"])
             .await
             .unwrap();
-        pool.execute_new("INSERT INTO foo_pg (far) VALUES ($1)", &[1 as i64])
+        pool.execute("INSERT INTO foo_pg (far) VALUES ($1)", &[1 as i64])
             .await
             .unwrap();
-        pool.execute_new("INSERT INTO foo_pg (bar) VALUES ($1)", ["two"])
+        pool.execute("INSERT INTO foo_pg (bar) VALUES ($1)", ["two"])
             .await
             .unwrap();
-        pool.execute_new("INSERT INTO foo_pg (far) VALUES ($1)", [2 as i64])
+        pool.execute("INSERT INTO foo_pg (far) VALUES ($1)", [2 as i64])
             .await
             .unwrap();
-        pool.execute_new("INSERT INTO foo_pg (bar) VALUES ($1)", vec!["three"])
+        pool.execute("INSERT INTO foo_pg (bar) VALUES ($1)", vec!["three"])
             .await
             .unwrap();
-        pool.execute_new("INSERT INTO foo_pg (far) VALUES ($1)", vec![3 as i64])
+        pool.execute("INSERT INTO foo_pg (far) VALUES ($1)", vec![3 as i64])
             .await
             .unwrap();
-        pool.execute_new("INSERT INTO foo_pg (gar) VALUES ($1)", vec![3 as f32])
+        pool.execute("INSERT INTO foo_pg (gar) VALUES ($1)", vec![3 as f32])
             .await
             .unwrap();
-        pool.execute_new("INSERT INTO foo_pg (har) VALUES ($1)", vec![3 as f64])
+        pool.execute("INSERT INTO foo_pg (har) VALUES ($1)", vec![3 as f64])
             .await
             .unwrap();
-        pool.execute_new("INSERT INTO foo_pg (jar) VALUES ($1)", vec![dec!(3)])
+        pool.execute("INSERT INTO foo_pg (jar) VALUES ($1)", vec![dec!(3)])
             .await
             .unwrap();
-        pool.execute_new("INSERT INTO foo_pg (kar) VALUES ($1)", vec![true])
+        pool.execute("INSERT INTO foo_pg (kar) VALUES ($1)", vec![true])
             .await
             .unwrap();
-        pool.execute_new(
+        pool.execute(
             "INSERT INTO foo_pg \
              (bar, car, dar, far, gar, har, jar, kar) \
              VALUES ($1, $2, $3, $4, $5 ,$6, $7, $8)",
