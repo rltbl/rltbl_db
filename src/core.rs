@@ -52,6 +52,14 @@ impl TryFrom<&str> for ParamValue {
     }
 }
 
+impl TryFrom<i64> for ParamValue {
+    type Error = DbError;
+
+    fn try_from(item: i64) -> Result<Self, DbError> {
+        Ok(ParamValue::Integer(item))
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Params {
     None,
@@ -123,6 +131,18 @@ impl<T: IntoParamValue> IntoParams for Vec<T> {
             .collect::<Result<Vec<_>, DbError>>()?;
         Ok(Params::Positional(values))
     }
+}
+
+#[macro_export]
+macro_rules! params {
+    () => {
+       ()
+    };
+    ($($value:expr),* $(,)?) => {{
+        use $crate::core::IntoParamValue;
+        [$($value.into_param_value()),*]
+
+    }};
 }
 
 pub trait DbQuery {

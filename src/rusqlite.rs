@@ -408,6 +408,8 @@ impl DbQuery for RusqlitePool {
 mod tests {
     use super::*;
 
+    use crate::params;
+
     use serde_json::json;
 
     #[tokio::test]
@@ -710,27 +712,30 @@ mod tests {
         pool.execute_new("DROP TABLE IF EXISTS foo", ())
             .await
             .unwrap();
-        pool.execute_new("CREATE TABLE foo (bar TEXT, jar TEXT)", ())
+        pool.execute_new("CREATE TABLE foo (bar TEXT, jar BIGINT)", ())
             .await
             .unwrap();
-        pool.execute_new("INSERT INTO foo (bar) VALUES ($1)", &["array_ref"])
+        pool.execute_new("INSERT INTO foo (bar) VALUES ($1)", &["one"])
             .await
             .unwrap();
-        pool.execute_new("INSERT INTO foo (bar) VALUES ($1)", ["array"])
+        pool.execute_new("INSERT INTO foo (jar) VALUES ($1)", &[1])
             .await
             .unwrap();
-        pool.execute_new("INSERT INTO foo (bar) VALUES ($1)", vec!["vector"])
+        pool.execute_new("INSERT INTO foo (bar) VALUES ($1)", ["two"])
+            .await
+            .unwrap();
+        pool.execute_new("INSERT INTO foo (jar) VALUES ($1)", [2])
+            .await
+            .unwrap();
+        pool.execute_new("INSERT INTO foo (bar) VALUES ($1)", vec!["three"])
+            .await
+            .unwrap();
+        pool.execute_new("INSERT INTO foo (jar) VALUES ($1)", vec![3])
             .await
             .unwrap();
         pool.execute_new(
             "INSERT INTO foo (bar, jar) VALUES ($1, $2)",
-            &["array_ref_1", "array_ref_2"],
-        )
-        .await
-        .unwrap();
-        pool.execute_new(
-            "INSERT INTO foo (bar, jar) VALUES ($1, $2)",
-            ["array_1", "array_2"],
+            params!["four", 4],
         )
         .await
         .unwrap();

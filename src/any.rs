@@ -177,6 +177,7 @@ impl DbQuery for AnyPool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::params;
 
     use serde_json::json;
 
@@ -324,27 +325,30 @@ mod tests {
         pool.execute_new("DROP TABLE IF EXISTS foo_any", ())
             .await
             .unwrap();
-        pool.execute_new("CREATE TABLE foo_any (bar TEXT, jar TEXT)", ())
+        pool.execute_new("CREATE TABLE foo_any (bar TEXT, jar BIGINT)", ())
             .await
             .unwrap();
-        pool.execute_new("INSERT INTO foo_any (bar) VALUES ($1)", &["array_ref"])
+        pool.execute_new("INSERT INTO foo_any (bar) VALUES ($1)", &["one"])
             .await
             .unwrap();
-        pool.execute_new("INSERT INTO foo_any (bar) VALUES ($1)", ["array"])
+        pool.execute_new("INSERT INTO foo_any (jar) VALUES ($1)", &[1])
             .await
             .unwrap();
-        pool.execute_new("INSERT INTO foo_any (bar) VALUES ($1)", vec!["vector"])
+        pool.execute_new("INSERT INTO foo_any (bar) VALUES ($1)", ["two"])
+            .await
+            .unwrap();
+        pool.execute_new("INSERT INTO foo_any (jar) VALUES ($1)", [2])
+            .await
+            .unwrap();
+        pool.execute_new("INSERT INTO foo_any (bar) VALUES ($1)", vec!["three"])
+            .await
+            .unwrap();
+        pool.execute_new("INSERT INTO foo_any (jar) VALUES ($1)", vec![3])
             .await
             .unwrap();
         pool.execute_new(
             "INSERT INTO foo_any (bar, jar) VALUES ($1, $2)",
-            &["array_ref_1", "array_ref_2"],
-        )
-        .await
-        .unwrap();
-        pool.execute_new(
-            "INSERT INTO foo_any (bar, jar) VALUES ($1, $2)",
-            ["array_1", "array_2"],
+            params!["four", 4],
         )
         .await
         .unwrap();
