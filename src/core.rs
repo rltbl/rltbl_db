@@ -39,6 +39,7 @@ impl std::fmt::Display for DbError {
 #[derive(Debug, Clone)]
 pub enum ParamValue {
     Null,
+    Boolean(bool),
     SmallInteger(i16),
     Integer(i32),
     BigInteger(i64),
@@ -101,6 +102,14 @@ impl TryFrom<Decimal> for ParamValue {
 
     fn try_from(item: Decimal) -> Result<Self, DbError> {
         Ok(ParamValue::Numeric(item))
+    }
+}
+
+impl TryFrom<bool> for ParamValue {
+    type Error = DbError;
+
+    fn try_from(item: bool) -> Result<Self, DbError> {
+        Ok(ParamValue::Boolean(item))
     }
 }
 

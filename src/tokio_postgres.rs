@@ -230,6 +230,7 @@ impl DbQuery for TokioPostgresPool {
                         &Type::BOOL => {
                             match param {
                                 ParamValue::Null => params.push(Box::new(None::<bool>)),
+                                ParamValue::Boolean(flag) => params.push(Box::new(*flag)),
                                 _ => todo!(),
                             };
                         }
@@ -833,7 +834,8 @@ mod tests {
                far INT8,\
                gar FLOAT4,\
                har FLOAT8,\
-               jar NUMERIC
+               jar NUMERIC,\
+               kar BOOL
              )",
             (),
         )
@@ -866,10 +868,13 @@ mod tests {
         pool.execute_new("INSERT INTO foo_pg (jar) VALUES ($1)", vec![dec!(3)])
             .await
             .unwrap();
+        pool.execute_new("INSERT INTO foo_pg (kar) VALUES ($1)", vec![true])
+            .await
+            .unwrap();
         pool.execute_new(
             "INSERT INTO foo_pg \
-             (bar, car, dar, far, gar, har, jar) \
-             VALUES ($1, $2, $3, $4, $5 ,$6, $7)",
+             (bar, car, dar, far, gar, har, jar, kar) \
+             VALUES ($1, $2, $3, $4, $5 ,$6, $7, $8)",
             params![
                 "four",
                 123_i16,
@@ -877,7 +882,8 @@ mod tests {
                 123_i64,
                 123_f32,
                 123_f64,
-                dec!(123)
+                dec!(123),
+                true,
             ],
         )
         .await
