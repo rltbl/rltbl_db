@@ -130,6 +130,12 @@ pub trait IntoParamValue {
     fn into_param_value(self) -> Result<ParamValue, DbError>;
 }
 
+impl IntoParamValue for ParamValue {
+    fn into_param_value(self) -> Result<ParamValue, DbError> {
+        Ok(self)
+    }
+}
+
 /// Implements [IntoParamValue] for types that implement [TryFrom] for [ParamValue].
 impl<T> IntoParamValue for T
 where

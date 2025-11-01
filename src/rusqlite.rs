@@ -463,15 +463,10 @@ mod tests {
         pool.execute(
             r#"INSERT INTO test_table_mixed
                (text_value,
-                -- alt_text_value,
+                alt_text_value,
                 float_value, int_value, bool_value, numeric_value)
-               VALUES ($1,
-                       -- $2,
-                       $3, $4, $5, $6)"#,
-            params![
-                "foo", //JsonValue::Null, TODO: How to use NULL as a parameter?
-                1.05_f64, 1_i64, true, 1_000_000,
-            ],
+               VALUES ($1, $2, $3, $4, $5, $6)"#,
+            params!["foo", ParamValue::Null, 1.05_f64, 1_i64, true, 1_000_000,],
         )
         .await
         .unwrap();
