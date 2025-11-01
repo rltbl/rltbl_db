@@ -42,7 +42,8 @@ pub enum ParamValue {
     SmallInteger(i16),
     Integer(i32),
     BigInteger(i64),
-    Real(f64),
+    Real(f32),
+    BigReal(f64),
     Text(String),
 }
 
@@ -75,6 +76,22 @@ impl TryFrom<i64> for ParamValue {
 
     fn try_from(item: i64) -> Result<Self, DbError> {
         Ok(ParamValue::BigInteger(item))
+    }
+}
+
+impl TryFrom<f32> for ParamValue {
+    type Error = DbError;
+
+    fn try_from(item: f32) -> Result<Self, DbError> {
+        Ok(ParamValue::Real(item))
+    }
+}
+
+impl TryFrom<f64> for ParamValue {
+    type Error = DbError;
+
+    fn try_from(item: f64) -> Result<Self, DbError> {
+        Ok(ParamValue::BigReal(item))
     }
 }
 

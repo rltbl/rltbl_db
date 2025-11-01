@@ -77,6 +77,14 @@ fn query_prepared_new(
                                 ))
                             })?;
                     }
+                    ParamValue::BigReal(num) => {
+                        stmt.raw_bind_parameter(i + 1, num.to_string())
+                            .map_err(|err| {
+                                DbError::InputError(format!(
+                                    "Error binding parameter '{param:?}': {err}"
+                                ))
+                            })?;
+                    }
                     ParamValue::Null => {
                         stmt.raw_bind_parameter(i + 1, &Null).map_err(|err| {
                             DbError::InputError(format!(
@@ -733,7 +741,9 @@ mod tests {
                bar TEXT,\
                car INT2,\
                dar INT4,\
-               far INT8\
+               far INT8,\
+               gar FLOAT4,\
+               har FLOAT8
              )",
             (),
         )
@@ -757,9 +767,15 @@ mod tests {
         pool.execute_new("INSERT INTO foo (far) VALUES ($1)", vec![3 as i64])
             .await
             .unwrap();
+        pool.execute_new("INSERT INTO foo (gar) VALUES ($1)", vec![3 as f32])
+            .await
+            .unwrap();
+        pool.execute_new("INSERT INTO foo (har) VALUES ($1)", vec![3 as f64])
+            .await
+            .unwrap();
         pool.execute_new(
-            "INSERT INTO foo (bar, car, dar, far) VALUES ($1, $2, $3, $4)",
-            params!["four", 123_i16, 123_i32, 123_i64],
+            "INSERT INTO foo (bar, car, dar, far, gar, har) VALUES ($1, $2, $3, $4, $5 ,$6)",
+            params!["four", 123_i16, 123_i32, 123_i64, 123_f32, 123_f64],
         )
         .await
         .unwrap();

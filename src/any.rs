@@ -330,7 +330,9 @@ mod tests {
                bar TEXT,\
                car INT2,\
                dar INT4,\
-               far INT8\
+               far INT8,\
+               gar FLOAT4,\
+               har FLOAT8
              )",
             (),
         )
@@ -354,9 +356,15 @@ mod tests {
         pool.execute_new("INSERT INTO foo_any (far) VALUES ($1)", vec![3 as i64])
             .await
             .unwrap();
+        pool.execute_new("INSERT INTO foo_any (gar) VALUES ($1)", vec![3 as f32])
+            .await
+            .unwrap();
+        pool.execute_new("INSERT INTO foo_any (har) VALUES ($1)", vec![3 as f64])
+            .await
+            .unwrap();
         pool.execute_new(
-            "INSERT INTO foo_any (bar, car, dar, far) VALUES ($1, $2, $3, $4)",
-            params!["four", 123_i16, 123_i32, 123_i64],
+            "INSERT INTO foo_any (bar, car, dar, far, gar, har) VALUES ($1, $2, $3, $4, $5 ,$6)",
+            params!["four", 123_i16, 123_i32, 123_i64, 123_f32, 123_f64],
         )
         .await
         .unwrap();

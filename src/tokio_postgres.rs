@@ -216,19 +216,19 @@ impl DbQuery for TokioPostgresPool {
                         &Type::FLOAT8 => {
                             match param {
                                 ParamValue::Null => params.push(Box::new(None::<f64>)),
-                                ParamValue::Real(num) => params.push(Box::new(*num)),
+                                ParamValue::BigReal(num) => params.push(Box::new(*num)),
                                 _ => panic!("TODO: Return a proper error here"),
-                            };
-                        }
-                        &Type::BOOL => {
-                            match param {
-                                ParamValue::Null => params.push(Box::new(None::<bool>)),
-                                _ => todo!(),
                             };
                         }
                         &Type::NUMERIC => {
                             match param {
                                 ParamValue::Null => params.push(Box::new(None::<Decimal>)),
+                                _ => todo!(),
+                            };
+                        }
+                        &Type::BOOL => {
+                            match param {
+                                ParamValue::Null => params.push(Box::new(None::<bool>)),
                                 _ => todo!(),
                             };
                         }
@@ -829,7 +829,9 @@ mod tests {
                bar TEXT,\
                car INT2,\
                dar INT4,\
-               far INT8\
+               far INT8,\
+               gar FLOAT4,\
+               har FLOAT8
              )",
             (),
         )
@@ -853,9 +855,15 @@ mod tests {
         pool.execute_new("INSERT INTO foo_pg (far) VALUES ($1)", vec![3 as i64])
             .await
             .unwrap();
+        pool.execute_new("INSERT INTO foo_pg (gar) VALUES ($1)", vec![3 as f32])
+            .await
+            .unwrap();
+        pool.execute_new("INSERT INTO foo_pg (har) VALUES ($1)", vec![3 as f64])
+            .await
+            .unwrap();
         pool.execute_new(
-            "INSERT INTO foo_pg (bar, car, dar, far) VALUES ($1, $2, $3, $4)",
-            params!["four", 123_i16, 123_i32, 123_i64],
+            "INSERT INTO foo_pg (bar, car, dar, far, gar, har) VALUES ($1, $2, $3, $4, $5 ,$6)",
+            params!["four", 123_i16, 123_i32, 123_i64, 123_f32, 123_f64],
         )
         .await
         .unwrap();
