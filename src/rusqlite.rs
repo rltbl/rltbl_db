@@ -45,7 +45,23 @@ fn query_prepared_new(
                             ))
                         })?;
                     }
+                    ParamValue::SmallInteger(num) => {
+                        stmt.raw_bind_parameter(i + 1, num.to_string())
+                            .map_err(|err| {
+                                DbError::InputError(format!(
+                                    "Error binding parameter '{param:?}': {err}"
+                                ))
+                            })?;
+                    }
                     ParamValue::Integer(num) => {
+                        stmt.raw_bind_parameter(i + 1, num.to_string())
+                            .map_err(|err| {
+                                DbError::InputError(format!(
+                                    "Error binding parameter '{param:?}': {err}"
+                                ))
+                            })?;
+                    }
+                    ParamValue::BigInteger(num) => {
                         stmt.raw_bind_parameter(i + 1, num.to_string())
                             .map_err(|err| {
                                 DbError::InputError(format!(
@@ -712,30 +728,38 @@ mod tests {
         pool.execute_new("DROP TABLE IF EXISTS foo", ())
             .await
             .unwrap();
-        pool.execute_new("CREATE TABLE foo (bar TEXT, jar BIGINT)", ())
-            .await
-            .unwrap();
+        pool.execute_new(
+            "CREATE TABLE foo (\
+               bar TEXT,\
+               car INT2,\
+               dar INT4,\
+               far INT8\
+             )",
+            (),
+        )
+        .await
+        .unwrap();
         pool.execute_new("INSERT INTO foo (bar) VALUES ($1)", &["one"])
             .await
             .unwrap();
-        pool.execute_new("INSERT INTO foo (jar) VALUES ($1)", &[1])
+        pool.execute_new("INSERT INTO foo (far) VALUES ($1)", &[1 as i64])
             .await
             .unwrap();
         pool.execute_new("INSERT INTO foo (bar) VALUES ($1)", ["two"])
             .await
             .unwrap();
-        pool.execute_new("INSERT INTO foo (jar) VALUES ($1)", [2])
+        pool.execute_new("INSERT INTO foo (far) VALUES ($1)", [2 as i64])
             .await
             .unwrap();
         pool.execute_new("INSERT INTO foo (bar) VALUES ($1)", vec!["three"])
             .await
             .unwrap();
-        pool.execute_new("INSERT INTO foo (jar) VALUES ($1)", vec![3])
+        pool.execute_new("INSERT INTO foo (far) VALUES ($1)", vec![3 as i64])
             .await
             .unwrap();
         pool.execute_new(
-            "INSERT INTO foo (bar, jar) VALUES ($1, $2)",
-            params!["four", 4],
+            "INSERT INTO foo (bar, car, dar, far) VALUES ($1, $2, $3, $4)",
+            params!["four", 123_i16, 123_i32, 123_i64],
         )
         .await
         .unwrap();

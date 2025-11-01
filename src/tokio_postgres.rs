@@ -188,7 +188,7 @@ impl DbQuery for TokioPostgresPool {
                         &Type::INT2 => {
                             match param {
                                 ParamValue::Null => params.push(Box::new(None::<i16>)),
-                                ParamValue::Integer(num) => params.push(Box::new(*num)),
+                                ParamValue::SmallInteger(num) => params.push(Box::new(*num)),
                                 _ => panic!("TODO: Return a proper error here"),
                             };
                         }
@@ -202,21 +202,21 @@ impl DbQuery for TokioPostgresPool {
                         &Type::INT8 => {
                             match param {
                                 ParamValue::Null => params.push(Box::new(None::<i64>)),
-                                ParamValue::Integer(num) => params.push(Box::new(*num)),
+                                ParamValue::BigInteger(num) => params.push(Box::new(*num)),
                                 _ => panic!("TODO: Return a proper error here"),
                             };
                         }
                         &Type::FLOAT4 => {
                             match param {
                                 ParamValue::Null => params.push(Box::new(None::<f32>)),
-                                ParamValue::Integer(num) => params.push(Box::new(*num)),
+                                ParamValue::Real(num) => params.push(Box::new(*num)),
                                 _ => panic!("TODO: Return a proper error here"),
                             };
                         }
                         &Type::FLOAT8 => {
                             match param {
                                 ParamValue::Null => params.push(Box::new(None::<f64>)),
-                                ParamValue::Integer(num) => params.push(Box::new(*num)),
+                                ParamValue::Real(num) => params.push(Box::new(*num)),
                                 _ => panic!("TODO: Return a proper error here"),
                             };
                         }
@@ -824,30 +824,38 @@ mod tests {
         pool.execute_new("DROP TABLE IF EXISTS foo_pg", ())
             .await
             .unwrap();
-        pool.execute_new("CREATE TABLE foo_pg (bar TEXT, jar BIGINT)", ())
-            .await
-            .unwrap();
+        pool.execute_new(
+            "CREATE TABLE foo_pg (\
+               bar TEXT,\
+               car INT2,\
+               dar INT4,\
+               far INT8\
+             )",
+            (),
+        )
+        .await
+        .unwrap();
         pool.execute_new("INSERT INTO foo_pg (bar) VALUES ($1)", &["one"])
             .await
             .unwrap();
-        pool.execute_new("INSERT INTO foo_pg (jar) VALUES ($1)", &[1])
+        pool.execute_new("INSERT INTO foo_pg (far) VALUES ($1)", &[1 as i64])
             .await
             .unwrap();
         pool.execute_new("INSERT INTO foo_pg (bar) VALUES ($1)", ["two"])
             .await
             .unwrap();
-        pool.execute_new("INSERT INTO foo_pg (jar) VALUES ($1)", [2])
+        pool.execute_new("INSERT INTO foo_pg (far) VALUES ($1)", [2 as i64])
             .await
             .unwrap();
         pool.execute_new("INSERT INTO foo_pg (bar) VALUES ($1)", vec!["three"])
             .await
             .unwrap();
-        pool.execute_new("INSERT INTO foo_pg (jar) VALUES ($1)", vec![3])
+        pool.execute_new("INSERT INTO foo_pg (far) VALUES ($1)", vec![3 as i64])
             .await
             .unwrap();
         pool.execute_new(
-            "INSERT INTO foo_pg (bar, jar) VALUES ($1, $2)",
-            params!["four", 4],
+            "INSERT INTO foo_pg (bar, car, dar, far) VALUES ($1, $2, $3, $4)",
+            params!["four", 123_i16, 123_i32, 123_i64],
         )
         .await
         .unwrap();

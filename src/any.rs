@@ -325,30 +325,38 @@ mod tests {
         pool.execute_new("DROP TABLE IF EXISTS foo_any", ())
             .await
             .unwrap();
-        pool.execute_new("CREATE TABLE foo_any (bar TEXT, jar BIGINT)", ())
-            .await
-            .unwrap();
+        pool.execute_new(
+            "CREATE TABLE foo_any (\
+               bar TEXT,\
+               car INT2,\
+               dar INT4,\
+               far INT8\
+             )",
+            (),
+        )
+        .await
+        .unwrap();
         pool.execute_new("INSERT INTO foo_any (bar) VALUES ($1)", &["one"])
             .await
             .unwrap();
-        pool.execute_new("INSERT INTO foo_any (jar) VALUES ($1)", &[1])
+        pool.execute_new("INSERT INTO foo_any (far) VALUES ($1)", &[1 as i64])
             .await
             .unwrap();
         pool.execute_new("INSERT INTO foo_any (bar) VALUES ($1)", ["two"])
             .await
             .unwrap();
-        pool.execute_new("INSERT INTO foo_any (jar) VALUES ($1)", [2])
+        pool.execute_new("INSERT INTO foo_any (far) VALUES ($1)", [2 as i64])
             .await
             .unwrap();
         pool.execute_new("INSERT INTO foo_any (bar) VALUES ($1)", vec!["three"])
             .await
             .unwrap();
-        pool.execute_new("INSERT INTO foo_any (jar) VALUES ($1)", vec![3])
+        pool.execute_new("INSERT INTO foo_any (far) VALUES ($1)", vec![3 as i64])
             .await
             .unwrap();
         pool.execute_new(
-            "INSERT INTO foo_any (bar, jar) VALUES ($1, $2)",
-            params!["four", 4],
+            "INSERT INTO foo_any (bar, car, dar, far) VALUES ($1, $2, $3, $4)",
+            params!["four", 123_i16, 123_i32, 123_i64],
         )
         .await
         .unwrap();

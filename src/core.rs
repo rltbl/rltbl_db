@@ -39,7 +39,9 @@ impl std::fmt::Display for DbError {
 #[derive(Debug, Clone)]
 pub enum ParamValue {
     Null,
-    Integer(i64),
+    SmallInteger(i16),
+    Integer(i32),
+    BigInteger(i64),
     Real(f64),
     Text(String),
 }
@@ -52,11 +54,27 @@ impl TryFrom<&str> for ParamValue {
     }
 }
 
+impl TryFrom<i16> for ParamValue {
+    type Error = DbError;
+
+    fn try_from(item: i16) -> Result<Self, DbError> {
+        Ok(ParamValue::SmallInteger(item))
+    }
+}
+
+impl TryFrom<i32> for ParamValue {
+    type Error = DbError;
+
+    fn try_from(item: i32) -> Result<Self, DbError> {
+        Ok(ParamValue::Integer(item.into()))
+    }
+}
+
 impl TryFrom<i64> for ParamValue {
     type Error = DbError;
 
     fn try_from(item: i64) -> Result<Self, DbError> {
-        Ok(ParamValue::Integer(item))
+        Ok(ParamValue::BigInteger(item))
     }
 }
 
