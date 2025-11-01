@@ -85,6 +85,14 @@ fn query_prepared_new(
                                 ))
                             })?;
                     }
+                    ParamValue::Numeric(num) => {
+                        stmt.raw_bind_parameter(i + 1, num.to_string())
+                            .map_err(|err| {
+                                DbError::InputError(format!(
+                                    "Error binding parameter '{param:?}': {err}"
+                                ))
+                            })?;
+                    }
                     ParamValue::Null => {
                         stmt.raw_bind_parameter(i + 1, &Null).map_err(|err| {
                             DbError::InputError(format!(
@@ -431,9 +439,8 @@ impl DbQuery for RusqlitePool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     use crate::params;
-
+    use rust_decimal::dec;
     use serde_json::json;
 
     #[tokio::test]
@@ -743,7 +750,8 @@ mod tests {
                dar INT4,\
                far INT8,\
                gar FLOAT4,\
-               har FLOAT8
+               har FLOAT8,\
+               jar NUMERIC
              )",
             (),
         )
@@ -773,9 +781,22 @@ mod tests {
         pool.execute_new("INSERT INTO foo (har) VALUES ($1)", vec![3 as f64])
             .await
             .unwrap();
+        pool.execute_new("INSERT INTO foo (jar) VALUES ($1)", vec![dec!(3)])
+            .await
+            .unwrap();
         pool.execute_new(
-            "INSERT INTO foo (bar, car, dar, far, gar, har) VALUES ($1, $2, $3, $4, $5 ,$6)",
-            params!["four", 123_i16, 123_i32, 123_i64, 123_f32, 123_f64],
+            "INSERT INTO foo \
+             (bar, car, dar, far, gar, har, jar) \
+             VALUES ($1, $2, $3, $4, $5 ,$6, $7)",
+            params![
+                "four",
+                123_i16,
+                123_i32,
+                123_i64,
+                123_f32,
+                123_f64,
+                dec!(123)
+            ],
         )
         .await
         .unwrap();

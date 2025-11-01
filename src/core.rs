@@ -1,6 +1,6 @@
-use std::future::Future;
-
+use rust_decimal::Decimal;
 use serde_json::Map as JsonMap;
+use std::future::Future;
 
 pub type JsonValue = serde_json::Value;
 pub type JsonRow = JsonMap<String, JsonValue>;
@@ -44,6 +44,7 @@ pub enum ParamValue {
     BigInteger(i64),
     Real(f32),
     BigReal(f64),
+    Numeric(Decimal),
     Text(String),
 }
 
@@ -92,6 +93,14 @@ impl TryFrom<f64> for ParamValue {
 
     fn try_from(item: f64) -> Result<Self, DbError> {
         Ok(ParamValue::BigReal(item))
+    }
+}
+
+impl TryFrom<Decimal> for ParamValue {
+    type Error = DbError;
+
+    fn try_from(item: Decimal) -> Result<Self, DbError> {
+        Ok(ParamValue::Numeric(item))
     }
 }
 
