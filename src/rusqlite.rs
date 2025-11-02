@@ -95,6 +95,8 @@ fn query_prepared(
                             })?;
                     }
                     ParamValue::Boolean(flag) => {
+                        // Note that SQLite's type affinity means that booleans are actually
+                        // implemented as numbers (see https://sqlite.org/datatype3.html).
                         let num = match flag {
                             true => 1,
                             false => 0,
