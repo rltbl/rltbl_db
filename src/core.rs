@@ -130,12 +130,6 @@ pub trait IntoParamValue {
     fn into_param_value(self) -> Result<ParamValue, DbError>;
 }
 
-impl IntoParamValue for ParamValue {
-    fn into_param_value(self) -> Result<ParamValue, DbError> {
-        Ok(self)
-    }
-}
-
 /// Implements [IntoParamValue] for types that implement [TryFrom] for [ParamValue].
 impl<T> IntoParamValue for T
 where
@@ -148,10 +142,24 @@ where
     }
 }
 
+/// Implements [IntoParamValue] (trivially) for a [ParamValue].
+impl IntoParamValue for ParamValue {
+    fn into_param_value(self) -> Result<ParamValue, DbError> {
+        Ok(self)
+    }
+}
+
 /// Implements [IntoParamValue] for a [ParamValue] wrapped in a Result.
 impl IntoParamValue for Result<ParamValue, DbError> {
     fn into_param_value(self) -> Result<ParamValue, DbError> {
         self
+    }
+}
+
+/// Implements [IntoParamValue] for an empty tuple. Always returns [ParamValue::Null].
+impl IntoParamValue for () {
+    fn into_param_value(self) -> Result<ParamValue, DbError> {
+        Ok(ParamValue::Null)
     }
 }
 
@@ -232,7 +240,7 @@ pub trait DbQuery {
     fn execute(
         &self,
         sql: &str,
-        params: impl IntoParams + Send + Clone + 'static,
+        params: impl IntoParams + Send + 'static,
     ) -> impl Future<Output = Result<(), DbError>> + Send;
 
     /// Sequentially execute a semicolon-delimited list of statements, without parameters.

@@ -69,7 +69,7 @@ impl DbQuery for AnyPool {
     async fn execute(
         &self,
         sql: &str,
-        params: impl IntoParams + Send + Clone + 'static,
+        params: impl IntoParams + Send + 'static,
     ) -> Result<(), DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
@@ -195,7 +195,6 @@ mod tests {
         mixed_column_query("postgresql:///rltbl_db").await;
     }
 
-    // TODO: Nulls
     async fn mixed_column_query(url: &str) {
         let pool = AnyPool::connect(url).await.unwrap();
         pool.execute_batch(
@@ -219,30 +218,18 @@ mod tests {
             r#"INSERT INTO test_any_table_mixed
                (
                  text_value,
-                 -- alt_text_value,
+                 alt_text_value,
                  float_value,
-                 -- alt_float_value,
+                 alt_float_value,
                  int_value,
-                 -- alt_int_value,
+                 alt_int_value,
                  bool_value,
-                 -- alt_bool_value,
-                 numeric_value
-                 -- alt_numeric_value
+                 alt_bool_value,
+                 numeric_value,
+                 alt_numeric_value
                )
-               -- VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-               VALUES ($1, $2, $3, $4, $5)"#,
-            params![
-                "foo",
-                //JsonValue::Null,
-                1.05_f64,
-                //JsonValue::Null,
-                1_i64,
-                //JsonValue::Null,
-                true,
-                //JsonValue::Null,
-                dec!(1),
-                //JsonValue::Null,
-            ],
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"#,
+            params!["foo", (), 1.05_f64, (), 1_i64, (), true, (), dec!(1), ()],
         )
         .await
         .unwrap();
@@ -270,19 +257,12 @@ mod tests {
                               alt_numeric_value
                             FROM test_any_table_mixed
                             WHERE text_value = $1
-                              -- AND alt_text_value IS NOT DISTINCT FROM $2
-                              AND float_value > $2
-                              AND int_value > $3
-                              AND bool_value = $4
-                              AND numeric_value > $5"#;
-        let params = params![
-            "foo",
-            // JsonValue::Null,
-            1.0_f64,
-            0_i64,
-            true,
-            dec!(0.999),
-        ];
+                              AND alt_text_value IS NOT DISTINCT FROM $2
+                              AND float_value > $3
+                              AND int_value > $4
+                              AND bool_value = $5
+                              AND numeric_value > $6"#;
+        let params = params!["foo", (), 1.0_f64, 0_i64, true, dec!(0.999)];
 
         let row = pool.query_row(select_sql, params.clone()).await.unwrap();
         assert_eq!(

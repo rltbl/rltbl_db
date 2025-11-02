@@ -120,12 +120,12 @@ impl DbQuery for TokioPostgresPool {
     async fn execute(
         &self,
         sql: &str,
-        params: impl IntoParams + Send + Clone + 'static,
+        params: impl IntoParams + Send + 'static,
     ) -> Result<(), DbError> {
-        let params2 = params.clone();
-        match params.into_params()? {
+        let params = params.into_params()?;
+        match params {
             Params::None => self.query(sql, ()).await?,
-            _ => self.query(sql, params2).await?,
+            _ => self.query(sql, params).await?,
         };
         Ok(())
     }
@@ -500,7 +500,6 @@ mod tests {
         assert_eq!("1.05", format!("{value:.2}"));
     }
 
-    // TODO: Nulls
     #[tokio::test]
     async fn test_mixed_column_query() {
         let pool = TokioPostgresPool::connect("postgresql:///rltbl_db")
@@ -527,30 +526,18 @@ mod tests {
             r#"INSERT INTO test_table_mixed
                (
                  text_value,
-                 -- alt_text_value,
+                 alt_text_value,
                  float_value,
-                 -- alt_float_value,
+                 alt_float_value,
                  int_value,
-                 -- alt_int_value,
+                 alt_int_value,
                  bool_value,
-                 -- alt_bool_value,
-                 numeric_value
-                 -- alt_numeric_value
+                 alt_bool_value,
+                 numeric_value,
+                 alt_numeric_value
                )
-               -- VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-               VALUES ($1, $2, $3, $4, $5)"#,
-            params![
-                "foo",
-                //JsonValue::Null,
-                1.05_f64,
-                //JsonValue::Null,
-                1_i64,
-                //JsonValue::Null,
-                true,
-                //JsonValue::Null,
-                dec!(1.0),
-                //JsonValue::Null,
-            ],
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"#,
+            params!["foo", (), 1.05_f64, (), 1_i64, (), true, (), dec!(1.0), ()],
         )
         .await
         .unwrap();
@@ -578,19 +565,12 @@ mod tests {
                               alt_numeric_value
                             FROM test_table_mixed
                             WHERE text_value = $1
-                              -- AND alt_text_value IS NOT DISTINCT FROM $2
-                              AND float_value > $2
-                              AND int_value > $3
-                              AND bool_value = $4
-                              AND numeric_value > $5"#;
-        let params = params![
-            "foo",
-            //JsonValue::Null,
-            1.0_f64,
-            0_i64,
-            true,
-            dec!(0.999),
-        ];
+                              AND alt_text_value IS NOT DISTINCT FROM $2
+                              AND float_value > $3
+                              AND int_value > $4
+                              AND bool_value = $5
+                              AND numeric_value > $6"#;
+        let params = params!["foo", (), 1.0_f64, 0_i64, true, dec!(0.999)];
 
         let row = pool.query_row(select_sql, params.clone()).await.unwrap();
         assert_eq!(
@@ -627,7 +607,6 @@ mod tests {
         );
     }
 
-    // TODO: Nulls
     #[tokio::test]
     async fn test_aliases_and_builtin_functions() {
         let pool = TokioPostgresPool::connect("postgresql:///rltbl_db")
@@ -647,14 +626,9 @@ mod tests {
         .unwrap();
         pool.execute(
             r#"INSERT INTO test_table_indirect
-               -- (text_value, alt_text_value, float_value, int_value, bool_value)
-               (text_value, float_value, int_value, bool_value)
-               -- VALUES ($1, $2, $3, $4, $5)
-               VALUES ($1, $2, $3, $4)"#,
-            params![
-                "foo", // JsonValue::Null,
-                1.05_f64, 1_i64, true,
-            ],
+               (text_value, alt_text_value, float_value, int_value, bool_value)
+               VALUES ($1, $2, $3, $4, $5)"#,
+            params!["foo", (), 1.05_f64, 1_i64, true],
         )
         .await
         .unwrap();
@@ -777,5 +751,15 @@ mod tests {
         )
         .await
         .unwrap();
+        // Two alternative ways of specifying a NULL parameter:
+        let row = pool
+            .query_row(
+                "SELECT COUNT(1) AS count FROM foo_pg \
+                 WHERE bar IS NOT DISTINCT FROM $1 AND far IS NOT DISTINCT FROM $2",
+                params![ParamValue::Null, ()],
+            )
+            .await
+            .unwrap();
+        assert_eq!(json!({"count": 4}), json!(row));
     }
 }

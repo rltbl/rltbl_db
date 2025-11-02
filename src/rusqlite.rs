@@ -182,12 +182,12 @@ impl DbQuery for RusqlitePool {
     async fn execute(
         &self,
         sql: &str,
-        params: impl IntoParams + Send + Clone + 'static,
+        params: impl IntoParams + Send + 'static,
     ) -> Result<(), DbError> {
-        let params2 = params.clone();
-        match params.into_params()? {
+        let params = params.into_params()?;
+        match params {
             Params::None => self.query(sql, ()).await?,
-            _ => self.query(sql, params2).await?,
+            _ => self.query(sql, params).await?,
         };
         Ok(())
     }
@@ -462,11 +462,9 @@ mod tests {
         .unwrap();
         pool.execute(
             r#"INSERT INTO test_table_mixed
-               (text_value,
-                alt_text_value,
-                float_value, int_value, bool_value, numeric_value)
+               (text_value, alt_text_value, float_value, int_value, bool_value, numeric_value)
                VALUES ($1, $2, $3, $4, $5, $6)"#,
-            params!["foo", ParamValue::Null, 1.05_f64, 1_i64, true, 1_000_000,],
+            params!["foo", (), 1.05_f64, 1_i64, true, 1_000_000,],
         )
         .await
         .unwrap();
@@ -490,7 +488,7 @@ mod tests {
                               numeric_value
                             FROM test_table_mixed
                             WHERE text_value = $1
-                              -- AND alt_text_value IS $2 // TODO: How to use NULL as a parameter?
+                              AND alt_text_value IS $2
                               AND float_value > $3
                               AND int_value > $4
                               AND bool_value = $5
@@ -499,11 +497,7 @@ mod tests {
         let row = pool
             .query_row(
                 select_sql,
-                params![
-                    "foo",
-                    // JsonValue::Null, // TODO: How to use NULL as a parameter?
-                    1.0_f64, 0_i64, true, 999_999,
-                ],
+                params!["foo", (), 1.0_f64, 0_i64, true, 999_999],
             )
             .await
             .unwrap();
@@ -522,11 +516,7 @@ mod tests {
         let rows = pool
             .query(
                 select_sql,
-                params![
-                    "foo",
-                    // JsonValue::Null, // TODO: How to use NULL as a parameter?
-                    1.0_f64, 0_i64, true, 999_999,
-                ],
+                params!["foo", (), 1.0_f64, 0_i64, true, 999_999],
             )
             .await
             .unwrap();
@@ -560,16 +550,9 @@ mod tests {
         .unwrap();
         pool.execute(
             r#"INSERT INTO test_table_indirect
-               (text_value,
-                -- alt_text_value,
-                float_value, int_value, bool_value)
-               VALUES ($1,
-                       -- $2,
-                       $3, $4, $5)"#,
-            params![
-                "foo", // JsonValue::Null, //TODO: How to use NULL as a parameter.
-                1.05_f64, 1_i64, true,
-            ],
+               (text_value, alt_text_value, float_value, int_value, bool_value)
+               VALUES ($1, $2, $3, $4, $5)"#,
+            params!["foo", (), 1.05_f64, 1_i64, true],
         )
         .await
         .unwrap();
@@ -705,5 +688,15 @@ mod tests {
         )
         .await
         .unwrap();
+        // Two alternative ways of specifying a NULL parameter:
+        let row = pool
+            .query_row(
+                "SELECT COUNT(1) AS count FROM foo \
+                 WHERE bar IS $1 AND far IS $2",
+                params![ParamValue::Null, ()],
+            )
+            .await
+            .unwrap();
+        assert_eq!(json!({"count": 4}), json!(row));
     }
 }
