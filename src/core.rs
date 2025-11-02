@@ -38,10 +38,10 @@ impl std::fmt::Display for DbError {
     }
 }
 
-/// Query parameters
+/// Value types for [query parameters](Params)
 #[derive(Debug, Clone)]
 pub enum ParamValue {
-    /// Represents a NULL value.
+    /// Represents a NULL value. Can be used with any column type.
     Null,
     /// Use with BOOL column types or equivalent.
     Boolean(bool),
@@ -60,6 +60,8 @@ pub enum ParamValue {
     /// Use with TEXT and VARCHAR column types or equivalent.
     Text(String),
 }
+
+// Implementations of attempted conversions of various types into ParamValues:
 
 impl TryFrom<&str> for ParamValue {
     type Error = DbError;
@@ -125,7 +127,7 @@ impl TryFrom<bool> for ParamValue {
     }
 }
 
-/// Any type that implements this trait can be converted into a [ParamValue]
+/// Types that implements this trait can be converted into a [ParamValue]
 pub trait IntoParamValue {
     fn into_param_value(self) -> Result<ParamValue, DbError>;
 }
@@ -163,7 +165,7 @@ impl IntoParamValue for () {
     }
 }
 
-/// Represents a list of parameters.
+/// Query parameters
 #[derive(Debug, Clone)]
 pub enum Params {
     None,
@@ -175,7 +177,7 @@ pub trait IntoParams {
     fn into_params(self) -> Result<Params, DbError>;
 }
 
-/// Implements [IntoParams] for an empty tuple.
+/// Implements [IntoParams] for an empty tuple. Always returns [Params::None].
 impl IntoParams for () {
     fn into_params(self) -> Result<Params, DbError> {
         Ok(Params::None)
@@ -203,7 +205,7 @@ impl<T: IntoParamValue, const N: usize> IntoParams for [T; N] {
     }
 }
 
-/// Implements [IntoParams] for references of fixed-length arrays of types that implement
+/// Implements [IntoParams] for references to fixed-length arrays of types that implement
 /// [IntoParamValue]
 impl<T: IntoParamValue + Clone, const N: usize> IntoParams for &[T; N] {
     fn into_params(self) -> Result<Params, DbError> {

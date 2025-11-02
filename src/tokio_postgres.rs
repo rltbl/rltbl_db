@@ -106,7 +106,9 @@ fn extract_value(row: &Row, idx: usize) -> Result<JsonValue, DbError> {
                 } else if let Ok(number) = v.parse::<f64>() {
                     Ok(number.into())
                 } else {
-                    panic!("Not a u64, i64, or f64: {value}");
+                    Err(DbError::DataError(format!(
+                        "Not a u64, i64, or f64: {value}"
+                    )))
                 }
             }
             None => Ok(JsonValue::Null),
@@ -166,8 +168,9 @@ impl DbQuery for TokioPostgresPool {
             .to_vec();
 
         let mut params: Vec<Box<dyn ToSql + Sync + Send>> = Vec::new();
-
-        // TODO: Remove panics.
+        let gen_err = |param: &ParamValue, sql_type: &str| -> String {
+            format!("Param {param:?} is wrong type for {sql_type}")
+        };
         match into_params {
             Params::None => (),
             Params::Positional(plist) => {
@@ -178,56 +181,56 @@ impl DbQuery for TokioPostgresPool {
                             match param {
                                 ParamValue::Null => params.push(Box::new(None::<String>)),
                                 ParamValue::Text(text) => params.push(Box::new(text.to_string())),
-                                _ => panic!("Param {param:?} is wrong type for TEXT"),
+                                _ => return Err(DbError::InputError(gen_err(&param, "TEXT"))),
                             };
                         }
                         &Type::INT2 => {
                             match param {
                                 ParamValue::Null => params.push(Box::new(None::<i16>)),
                                 ParamValue::SmallInteger(num) => params.push(Box::new(*num)),
-                                _ => panic!("Param {param:?} is wrong type for INT2"),
+                                _ => return Err(DbError::InputError(gen_err(&param, "INT2"))),
                             };
                         }
                         &Type::INT4 => {
                             match param {
                                 ParamValue::Null => params.push(Box::new(None::<i32>)),
                                 ParamValue::Integer(num) => params.push(Box::new(*num)),
-                                _ => panic!("Param {param:?} is wrong type for INT4"),
+                                _ => return Err(DbError::InputError(gen_err(&param, "INT4"))),
                             };
                         }
                         &Type::INT8 => {
                             match param {
                                 ParamValue::Null => params.push(Box::new(None::<i64>)),
                                 ParamValue::BigInteger(num) => params.push(Box::new(*num)),
-                                _ => panic!("Param {param:?} is wrong type for INT8"),
+                                _ => return Err(DbError::InputError(gen_err(&param, "INT8"))),
                             };
                         }
                         &Type::FLOAT4 => {
                             match param {
                                 ParamValue::Null => params.push(Box::new(None::<f32>)),
                                 ParamValue::Real(num) => params.push(Box::new(*num)),
-                                _ => panic!("Param {param:?} is wrong type for FLOAT4"),
+                                _ => return Err(DbError::InputError(gen_err(&param, "FLOAT4"))),
                             };
                         }
                         &Type::FLOAT8 => {
                             match param {
                                 ParamValue::Null => params.push(Box::new(None::<f64>)),
                                 ParamValue::BigReal(num) => params.push(Box::new(*num)),
-                                _ => panic!("Param {param:?} is wrong type for FLOAT8"),
+                                _ => return Err(DbError::InputError(gen_err(&param, "FLOAT8"))),
                             };
                         }
                         &Type::NUMERIC => {
                             match param {
                                 ParamValue::Null => params.push(Box::new(None::<Decimal>)),
                                 ParamValue::Numeric(num) => params.push(Box::new(*num)),
-                                _ => panic!("Param {param:?} is wrong type for NUMERIC"),
+                                _ => return Err(DbError::InputError(gen_err(&param, "NUMERIC"))),
                             };
                         }
                         &Type::BOOL => {
                             match param {
                                 ParamValue::Null => params.push(Box::new(None::<bool>)),
                                 ParamValue::Boolean(flag) => params.push(Box::new(*flag)),
-                                _ => panic!("Param {param:?} is wrong type for BOOL"),
+                                _ => return Err(DbError::InputError(gen_err(&param, "BOOL"))),
                             };
                         }
                         _ => unimplemented!(),
