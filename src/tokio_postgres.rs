@@ -1,6 +1,6 @@
 //! tokio-postgres implementation for rltbl_db.
 
-use crate::core::{DbError, DbQuery, IntoParams, JsonRow, JsonValue, ParamValue, Params};
+use crate::core::{DbError, DbKind, DbQuery, IntoParams, JsonRow, JsonValue, ParamValue, Params};
 
 use deadpool_postgres::{Config, Pool, Runtime};
 use rust_decimal::Decimal;
@@ -118,6 +118,11 @@ fn extract_value(row: &Row, idx: usize) -> Result<JsonValue, DbError> {
 }
 
 impl DbQuery for TokioPostgresPool {
+    /// Implements [DbQuery::kind()] for PostgreSQL.
+    fn kind(&self) -> DbKind {
+        DbKind::PostgreSQL
+    }
+
     /// Implements [DbQuery::execute()] for PostgreSQL.
     async fn execute(
         &self,

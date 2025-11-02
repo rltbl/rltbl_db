@@ -1,6 +1,6 @@
 //! rusqlite implementation for rltbl_db.
 
-use crate::core::{DbError, DbQuery, IntoParams, JsonRow, JsonValue, ParamValue, Params};
+use crate::core::{DbError, DbKind, DbQuery, IntoParams, JsonRow, JsonValue, ParamValue, Params};
 
 use deadpool_sqlite::{
     Config, Pool, Runtime,
@@ -180,6 +180,11 @@ fn query_prepared(
 }
 
 impl DbQuery for RusqlitePool {
+    /// Implements [DbQuery::kind()] for SQLite.
+    fn kind(&self) -> DbKind {
+        DbKind::SQLite
+    }
+
     /// Implements [DbQuery::execute()] for SQLite.
     async fn execute(
         &self,

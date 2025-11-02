@@ -238,6 +238,9 @@ macro_rules! params {
 }
 
 pub trait DbQuery {
+    /// Get the kind of SQL database: SQLite or PostgreSQL.
+    fn kind(&self) -> DbKind;
+
     /// Execute a SQL command, without a return value.
     fn execute(
         &self,
