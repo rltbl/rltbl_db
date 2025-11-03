@@ -66,11 +66,7 @@ impl DbQuery for AnyPool {
         }
     }
 
-    async fn execute(
-        &self,
-        sql: &str,
-        params: impl IntoParams + Send + 'static,
-    ) -> Result<(), DbError> {
+    async fn execute(&self, sql: &str, params: impl IntoParams + Send) -> Result<(), DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.execute(sql, params).await,

@@ -186,11 +186,7 @@ impl DbQuery for RusqlitePool {
     }
 
     /// Implements [DbQuery::execute()] for SQLite.
-    async fn execute(
-        &self,
-        sql: &str,
-        params: impl IntoParams + Send + 'static,
-    ) -> Result<(), DbError> {
+    async fn execute(&self, sql: &str, params: impl IntoParams + Send) -> Result<(), DbError> {
         let params = params.into_params()?;
         match params {
             Params::None => self.query(sql, ()).await?,

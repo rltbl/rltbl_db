@@ -245,7 +245,7 @@ pub trait DbQuery {
     fn execute(
         &self,
         sql: &str,
-        params: impl IntoParams + Send + 'static,
+        params: impl IntoParams + Send,
     ) -> impl Future<Output = Result<(), DbError>> + Send;
 
     /// Sequentially execute a semicolon-delimited list of statements, without parameters.
