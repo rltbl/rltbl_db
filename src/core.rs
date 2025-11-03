@@ -95,6 +95,22 @@ impl TryFrom<i64> for ParamValue {
     }
 }
 
+impl TryFrom<isize> for ParamValue {
+    type Error = DbError;
+
+    fn try_from(item: isize) -> Result<Self, DbError> {
+        match isize::BITS {
+            32 => Ok(ParamValue::Integer(item.try_into().map_err(|_| {
+                DbError::DataError(format!("Error converting isize (32-bit) item: {item}"))
+            })?)),
+            64 => Ok(ParamValue::Integer(item.try_into().map_err(|_| {
+                DbError::DataError(format!("Error converting isize (64-bit) item: {item}"))
+            })?)),
+            _ => unimplemented!(),
+        }
+    }
+}
+
 impl TryFrom<f32> for ParamValue {
     type Error = DbError;
 
