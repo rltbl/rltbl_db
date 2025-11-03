@@ -87,7 +87,7 @@ impl DbQuery for AnyPool {
     async fn query(
         &self,
         sql: &str,
-        params: impl IntoParams + Send + 'static,
+        params: impl IntoParams + Send,
     ) -> Result<Vec<JsonRow>, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
@@ -100,7 +100,7 @@ impl DbQuery for AnyPool {
     async fn query_row(
         &self,
         sql: &str,
-        params: impl IntoParams + Send + 'static,
+        params: impl IntoParams + Send,
     ) -> Result<JsonRow, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
@@ -113,7 +113,7 @@ impl DbQuery for AnyPool {
     async fn query_value(
         &self,
         sql: &str,
-        params: impl IntoParams + Send + 'static,
+        params: impl IntoParams + Send,
     ) -> Result<JsonValue, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
@@ -126,7 +126,7 @@ impl DbQuery for AnyPool {
     async fn query_string(
         &self,
         sql: &str,
-        params: impl IntoParams + Send + 'static,
+        params: impl IntoParams + Send,
     ) -> Result<String, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
@@ -136,11 +136,7 @@ impl DbQuery for AnyPool {
         }
     }
 
-    async fn query_u64(
-        &self,
-        sql: &str,
-        params: impl IntoParams + Send + 'static,
-    ) -> Result<u64, DbError> {
+    async fn query_u64(&self, sql: &str, params: impl IntoParams + Send) -> Result<u64, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.query_u64(sql, params).await,
@@ -149,11 +145,7 @@ impl DbQuery for AnyPool {
         }
     }
 
-    async fn query_i64(
-        &self,
-        sql: &str,
-        params: impl IntoParams + Send + 'static,
-    ) -> Result<i64, DbError> {
+    async fn query_i64(&self, sql: &str, params: impl IntoParams + Send) -> Result<i64, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.query_i64(sql, params).await,
@@ -162,11 +154,7 @@ impl DbQuery for AnyPool {
         }
     }
 
-    async fn query_f64(
-        &self,
-        sql: &str,
-        params: impl IntoParams + Send + 'static,
-    ) -> Result<f64, DbError> {
+    async fn query_f64(&self, sql: &str, params: impl IntoParams + Send) -> Result<f64, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.query_f64(sql, params).await,

@@ -258,49 +258,49 @@ pub trait DbQuery {
     fn query(
         &self,
         sql: &str,
-        params: impl IntoParams + Send + 'static,
+        params: impl IntoParams + Send,
     ) -> impl Future<Output = Result<Vec<JsonRow>, DbError>> + Send;
 
     /// Execute a SQL command, returning a single JSON row.
     fn query_row(
         &self,
         sql: &str,
-        params: impl IntoParams + Send + 'static,
+        params: impl IntoParams + Send,
     ) -> impl Future<Output = Result<JsonRow, DbError>> + Send;
 
     /// Execute a SQL command, returning a single JSON value.
     fn query_value(
         &self,
         sql: &str,
-        params: impl IntoParams + Send + 'static,
+        params: impl IntoParams + Send,
     ) -> impl Future<Output = Result<JsonValue, DbError>> + Send;
 
     /// Execute a SQL command, returning a single string.
     fn query_string(
         &self,
         sql: &str,
-        params: impl IntoParams + Send + 'static,
+        params: impl IntoParams + Send,
     ) -> impl Future<Output = Result<String, DbError>> + Send;
 
     /// Execute a SQL command, returning a single unsigned integer.
     fn query_u64(
         &self,
         sql: &str,
-        params: impl IntoParams + Send + 'static,
+        params: impl IntoParams + Send,
     ) -> impl Future<Output = Result<u64, DbError>> + Send;
 
     /// Execute a SQL command, returning a single signed integer.
     fn query_i64(
         &self,
         sql: &str,
-        params: impl IntoParams + Send + 'static,
+        params: impl IntoParams + Send,
     ) -> impl Future<Output = Result<i64, DbError>> + Send;
 
     /// Execute a SQL command, returning a single float.
     fn query_f64(
         &self,
         sql: &str,
-        params: impl IntoParams + Send + 'static,
+        params: impl IntoParams + Send,
     ) -> impl Future<Output = Result<f64, DbError>> + Send;
     /// Insert JSON rows into a table, returning the inserted rows.
     /// If a row does not have a key for a column, we treat it as NULL.

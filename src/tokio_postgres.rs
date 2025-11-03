@@ -265,7 +265,7 @@ impl DbQuery for TokioPostgresPool {
     async fn query_row(
         &self,
         sql: &str,
-        params: impl IntoParams + Send + 'static,
+        params: impl IntoParams + Send,
     ) -> Result<JsonRow, DbError> {
         let rows = self.query(sql, params).await?;
         if rows.len() > 1 {
@@ -283,7 +283,7 @@ impl DbQuery for TokioPostgresPool {
     async fn query_value(
         &self,
         sql: &str,
-        params: impl IntoParams + Send + 'static,
+        params: impl IntoParams + Send,
     ) -> Result<JsonValue, DbError> {
         let row = self.query_row(sql, params).await?;
         if row.values().len() > 1 {
@@ -301,7 +301,7 @@ impl DbQuery for TokioPostgresPool {
     async fn query_string(
         &self,
         sql: &str,
-        params: impl IntoParams + Send + 'static,
+        params: impl IntoParams + Send,
     ) -> Result<String, DbError> {
         let value = self.query_value(sql, params).await?;
         match value.as_str() {
@@ -311,11 +311,7 @@ impl DbQuery for TokioPostgresPool {
     }
 
     /// Implements [DbQuery::query_u64()] for PostgreSQL.
-    async fn query_u64(
-        &self,
-        sql: &str,
-        params: impl IntoParams + Send + 'static,
-    ) -> Result<u64, DbError> {
+    async fn query_u64(&self, sql: &str, params: impl IntoParams + Send) -> Result<u64, DbError> {
         let value = self.query_value(sql, params).await?;
         match value.as_u64() {
             Some(val) => Ok(val),
@@ -324,11 +320,7 @@ impl DbQuery for TokioPostgresPool {
     }
 
     /// Implements [DbQuery::query_i64()] for PostgreSQL.
-    async fn query_i64(
-        &self,
-        sql: &str,
-        params: impl IntoParams + Send + 'static,
-    ) -> Result<i64, DbError> {
+    async fn query_i64(&self, sql: &str, params: impl IntoParams + Send) -> Result<i64, DbError> {
         let value = self.query_value(sql, params).await?;
         match value.as_i64() {
             Some(val) => Ok(val),
@@ -337,11 +329,7 @@ impl DbQuery for TokioPostgresPool {
     }
 
     /// Implements [DbQuery::query_f64] for PostgreSQL.
-    async fn query_f64(
-        &self,
-        sql: &str,
-        params: impl IntoParams + Send + 'static,
-    ) -> Result<f64, DbError> {
+    async fn query_f64(&self, sql: &str, params: impl IntoParams + Send) -> Result<f64, DbError> {
         let value = self.query_value(sql, params).await?;
         match value.as_f64() {
             Some(val) => Ok(val),
