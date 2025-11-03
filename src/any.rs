@@ -298,15 +298,42 @@ mod tests {
     #[tokio::test]
     async fn test_table_names() {
         // Valid table names:
-        crate::core::validate_table_name(r#"table"#).expect("Invalid table name");
-        crate::core::validate_table_name(r#"my_table"#).expect("Invalid table name");
-        crate::core::validate_table_name(r#"my_2nd_table"#).expect("Invalid table name");
-        crate::core::validate_table_name(r#"my_table_2"#).expect("Invalid table name");
-        crate::core::validate_table_name(r#"my_table2"#).expect("Invalid table name");
-        crate::core::validate_table_name(r#"My_Table_2"#).expect("Invalid table name");
+        assert_eq!(
+            crate::core::validate_table_name(r#"table"#).expect("Expected table name to be valid"),
+            "table"
+        );
+        assert_eq!(
+            crate::core::validate_table_name(r#"my_table"#)
+                .expect("Expected table name to be valid"),
+            "my_table"
+        );
+        assert_eq!(
+            crate::core::validate_table_name(r#"my_2nd_table"#)
+                .expect("Expected table name to be valid"),
+            "my_2nd_table"
+        );
+        assert_eq!(
+            crate::core::validate_table_name(r#"my_table_2"#)
+                .expect("Expected table name to be valid"),
+            "my_table_2"
+        );
+        assert_eq!(
+            crate::core::validate_table_name(r#"my_table2"#)
+                .expect("Expected table name to be valid"),
+            "my_table2"
+        );
+        assert_eq!(
+            crate::core::validate_table_name(r#"My_Table_2"#)
+                .expect("Expected table name to be valid"),
+            "My_Table_2"
+        );
 
         // Valid table name surrounded by quotes:
-        crate::core::validate_table_name(r#""table""#).expect("Invalid table name");
+        assert_eq!(
+            crate::core::validate_table_name(r#""table""#)
+                .expect("Expected table name to be valid"),
+            "table"
+        );
 
         // Invalid first character:
         if let Ok(_) = crate::core::validate_table_name(r#"1table"#) {
