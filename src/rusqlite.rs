@@ -631,7 +631,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_input_params() {
-        let pool = RusqlitePool::connect("output/test.db").await.unwrap();
+        let pool = RusqlitePool::connect(":memory:").await.unwrap();
         pool.execute("DROP TABLE IF EXISTS foo", ()).await.unwrap();
         pool.execute(
             "CREATE TABLE foo (\
