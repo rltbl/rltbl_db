@@ -1,9 +1,21 @@
+//! # rltbl/rltbl_db
+
+use lazy_static::lazy_static;
+use regex::Regex;
 use rust_decimal::Decimal;
 use serde_json::Map as JsonMap;
 use std::future::Future;
 
 pub type JsonValue = serde_json::Value;
 pub type JsonRow = JsonMap<String, JsonValue>;
+
+/// Represents a valid database table name.
+static VALID_TABLE_NAME_MATCH_STR: &str = r"^[A-Za-z_][0-9A-Za-z_]*$";
+
+lazy_static! {
+    /// The regex used to match [valid database table names](VALID_TABLE_NAME_MATCH_STR).
+    static ref VALID_TABLE_NAME_REGEX: Regex = Regex::new(VALID_TABLE_NAME_MATCH_STR).unwrap();
+}
 
 /// Defines the supported database kinds.
 pub enum DbKind {
@@ -315,4 +327,92 @@ pub trait DbQuery {
         sql: &str,
         params: impl IntoParams + Send + 'static,
     ) -> impl Future<Output = Result<f64, DbError>> + Send;
+}
+
+/// Determines whether the given table name is a valid database table name. Valid database table
+/// names must match the regular expression: `^[A-Za-z_\]\[0-9A-Za-z_]*$`. For convenience, a
+/// double-quoted valid table name is also accepted as valid. The function returns the table name,
+/// if valid, with the surrounding double-quotes (if any) removed, or an error if the table name is
+/// invalid.
+pub fn validate_table_name(table_name: &str) -> Result<String, DbError> {
+    let error_msg = format!(
+        "Not a valid table name: \"{table_name}\". Valid table names must match \
+         the regular expression: '{VALID_TABLE_NAME_MATCH_STR}' and may possibly begin and \
+         end with double-quotes."
+    );
+    let table_name = match table_name.strip_prefix("\"") {
+        Some(table_name) => match table_name.strip_suffix("\"") {
+            Some(table_name) => table_name,
+            None => return Err(DbError::InputError(error_msg)),
+        },
+        None => match table_name.strip_suffix("\"") {
+            Some(_) => return Err(DbError::InputError(error_msg)),
+            None => table_name,
+        },
+    };
+    match VALID_TABLE_NAME_REGEX.is_match(table_name) {
+        true => Ok(table_name.to_string()),
+        false => Err(DbError::InputError(error_msg)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_table_names() {
+        // Valid table names:
+        assert_eq!(
+            validate_table_name(r#"table"#).expect("Expected table name to be valid"),
+            "table"
+        );
+        assert_eq!(
+            validate_table_name(r#"my_table"#).expect("Expected table name to be valid"),
+            "my_table"
+        );
+        assert_eq!(
+            validate_table_name(r#"my_2nd_table"#).expect("Expected table name to be valid"),
+            "my_2nd_table"
+        );
+        assert_eq!(
+            validate_table_name(r#"my_table_2"#).expect("Expected table name to be valid"),
+            "my_table_2"
+        );
+        assert_eq!(
+            validate_table_name(r#"my_table2"#).expect("Expected table name to be valid"),
+            "my_table2"
+        );
+        assert_eq!(
+            validate_table_name(r#"My_Table_2"#).expect("Expected table name to be valid"),
+            "My_Table_2"
+        );
+
+        // Valid table name surrounded by quotes:
+        assert_eq!(
+            validate_table_name(r#""table""#).expect("Expected table name to be valid"),
+            "table"
+        );
+
+        // Invalid first character:
+        if let Ok(_) = validate_table_name(r#"1table"#) {
+            panic!("Expected an error");
+        };
+        if let Ok(_) = validate_table_name(r#""1table""#) {
+            panic!("Expected an error");
+        }
+
+        // Beginning or trailing double-quote is missing:
+        if let Ok(_) = validate_table_name(r#"table""#) {
+            panic!("Expected an error");
+        }
+        if let Ok(_) = validate_table_name(r#""table"#) {
+            panic!("Expected an error");
+        }
+
+        // Table name with spaces:
+        if let Ok(_) = validate_table_name(r#"my table"#) {
+            panic!("Expected an error");
+        }
+    }
 }
