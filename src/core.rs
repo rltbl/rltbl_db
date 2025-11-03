@@ -107,22 +107,44 @@ impl From<u16> for ParamValue {
 
 impl From<u32> for ParamValue {
     fn from(item: u32) -> Self {
-        ParamValue::BigInteger(item.into())
+        if usize::BITS <= 31 {
+            ParamValue::Integer(item as i32)
+        } else {
+            ParamValue::BigInteger(item as i64)
+        }
     }
 }
 
 impl From<u64> for ParamValue {
     fn from(item: u64) -> Self {
-        ParamValue::Numeric(Decimal::from(item))
+        if usize::BITS <= 63 {
+            ParamValue::BigInteger(item as i64)
+        } else {
+            ParamValue::Numeric(Decimal::from(item))
+        }
     }
 }
 
 impl From<isize> for ParamValue {
     fn from(item: isize) -> Self {
-        match isize::BITS {
-            32 => ParamValue::Integer(item as i32),
-            64 => ParamValue::BigInteger(item as i64),
-            _ => unimplemented!(),
+        if isize::BITS <= 32 {
+            ParamValue::Integer(item as i32)
+        } else if isize::BITS <= 64 {
+            ParamValue::BigInteger(item as i64)
+        } else {
+            ParamValue::Numeric(Decimal::from(item))
+        }
+    }
+}
+
+impl From<usize> for ParamValue {
+    fn from(item: usize) -> Self {
+        if usize::BITS <= 31 {
+            ParamValue::Integer(item as i32)
+        } else if usize::BITS <= 63 {
+            ParamValue::BigInteger(item as i64)
+        } else {
+            ParamValue::Numeric(Decimal::from(item))
         }
     }
 }
