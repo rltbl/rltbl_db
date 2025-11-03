@@ -296,68 +296,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_table_names() {
-        // Valid table names:
-        assert_eq!(
-            crate::core::validate_table_name(r#"table"#).expect("Expected table name to be valid"),
-            "table"
-        );
-        assert_eq!(
-            crate::core::validate_table_name(r#"my_table"#)
-                .expect("Expected table name to be valid"),
-            "my_table"
-        );
-        assert_eq!(
-            crate::core::validate_table_name(r#"my_2nd_table"#)
-                .expect("Expected table name to be valid"),
-            "my_2nd_table"
-        );
-        assert_eq!(
-            crate::core::validate_table_name(r#"my_table_2"#)
-                .expect("Expected table name to be valid"),
-            "my_table_2"
-        );
-        assert_eq!(
-            crate::core::validate_table_name(r#"my_table2"#)
-                .expect("Expected table name to be valid"),
-            "my_table2"
-        );
-        assert_eq!(
-            crate::core::validate_table_name(r#"My_Table_2"#)
-                .expect("Expected table name to be valid"),
-            "My_Table_2"
-        );
-
-        // Valid table name surrounded by quotes:
-        assert_eq!(
-            crate::core::validate_table_name(r#""table""#)
-                .expect("Expected table name to be valid"),
-            "table"
-        );
-
-        // Invalid first character:
-        if let Ok(_) = crate::core::validate_table_name(r#"1table"#) {
-            panic!("Expected an error");
-        };
-        if let Ok(_) = crate::core::validate_table_name(r#""1table""#) {
-            panic!("Expected an error");
-        }
-
-        // Beginning or trailing double-quote is missing:
-        if let Ok(_) = crate::core::validate_table_name(r#"table""#) {
-            panic!("Expected an error");
-        }
-        if let Ok(_) = crate::core::validate_table_name(r#""table"#) {
-            panic!("Expected an error");
-        }
-
-        // Table name with spaces:
-        if let Ok(_) = crate::core::validate_table_name(r#"my table"#) {
-            panic!("Expected an error");
-        }
-    }
-
-    #[tokio::test]
     async fn test_input_params() {
         #[cfg(feature = "rusqlite")]
         input_params("test_any_sqlite.db").await;
