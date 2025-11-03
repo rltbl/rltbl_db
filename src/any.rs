@@ -10,11 +10,11 @@
 ///          CREATE TABLE test ( value TEXT );\
 ///          INSERT INTO test VALUES ('foo');",
 ///     ).await?;
-///     let value = pool.query_string("SELECT value FROM test;", &[]).await?;
+///     let value = pool.query_string("SELECT value FROM test;", ()).await?;
 ///     Ok(value)
 /// }
 /// ```
-use crate::core::{DbError, DbKind, DbQuery, JsonRow, JsonValue};
+use crate::core::{DbError, DbKind, DbQuery, IntoParams, JsonRow, JsonValue};
 
 #[cfg(feature = "rusqlite")]
 use crate::rusqlite::RusqlitePool;
@@ -65,7 +65,8 @@ impl DbQuery for AnyPool {
             AnyPool::TokioPostgres(pool) => pool.kind(),
         }
     }
-    async fn execute(&self, sql: &str, params: &[JsonValue]) -> Result<(), DbError> {
+
+    async fn execute(&self, sql: &str, params: impl IntoParams + Send) -> Result<(), DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.execute(sql, params).await,
@@ -83,7 +84,11 @@ impl DbQuery for AnyPool {
         }
     }
 
-    async fn query(&self, sql: &str, params: &[JsonValue]) -> Result<Vec<JsonRow>, DbError> {
+    async fn query(
+        &self,
+        sql: &str,
+        params: impl IntoParams + Send + 'static,
+    ) -> Result<Vec<JsonRow>, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.query(sql, params).await,
@@ -92,7 +97,11 @@ impl DbQuery for AnyPool {
         }
     }
 
-    async fn query_row(&self, sql: &str, params: &[JsonValue]) -> Result<JsonRow, DbError> {
+    async fn query_row(
+        &self,
+        sql: &str,
+        params: impl IntoParams + Send + 'static,
+    ) -> Result<JsonRow, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.query_row(sql, params).await,
@@ -101,7 +110,11 @@ impl DbQuery for AnyPool {
         }
     }
 
-    async fn query_value(&self, sql: &str, params: &[JsonValue]) -> Result<JsonValue, DbError> {
+    async fn query_value(
+        &self,
+        sql: &str,
+        params: impl IntoParams + Send + 'static,
+    ) -> Result<JsonValue, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.query_value(sql, params).await,
@@ -110,7 +123,11 @@ impl DbQuery for AnyPool {
         }
     }
 
-    async fn query_string(&self, sql: &str, params: &[JsonValue]) -> Result<String, DbError> {
+    async fn query_string(
+        &self,
+        sql: &str,
+        params: impl IntoParams + Send + 'static,
+    ) -> Result<String, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.query_string(sql, params).await,
@@ -119,7 +136,11 @@ impl DbQuery for AnyPool {
         }
     }
 
-    async fn query_u64(&self, sql: &str, params: &[JsonValue]) -> Result<u64, DbError> {
+    async fn query_u64(
+        &self,
+        sql: &str,
+        params: impl IntoParams + Send + 'static,
+    ) -> Result<u64, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.query_u64(sql, params).await,
@@ -128,7 +149,11 @@ impl DbQuery for AnyPool {
         }
     }
 
-    async fn query_i64(&self, sql: &str, params: &[JsonValue]) -> Result<i64, DbError> {
+    async fn query_i64(
+        &self,
+        sql: &str,
+        params: impl IntoParams + Send + 'static,
+    ) -> Result<i64, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.query_i64(sql, params).await,
@@ -137,7 +162,11 @@ impl DbQuery for AnyPool {
         }
     }
 
-    async fn query_f64(&self, sql: &str, params: &[JsonValue]) -> Result<f64, DbError> {
+    async fn query_f64(
+        &self,
+        sql: &str,
+        params: impl IntoParams + Send + 'static,
+    ) -> Result<f64, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.query_f64(sql, params).await,
@@ -159,7 +188,8 @@ impl DbQuery for AnyPool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
+    use crate::params;
+    use rust_decimal::dec;
     use serde_json::json;
 
     #[tokio::test]
@@ -204,26 +234,14 @@ mod tests {
                  alt_numeric_value
                )
                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)"#,
-            &[
-                json!("foo"),
-                JsonValue::Null,
-                json!(1.05),
-                JsonValue::Null,
-                json!(1),
-                JsonValue::Null,
-                json!(true),
-                JsonValue::Null,
-                json!(1_000_000),
-                JsonValue::Null,
-            ],
+            params!["foo", (), 1.05_f64, (), 1_i64, (), true, (), dec!(1), ()],
         )
         .await
         .unwrap();
 
         let select_sql = "SELECT text_value FROM test_any_table_mixed WHERE text_value = $1";
-        let params = [json!("foo")];
         let value = pool
-            .query_value(select_sql, &params)
+            .query_value(select_sql, ["foo"])
             .await
             .unwrap()
             .as_str()
@@ -249,16 +267,9 @@ mod tests {
                               AND int_value > $4
                               AND bool_value = $5
                               AND numeric_value > $6"#;
-        let params = [
-            json!("foo"),
-            JsonValue::Null,
-            json!(1.0),
-            json!(0),
-            json!(true),
-            json!(999_999),
-        ];
+        let params = params!["foo", (), 1.0_f64, 0_i64, true, dec!(0.999)];
 
-        let row = pool.query_row(select_sql, &params).await.unwrap();
+        let row = pool.query_row(select_sql, params.clone()).await.unwrap();
         assert_eq!(
             json!(row),
             json!({
@@ -270,12 +281,12 @@ mod tests {
                 "alt_int_value": JsonValue::Null,
                 "bool_value": true,
                 "alt_bool_value": JsonValue::Null,
-                "numeric_value": 1_000_000,
+                "numeric_value": 1,
                 "alt_numeric_value": JsonValue::Null,
             })
         );
 
-        let rows = pool.query(select_sql, &params).await.unwrap();
+        let rows = pool.query(select_sql, params.clone()).await.unwrap();
         assert_eq!(
             json!(rows),
             json!([{
@@ -287,9 +298,86 @@ mod tests {
                 "alt_int_value": JsonValue::Null,
                 "bool_value": true,
                 "alt_bool_value": JsonValue::Null,
-                "numeric_value": 1_000_000,
+                "numeric_value": 1,
                 "alt_numeric_value": JsonValue::Null,
             }])
         );
+    }
+
+    #[tokio::test]
+    async fn test_input_params() {
+        #[cfg(feature = "rusqlite")]
+        input_params("test_any_sqlite.db").await;
+        #[cfg(feature = "tokio-postgres")]
+        input_params("postgresql:///rltbl_db").await;
+    }
+
+    async fn input_params(url: &str) {
+        let pool = AnyPool::connect(url).await.unwrap();
+        pool.execute("DROP TABLE IF EXISTS foo_any", ())
+            .await
+            .unwrap();
+        pool.execute(
+            "CREATE TABLE foo_any (\
+               bar TEXT,\
+               car INT2,\
+               dar INT4,\
+               far INT8,\
+               gar FLOAT4,\
+               har FLOAT8,\
+               jar NUMERIC,\
+               kar BOOL
+             )",
+            (),
+        )
+        .await
+        .unwrap();
+        pool.execute("INSERT INTO foo_any (bar) VALUES ($1)", &["one"])
+            .await
+            .unwrap();
+        pool.execute("INSERT INTO foo_any (far) VALUES ($1)", &[1 as i64])
+            .await
+            .unwrap();
+        pool.execute("INSERT INTO foo_any (bar) VALUES ($1)", ["two"])
+            .await
+            .unwrap();
+        pool.execute("INSERT INTO foo_any (far) VALUES ($1)", [2 as i64])
+            .await
+            .unwrap();
+        pool.execute("INSERT INTO foo_any (bar) VALUES ($1)", vec!["three"])
+            .await
+            .unwrap();
+        pool.execute("INSERT INTO foo_any (far) VALUES ($1)", vec![3 as i64])
+            .await
+            .unwrap();
+        pool.execute("INSERT INTO foo_any (gar) VALUES ($1)", vec![3 as f32])
+            .await
+            .unwrap();
+        pool.execute("INSERT INTO foo_any (har) VALUES ($1)", vec![3 as f64])
+            .await
+            .unwrap();
+        pool.execute("INSERT INTO foo_any (jar) VALUES ($1)", vec![dec!(3)])
+            .await
+            .unwrap();
+        pool.execute("INSERT INTO foo_any (kar) VALUES ($1)", vec![true])
+            .await
+            .unwrap();
+        pool.execute(
+            "INSERT INTO foo_any \
+             (bar, car, dar, far, gar, har, jar, kar) \
+             VALUES ($1, $2, $3, $4, $5 ,$6, $7, $8)",
+            params![
+                "four",
+                123_i16,
+                123_i32,
+                123_i64,
+                123_f32,
+                123_f64,
+                dec!(123),
+                true,
+            ],
+        )
+        .await
+        .unwrap();
     }
 }
