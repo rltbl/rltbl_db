@@ -37,7 +37,7 @@ fn query_prepared(
     stmt: &mut Statement<'_>,
     params: impl IntoParams + Send,
 ) -> Result<Vec<JsonRow>, DbError> {
-    match params.into_params()? {
+    match params.into_params() {
         Params::None => (),
         Params::Positional(params) => {
             for (i, param) in params.iter().enumerate() {
@@ -190,7 +190,7 @@ impl DbQuery for RusqlitePool {
 
     /// Implements [DbQuery::execute()] for SQLite.
     async fn execute(&self, sql: &str, params: impl IntoParams + Send) -> Result<(), DbError> {
-        let params = params.into_params()?;
+        let params = params.into_params();
         match params {
             Params::None => self.query(sql, ()).await?,
             _ => self.query(sql, params).await?,

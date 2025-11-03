@@ -125,7 +125,7 @@ impl DbQuery for TokioPostgresPool {
 
     /// Implements [DbQuery::execute()] for PostgreSQL.
     async fn execute(&self, sql: &str, params: impl IntoParams + Send) -> Result<(), DbError> {
-        let params = params.into_params()?;
+        let params = params.into_params();
         match params {
             Params::None => self.query(sql, ()).await?,
             _ => self.query(sql, params).await?,
@@ -153,7 +153,7 @@ impl DbQuery for TokioPostgresPool {
         sql: &str,
         into_params: impl IntoParams + Send,
     ) -> Result<Vec<JsonRow>, DbError> {
-        let into_params = into_params.into_params()?;
+        let into_params = into_params.into_params();
         let client = self
             .pool
             .get()

@@ -63,121 +63,108 @@ pub enum ParamValue {
 
 // Implementations of attempted conversions of various types into ParamValues:
 
-impl TryFrom<&str> for ParamValue {
-    type Error = DbError;
-
-    fn try_from(item: &str) -> Result<Self, DbError> {
-        Ok(ParamValue::Text(item.to_string()))
+impl From<&str> for ParamValue {
+    fn from(item: &str) -> Self {
+        ParamValue::Text(item.to_string())
     }
 }
 
-impl TryFrom<i16> for ParamValue {
-    type Error = DbError;
-
-    fn try_from(item: i16) -> Result<Self, DbError> {
-        Ok(ParamValue::SmallInteger(item))
+impl From<String> for ParamValue {
+    fn from(item: String) -> Self {
+        ParamValue::Text(item)
     }
 }
 
-impl TryFrom<i32> for ParamValue {
-    type Error = DbError;
-
-    fn try_from(item: i32) -> Result<Self, DbError> {
-        Ok(ParamValue::Integer(item.into()))
+impl From<&String> for ParamValue {
+    fn from(item: &String) -> Self {
+        ParamValue::Text(item.clone())
     }
 }
 
-impl TryFrom<i64> for ParamValue {
-    type Error = DbError;
-
-    fn try_from(item: i64) -> Result<Self, DbError> {
-        Ok(ParamValue::BigInteger(item))
+impl From<i16> for ParamValue {
+    fn from(item: i16) -> Self {
+        ParamValue::SmallInteger(item)
     }
 }
 
-impl TryFrom<isize> for ParamValue {
-    type Error = DbError;
+impl From<i32> for ParamValue {
+    fn from(item: i32) -> Self {
+        ParamValue::Integer(item.into())
+    }
+}
 
-    fn try_from(item: isize) -> Result<Self, DbError> {
+impl From<i64> for ParamValue {
+    fn from(item: i64) -> Self {
+        ParamValue::BigInteger(item)
+    }
+}
+
+impl From<u16> for ParamValue {
+    fn from(item: u16) -> Self {
+        ParamValue::Integer(item.into())
+    }
+}
+
+impl From<u32> for ParamValue {
+    fn from(item: u32) -> Self {
+        ParamValue::BigInteger(item.into())
+    }
+}
+
+impl From<u64> for ParamValue {
+    fn from(item: u64) -> Self {
+        ParamValue::Numeric(Decimal::from(item))
+    }
+}
+
+impl From<isize> for ParamValue {
+    fn from(item: isize) -> Self {
         match isize::BITS {
-            32 => Ok(ParamValue::Integer(item.try_into().map_err(|_| {
-                DbError::DataError(format!("Error converting isize (32-bit) item: {item}"))
-            })?)),
-            64 => Ok(ParamValue::Integer(item.try_into().map_err(|_| {
-                DbError::DataError(format!("Error converting isize (64-bit) item: {item}"))
-            })?)),
+            32 => ParamValue::Integer(item as i32),
+            64 => ParamValue::BigInteger(item as i64),
             _ => unimplemented!(),
         }
     }
 }
 
-impl TryFrom<f32> for ParamValue {
-    type Error = DbError;
-
-    fn try_from(item: f32) -> Result<Self, DbError> {
-        Ok(ParamValue::Real(item))
+impl From<f32> for ParamValue {
+    fn from(item: f32) -> Self {
+        ParamValue::Real(item)
     }
 }
 
-impl TryFrom<f64> for ParamValue {
-    type Error = DbError;
-
-    fn try_from(item: f64) -> Result<Self, DbError> {
-        Ok(ParamValue::BigReal(item))
+impl From<f64> for ParamValue {
+    fn from(item: f64) -> Self {
+        ParamValue::BigReal(item)
     }
 }
 
-impl TryFrom<Decimal> for ParamValue {
-    type Error = DbError;
-
-    fn try_from(item: Decimal) -> Result<Self, DbError> {
-        Ok(ParamValue::Numeric(item))
+impl From<Decimal> for ParamValue {
+    fn from(item: Decimal) -> Self {
+        ParamValue::Numeric(item)
     }
 }
 
-impl TryFrom<bool> for ParamValue {
-    type Error = DbError;
-
-    fn try_from(item: bool) -> Result<Self, DbError> {
-        Ok(ParamValue::Boolean(item))
+impl From<bool> for ParamValue {
+    fn from(item: bool) -> Self {
+        ParamValue::Boolean(item)
     }
 }
 
-/// Types that implements this trait can be converted into a [ParamValue]
+impl From<()> for ParamValue {
+    fn from(_: ()) -> Self {
+        ParamValue::Null
+    }
+}
+
 pub trait IntoParamValue {
-    fn into_param_value(self) -> Result<ParamValue, DbError>;
+    fn into_param_value(self) -> ParamValue;
 }
 
 /// Implements [IntoParamValue] for types that implement [TryFrom] for [ParamValue].
-impl<T> IntoParamValue for T
-where
-    T: TryInto<ParamValue>,
-    T::Error: Into<DbError>,
-{
-    fn into_param_value(self) -> Result<ParamValue, DbError> {
-        self.try_into()
-            .map_err(|e| DbError::DataError(e.into().to_string()))
-    }
-}
-
-/// Implements [IntoParamValue] (trivially) for a [ParamValue].
-impl IntoParamValue for ParamValue {
-    fn into_param_value(self) -> Result<ParamValue, DbError> {
-        Ok(self)
-    }
-}
-
-/// Implements [IntoParamValue] for a [ParamValue] wrapped in a Result.
-impl IntoParamValue for Result<ParamValue, DbError> {
-    fn into_param_value(self) -> Result<ParamValue, DbError> {
-        self
-    }
-}
-
-/// Implements [IntoParamValue] for an empty tuple. Always returns [ParamValue::Null].
-impl IntoParamValue for () {
-    fn into_param_value(self) -> Result<ParamValue, DbError> {
-        Ok(ParamValue::Null)
+impl<T: Into<ParamValue>> IntoParamValue for T {
+    fn into_param_value(self) -> ParamValue {
+        self.into()
     }
 }
 
@@ -190,33 +177,33 @@ pub enum Params {
 
 /// Types that implement this trait can be converted into [Params]
 pub trait IntoParams {
-    fn into_params(self) -> Result<Params, DbError>;
-}
-
-/// Implements [IntoParams] for an empty tuple. Always returns [Params::None].
-impl IntoParams for () {
-    fn into_params(self) -> Result<Params, DbError> {
-        Ok(Params::None)
-    }
+    fn into_params(self) -> Params;
 }
 
 /// (Trivially) implements [IntoParams] for [Params]
 impl IntoParams for Params {
-    fn into_params(self) -> Result<Params, DbError> {
-        Ok(self)
+    fn into_params(self) -> Params {
+        self
     }
 }
 
 /// Implements [IntoParams] for references to [Params]
 impl IntoParams for &Params {
-    fn into_params(self) -> Result<Params, DbError> {
-        Ok(self.clone())
+    fn into_params(self) -> Params {
+        self.clone()
+    }
+}
+
+/// Implements [IntoParams] for an empty tuple. Always returns [Params::None].
+impl IntoParams for () {
+    fn into_params(self) -> Params {
+        Params::None
     }
 }
 
 /// Implements [IntoParams] for fixed-length arrays of types that implement [IntoParamValue]
 impl<T: IntoParamValue, const N: usize> IntoParams for [T; N] {
-    fn into_params(self) -> Result<Params, DbError> {
+    fn into_params(self) -> Params {
         self.into_iter().collect::<Vec<_>>().into_params()
     }
 }
@@ -224,19 +211,19 @@ impl<T: IntoParamValue, const N: usize> IntoParams for [T; N] {
 /// Implements [IntoParams] for references to fixed-length arrays of types that implement
 /// [IntoParamValue]
 impl<T: IntoParamValue + Clone, const N: usize> IntoParams for &[T; N] {
-    fn into_params(self) -> Result<Params, DbError> {
+    fn into_params(self) -> Params {
         self.iter().cloned().collect::<Vec<_>>().into_params()
     }
 }
 
 /// Implements [IntoParams] for vectors of types that implement [IntoParamValue]
 impl<T: IntoParamValue> IntoParams for Vec<T> {
-    fn into_params(self) -> Result<Params, DbError> {
+    fn into_params(self) -> Params {
         let values = self
             .into_iter()
             .map(|i| i.into_param_value())
-            .collect::<Result<Vec<_>, DbError>>()?;
-        Ok(Params::Positional(values))
+            .collect::<Vec<_>>();
+        Params::Positional(values)
     }
 }
 
