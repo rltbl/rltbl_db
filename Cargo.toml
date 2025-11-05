@@ -27,5 +27,5 @@ tower-service = "0.3.3"
 
 [features]
 default = ["rusqlite", "tokio-postgres"]
-rusqlite = ["dep:deadpool-sqlite"]
+rusqlite = ["dep:deadpool-sqlite", "rust_decimal/macros"]
 tokio-postgres = ["dep:deadpool-postgres", "dep:tokio-postgres", "dep:rust_decimal"]

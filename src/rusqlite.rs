@@ -1,6 +1,9 @@
 //! rusqlite implementation for rltbl_db.
 
-use crate::core::{DbError, DbKind, DbQuery, IntoParams, JsonRow, JsonValue, ParamValue, Params};
+use crate::{
+    core::{DbError, DbKind, DbQuery, IntoParams, JsonRow, JsonValue, ParamValue, Params},
+    params,
+};
 
 use deadpool_sqlite::{
     Config, Pool, Runtime,
@@ -34,7 +37,7 @@ fn query_prepared(
     stmt: &mut Statement<'_>,
     params: impl IntoParams + Send,
 ) -> Result<Vec<JsonRow>, DbError> {
-    match params.into_params()? {
+    match params.into_params() {
         Params::None => (),
         Params::Positional(params) => {
             for (i, param) in params.iter().enumerate() {
@@ -187,7 +190,7 @@ impl DbQuery for RusqlitePool {
 
     /// Implements [DbQuery::execute()] for SQLite.
     async fn execute(&self, sql: &str, params: impl IntoParams + Send) -> Result<(), DbError> {
-        let params = params.into_params()?;
+        let params = params.into_params();
         match params {
             Params::None => self.query(sql, ()).await?,
             _ => self.query(sql, params).await?,
@@ -221,7 +224,7 @@ impl DbQuery for RusqlitePool {
     async fn query(
         &self,
         sql: &str,
-        params: impl IntoParams + Send + 'static,
+        params: impl IntoParams + Send,
     ) -> Result<Vec<JsonRow>, DbError> {
         let conn = self
             .pool
@@ -229,6 +232,7 @@ impl DbQuery for RusqlitePool {
             .await
             .map_err(|err| DbError::ConnectError(format!("Error getting pool: {err}")))?;
         let sql = sql.to_string();
+        let params: Params = params.into_params();
         let rows = conn
             .interact(move |conn| {
                 let mut stmt = conn.prepare(&sql).map_err(|err| {
@@ -249,7 +253,7 @@ impl DbQuery for RusqlitePool {
     async fn query_row(
         &self,
         sql: &str,
-        params: impl IntoParams + Send + 'static,
+        params: impl IntoParams + Send,
     ) -> Result<JsonRow, DbError> {
         let rows = self.query(&sql, params).await?;
         if rows.len() > 1 {
@@ -267,7 +271,7 @@ impl DbQuery for RusqlitePool {
     async fn query_value(
         &self,
         sql: &str,
-        params: impl IntoParams + Send + 'static,
+        params: impl IntoParams + Send,
     ) -> Result<JsonValue, DbError> {
         let row = self.query_row(sql, params).await?;
         if row.len() > 1 {
@@ -285,7 +289,7 @@ impl DbQuery for RusqlitePool {
     async fn query_string(
         &self,
         sql: &str,
-        params: impl IntoParams + Send + 'static,
+        params: impl IntoParams + Send,
     ) -> Result<String, DbError> {
         let value = self.query_value(sql, params).await?;
         match value.as_str() {
@@ -295,11 +299,7 @@ impl DbQuery for RusqlitePool {
     }
 
     /// Implements [DbQuery::query_u64()] for SQLite.
-    async fn query_u64(
-        &self,
-        sql: &str,
-        params: impl IntoParams + Send + 'static,
-    ) -> Result<u64, DbError> {
+    async fn query_u64(&self, sql: &str, params: impl IntoParams + Send) -> Result<u64, DbError> {
         let value = self.query_value(sql, params).await?;
         match value.as_u64() {
             Some(val) => Ok(val),
@@ -310,11 +310,7 @@ impl DbQuery for RusqlitePool {
     }
 
     /// Implements [DbQuery::query_i64()] for SQLite.
-    async fn query_i64(
-        &self,
-        sql: &str,
-        params: impl IntoParams + Send + 'static,
-    ) -> Result<i64, DbError> {
+    async fn query_i64(&self, sql: &str, params: impl IntoParams + Send) -> Result<i64, DbError> {
         let value = self.query_value(sql, params).await?;
         match value.as_i64() {
             Some(val) => Ok(val),
@@ -323,16 +319,71 @@ impl DbQuery for RusqlitePool {
     }
 
     /// Implements [DbQuery::query_f64()] for SQLite.
-    async fn query_f64(
-        &self,
-        sql: &str,
-        params: impl IntoParams + Send + 'static,
-    ) -> Result<f64, DbError> {
+    async fn query_f64(&self, sql: &str, params: impl IntoParams + Send) -> Result<f64, DbError> {
         let value = self.query_value(sql, params).await?;
         match value.as_f64() {
             Some(val) => Ok(val),
             None => Err(DbError::DataError(format!("Not an float: {value}"))),
         }
+    }
+
+    async fn insert(&self, table: &str, rows: &[&JsonRow]) -> Result<Vec<JsonRow>, DbError> {
+        let columns = self
+            .query("SELECT name FROM PRAGMA_TABLE_INFO($1)", params![table])
+            .await?;
+        let columns: Vec<String> = columns
+            .iter()
+            .map(|row| row.get("name").unwrap().as_str().unwrap().to_string())
+            .collect();
+        let mut lines: Vec<String> = Vec::new();
+        let mut params: Vec<ParamValue> = Vec::new();
+        let mut i = 0;
+        for row in rows {
+            let mut cells: Vec<String> = Vec::new();
+            for column in &columns {
+                if row.contains_key(column) {
+                    i += 1;
+                    cells.push(format!("${i}"));
+                    let param = match row.get(column).unwrap() {
+                        serde_json::Value::Null => ParamValue::Null,
+                        serde_json::Value::Bool(bool) => ParamValue::Boolean(*bool),
+                        serde_json::Value::Number(number) => {
+                            if number.is_i64() {
+                                ParamValue::BigInteger(number.as_i64().unwrap())
+                            } else if number.is_f64() {
+                                ParamValue::BigReal(number.as_f64().unwrap())
+                            } else {
+                                unimplemented!()
+                            }
+                        }
+                        serde_json::Value::String(text) => ParamValue::Text(text.to_string()),
+                        serde_json::Value::Array(values) => {
+                            return Err(DbError::InputError(format!(
+                                "JSON Arrays not supported: {values:?}"
+                            )));
+                        }
+                        serde_json::Value::Object(map) => {
+                            return Err(DbError::InputError(format!(
+                                "JSON Objects not supported: {map:?}"
+                            )));
+                        }
+                    };
+                    params.push(param);
+                } else {
+                    cells.push(String::from("NULL"))
+                }
+            }
+            let line = format!("({})", cells.join(", "));
+            lines.push(line);
+        }
+        // WARN: This allows SQL injection.
+        let sql = format!(
+            r#"INSERT INTO "{table}" VALUES
+            {}
+            RETURNING *;"#,
+            lines.join(",\n")
+        );
+        self.query(&sql, params).await
     }
 }
 
@@ -623,6 +674,51 @@ mod tests {
         // So, perhaps, this is tu quoque an argument that the behaviour below is acceptable for
         // sqlite.
         assert_eq!(json!(rows), json!([{"MAX(bool_value)": 1}]));
+    }
+
+    #[tokio::test]
+    async fn test_insert() {
+        let pool = RusqlitePool::connect(":memory:").await.unwrap();
+        pool.execute_batch(
+            "DROP TABLE IF EXISTS test_insert;\
+             CREATE TABLE test_insert (\
+                 text_value TEXT,\
+                 alt_text_value TEXT,\
+                 float_value FLOAT8,\
+                 int_value INT8,\
+                 bool_value BOOL\
+             )",
+        )
+        .await
+        .unwrap();
+        let rows = pool
+            .insert(
+                "test_insert",
+                &[
+                    &json!({"text_value": "TEXT"}).as_object().unwrap(),
+                    &json!({"int_value": 1, "bool_value": true})
+                        .as_object()
+                        .unwrap(),
+                ],
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            json!(rows),
+            json!([{
+                "text_value": "TEXT",
+                "alt_text_value": JsonValue::Null,
+                "float_value": JsonValue::Null,
+                "int_value": JsonValue::Null,
+                "bool_value": JsonValue::Null,
+            },{
+                "text_value": JsonValue::Null,
+                "alt_text_value": JsonValue::Null,
+                "float_value": JsonValue::Null,
+                "int_value": 1,
+                "bool_value": true,
+            }])
+        );
     }
 
     #[tokio::test]
