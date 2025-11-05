@@ -1,7 +1,10 @@
 //! rusqlite implementation for rltbl_db.
 
 use crate::{
-    core::{DbError, DbKind, DbQuery, IntoParams, JsonRow, JsonValue, ParamValue, Params},
+    core::{
+        DbError, DbKind, DbQuery, IntoParams, JsonRow, JsonValue, ParamValue, Params,
+        validate_table_name,
+    },
     params,
 };
 
@@ -339,15 +342,37 @@ impl DbQuery for RusqlitePool {
         rows: &[&JsonRow],
         filtered_by: &[&str],
     ) -> Result<Vec<JsonRow>, DbError> {
-        let columns = self
-            .query("SELECT name FROM PRAGMA_TABLE_INFO($1)", params![table])
-            .await?;
-        let columns: Vec<String> = columns
-            .iter()
-            .map(|row| row.get("name").unwrap().as_str().unwrap().to_string())
-            .collect();
-        let mut lines: Vec<String> = Vec::new();
+        // Begin by verifying that the given table name is valid, which has the side-effect of
+        // removing any enclosing double-quotes:
+        let table = validate_table_name(table)?;
+
+        // Retrieve the names of all of the table's columns from the database's metadata:
+        let columns = {
+            let mut columns = vec![];
+            for row in self
+                .query("SELECT name FROM PRAGMA_TABLE_INFO($1)", params![&table])
+                .await?
+            {
+                match row
+                    .get("name")
+                    .and_then(|name| name.as_str().and_then(|name| Some(name)))
+                {
+                    Some(column) => columns.push(column.to_string()),
+                    None => {
+                        return Err(DbError::DataError(format!(
+                            "Error getting columns for table '{table}'"
+                        )));
+                    }
+                };
+            }
+            columns
+        };
+
+        // The lines, with placeholders, that need to be bound by parameters:
+        let mut lines_to_bind: Vec<String> = Vec::new();
+        // The parameters to bind the placeholders with:
         let mut params: Vec<ParamValue> = Vec::new();
+        // Used to represent the ith parameter in the line to be bound:
         let mut i = 0;
         for row in rows {
             let mut cells: Vec<String> = Vec::new();
@@ -355,25 +380,29 @@ impl DbQuery for RusqlitePool {
                 if row.contains_key(column) {
                     i += 1;
                     cells.push(format!("${i}"));
+                    // This unwrap is safe since the row must contain the column otherwise this
+                    // if-clause would not have been activated.
                     let param = match row.get(column).unwrap() {
-                        serde_json::Value::Null => ParamValue::Null,
-                        serde_json::Value::Bool(bool) => ParamValue::Boolean(*bool),
-                        serde_json::Value::Number(number) => {
+                        JsonValue::Null => ParamValue::Null,
+                        JsonValue::Bool(flag) => ParamValue::Boolean(*flag),
+                        JsonValue::Number(number) => {
                             if number.is_i64() {
                                 ParamValue::BigInteger(number.as_i64().unwrap())
                             } else if number.is_f64() {
                                 ParamValue::BigReal(number.as_f64().unwrap())
                             } else {
-                                unimplemented!()
+                                return Err(DbError::DataError(format!(
+                                    "Unsupported number: {number} is neither i64 nor f64"
+                                )));
                             }
                         }
-                        serde_json::Value::String(text) => ParamValue::Text(text.to_string()),
-                        serde_json::Value::Array(values) => {
+                        JsonValue::String(text) => ParamValue::Text(text.to_string()),
+                        JsonValue::Array(values) => {
                             return Err(DbError::InputError(format!(
                                 "JSON Arrays not supported: {values:?}"
                             )));
                         }
-                        serde_json::Value::Object(map) => {
+                        JsonValue::Object(map) => {
                             return Err(DbError::InputError(format!(
                                 "JSON Objects not supported: {map:?}"
                             )));
@@ -384,17 +413,30 @@ impl DbQuery for RusqlitePool {
                     cells.push(String::from("NULL"))
                 }
             }
-            let line = format!("({})", cells.join(", "));
-            lines.push(line);
+            let line_to_bind = format!("({})", cells.join(", "));
+            lines_to_bind.push(line_to_bind);
         }
 
-        // TODO: Use the `filtered_by` argument to restrict the RETURNING clause.
-        // TODO: Validate the table name to avoid SQL injection.
+        // Use the `filtered_by` argument to restrict the RETURNING clause, defaulting to '*'
+        // if `filtered_by` is empty:
+        let returning = match filtered_by.is_empty() {
+            true => "*".to_string(),
+            false => filtered_by
+                .iter()
+                // TODO: Should we log a warning when filtered_by contains non-existent columns?
+                // TODO: Try to remove the call to .to_string() here:
+                .filter(|col| columns.contains(&col.to_string()))
+                .map(|col| *col)
+                .collect::<Vec<_>>()
+                .join(", "),
+        };
+
+        // Finally, execute the insert statement using query():
         let sql = format!(
             r#"INSERT INTO "{table}" VALUES
             {}
-            RETURNING *;"#,
-            lines.join(",\n")
+            RETURNING {returning};"#,
+            lines_to_bind.join(",\n")
         );
         self.query(&sql, params).await
     }
@@ -710,6 +752,8 @@ mod tests {
         )
         .await
         .unwrap();
+
+        // No filtering:
         let rows = pool
             .insert_returning(
                 "test_insert",
@@ -737,6 +781,31 @@ mod tests {
                 "float_value": JsonValue::Null,
                 "int_value": 1,
                 "bool_value": true,
+            }])
+        );
+
+        // With filtering:
+        let rows = pool
+            .insert_returning(
+                "test_insert",
+                &[
+                    &json!({"text_value": "TEXT"}).as_object().unwrap(),
+                    &json!({"int_value": 1, "bool_value": true})
+                        .as_object()
+                        .unwrap(),
+                ],
+                &["int_value", "float_value"],
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            json!(rows),
+            json!([{
+                "float_value": JsonValue::Null,
+                "int_value": JsonValue::Null,
+            },{
+                "float_value": JsonValue::Null,
+                "int_value": 1,
             }])
         );
     }
