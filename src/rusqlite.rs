@@ -327,7 +327,18 @@ impl DbQuery for RusqlitePool {
         }
     }
 
-    async fn insert(&self, table: &str, rows: &[&JsonRow]) -> Result<Vec<JsonRow>, DbError> {
+    /// Implements [DbQuery::insert()] for SQLite.
+    async fn insert(&self, _table: &str, _rows: &[&JsonRow]) -> Result<(), DbError> {
+        todo!();
+    }
+
+    /// Implements [DbQuery::insert_returning()] for SQLite.
+    async fn insert_returning(
+        &self,
+        table: &str,
+        rows: &[&JsonRow],
+        filtered_by: &[&str],
+    ) -> Result<Vec<JsonRow>, DbError> {
         let columns = self
             .query("SELECT name FROM PRAGMA_TABLE_INFO($1)", params![table])
             .await?;
@@ -376,7 +387,9 @@ impl DbQuery for RusqlitePool {
             let line = format!("({})", cells.join(", "));
             lines.push(line);
         }
-        // WARN: This allows SQL injection.
+
+        // TODO: Use the `filtered_by` argument to restrict the RETURNING clause.
+        // TODO: Validate the table name to avoid SQL injection.
         let sql = format!(
             r#"INSERT INTO "{table}" VALUES
             {}
@@ -678,6 +691,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_insert() {
+        // TODO: Implement this test.
+        assert_eq!(1, 1);
+    }
+
+    #[tokio::test]
+    async fn test_insert_returning() {
         let pool = RusqlitePool::connect(":memory:").await.unwrap();
         pool.execute_batch(
             "DROP TABLE IF EXISTS test_insert;\
@@ -692,7 +711,7 @@ mod tests {
         .await
         .unwrap();
         let rows = pool
-            .insert(
+            .insert_returning(
                 "test_insert",
                 &[
                     &json!({"text_value": "TEXT"}).as_object().unwrap(),
@@ -700,6 +719,7 @@ mod tests {
                         .as_object()
                         .unwrap(),
                 ],
+                &[],
             )
             .await
             .unwrap();

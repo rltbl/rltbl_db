@@ -163,12 +163,26 @@ impl DbQuery for AnyPool {
         }
     }
 
-    async fn insert(&self, table: &str, rows: &[&JsonRow]) -> Result<Vec<JsonRow>, DbError> {
+    async fn insert(&self, table: &str, rows: &[&JsonRow]) -> Result<(), DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.insert(table, rows).await,
             #[cfg(feature = "tokio-postgres")]
             AnyPool::TokioPostgres(pool) => pool.insert(table, rows).await,
+        }
+    }
+
+    async fn insert_returning(
+        &self,
+        table: &str,
+        rows: &[&JsonRow],
+        filtered_by: &[&str],
+    ) -> Result<Vec<JsonRow>, DbError> {
+        match self {
+            #[cfg(feature = "rusqlite")]
+            AnyPool::Rusqlite(pool) => pool.insert_returning(table, rows, filtered_by).await,
+            #[cfg(feature = "tokio-postgres")]
+            AnyPool::TokioPostgres(pool) => pool.insert_returning(table, rows, filtered_by).await,
         }
     }
 }

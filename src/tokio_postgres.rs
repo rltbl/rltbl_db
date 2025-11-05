@@ -328,7 +328,7 @@ impl DbQuery for TokioPostgresPool {
         }
     }
 
-    /// Implements [DbQuery::query_f64] for PostgreSQL.
+    /// Implements [DbQuery::query_f64()] for PostgreSQL.
     async fn query_f64(&self, sql: &str, params: impl IntoParams + Send) -> Result<f64, DbError> {
         let value = self.query_value(sql, params).await?;
         match value.as_f64() {
@@ -337,9 +337,18 @@ impl DbQuery for TokioPostgresPool {
         }
     }
 
-    async fn insert(&self, table: &str, rows: &[&JsonRow]) -> Result<Vec<JsonRow>, DbError> {
-        let _ = table;
-        let _ = rows;
+    /// Implements [DbQuery::insert()] for PostgreSQL
+    async fn insert(&self, _table: &str, _rows: &[&JsonRow]) -> Result<(), DbError> {
+        todo!();
+    }
+
+    /// Implements [DbQuery::insert_returning()] for PostgreSQL
+    async fn insert_returning(
+        &self,
+        _table: &str,
+        _rows: &[&JsonRow],
+        _filtered_by: &[&str],
+    ) -> Result<Vec<JsonRow>, DbError> {
         todo!();
     }
 }

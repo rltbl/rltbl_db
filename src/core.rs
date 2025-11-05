@@ -337,12 +337,18 @@ pub trait DbQuery {
         params: impl IntoParams + Send,
     ) -> impl Future<Output = Result<f64, DbError>> + Send;
 
-    /// Insert JSON rows into a table, returning the inserted rows.
-    /// If a row does not have a key for a column, we treat it as NULL.
-    fn insert(
+    /// Insert JSON rows into the given table. If an input row does not have a key for a column,
+    /// use NULL as the value of that column when inserting the row to the table.
+    fn insert(&self, table: &str, rows: &[&JsonRow]) -> impl Future<Output = Result<(), DbError>>;
+
+    /// Insert JSON rows into the given table and then return the inserted data, filtered by the
+    /// given list of columns, if any. If an input row does not have a key for a column, use NULL
+    /// as the value of that column when inserting the row to the table.
+    fn insert_returning(
         &self,
         table: &str,
         rows: &[&JsonRow],
+        filtered_by: &[&str],
     ) -> impl Future<Output = Result<Vec<JsonRow>, DbError>>;
 }
 
