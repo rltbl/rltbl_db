@@ -336,6 +336,7 @@ pub trait DbQuery {
         sql: &str,
         params: impl IntoParams + Send,
     ) -> impl Future<Output = Result<f64, DbError>> + Send;
+
     /// Insert JSON rows into a table, returning the inserted rows.
     /// If a row does not have a key for a column, we treat it as NULL.
     fn insert(

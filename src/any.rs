@@ -168,7 +168,7 @@ impl DbQuery for AnyPool {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.insert(table, rows).await,
             #[cfg(feature = "tokio-postgres")]
-            AnyPool::TokioPostgres(_) => todo!(),
+            AnyPool::TokioPostgres(pool) => pool.insert(table, rows).await,
         }
     }
 }
