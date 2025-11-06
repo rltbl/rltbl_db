@@ -18,6 +18,13 @@ use deadpool_sqlite::{
 };
 use serde_json::json;
 
+// TODO: The maximum number of parameters is artificially set to a very low level during initial
+// dev. Make sure to uncomment the correct value before merging this code.
+/// The [maximum number of parameters](https://www.sqlite.org/limits.html#max_variable_number)
+/// that can be bound to a SQLite query
+static MAX_PARAMS_SQLITE: usize = 6;
+// static MAX_PARAMS_SQLITE: usize = 32766;
+
 /// Represents a SQLite database connection pool
 #[derive(Debug)]
 pub struct RusqlitePool {
@@ -365,24 +372,61 @@ impl DbQuery for RusqlitePool {
                     }
                 };
             }
+            if columns.len() > MAX_PARAMS_SQLITE {
+                return Err(DbError::InputError(format!(
+                    "Unable to insert to table '{}', which has more columns ({}) than the \
+                     maximum number of variables ({}) allowed in a SQL statement by SQLite.",
+                    table,
+                    columns.len(),
+                    MAX_PARAMS_SQLITE,
+                )));
+            }
             columns
         };
 
-        // The lines, with placeholders, that need to be bound by parameters:
+        // Use the `filtered_by` argument to restrict the RETURNING clause, defaulting
+        // to '*' if `filtered_by` is empty:
+        let returning = match filtered_by.is_empty() {
+            true => "*".to_string(),
+            false => filtered_by
+                .iter()
+                // TODO: Should we log a warning when filtered_by contains non-existent
+                // columns?
+                // TODO: Try to remove the call to .to_string() here:
+                .filter(|col| columns.contains(&col.to_string()))
+                .map(|col| *col)
+                .collect::<Vec<_>>()
+                .join(", "),
+        };
+
+        let mut rows_to_return = vec![];
         let mut lines_to_bind: Vec<String> = Vec::new();
-        // The parameters to bind the placeholders with:
-        let mut params: Vec<ParamValue> = Vec::new();
-        // Used to represent the ith parameter in the line to be bound:
-        let mut i = 0;
+        let mut params_to_be_bound: Vec<ParamValue> = Vec::new();
+        let mut param_idx = 0;
         for row in rows {
-            let mut cells: Vec<String> = Vec::new();
+            // If we have reached SQLite's limit on the number of bound parameters, insert what
+            // we have so far and then reset all of the counters and collections:
+            if param_idx + columns.len() > MAX_PARAMS_SQLITE {
+                let sql = format!(
+                    r#"INSERT INTO "{table}" VALUES
+                       {}
+                       RETURNING {returning};"#,
+                    lines_to_bind.join(",\n")
+                );
+                rows_to_return.append(&mut self.query(&sql, params_to_be_bound.clone()).await?);
+                lines_to_bind.clear();
+                params_to_be_bound.clear();
+                param_idx = 0;
+            }
+
+            // Optimization to avoid repeated heap allocations while processing a single given row:
+            params_to_be_bound.reserve(columns.len());
+            let mut cells: Vec<String> = Vec::with_capacity(columns.len());
             for column in &columns {
-                if row.contains_key(column) {
-                    i += 1;
-                    cells.push(format!("${i}"));
-                    // This unwrap is safe since the row must contain the column otherwise this
-                    // if-clause would not have been activated.
-                    let param = match row.get(column).unwrap() {
+                param_idx += 1;
+                cells.push(format!("${param_idx}"));
+                let param = match row.get(column) {
+                    Some(json_value) => match json_value {
                         JsonValue::Null => ParamValue::Null,
                         JsonValue::Bool(flag) => ParamValue::Boolean(*flag),
                         JsonValue::Number(number) => {
@@ -407,38 +451,26 @@ impl DbQuery for RusqlitePool {
                                 "JSON Objects not supported: {map:?}"
                             )));
                         }
-                    };
-                    params.push(param);
-                } else {
-                    cells.push(String::from("NULL"))
-                }
+                    },
+                    None => ParamValue::Null,
+                };
+                params_to_be_bound.push(param);
             }
             let line_to_bind = format!("({})", cells.join(", "));
             lines_to_bind.push(line_to_bind);
         }
 
-        // Use the `filtered_by` argument to restrict the RETURNING clause, defaulting to '*'
-        // if `filtered_by` is empty:
-        let returning = match filtered_by.is_empty() {
-            true => "*".to_string(),
-            false => filtered_by
-                .iter()
-                // TODO: Should we log a warning when filtered_by contains non-existent columns?
-                // TODO: Try to remove the call to .to_string() here:
-                .filter(|col| columns.contains(&col.to_string()))
-                .map(|col| *col)
-                .collect::<Vec<_>>()
-                .join(", "),
-        };
-
-        // Finally, execute the insert statement using query():
-        let sql = format!(
-            r#"INSERT INTO "{table}" VALUES
-            {}
-            RETURNING {returning};"#,
-            lines_to_bind.join(",\n")
-        );
-        self.query(&sql, params).await
+        // If there is anything left to insert, insert it now:
+        if lines_to_bind.len() > 0 {
+            let sql = format!(
+                r#"INSERT INTO "{table}" VALUES
+                   {}
+                   RETURNING {returning};"#,
+                lines_to_bind.join(",\n")
+            );
+            rows_to_return.append(&mut self.query(&sql, params_to_be_bound).await?);
+        }
+        Ok(rows_to_return)
     }
 }
 
