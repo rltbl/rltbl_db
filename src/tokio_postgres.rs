@@ -1,6 +1,12 @@
 //! tokio-postgres implementation for rltbl_db.
 
-use crate::core::{DbError, DbKind, DbQuery, IntoParams, JsonRow, JsonValue, ParamValue, Params};
+use crate::{
+    core::{
+        DbError, DbKind, DbQuery, IntoParams, JsonRow, JsonValue, ParamValue, Params,
+        validate_table_name,
+    },
+    params,
+};
 
 use deadpool_postgres::{Config, Pool, Runtime};
 use rust_decimal::Decimal;
@@ -9,6 +15,13 @@ use tokio_postgres::{
     row::Row,
     types::{ToSql, Type},
 };
+
+// TODO: The maximum number of parameters is artificially set to a very low level during initial
+// dev. Make sure to uncomment the correct value before merging this code.
+/// The [maximum number of parameters](https://www.postgresql.org/docs/current/limits.html)
+/// that can be bound to a Postgres query
+static MAX_PARAMS_POSTGRES: usize = 6;
+//pub static MAX_PARAMS_POSTGRES: usize = 65535;
 
 /// Represents a PostgreSQL database connection pool
 #[derive(Debug)]
@@ -37,8 +50,45 @@ impl TokioPostgresPool {
             ))),
         }
     }
+
+    /// Query the database's metadata to retrieve the columns associated with a given table.
+    async fn get_columns(&self, table: &str) -> Result<Vec<String>, DbError> {
+        let mut columns = vec![];
+        let sql = format!(
+            r#"SELECT
+                 "columns"."column_name"::TEXT AS "name"
+               FROM
+                 "information_schema"."columns" "columns"
+               WHERE
+                 "columns"."table_schema" IN (
+                   SELECT REGEXP_SPLIT_TO_TABLE("setting", ', ')
+                   FROM "pg_settings"
+                   WHERE "name" = 'search_path'
+                 )
+                 AND "columns"."table_name" = $1
+               ORDER BY "columns"."ordinal_position""#
+        );
+
+        for row in self.query(&sql, params![&table]).await? {
+            match row
+                .get("name")
+                .and_then(|name| name.as_str().and_then(|name| Some(name)))
+            {
+                Some(column) => columns.push(column.to_string()),
+                None => {
+                    return Err(DbError::DataError(format!(
+                        "Error getting columns for table '{table}'"
+                    )));
+                }
+            };
+        }
+
+        Ok(columns)
+    }
 }
 
+// TODO: Move the location of this function within this file to before the definition of
+// TokioPostgresPool:
 /// Extracts the value at the given index from the given [Row].
 fn extract_value(row: &Row, idx: usize) -> Result<JsonValue, DbError> {
     let column = &row.columns()[idx];
@@ -234,7 +284,28 @@ impl DbQuery for TokioPostgresPool {
                                 _ => return Err(DbError::InputError(gen_err(&param, "BOOL"))),
                             };
                         }
-                        _ => unimplemented!(),
+                        unimplemented => match param {
+                            // This case will be triggered by an unknown type, for example, when
+                            // querying the metadata table column, "columns"."columns", which
+                            // reports that it is of type "name", even though is implemented as
+                            // TEXT. In such cases we try to bind the parameter based on _its_
+                            // type rather than on the reported column type. This will not work
+                            // for null values, however, since there is no way to find out the type
+                            // of the associated column.
+                            ParamValue::Text(text) => params.push(Box::new(text.to_string())),
+                            ParamValue::SmallInteger(num) => params.push(Box::new(*num)),
+                            ParamValue::Integer(num) => params.push(Box::new(*num)),
+                            ParamValue::BigInteger(num) => params.push(Box::new(*num)),
+                            ParamValue::Real(num) => params.push(Box::new(*num)),
+                            ParamValue::BigReal(num) => params.push(Box::new(*num)),
+                            ParamValue::Numeric(num) => params.push(Box::new(*num)),
+                            ParamValue::Boolean(flag) => params.push(Box::new(*flag)),
+                            ParamValue::Null => {
+                                return Err(DbError::InputError(format!(
+                                    "Don't know how to bind a NULL param for type {unimplemented}"
+                                )));
+                            }
+                        },
                     };
                 }
             }
@@ -338,18 +409,204 @@ impl DbQuery for TokioPostgresPool {
     }
 
     /// Implements [DbQuery::insert()] for PostgreSQL
-    async fn insert(&self, _table: &str, _rows: &[&JsonRow]) -> Result<(), DbError> {
-        todo!();
+    async fn insert(&self, table: &str, rows: &[&JsonRow]) -> Result<(), DbError> {
+        // Begin by verifying that the given table name is valid, which has the side-effect of
+        // removing any enclosing double-quotes:
+        let table = validate_table_name(table)?;
+
+        // Retrieve the names of all of the table's columns from the database's metadata:
+        let columns = self.get_columns(&table).await?;
+        if columns.len() > MAX_PARAMS_POSTGRES {
+            return Err(DbError::InputError(format!(
+                "Unable to insert to table '{}', which has more columns ({}) than the \
+                 maximum number of variables ({}) allowed in a SQL statement by Postgres.",
+                table,
+                columns.len(),
+                MAX_PARAMS_POSTGRES,
+            )));
+        }
+
+        let mut lines_to_bind: Vec<String> = Vec::new();
+        let mut params_to_be_bound: Vec<ParamValue> = Vec::new();
+        let mut param_idx = 0;
+        for row in rows {
+            // If we have reached Postgres's limit on the number of bound parameters, insert what
+            // we have so far and then reset all of the counters and collections:
+            if param_idx + columns.len() > MAX_PARAMS_POSTGRES {
+                let sql = format!(
+                    r#"INSERT INTO "{table}" VALUES
+                       {}"#,
+                    lines_to_bind.join(",\n")
+                );
+                self.query(&sql, params_to_be_bound.clone()).await?;
+                lines_to_bind.clear();
+                params_to_be_bound.clear();
+                param_idx = 0;
+            }
+
+            // Optimization to avoid repeated heap allocations while processing a single given row:
+            params_to_be_bound.reserve(columns.len());
+            let mut cells: Vec<String> = Vec::with_capacity(columns.len());
+            for column in &columns {
+                param_idx += 1;
+                cells.push(format!("${param_idx}"));
+                let param = match row.get(column) {
+                    Some(json_value) => match json_value {
+                        JsonValue::Null => ParamValue::Null,
+                        JsonValue::Bool(flag) => ParamValue::Boolean(*flag),
+                        JsonValue::Number(number) => {
+                            if number.is_i64() {
+                                ParamValue::BigInteger(number.as_i64().unwrap())
+                            } else if number.is_f64() {
+                                ParamValue::BigReal(number.as_f64().unwrap())
+                            } else {
+                                return Err(DbError::DataError(format!(
+                                    "Unsupported number: {number} is neither i64 nor f64"
+                                )));
+                            }
+                        }
+                        JsonValue::String(text) => ParamValue::Text(text.to_string()),
+                        JsonValue::Array(values) => {
+                            return Err(DbError::InputError(format!(
+                                "JSON Arrays not supported: {values:?}"
+                            )));
+                        }
+                        JsonValue::Object(map) => {
+                            return Err(DbError::InputError(format!(
+                                "JSON Objects not supported: {map:?}"
+                            )));
+                        }
+                    },
+                    None => ParamValue::Null,
+                };
+                params_to_be_bound.push(param);
+            }
+            let line_to_bind = format!("({})", cells.join(", "));
+            lines_to_bind.push(line_to_bind);
+        }
+
+        // If there is anything left to insert, insert it now:
+        if lines_to_bind.len() > 0 {
+            let sql = format!(
+                r#"INSERT INTO "{table}" VALUES
+                   {}"#,
+                lines_to_bind.join(",\n")
+            );
+            self.query(&sql, params_to_be_bound.clone()).await?;
+        }
+        Ok(())
     }
 
     /// Implements [DbQuery::insert_returning()] for PostgreSQL
     async fn insert_returning(
         &self,
-        _table: &str,
-        _rows: &[&JsonRow],
-        _filtered_by: &[&str],
+        table: &str,
+        rows: &[&JsonRow],
+        filtered_by: &[&str],
     ) -> Result<Vec<JsonRow>, DbError> {
-        todo!();
+        // Begin by verifying that the given table name is valid, which has the side-effect of
+        // removing any enclosing double-quotes:
+        let table = validate_table_name(table)?;
+
+        // Retrieve the names of all of the table's columns from the database's metadata:
+        let columns = self.get_columns(&table).await?;
+        if columns.len() > MAX_PARAMS_POSTGRES {
+            return Err(DbError::InputError(format!(
+                "Unable to insert to table '{}', which has more columns ({}) than the \
+                 maximum number of variables ({}) allowed in a SQL statement by Postgres.",
+                table,
+                columns.len(),
+                MAX_PARAMS_POSTGRES,
+            )));
+        }
+
+        // Use the `filtered_by` argument to restrict the RETURNING clause, defaulting
+        // to '*' if `filtered_by` is empty:
+        let returning = match filtered_by.is_empty() {
+            true => "*".to_string(),
+            false => filtered_by
+                .iter()
+                // TODO: Should we log a warning when filtered_by contains non-existent
+                // columns?
+                // TODO: Try to remove the call to .to_string() here:
+                .filter(|col| columns.contains(&col.to_string()))
+                .map(|col| *col)
+                .collect::<Vec<_>>()
+                .join(", "),
+        };
+
+        let mut rows_to_return = vec![];
+        let mut lines_to_bind: Vec<String> = Vec::new();
+        let mut params_to_be_bound: Vec<ParamValue> = Vec::new();
+        let mut param_idx = 0;
+        for row in rows {
+            // If we have reached Postgres's limit on the number of bound parameters, insert what
+            // we have so far and then reset all of the counters and collections:
+            if param_idx + columns.len() > MAX_PARAMS_POSTGRES {
+                let sql = format!(
+                    r#"INSERT INTO "{table}" VALUES
+                       {}
+                       RETURNING {returning}"#,
+                    lines_to_bind.join(",\n")
+                );
+                rows_to_return.append(&mut self.query(&sql, params_to_be_bound.clone()).await?);
+                lines_to_bind.clear();
+                params_to_be_bound.clear();
+                param_idx = 0;
+            }
+
+            // Optimization to avoid repeated heap allocations while processing a single given row:
+            params_to_be_bound.reserve(columns.len());
+            let mut cells: Vec<String> = Vec::with_capacity(columns.len());
+            for column in &columns {
+                param_idx += 1;
+                cells.push(format!("${param_idx}"));
+                let param = match row.get(column) {
+                    Some(json_value) => match json_value {
+                        JsonValue::Null => ParamValue::Null,
+                        JsonValue::Bool(flag) => ParamValue::Boolean(*flag),
+                        JsonValue::Number(number) => {
+                            if number.is_i64() {
+                                ParamValue::BigInteger(number.as_i64().unwrap())
+                            } else if number.is_f64() {
+                                ParamValue::BigReal(number.as_f64().unwrap())
+                            } else {
+                                return Err(DbError::DataError(format!(
+                                    "Unsupported number: {number} is neither i64 nor f64"
+                                )));
+                            }
+                        }
+                        JsonValue::String(text) => ParamValue::Text(text.to_string()),
+                        JsonValue::Array(values) => {
+                            return Err(DbError::InputError(format!(
+                                "JSON Arrays not supported: {values:?}"
+                            )));
+                        }
+                        JsonValue::Object(map) => {
+                            return Err(DbError::InputError(format!(
+                                "JSON Objects not supported: {map:?}"
+                            )));
+                        }
+                    },
+                    None => ParamValue::Null,
+                };
+                params_to_be_bound.push(param);
+            }
+            let line_to_bind = format!("({})", cells.join(", "));
+            lines_to_bind.push(line_to_bind);
+        }
+
+        // If there is anything left to insert, insert it now:
+        if lines_to_bind.len() > 0 {
+            let sql = format!(
+                r#"INSERT INTO "{table}" VALUES
+                   {}
+                   RETURNING {returning}"#,
+                lines_to_bind.join(",\n")
+            );
+            rows_to_return.append(&mut self.query(&sql, params_to_be_bound).await?);
+        }
+        Ok(rows_to_return)
     }
 }
 
@@ -686,6 +943,81 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(json!(rows), json!([{"int_value_cast": "1"}]));
+    }
+
+    #[tokio::test]
+    async fn test_insert_returning() {
+        let pool = TokioPostgresPool::connect("postgresql:///rltbl_db")
+            .await
+            .unwrap();
+        pool.execute_batch(
+            "DROP TABLE IF EXISTS test_insert;\
+             CREATE TABLE test_insert (\
+                 text_value TEXT,\
+                 alt_text_value TEXT,\
+                 float_value FLOAT8,\
+                 int_value INT8,\
+                 bool_value BOOL\
+             )",
+        )
+        .await
+        .unwrap();
+
+        // No filtering:
+        let rows = pool
+            .insert_returning(
+                "test_insert",
+                &[
+                    &json!({"text_value": "TEXT"}).as_object().unwrap(),
+                    &json!({"int_value": 1, "bool_value": true})
+                        .as_object()
+                        .unwrap(),
+                ],
+                &[],
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            json!(rows),
+            json!([{
+                "text_value": "TEXT",
+                "alt_text_value": JsonValue::Null,
+                "float_value": JsonValue::Null,
+                "int_value": JsonValue::Null,
+                "bool_value": JsonValue::Null,
+            },{
+                "text_value": JsonValue::Null,
+                "alt_text_value": JsonValue::Null,
+                "float_value": JsonValue::Null,
+                "int_value": 1,
+                "bool_value": true,
+            }])
+        );
+
+        // With filtering:
+        let rows = pool
+            .insert_returning(
+                "test_insert",
+                &[
+                    &json!({"text_value": "TEXT"}).as_object().unwrap(),
+                    &json!({"int_value": 1, "bool_value": true})
+                        .as_object()
+                        .unwrap(),
+                ],
+                &["int_value", "float_value"],
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            json!(rows),
+            json!([{
+                "float_value": JsonValue::Null,
+                "int_value": JsonValue::Null,
+            },{
+                "float_value": JsonValue::Null,
+                "int_value": 1,
+            }])
+        );
     }
 
     #[tokio::test]
