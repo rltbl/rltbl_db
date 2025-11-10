@@ -560,6 +560,13 @@ impl DbQuery for RusqlitePool {
         }
         Ok(rows_to_return)
     }
+
+    /// Implements [DbQuery::drop_table()] for SQLite.
+    async fn drop_table(&self, table: &str) -> Result<(), DbError> {
+        let table = validate_table_name(table)?;
+        self.execute(&format!(r#"DROP TABLE IF EXISTS "{table}""#), ())
+            .await
+    }
 }
 
 #[cfg(test)]
@@ -974,6 +981,26 @@ mod tests {
                 "int_value": 1,
             }])
         );
+    }
+
+    #[tokio::test]
+    async fn drop_table() {
+        let pool = RusqlitePool::connect(":memory:").await.unwrap();
+        let table = "test_drop";
+        pool.execute_batch(&format!(
+            "DROP TABLE IF EXISTS {table};\
+             CREATE TABLE {table} (\
+                 foo TEXT\
+             )",
+        ))
+        .await
+        .unwrap();
+
+        let columns = pool.get_columns(table).await.unwrap();
+        assert_eq!(columns, ["foo"]);
+        pool.drop_table(table).await.unwrap();
+        let columns: Vec<String> = pool.get_columns(table).await.unwrap();
+        assert_eq!(columns, Vec::<String>::new());
     }
 
     #[tokio::test]

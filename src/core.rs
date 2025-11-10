@@ -350,6 +350,9 @@ pub trait DbQuery {
         rows: &[&JsonRow],
         filtered_by: &[&str],
     ) -> impl Future<Output = Result<Vec<JsonRow>, DbError>>;
+
+    /// Drop the given table from the database.
+    fn drop_table(&self, table: &str) -> impl Future<Output = Result<(), DbError>>;
 }
 
 /// Determines whether the given table name is a valid database table name. Valid database table

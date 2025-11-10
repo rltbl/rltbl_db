@@ -608,6 +608,16 @@ impl DbQuery for TokioPostgresPool {
         }
         Ok(rows_to_return)
     }
+
+    /// Implements [DbQuery::drop_table()] for PostgreSQL. Note (see
+    /// <https://www.postgresql.org/docs/current/sql-droptable.html>), that in the case of a
+    /// dependent foreign key constraint, only the constraint will be removed, not the dependent
+    /// table itself.
+    async fn drop_table(&self, table: &str) -> Result<(), DbError> {
+        let table = validate_table_name(table)?;
+        self.execute(&format!(r#"DROP TABLE IF EXISTS "{table}" CASCADE"#), ())
+            .await
+    }
 }
 
 #[cfg(test)]
@@ -650,6 +660,9 @@ mod tests {
 
         let rows = pool.query(select_sql, &["foo"]).await.unwrap();
         assert_eq!(json!(rows), json!([{"value":"foo"}]));
+
+        // Clean up:
+        pool.drop_table("test_table_text").await.unwrap();
     }
 
     #[tokio::test]
@@ -705,6 +718,9 @@ mod tests {
             let rows = pool.query(&select_sql, params.clone()).await.unwrap();
             assert_eq!(json!(rows), json!([{format!("{column}"):1}]));
         }
+
+        // Clean up:
+        pool.drop_table("test_table_int").await.unwrap();
     }
 
     #[tokio::test]
@@ -762,6 +778,9 @@ mod tests {
             .as_f64()
             .unwrap();
         assert_eq!("1.05", format!("{value:.2}"));
+
+        // Clean up:
+        pool.drop_table("test_table_float").await.unwrap();
     }
 
     #[tokio::test]
@@ -869,6 +888,9 @@ mod tests {
                 "alt_numeric_value": JsonValue::Null,
             }])
         );
+
+        // Clean up:
+        pool.drop_table("test_table_mixed").await.unwrap();
     }
 
     #[tokio::test]
@@ -943,10 +965,13 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(json!(rows), json!([{"int_value_cast": "1"}]));
+
+        // Clean up.
+        pool.drop_table("test_table_indirect").await.unwrap();
     }
 
     #[tokio::test]
-    async fn test_insert_returning() {
+    async fn test_insert() {
         let pool = TokioPostgresPool::connect("postgresql:///rltbl_db")
             .await
             .unwrap();
@@ -963,10 +988,67 @@ mod tests {
         .await
         .unwrap();
 
+        // Insert rows:
+        pool.insert(
+            "test_insert",
+            &[
+                &json!({"text_value": "TEXT"}).as_object().unwrap(),
+                &json!({"int_value": 1, "bool_value": true})
+                    .as_object()
+                    .unwrap(),
+            ],
+        )
+        .await
+        .unwrap();
+
+        // Validate the inserted data:
+        let rows = pool
+            .query(r#"SELECT * FROM test_insert"#, ())
+            .await
+            .unwrap();
+        assert_eq!(
+            json!(rows),
+            json!([{
+                "text_value": "TEXT",
+                "alt_text_value": JsonValue::Null,
+                "float_value": JsonValue::Null,
+                "int_value": JsonValue::Null,
+                "bool_value": JsonValue::Null,
+            },{
+                "text_value": JsonValue::Null,
+                "alt_text_value": JsonValue::Null,
+                "float_value": JsonValue::Null,
+                "int_value": 1,
+                "bool_value": true,
+            }])
+        );
+
+        // Clean up.
+        pool.drop_table("test_insert").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_insert_returning() {
+        let pool = TokioPostgresPool::connect("postgresql:///rltbl_db")
+            .await
+            .unwrap();
+        pool.execute_batch(
+            "DROP TABLE IF EXISTS test_insert_returning;\
+             CREATE TABLE test_insert_returning (\
+                 text_value TEXT,\
+                 alt_text_value TEXT,\
+                 float_value FLOAT8,\
+                 int_value INT8,\
+                 bool_value BOOL\
+             )",
+        )
+        .await
+        .unwrap();
+
         // No filtering:
         let rows = pool
             .insert_returning(
-                "test_insert",
+                "test_insert_returning",
                 &[
                     &json!({"text_value": "TEXT"}).as_object().unwrap(),
                     &json!({"int_value": 1, "bool_value": true})
@@ -997,7 +1079,7 @@ mod tests {
         // With filtering:
         let rows = pool
             .insert_returning(
-                "test_insert",
+                "test_insert_returning",
                 &[
                     &json!({"text_value": "TEXT"}).as_object().unwrap(),
                     &json!({"int_value": 1, "bool_value": true})
@@ -1018,6 +1100,40 @@ mod tests {
                 "int_value": 1,
             }])
         );
+
+        // Clean up.
+        pool.drop_table("test_insert_returning").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn drop_table() {
+        let pool = TokioPostgresPool::connect("postgresql:///rltbl_db")
+            .await
+            .unwrap();
+        let table1 = "test_drop1";
+        let table2 = "test_drop2";
+        pool.execute_batch(&format!(
+            "DROP TABLE IF EXISTS {table1};\
+             DROP TABLE IF EXISTS {table2};\
+             CREATE TABLE {table1} (\
+                 foo TEXT PRIMARY KEY\
+             );\
+             CREATE TABLE {table2} (\
+                 foo TEXT REFERENCES {table1}(foo)\
+             );",
+        ))
+        .await
+        .unwrap();
+
+        let columns = pool.get_columns(table1).await.unwrap();
+        assert_eq!(columns, ["foo"]);
+        pool.drop_table(table1).await.unwrap();
+
+        let columns: Vec<String> = pool.get_columns(table1).await.unwrap();
+        assert_eq!(columns, Vec::<String>::new());
+
+        // Clean up.
+        pool.drop_table(table2).await.unwrap();
     }
 
     #[tokio::test]
@@ -1025,11 +1141,11 @@ mod tests {
         let pool = TokioPostgresPool::connect("postgresql:///rltbl_db")
             .await
             .unwrap();
-        pool.execute("DROP TABLE IF EXISTS foo_pg", ())
+        pool.execute("DROP TABLE IF EXISTS test_input_params", ())
             .await
             .unwrap();
         pool.execute(
-            "CREATE TABLE foo_pg (\
+            "CREATE TABLE test_input_params (\
                bar TEXT,\
                car INT2,\
                dar INT4,\
@@ -1043,38 +1159,62 @@ mod tests {
         )
         .await
         .unwrap();
-        pool.execute("INSERT INTO foo_pg (bar) VALUES ($1)", &["one"])
-            .await
-            .unwrap();
-        pool.execute("INSERT INTO foo_pg (far) VALUES ($1)", &[1 as i64])
-            .await
-            .unwrap();
-        pool.execute("INSERT INTO foo_pg (bar) VALUES ($1)", ["two"])
-            .await
-            .unwrap();
-        pool.execute("INSERT INTO foo_pg (far) VALUES ($1)", [2 as i64])
-            .await
-            .unwrap();
-        pool.execute("INSERT INTO foo_pg (bar) VALUES ($1)", vec!["three"])
-            .await
-            .unwrap();
-        pool.execute("INSERT INTO foo_pg (far) VALUES ($1)", vec![3 as i64])
-            .await
-            .unwrap();
-        pool.execute("INSERT INTO foo_pg (gar) VALUES ($1)", vec![3 as f32])
-            .await
-            .unwrap();
-        pool.execute("INSERT INTO foo_pg (har) VALUES ($1)", vec![3 as f64])
-            .await
-            .unwrap();
-        pool.execute("INSERT INTO foo_pg (jar) VALUES ($1)", vec![dec!(3)])
-            .await
-            .unwrap();
-        pool.execute("INSERT INTO foo_pg (kar) VALUES ($1)", vec![true])
+        pool.execute("INSERT INTO test_input_params (bar) VALUES ($1)", &["one"])
             .await
             .unwrap();
         pool.execute(
-            "INSERT INTO foo_pg \
+            "INSERT INTO test_input_params (far) VALUES ($1)",
+            &[1 as i64],
+        )
+        .await
+        .unwrap();
+        pool.execute("INSERT INTO test_input_params (bar) VALUES ($1)", ["two"])
+            .await
+            .unwrap();
+        pool.execute(
+            "INSERT INTO test_input_params (far) VALUES ($1)",
+            [2 as i64],
+        )
+        .await
+        .unwrap();
+        pool.execute(
+            "INSERT INTO test_input_params (bar) VALUES ($1)",
+            vec!["three"],
+        )
+        .await
+        .unwrap();
+        pool.execute(
+            "INSERT INTO test_input_params (far) VALUES ($1)",
+            vec![3 as i64],
+        )
+        .await
+        .unwrap();
+        pool.execute(
+            "INSERT INTO test_input_params (gar) VALUES ($1)",
+            vec![3 as f32],
+        )
+        .await
+        .unwrap();
+        pool.execute(
+            "INSERT INTO test_input_params (har) VALUES ($1)",
+            vec![3 as f64],
+        )
+        .await
+        .unwrap();
+        pool.execute(
+            "INSERT INTO test_input_params (jar) VALUES ($1)",
+            vec![dec!(3)],
+        )
+        .await
+        .unwrap();
+        pool.execute(
+            "INSERT INTO test_input_params (kar) VALUES ($1)",
+            vec![true],
+        )
+        .await
+        .unwrap();
+        pool.execute(
+            "INSERT INTO test_input_params \
              (bar, car, dar, far, gar, har, jar, kar) \
              VALUES ($1, $2, $3, $4, $5 ,$6, $7, $8)",
             params![
@@ -1093,12 +1233,15 @@ mod tests {
         // Two alternative ways of specifying a NULL parameter:
         let row = pool
             .query_row(
-                "SELECT COUNT(1) AS count FROM foo_pg \
+                "SELECT COUNT(1) AS count FROM test_input_params \
                  WHERE bar IS NOT DISTINCT FROM $1 AND far IS NOT DISTINCT FROM $2",
                 params![ParamValue::Null, ()],
             )
             .await
             .unwrap();
         assert_eq!(json!({"count": 4}), json!(row));
+
+        // Clean up:
+        pool.drop_table("test_input_params").await.unwrap();
     }
 }
