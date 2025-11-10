@@ -40,8 +40,31 @@ impl RusqlitePool {
             .map_err(|err| DbError::ConnectError(format!("Error creating pool: {err}")))?;
         Ok(Self { pool })
     }
+
+    /// Query the database's metadata to retrieve the columns associated with a given table.
+    async fn get_columns(&self, table: &str) -> Result<Vec<String>, DbError> {
+        let mut columns = vec![];
+        for row in self
+            .query("SELECT name FROM PRAGMA_TABLE_INFO($1)", params![&table])
+            .await?
+        {
+            match row
+                .get("name")
+                .and_then(|name| name.as_str().and_then(|name| Some(name)))
+            {
+                Some(column) => columns.push(column.to_string()),
+                None => {
+                    return Err(DbError::DataError(format!(
+                        "Error getting columns for table '{table}'"
+                    )));
+                }
+            };
+        }
+        Ok(columns)
+    }
 }
 
+// TODO: Move the location of this function within this file to before the definition of RusqlitePool.
 /// Query a database using the given prepared statement and parameters.
 fn query_prepared(
     stmt: &mut Statement<'_>,
@@ -338,8 +361,92 @@ impl DbQuery for RusqlitePool {
     }
 
     /// Implements [DbQuery::insert()] for SQLite.
-    async fn insert(&self, _table: &str, _rows: &[&JsonRow]) -> Result<(), DbError> {
-        todo!();
+    async fn insert(&self, table: &str, rows: &[&JsonRow]) -> Result<(), DbError> {
+        // Begin by verifying that the given table name is valid, which has the side-effect of
+        // removing any enclosing double-quotes:
+        let table = validate_table_name(table)?;
+
+        // Retrieve the names of all of the table's columns from the database's metadata:
+        let columns = self.get_columns(&table).await?;
+        if columns.len() > MAX_PARAMS_SQLITE {
+            return Err(DbError::InputError(format!(
+                "Unable to insert to table '{}', which has more columns ({}) than the \
+                 maximum number of variables ({}) allowed in a SQL statement by SQLite.",
+                table,
+                columns.len(),
+                MAX_PARAMS_SQLITE,
+            )));
+        }
+
+        let mut lines_to_bind: Vec<String> = Vec::new();
+        let mut params_to_be_bound: Vec<ParamValue> = Vec::new();
+        let mut param_idx = 0;
+        for row in rows {
+            // If we have reached SQLite's limit on the number of bound parameters, insert what
+            // we have so far and then reset all of the counters and collections:
+            if param_idx + columns.len() > MAX_PARAMS_SQLITE {
+                let sql = format!(
+                    r#"INSERT INTO "{table}" VALUES
+                       {}"#,
+                    lines_to_bind.join(",\n")
+                );
+                self.query(&sql, params_to_be_bound.clone()).await?;
+                lines_to_bind.clear();
+                params_to_be_bound.clear();
+                param_idx = 0;
+            }
+
+            // Optimization to avoid repeated heap allocations while processing a single given row:
+            params_to_be_bound.reserve(columns.len());
+            let mut cells: Vec<String> = Vec::with_capacity(columns.len());
+            for column in &columns {
+                param_idx += 1;
+                cells.push(format!("${param_idx}"));
+                let param = match row.get(column) {
+                    Some(json_value) => match json_value {
+                        JsonValue::Null => ParamValue::Null,
+                        JsonValue::Bool(flag) => ParamValue::Boolean(*flag),
+                        JsonValue::Number(number) => {
+                            if number.is_i64() {
+                                ParamValue::BigInteger(number.as_i64().unwrap())
+                            } else if number.is_f64() {
+                                ParamValue::BigReal(number.as_f64().unwrap())
+                            } else {
+                                return Err(DbError::DataError(format!(
+                                    "Unsupported number: {number} is neither i64 nor f64"
+                                )));
+                            }
+                        }
+                        JsonValue::String(text) => ParamValue::Text(text.to_string()),
+                        JsonValue::Array(values) => {
+                            return Err(DbError::InputError(format!(
+                                "JSON Arrays not supported: {values:?}"
+                            )));
+                        }
+                        JsonValue::Object(map) => {
+                            return Err(DbError::InputError(format!(
+                                "JSON Objects not supported: {map:?}"
+                            )));
+                        }
+                    },
+                    None => ParamValue::Null,
+                };
+                params_to_be_bound.push(param);
+            }
+            let line_to_bind = format!("({})", cells.join(", "));
+            lines_to_bind.push(line_to_bind);
+        }
+
+        // If there is anything left to insert, insert it now:
+        if lines_to_bind.len() > 0 {
+            let sql = format!(
+                r#"INSERT INTO "{table}" VALUES
+                   {}"#,
+                lines_to_bind.join(",\n")
+            );
+            self.query(&sql, params_to_be_bound.clone()).await?;
+        }
+        Ok(())
     }
 
     /// Implements [DbQuery::insert_returning()] for SQLite.
@@ -354,35 +461,16 @@ impl DbQuery for RusqlitePool {
         let table = validate_table_name(table)?;
 
         // Retrieve the names of all of the table's columns from the database's metadata:
-        let columns = {
-            let mut columns = vec![];
-            for row in self
-                .query("SELECT name FROM PRAGMA_TABLE_INFO($1)", params![&table])
-                .await?
-            {
-                match row
-                    .get("name")
-                    .and_then(|name| name.as_str().and_then(|name| Some(name)))
-                {
-                    Some(column) => columns.push(column.to_string()),
-                    None => {
-                        return Err(DbError::DataError(format!(
-                            "Error getting columns for table '{table}'"
-                        )));
-                    }
-                };
-            }
-            if columns.len() > MAX_PARAMS_SQLITE {
-                return Err(DbError::InputError(format!(
-                    "Unable to insert to table '{}', which has more columns ({}) than the \
-                     maximum number of variables ({}) allowed in a SQL statement by SQLite.",
-                    table,
-                    columns.len(),
-                    MAX_PARAMS_SQLITE,
-                )));
-            }
-            columns
-        };
+        let columns = self.get_columns(&table).await?;
+        if columns.len() > MAX_PARAMS_SQLITE {
+            return Err(DbError::InputError(format!(
+                "Unable to insert to table '{}', which has more columns ({}) than the \
+                 maximum number of variables ({}) allowed in a SQL statement by SQLite.",
+                table,
+                columns.len(),
+                MAX_PARAMS_SQLITE,
+            )));
+        }
 
         // Use the `filtered_by` argument to restrict the RETURNING clause, defaulting
         // to '*' if `filtered_by` is empty:
@@ -410,7 +498,7 @@ impl DbQuery for RusqlitePool {
                 let sql = format!(
                     r#"INSERT INTO "{table}" VALUES
                        {}
-                       RETURNING {returning};"#,
+                       RETURNING {returning}"#,
                     lines_to_bind.join(",\n")
                 );
                 rows_to_return.append(&mut self.query(&sql, params_to_be_bound.clone()).await?);
@@ -465,7 +553,7 @@ impl DbQuery for RusqlitePool {
             let sql = format!(
                 r#"INSERT INTO "{table}" VALUES
                    {}
-                   RETURNING {returning};"#,
+                   RETURNING {returning}"#,
                 lines_to_bind.join(",\n")
             );
             rows_to_return.append(&mut self.query(&sql, params_to_be_bound).await?);
@@ -765,8 +853,54 @@ mod tests {
 
     #[tokio::test]
     async fn test_insert() {
-        // TODO: Implement this test.
-        assert_eq!(1, 1);
+        let pool = RusqlitePool::connect(":memory:").await.unwrap();
+        pool.execute_batch(
+            "DROP TABLE IF EXISTS test_insert;\
+             CREATE TABLE test_insert (\
+                 text_value TEXT,\
+                 alt_text_value TEXT,\
+                 float_value FLOAT8,\
+                 int_value INT8,\
+                 bool_value BOOL\
+             )",
+        )
+        .await
+        .unwrap();
+
+        // Insert rows:
+        pool.insert(
+            "test_insert",
+            &[
+                &json!({"text_value": "TEXT"}).as_object().unwrap(),
+                &json!({"int_value": 1, "bool_value": true})
+                    .as_object()
+                    .unwrap(),
+            ],
+        )
+        .await
+        .unwrap();
+
+        // Validate the inserted data:
+        let rows = pool
+            .query(r#"SELECT * FROM test_insert"#, ())
+            .await
+            .unwrap();
+        assert_eq!(
+            json!(rows),
+            json!([{
+                "text_value": "TEXT",
+                "alt_text_value": JsonValue::Null,
+                "float_value": JsonValue::Null,
+                "int_value": JsonValue::Null,
+                "bool_value": JsonValue::Null,
+            },{
+                "text_value": JsonValue::Null,
+                "alt_text_value": JsonValue::Null,
+                "float_value": JsonValue::Null,
+                "int_value": 1,
+                "bool_value": true,
+            }])
+        );
     }
 
     #[tokio::test]
