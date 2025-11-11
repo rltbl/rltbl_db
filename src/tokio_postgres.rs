@@ -1,6 +1,12 @@
 //! tokio-postgres implementation for rltbl_db.
 
-use crate::core::{DbError, DbKind, DbQuery, IntoParams, JsonRow, JsonValue, ParamValue, Params};
+use crate::{
+    core::{
+        DbError, DbKind, DbQuery, IntoParams, JsonRow, JsonValue, ParamValue, Params, parameterize,
+        validate_table_name,
+    },
+    params,
+};
 
 use deadpool_postgres::{Config, Pool, Runtime};
 use rust_decimal::Decimal;
@@ -10,34 +16,9 @@ use tokio_postgres::{
     types::{ToSql, Type},
 };
 
-/// Represents a PostgreSQL database connection pool
-#[derive(Debug)]
-pub struct TokioPostgresPool {
-    pool: Pool,
-}
-
-impl TokioPostgresPool {
-    /// Connect to a PostgreSQL database using the given url, which should be of the form
-    /// postgresql:///DATABASE_NAME
-    pub async fn connect(url: &str) -> Result<Self, DbError> {
-        match url.starts_with("postgresql:///") {
-            true => {
-                let mut cfg = Config::new();
-                let db_name = url
-                    .strip_prefix("postgresql:///")
-                    .ok_or(DbError::ConnectError("Invalid PostgreSQL URL".to_string()))?;
-                cfg.dbname = Some(db_name.to_string());
-                let pool = cfg
-                    .create_pool(Some(Runtime::Tokio1), NoTls)
-                    .map_err(|err| DbError::ConnectError(format!("Error creating pool: {err}")))?;
-                Ok(Self { pool })
-            }
-            false => Err(DbError::ConnectError(format!(
-                "Invalid PostgreSQL URL: '{url}'"
-            ))),
-        }
-    }
-}
+/// The [maximum number of parameters](https://www.postgresql.org/docs/current/limits.html)
+/// that can be bound to a Postgres query
+pub static MAX_PARAMS_POSTGRES: usize = 65535;
 
 /// Extracts the value at the given index from the given [Row].
 fn extract_value(row: &Row, idx: usize) -> Result<JsonValue, DbError> {
@@ -117,6 +98,70 @@ fn extract_value(row: &Row, idx: usize) -> Result<JsonValue, DbError> {
     }
 }
 
+/// Represents a PostgreSQL database connection pool
+#[derive(Debug)]
+pub struct TokioPostgresPool {
+    pool: Pool,
+}
+
+impl TokioPostgresPool {
+    /// Connect to a PostgreSQL database using the given url, which should be of the form
+    /// postgresql:///DATABASE_NAME
+    pub async fn connect(url: &str) -> Result<Self, DbError> {
+        match url.starts_with("postgresql:///") {
+            true => {
+                let mut cfg = Config::new();
+                let db_name = url
+                    .strip_prefix("postgresql:///")
+                    .ok_or(DbError::ConnectError("Invalid PostgreSQL URL".to_string()))?;
+                cfg.dbname = Some(db_name.to_string());
+                let pool = cfg
+                    .create_pool(Some(Runtime::Tokio1), NoTls)
+                    .map_err(|err| DbError::ConnectError(format!("Error creating pool: {err}")))?;
+                Ok(Self { pool })
+            }
+            false => Err(DbError::ConnectError(format!(
+                "Invalid PostgreSQL URL: '{url}'"
+            ))),
+        }
+    }
+
+    /// Query the database's metadata to retrieve the columns associated with a given table.
+    async fn get_columns(&self, table: &str) -> Result<Vec<String>, DbError> {
+        let mut columns = vec![];
+        let sql = format!(
+            r#"SELECT
+                 "columns"."column_name"::TEXT AS "name"
+               FROM
+                 "information_schema"."columns" "columns"
+               WHERE
+                 "columns"."table_schema" IN (
+                   SELECT REGEXP_SPLIT_TO_TABLE("setting", ', ')
+                   FROM "pg_settings"
+                   WHERE "name" = 'search_path'
+                 )
+                 AND "columns"."table_name" = $1
+               ORDER BY "columns"."ordinal_position""#
+        );
+
+        for row in self.query(&sql, params![&table]).await? {
+            match row
+                .get("name")
+                .and_then(|name| name.as_str().and_then(|name| Some(name)))
+            {
+                Some(column) => columns.push(column.to_string()),
+                None => {
+                    return Err(DbError::DataError(format!(
+                        "Error getting columns for table '{table}'"
+                    )));
+                }
+            };
+        }
+
+        Ok(columns)
+    }
+}
+
 impl DbQuery for TokioPostgresPool {
     /// Implements [DbQuery::kind()] for PostgreSQL.
     fn kind(&self) -> DbKind {
@@ -125,7 +170,7 @@ impl DbQuery for TokioPostgresPool {
 
     /// Implements [DbQuery::execute()] for PostgreSQL.
     async fn execute(&self, sql: &str, params: impl IntoParams + Send) -> Result<(), DbError> {
-        let params = params.into_params()?;
+        let params = params.into_params();
         match params {
             Params::None => self.query(sql, ()).await?,
             _ => self.query(sql, params).await?,
@@ -153,7 +198,7 @@ impl DbQuery for TokioPostgresPool {
         sql: &str,
         into_params: impl IntoParams + Send,
     ) -> Result<Vec<JsonRow>, DbError> {
-        let into_params = into_params.into_params()?;
+        let into_params = into_params.into_params();
         let client = self
             .pool
             .get()
@@ -178,7 +223,7 @@ impl DbQuery for TokioPostgresPool {
                 for (i, param) in plist.iter().enumerate() {
                     let pg_type = &param_pg_types[i];
                     match pg_type {
-                        &Type::TEXT | &Type::VARCHAR => {
+                        &Type::TEXT | &Type::VARCHAR | &Type::NAME => {
                             match param {
                                 ParamValue::Null => params.push(Box::new(None::<String>)),
                                 ParamValue::Text(text) => params.push(Box::new(text.to_string())),
@@ -265,7 +310,7 @@ impl DbQuery for TokioPostgresPool {
     async fn query_row(
         &self,
         sql: &str,
-        params: impl IntoParams + Send + 'static,
+        params: impl IntoParams + Send,
     ) -> Result<JsonRow, DbError> {
         let rows = self.query(sql, params).await?;
         if rows.len() > 1 {
@@ -283,7 +328,7 @@ impl DbQuery for TokioPostgresPool {
     async fn query_value(
         &self,
         sql: &str,
-        params: impl IntoParams + Send + 'static,
+        params: impl IntoParams + Send,
     ) -> Result<JsonValue, DbError> {
         let row = self.query_row(sql, params).await?;
         if row.values().len() > 1 {
@@ -301,7 +346,7 @@ impl DbQuery for TokioPostgresPool {
     async fn query_string(
         &self,
         sql: &str,
-        params: impl IntoParams + Send + 'static,
+        params: impl IntoParams + Send,
     ) -> Result<String, DbError> {
         let value = self.query_value(sql, params).await?;
         match value.as_str() {
@@ -311,11 +356,7 @@ impl DbQuery for TokioPostgresPool {
     }
 
     /// Implements [DbQuery::query_u64()] for PostgreSQL.
-    async fn query_u64(
-        &self,
-        sql: &str,
-        params: impl IntoParams + Send + 'static,
-    ) -> Result<u64, DbError> {
+    async fn query_u64(&self, sql: &str, params: impl IntoParams + Send) -> Result<u64, DbError> {
         let value = self.query_value(sql, params).await?;
         match value.as_u64() {
             Some(val) => Ok(val),
@@ -324,11 +365,7 @@ impl DbQuery for TokioPostgresPool {
     }
 
     /// Implements [DbQuery::query_i64()] for PostgreSQL.
-    async fn query_i64(
-        &self,
-        sql: &str,
-        params: impl IntoParams + Send + 'static,
-    ) -> Result<i64, DbError> {
+    async fn query_i64(&self, sql: &str, params: impl IntoParams + Send) -> Result<i64, DbError> {
         let value = self.query_value(sql, params).await?;
         match value.as_i64() {
             Some(val) => Ok(val),
@@ -336,17 +373,173 @@ impl DbQuery for TokioPostgresPool {
         }
     }
 
-    /// Implements [DbQuery::query_f64] for PostgreSQL.
-    async fn query_f64(
-        &self,
-        sql: &str,
-        params: impl IntoParams + Send + 'static,
-    ) -> Result<f64, DbError> {
+    /// Implements [DbQuery::query_f64()] for PostgreSQL.
+    async fn query_f64(&self, sql: &str, params: impl IntoParams + Send) -> Result<f64, DbError> {
         let value = self.query_value(sql, params).await?;
         match value.as_f64() {
             Some(val) => Ok(val),
             None => Err(DbError::DataError(format!("Not a f64: {value}"))),
         }
+    }
+
+    /// Implements [DbQuery::insert()] for PostgreSQL
+    async fn insert(&self, table: &str, rows: &[&JsonRow]) -> Result<(), DbError> {
+        // Begin by verifying that the given table name is valid, which has the side-effect of
+        // removing any enclosing double-quotes:
+        let table = validate_table_name(table)?;
+
+        // Retrieve the names of all of the table's columns from the database's metadata:
+        let columns = self.get_columns(&table).await?;
+        if columns.len() > MAX_PARAMS_POSTGRES {
+            return Err(DbError::InputError(format!(
+                "Unable to insert to table '{}', which has more columns ({}) than the \
+                 maximum number of variables ({}) allowed in a SQL statement by Postgres.",
+                table,
+                columns.len(),
+                MAX_PARAMS_POSTGRES,
+            )));
+        }
+
+        let mut lines_to_bind: Vec<String> = Vec::new();
+        let mut params_to_be_bound: Vec<ParamValue> = Vec::new();
+        let mut param_idx = 0;
+        for row in rows {
+            // If we have reached Postgres's limit on the number of bound parameters, insert what
+            // we have so far and then reset all of the counters and collections:
+            if param_idx + columns.len() > MAX_PARAMS_POSTGRES {
+                let sql = format!(
+                    r#"INSERT INTO "{table}" VALUES
+                       {}"#,
+                    lines_to_bind.join(",\n")
+                );
+                self.query(&sql, params_to_be_bound.clone()).await?;
+                lines_to_bind.clear();
+                params_to_be_bound.clear();
+                param_idx = 0;
+            }
+
+            // Optimization to avoid repeated heap allocations while processing a single given row:
+            params_to_be_bound.reserve(columns.len());
+            let mut cells: Vec<String> = Vec::with_capacity(columns.len());
+            for column in &columns {
+                param_idx += 1;
+                cells.push(format!("${param_idx}"));
+                let param = parameterize(row, column)?;
+                params_to_be_bound.push(param);
+            }
+            let line_to_bind = format!("({})", cells.join(", "));
+            lines_to_bind.push(line_to_bind);
+        }
+
+        // If there is anything left to insert, insert it now:
+        if lines_to_bind.len() > 0 {
+            let sql = format!(
+                r#"INSERT INTO "{table}" VALUES
+                   {}"#,
+                lines_to_bind.join(",\n")
+            );
+            self.query(&sql, params_to_be_bound.clone()).await?;
+        }
+        Ok(())
+    }
+
+    /// Implements [DbQuery::insert_returning()] for PostgreSQL
+    async fn insert_returning(
+        &self,
+        table: &str,
+        rows: &[&JsonRow],
+        returning: &[&str],
+    ) -> Result<Vec<JsonRow>, DbError> {
+        // Begin by verifying that the given table name is valid, which has the side-effect of
+        // removing any enclosing double-quotes:
+        let table = validate_table_name(table)?;
+
+        // Retrieve the names of all of the table's columns from the database's metadata:
+        let columns = self.get_columns(&table).await?;
+        if columns.len() > MAX_PARAMS_POSTGRES {
+            return Err(DbError::InputError(format!(
+                "Unable to insert to table '{}', which has more columns ({}) than the \
+                 maximum number of variables ({}) allowed in a SQL statement by Postgres.",
+                table,
+                columns.len(),
+                MAX_PARAMS_POSTGRES,
+            )));
+        }
+
+        // Use the `returning` argument to restrict the RETURNING clause, defaulting
+        // to '*' if `returning` is empty:
+        let returning = match returning.is_empty() {
+            true => "*".to_string(),
+            false => {
+                let mut returned_columns = vec![];
+                for column in returning {
+                    let column = column.to_string();
+                    if columns.contains(&column) {
+                        returned_columns.push(column);
+                    } else {
+                        return Err(DbError::InputError(format!(
+                            "Returning column '{column}' does not exist in table '{table}'"
+                        )));
+                    }
+                }
+                returned_columns.join(", ")
+            }
+        };
+
+        let mut rows_to_return = vec![];
+        let mut lines_to_bind: Vec<String> = Vec::new();
+        let mut params_to_be_bound: Vec<ParamValue> = Vec::new();
+        let mut param_idx = 0;
+        for row in rows {
+            // If we have reached Postgres's limit on the number of bound parameters, insert what
+            // we have so far and then reset all of the counters and collections:
+            if param_idx + columns.len() > MAX_PARAMS_POSTGRES {
+                let sql = format!(
+                    r#"INSERT INTO "{table}" VALUES
+                       {}
+                       RETURNING {returning}"#,
+                    lines_to_bind.join(",\n")
+                );
+                rows_to_return.append(&mut self.query(&sql, params_to_be_bound.clone()).await?);
+                lines_to_bind.clear();
+                params_to_be_bound.clear();
+                param_idx = 0;
+            }
+
+            // Optimization to avoid repeated heap allocations while processing a single given row:
+            params_to_be_bound.reserve(columns.len());
+            let mut cells: Vec<String> = Vec::with_capacity(columns.len());
+            for column in &columns {
+                param_idx += 1;
+                cells.push(format!("${param_idx}"));
+                let param = parameterize(row, column)?;
+                params_to_be_bound.push(param);
+            }
+            let line_to_bind = format!("({})", cells.join(", "));
+            lines_to_bind.push(line_to_bind);
+        }
+
+        // If there is anything left to insert, insert it now:
+        if lines_to_bind.len() > 0 {
+            let sql = format!(
+                r#"INSERT INTO "{table}" VALUES
+                   {}
+                   RETURNING {returning}"#,
+                lines_to_bind.join(",\n")
+            );
+            rows_to_return.append(&mut self.query(&sql, params_to_be_bound).await?);
+        }
+        Ok(rows_to_return)
+    }
+
+    /// Implements [DbQuery::drop_table()] for PostgreSQL. Note (see
+    /// <https://www.postgresql.org/docs/current/sql-droptable.html>), that in the case of a
+    /// dependent foreign key constraint, only the constraint will be removed, not the dependent
+    /// table itself.
+    async fn drop_table(&self, table: &str) -> Result<(), DbError> {
+        let table = validate_table_name(table)?;
+        self.execute(&format!(r#"DROP TABLE IF EXISTS "{table}" CASCADE"#), ())
+            .await
     }
 }
 
@@ -364,7 +557,7 @@ mod tests {
             .await
             .unwrap();
         pool.execute_batch(
-            "DROP TABLE IF EXISTS test_table_text;\
+            "DROP TABLE IF EXISTS test_table_text CASCADE;\
              CREATE TABLE test_table_text ( value TEXT )",
         )
         .await
@@ -390,6 +583,9 @@ mod tests {
 
         let rows = pool.query(select_sql, &["foo"]).await.unwrap();
         assert_eq!(json!(rows), json!([{"value":"foo"}]));
+
+        // Clean up:
+        pool.drop_table("test_table_text").await.unwrap();
     }
 
     #[tokio::test]
@@ -399,7 +595,7 @@ mod tests {
             .unwrap();
 
         pool.execute_batch(&format!(
-            "DROP TABLE IF EXISTS test_table_int;\
+            "DROP TABLE IF EXISTS test_table_int CASCADE;\
              CREATE TABLE test_table_int ( value_2 INT2, value_4 INT4, value_8 INT8 )",
         ))
         .await
@@ -445,6 +641,9 @@ mod tests {
             let rows = pool.query(&select_sql, params.clone()).await.unwrap();
             assert_eq!(json!(rows), json!([{format!("{column}"):1}]));
         }
+
+        // Clean up:
+        pool.drop_table("test_table_int").await.unwrap();
     }
 
     #[tokio::test]
@@ -455,7 +654,7 @@ mod tests {
 
         // FLOAT8
         pool.execute_batch(
-            "DROP TABLE IF EXISTS test_table_float;\
+            "DROP TABLE IF EXISTS test_table_float CASCADE;\
              CREATE TABLE test_table_float ( value FLOAT8 )",
         )
         .await
@@ -486,7 +685,7 @@ mod tests {
 
         // FLOAT4
         pool.execute_batch(
-            "DROP TABLE IF EXISTS test_table_float;\
+            "DROP TABLE IF EXISTS test_table_float CASCADE;\
              CREATE TABLE test_table_float ( value FLOAT4 )",
         )
         .await
@@ -502,6 +701,9 @@ mod tests {
             .as_f64()
             .unwrap();
         assert_eq!("1.05", format!("{value:.2}"));
+
+        // Clean up:
+        pool.drop_table("test_table_float").await.unwrap();
     }
 
     #[tokio::test]
@@ -510,7 +712,7 @@ mod tests {
             .await
             .unwrap();
         pool.execute_batch(
-            "DROP TABLE IF EXISTS test_table_mixed;\
+            "DROP TABLE IF EXISTS test_table_mixed CASCADE;\
              CREATE TABLE test_table_mixed (\
                  text_value TEXT,\
                  alt_text_value TEXT,\
@@ -609,6 +811,9 @@ mod tests {
                 "alt_numeric_value": JsonValue::Null,
             }])
         );
+
+        // Clean up:
+        pool.drop_table("test_table_mixed").await.unwrap();
     }
 
     #[tokio::test]
@@ -617,7 +822,7 @@ mod tests {
             .await
             .unwrap();
         pool.execute_batch(
-            "DROP TABLE IF EXISTS test_table_indirect;\
+            "DROP TABLE IF EXISTS test_table_indirect CASCADE;\
              CREATE TABLE test_table_indirect (\
                  text_value TEXT,\
                  alt_text_value TEXT,\
@@ -683,6 +888,175 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(json!(rows), json!([{"int_value_cast": "1"}]));
+
+        // Clean up.
+        pool.drop_table("test_table_indirect").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_insert() {
+        let pool = TokioPostgresPool::connect("postgresql:///rltbl_db")
+            .await
+            .unwrap();
+        pool.execute_batch(
+            "DROP TABLE IF EXISTS test_insert CASCADE;\
+             CREATE TABLE test_insert (\
+                 text_value TEXT,\
+                 alt_text_value TEXT,\
+                 float_value FLOAT8,\
+                 int_value INT8,\
+                 bool_value BOOL\
+             )",
+        )
+        .await
+        .unwrap();
+
+        // Insert rows:
+        pool.insert(
+            "test_insert",
+            &[
+                &json!({"text_value": "TEXT"}).as_object().unwrap(),
+                &json!({"int_value": 1, "bool_value": true})
+                    .as_object()
+                    .unwrap(),
+            ],
+        )
+        .await
+        .unwrap();
+
+        // Validate the inserted data:
+        let rows = pool
+            .query(r#"SELECT * FROM test_insert"#, ())
+            .await
+            .unwrap();
+        assert_eq!(
+            json!(rows),
+            json!([{
+                "text_value": "TEXT",
+                "alt_text_value": JsonValue::Null,
+                "float_value": JsonValue::Null,
+                "int_value": JsonValue::Null,
+                "bool_value": JsonValue::Null,
+            },{
+                "text_value": JsonValue::Null,
+                "alt_text_value": JsonValue::Null,
+                "float_value": JsonValue::Null,
+                "int_value": 1,
+                "bool_value": true,
+            }])
+        );
+
+        // Clean up.
+        pool.drop_table("test_insert").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_insert_returning() {
+        let pool = TokioPostgresPool::connect("postgresql:///rltbl_db")
+            .await
+            .unwrap();
+        pool.execute_batch(
+            "DROP TABLE IF EXISTS test_insert_returning CASCADE;\
+             CREATE TABLE test_insert_returning (\
+                 text_value TEXT,\
+                 alt_text_value TEXT,\
+                 float_value FLOAT8,\
+                 int_value INT8,\
+                 bool_value BOOL\
+             )",
+        )
+        .await
+        .unwrap();
+
+        // No filtering:
+        let rows = pool
+            .insert_returning(
+                "test_insert_returning",
+                &[
+                    &json!({"text_value": "TEXT"}).as_object().unwrap(),
+                    &json!({"int_value": 1, "bool_value": true})
+                        .as_object()
+                        .unwrap(),
+                ],
+                &[],
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            json!(rows),
+            json!([{
+                "text_value": "TEXT",
+                "alt_text_value": JsonValue::Null,
+                "float_value": JsonValue::Null,
+                "int_value": JsonValue::Null,
+                "bool_value": JsonValue::Null,
+            },{
+                "text_value": JsonValue::Null,
+                "alt_text_value": JsonValue::Null,
+                "float_value": JsonValue::Null,
+                "int_value": 1,
+                "bool_value": true,
+            }])
+        );
+
+        // With filtering:
+        let rows = pool
+            .insert_returning(
+                "test_insert_returning",
+                &[
+                    &json!({"text_value": "TEXT"}).as_object().unwrap(),
+                    &json!({"int_value": 1, "bool_value": true})
+                        .as_object()
+                        .unwrap(),
+                ],
+                &["int_value", "float_value"],
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            json!(rows),
+            json!([{
+                "float_value": JsonValue::Null,
+                "int_value": JsonValue::Null,
+            },{
+                "float_value": JsonValue::Null,
+                "int_value": 1,
+            }])
+        );
+
+        // Clean up.
+        pool.drop_table("test_insert_returning").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn drop_table() {
+        let pool = TokioPostgresPool::connect("postgresql:///rltbl_db")
+            .await
+            .unwrap();
+        let table1 = "test_drop1";
+        let table2 = "test_drop2";
+        pool.execute_batch(&format!(
+            "DROP TABLE IF EXISTS {table1} CASCADE;\
+             DROP TABLE IF EXISTS {table2} CASCADE;\
+             CREATE TABLE {table1} (\
+                 foo TEXT PRIMARY KEY\
+             );\
+             CREATE TABLE {table2} (\
+                 foo TEXT REFERENCES {table1}(foo)\
+             );",
+        ))
+        .await
+        .unwrap();
+
+        let columns = pool.get_columns(table1).await.unwrap();
+        assert_eq!(columns, ["foo"]);
+        pool.drop_table(table1).await.unwrap();
+
+        let columns: Vec<String> = pool.get_columns(table1).await.unwrap();
+        assert_eq!(columns, Vec::<String>::new());
+
+        // Clean up.
+        pool.drop_table(table2).await.unwrap();
     }
 
     #[tokio::test]
@@ -690,11 +1064,11 @@ mod tests {
         let pool = TokioPostgresPool::connect("postgresql:///rltbl_db")
             .await
             .unwrap();
-        pool.execute("DROP TABLE IF EXISTS foo_pg", ())
+        pool.execute("DROP TABLE IF EXISTS test_input_params CASCADE", ())
             .await
             .unwrap();
         pool.execute(
-            "CREATE TABLE foo_pg (\
+            "CREATE TABLE test_input_params (\
                bar TEXT,\
                car INT2,\
                dar INT4,\
@@ -708,38 +1082,62 @@ mod tests {
         )
         .await
         .unwrap();
-        pool.execute("INSERT INTO foo_pg (bar) VALUES ($1)", &["one"])
-            .await
-            .unwrap();
-        pool.execute("INSERT INTO foo_pg (far) VALUES ($1)", &[1 as i64])
-            .await
-            .unwrap();
-        pool.execute("INSERT INTO foo_pg (bar) VALUES ($1)", ["two"])
-            .await
-            .unwrap();
-        pool.execute("INSERT INTO foo_pg (far) VALUES ($1)", [2 as i64])
-            .await
-            .unwrap();
-        pool.execute("INSERT INTO foo_pg (bar) VALUES ($1)", vec!["three"])
-            .await
-            .unwrap();
-        pool.execute("INSERT INTO foo_pg (far) VALUES ($1)", vec![3 as i64])
-            .await
-            .unwrap();
-        pool.execute("INSERT INTO foo_pg (gar) VALUES ($1)", vec![3 as f32])
-            .await
-            .unwrap();
-        pool.execute("INSERT INTO foo_pg (har) VALUES ($1)", vec![3 as f64])
-            .await
-            .unwrap();
-        pool.execute("INSERT INTO foo_pg (jar) VALUES ($1)", vec![dec!(3)])
-            .await
-            .unwrap();
-        pool.execute("INSERT INTO foo_pg (kar) VALUES ($1)", vec![true])
+        pool.execute("INSERT INTO test_input_params (bar) VALUES ($1)", &["one"])
             .await
             .unwrap();
         pool.execute(
-            "INSERT INTO foo_pg \
+            "INSERT INTO test_input_params (far) VALUES ($1)",
+            &[1 as i64],
+        )
+        .await
+        .unwrap();
+        pool.execute("INSERT INTO test_input_params (bar) VALUES ($1)", ["two"])
+            .await
+            .unwrap();
+        pool.execute(
+            "INSERT INTO test_input_params (far) VALUES ($1)",
+            [2 as i64],
+        )
+        .await
+        .unwrap();
+        pool.execute(
+            "INSERT INTO test_input_params (bar) VALUES ($1)",
+            vec!["three"],
+        )
+        .await
+        .unwrap();
+        pool.execute(
+            "INSERT INTO test_input_params (far) VALUES ($1)",
+            vec![3 as i64],
+        )
+        .await
+        .unwrap();
+        pool.execute(
+            "INSERT INTO test_input_params (gar) VALUES ($1)",
+            vec![3 as f32],
+        )
+        .await
+        .unwrap();
+        pool.execute(
+            "INSERT INTO test_input_params (har) VALUES ($1)",
+            vec![3 as f64],
+        )
+        .await
+        .unwrap();
+        pool.execute(
+            "INSERT INTO test_input_params (jar) VALUES ($1)",
+            vec![dec!(3)],
+        )
+        .await
+        .unwrap();
+        pool.execute(
+            "INSERT INTO test_input_params (kar) VALUES ($1)",
+            vec![true],
+        )
+        .await
+        .unwrap();
+        pool.execute(
+            "INSERT INTO test_input_params \
              (bar, car, dar, far, gar, har, jar, kar) \
              VALUES ($1, $2, $3, $4, $5 ,$6, $7, $8)",
             params![
@@ -758,12 +1156,15 @@ mod tests {
         // Two alternative ways of specifying a NULL parameter:
         let row = pool
             .query_row(
-                "SELECT COUNT(1) AS count FROM foo_pg \
+                "SELECT COUNT(1) AS count FROM test_input_params \
                  WHERE bar IS NOT DISTINCT FROM $1 AND far IS NOT DISTINCT FROM $2",
                 params![ParamValue::Null, ()],
             )
             .await
             .unwrap();
         assert_eq!(json!({"count": 4}), json!(row));
+
+        // Clean up:
+        pool.drop_table("test_input_params").await.unwrap();
     }
 }
