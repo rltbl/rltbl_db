@@ -228,7 +228,7 @@ impl DbQuery for TokioPostgresPool {
                 for (i, param) in plist.iter().enumerate() {
                     let pg_type = &param_pg_types[i];
                     match pg_type {
-                        &Type::TEXT | &Type::VARCHAR => {
+                        &Type::TEXT | &Type::VARCHAR | &Type::NAME => {
                             match param {
                                 ParamValue::Null => params.push(Box::new(None::<String>)),
                                 ParamValue::Text(text) => params.push(Box::new(text.to_string())),
@@ -284,28 +284,7 @@ impl DbQuery for TokioPostgresPool {
                                 _ => return Err(DbError::InputError(gen_err(&param, "BOOL"))),
                             };
                         }
-                        unimplemented => match param {
-                            // This case will be triggered by an unknown type, for example, when
-                            // querying the metadata table column, "columns"."columns", which
-                            // reports that it is of type "name", even though is implemented as
-                            // TEXT. In such cases we try to bind the parameter based on _its_
-                            // type rather than on the reported column type. This will not work
-                            // for null values, however, since there is no way to find out the type
-                            // of the associated column.
-                            ParamValue::Text(text) => params.push(Box::new(text.to_string())),
-                            ParamValue::SmallInteger(num) => params.push(Box::new(*num)),
-                            ParamValue::Integer(num) => params.push(Box::new(*num)),
-                            ParamValue::BigInteger(num) => params.push(Box::new(*num)),
-                            ParamValue::Real(num) => params.push(Box::new(*num)),
-                            ParamValue::BigReal(num) => params.push(Box::new(*num)),
-                            ParamValue::Numeric(num) => params.push(Box::new(*num)),
-                            ParamValue::Boolean(flag) => params.push(Box::new(*flag)),
-                            ParamValue::Null => {
-                                return Err(DbError::InputError(format!(
-                                    "Don't know how to bind a NULL param for type {unimplemented}"
-                                )));
-                            }
-                        },
+                        _ => unimplemented!(),
                     };
                 }
             }
@@ -583,7 +562,7 @@ mod tests {
             .await
             .unwrap();
         pool.execute_batch(
-            "DROP TABLE IF EXISTS test_table_text;\
+            "DROP TABLE IF EXISTS test_table_text CASCADE;\
              CREATE TABLE test_table_text ( value TEXT )",
         )
         .await
@@ -621,7 +600,7 @@ mod tests {
             .unwrap();
 
         pool.execute_batch(&format!(
-            "DROP TABLE IF EXISTS test_table_int;\
+            "DROP TABLE IF EXISTS test_table_int CASCADE;\
              CREATE TABLE test_table_int ( value_2 INT2, value_4 INT4, value_8 INT8 )",
         ))
         .await
@@ -680,7 +659,7 @@ mod tests {
 
         // FLOAT8
         pool.execute_batch(
-            "DROP TABLE IF EXISTS test_table_float;\
+            "DROP TABLE IF EXISTS test_table_float CASCADE;\
              CREATE TABLE test_table_float ( value FLOAT8 )",
         )
         .await
@@ -711,7 +690,7 @@ mod tests {
 
         // FLOAT4
         pool.execute_batch(
-            "DROP TABLE IF EXISTS test_table_float;\
+            "DROP TABLE IF EXISTS test_table_float CASCADE;\
              CREATE TABLE test_table_float ( value FLOAT4 )",
         )
         .await
@@ -738,7 +717,7 @@ mod tests {
             .await
             .unwrap();
         pool.execute_batch(
-            "DROP TABLE IF EXISTS test_table_mixed;\
+            "DROP TABLE IF EXISTS test_table_mixed CASCADE;\
              CREATE TABLE test_table_mixed (\
                  text_value TEXT,\
                  alt_text_value TEXT,\
@@ -848,7 +827,7 @@ mod tests {
             .await
             .unwrap();
         pool.execute_batch(
-            "DROP TABLE IF EXISTS test_table_indirect;\
+            "DROP TABLE IF EXISTS test_table_indirect CASCADE;\
              CREATE TABLE test_table_indirect (\
                  text_value TEXT,\
                  alt_text_value TEXT,\
@@ -925,7 +904,7 @@ mod tests {
             .await
             .unwrap();
         pool.execute_batch(
-            "DROP TABLE IF EXISTS test_insert;\
+            "DROP TABLE IF EXISTS test_insert CASCADE;\
              CREATE TABLE test_insert (\
                  text_value TEXT,\
                  alt_text_value TEXT,\
@@ -982,7 +961,7 @@ mod tests {
             .await
             .unwrap();
         pool.execute_batch(
-            "DROP TABLE IF EXISTS test_insert_returning;\
+            "DROP TABLE IF EXISTS test_insert_returning CASCADE;\
              CREATE TABLE test_insert_returning (\
                  text_value TEXT,\
                  alt_text_value TEXT,\
@@ -1062,8 +1041,8 @@ mod tests {
         let table1 = "test_drop1";
         let table2 = "test_drop2";
         pool.execute_batch(&format!(
-            "DROP TABLE IF EXISTS {table1};\
-             DROP TABLE IF EXISTS {table2};\
+            "DROP TABLE IF EXISTS {table1} CASCADE;\
+             DROP TABLE IF EXISTS {table2} CASCADE;\
              CREATE TABLE {table1} (\
                  foo TEXT PRIMARY KEY\
              );\
@@ -1090,7 +1069,7 @@ mod tests {
         let pool = TokioPostgresPool::connect("postgresql:///rltbl_db")
             .await
             .unwrap();
-        pool.execute("DROP TABLE IF EXISTS test_input_params", ())
+        pool.execute("DROP TABLE IF EXISTS test_input_params CASCADE", ())
             .await
             .unwrap();
         pool.execute(
