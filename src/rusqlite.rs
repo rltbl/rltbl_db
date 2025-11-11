@@ -2,8 +2,9 @@
 
 use crate::{
     core::{
-        DbError, DbKind, DbQuery, IntoParams, JsonRow, JsonValue, ParamValue, Params,
-        jsonvalue_to_string, parameterize, validate_table_name,
+        DbError, DbKind, DbQuery, IntoParams, JsonRow, JsonValue, ParamValue, Params, StringRow,
+        jsonrow_to_stringrow, jsonrows_to_stringrows, jsonvalue_to_string, parameterize,
+        validate_table_name,
     },
     params,
 };
@@ -339,6 +340,26 @@ impl DbQuery for RusqlitePool {
             .collect()
     }
 
+    /// Implements [DbQuery::query_string_row()] for SQLite.
+    async fn query_string_row(
+        &self,
+        sql: &str,
+        params: impl IntoParams + Send,
+    ) -> Result<StringRow, DbError> {
+        let row = self.query_row(sql, params).await?;
+        Ok(jsonrow_to_stringrow(&row))
+    }
+
+    /// Implements [DbQuery::query_string_rows()] for SQLite.
+    async fn query_string_rows(
+        &self,
+        sql: &str,
+        params: impl IntoParams + Send,
+    ) -> Result<Vec<StringRow>, DbError> {
+        let rows = self.query(sql, params).await?;
+        Ok(jsonrows_to_stringrows(&rows))
+    }
+
     /// Implements [DbQuery::query_u64()] for SQLite.
     async fn query_u64(&self, sql: &str, params: impl IntoParams + Send) -> Result<u64, DbError> {
         let value = self.query_value(sql, params).await?;
@@ -561,6 +582,18 @@ mod tests {
 
         let strings = pool.query_strings(select_sql, &["foo"]).await.unwrap();
         assert_eq!(vec!["foo".to_owned()], strings);
+
+        let string_row = pool.query_string_row(select_sql, &["foo"]).await.unwrap();
+        assert_eq!(
+            StringRow::from([("value".to_owned(), "foo".to_owned())]),
+            string_row
+        );
+
+        let string_rows = pool.query_string_rows(select_sql, &["foo"]).await.unwrap();
+        assert_eq!(
+            vec![StringRow::from([("value".to_owned(), "foo".to_owned())])],
+            string_rows
+        );
 
         let row = pool.query_row(select_sql, &["foo"]).await.unwrap();
         assert_eq!(json!(row), json!({"value":"foo"}));

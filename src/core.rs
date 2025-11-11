@@ -1,5 +1,6 @@
 //! # rltbl/rltbl_db
 
+use indexmap::IndexMap;
 use lazy_static::lazy_static;
 use regex::Regex;
 use rust_decimal::Decimal;
@@ -9,6 +10,7 @@ use std::future::Future;
 
 pub type JsonValue = serde_json::Value;
 pub type JsonRow = JsonMap<String, JsonValue>;
+pub type StringRow = IndexMap<String, String>;
 
 /// Represents a valid database table name.
 static VALID_TABLE_NAME_MATCH_STR: &str = r"^[A-Za-z_][0-9A-Za-z_]*$";
@@ -27,6 +29,18 @@ pub fn jsonvalue_to_string(value: &JsonValue) -> String {
         JsonValue::Null => "NULL".to_string(),
         _ => value.to_string(),
     }
+}
+
+/// Convert a row of JSON Values to a row of Strings.
+pub fn jsonrow_to_stringrow(row: &JsonRow) -> StringRow {
+    row.iter()
+        .map(|(key, value)| (key.clone(), jsonvalue_to_string(value)))
+        .collect()
+}
+
+/// Convert a vector of JSON rows to a vector of String rows.
+pub fn jsonrows_to_stringrows(rows: &[JsonRow]) -> Vec<StringRow> {
+    rows.iter().map(|row| jsonrow_to_stringrow(row)).collect()
 }
 
 /// Defines the supported database kinds.
@@ -447,6 +461,20 @@ pub trait DbQuery {
         sql: &str,
         params: impl IntoParams + Send,
     ) -> impl Future<Output = Result<Vec<String>, DbError>> + Send;
+
+    /// Execute a SQL command, returning a row of strings.
+    fn query_string_row(
+        &self,
+        sql: &str,
+        params: impl IntoParams + Send,
+    ) -> impl Future<Output = Result<StringRow, DbError>> + Send;
+
+    /// Execute a SQL command, returning a vector of rows of strings.
+    fn query_string_rows(
+        &self,
+        sql: &str,
+        params: impl IntoParams + Send,
+    ) -> impl Future<Output = Result<Vec<StringRow>, DbError>> + Send;
 
     /// Execute a SQL command, returning a single unsigned integer.
     fn query_u64(
