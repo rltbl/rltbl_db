@@ -18,54 +18,10 @@ use deadpool_sqlite::{
 };
 use serde_json::json;
 
-// TODO: The maximum number of parameters is artificially set to a very low level during initial
-// dev. Make sure to uncomment the correct value before merging this code.
 /// The [maximum number of parameters](https://www.sqlite.org/limits.html#max_variable_number)
 /// that can be bound to a SQLite query
-static MAX_PARAMS_SQLITE: usize = 6;
-// static MAX_PARAMS_SQLITE: usize = 32766;
+static MAX_PARAMS_SQLITE: usize = 32766;
 
-/// Represents a SQLite database connection pool
-#[derive(Debug)]
-pub struct RusqlitePool {
-    pool: Pool,
-}
-
-impl RusqlitePool {
-    /// Connect to a SQLite database using the given url.
-    pub async fn connect(url: &str) -> Result<Self, DbError> {
-        let cfg = Config::new(url);
-        let pool = cfg
-            .create_pool(Runtime::Tokio1)
-            .map_err(|err| DbError::ConnectError(format!("Error creating pool: {err}")))?;
-        Ok(Self { pool })
-    }
-
-    /// Query the database's metadata to retrieve the columns associated with a given table.
-    async fn get_columns(&self, table: &str) -> Result<Vec<String>, DbError> {
-        let mut columns = vec![];
-        for row in self
-            .query("SELECT name FROM PRAGMA_TABLE_INFO($1)", params![&table])
-            .await?
-        {
-            match row
-                .get("name")
-                .and_then(|name| name.as_str().and_then(|name| Some(name)))
-            {
-                Some(column) => columns.push(column.to_string()),
-                None => {
-                    return Err(DbError::DataError(format!(
-                        "Error getting columns for table '{table}'"
-                    )));
-                }
-            };
-        }
-        Ok(columns)
-    }
-}
-
-// TODO: Move the location of this function within this file to before the definition of
-// RusqlitePool.
 /// Query a database using the given prepared statement and parameters.
 fn query_prepared(
     stmt: &mut Statement<'_>,
@@ -214,6 +170,45 @@ fn query_prepared(
         })
         .collect::<Vec<_>>();
     results.map_err(|err| DbError::DatabaseError(err.to_string()))
+}
+
+/// Represents a SQLite database connection pool
+#[derive(Debug)]
+pub struct RusqlitePool {
+    pool: Pool,
+}
+
+impl RusqlitePool {
+    /// Connect to a SQLite database using the given url.
+    pub async fn connect(url: &str) -> Result<Self, DbError> {
+        let cfg = Config::new(url);
+        let pool = cfg
+            .create_pool(Runtime::Tokio1)
+            .map_err(|err| DbError::ConnectError(format!("Error creating pool: {err}")))?;
+        Ok(Self { pool })
+    }
+
+    /// Query the database's metadata to retrieve the columns associated with a given table.
+    async fn get_columns(&self, table: &str) -> Result<Vec<String>, DbError> {
+        let mut columns = vec![];
+        for row in self
+            .query("SELECT name FROM PRAGMA_TABLE_INFO($1)", params![&table])
+            .await?
+        {
+            match row
+                .get("name")
+                .and_then(|name| name.as_str().and_then(|name| Some(name)))
+            {
+                Some(column) => columns.push(column.to_string()),
+                None => {
+                    return Err(DbError::DataError(format!(
+                        "Error getting columns for table '{table}'"
+                    )));
+                }
+            };
+        }
+        Ok(columns)
+    }
 }
 
 impl DbQuery for RusqlitePool {

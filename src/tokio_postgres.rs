@@ -16,79 +16,10 @@ use tokio_postgres::{
     types::{ToSql, Type},
 };
 
-// TODO: The maximum number of parameters is artificially set to a very low level during initial
-// dev. Make sure to uncomment the correct value before merging this code.
 /// The [maximum number of parameters](https://www.postgresql.org/docs/current/limits.html)
 /// that can be bound to a Postgres query
-static MAX_PARAMS_POSTGRES: usize = 6;
-//pub static MAX_PARAMS_POSTGRES: usize = 65535;
+pub static MAX_PARAMS_POSTGRES: usize = 65535;
 
-/// Represents a PostgreSQL database connection pool
-#[derive(Debug)]
-pub struct TokioPostgresPool {
-    pool: Pool,
-}
-
-impl TokioPostgresPool {
-    /// Connect to a PostgreSQL database using the given url, which should be of the form
-    /// postgresql:///DATABASE_NAME
-    pub async fn connect(url: &str) -> Result<Self, DbError> {
-        match url.starts_with("postgresql:///") {
-            true => {
-                let mut cfg = Config::new();
-                let db_name = url
-                    .strip_prefix("postgresql:///")
-                    .ok_or(DbError::ConnectError("Invalid PostgreSQL URL".to_string()))?;
-                cfg.dbname = Some(db_name.to_string());
-                let pool = cfg
-                    .create_pool(Some(Runtime::Tokio1), NoTls)
-                    .map_err(|err| DbError::ConnectError(format!("Error creating pool: {err}")))?;
-                Ok(Self { pool })
-            }
-            false => Err(DbError::ConnectError(format!(
-                "Invalid PostgreSQL URL: '{url}'"
-            ))),
-        }
-    }
-
-    /// Query the database's metadata to retrieve the columns associated with a given table.
-    async fn get_columns(&self, table: &str) -> Result<Vec<String>, DbError> {
-        let mut columns = vec![];
-        let sql = format!(
-            r#"SELECT
-                 "columns"."column_name"::TEXT AS "name"
-               FROM
-                 "information_schema"."columns" "columns"
-               WHERE
-                 "columns"."table_schema" IN (
-                   SELECT REGEXP_SPLIT_TO_TABLE("setting", ', ')
-                   FROM "pg_settings"
-                   WHERE "name" = 'search_path'
-                 )
-                 AND "columns"."table_name" = $1
-               ORDER BY "columns"."ordinal_position""#
-        );
-
-        for row in self.query(&sql, params![&table]).await? {
-            match row
-                .get("name")
-                .and_then(|name| name.as_str().and_then(|name| Some(name)))
-            {
-                Some(column) => columns.push(column.to_string()),
-                None => {
-                    return Err(DbError::DataError(format!(
-                        "Error getting columns for table '{table}'"
-                    )));
-                }
-            };
-        }
-
-        Ok(columns)
-    }
-}
-
-// TODO: Move the location of this function within this file to before the definition of
-// TokioPostgresPool:
 /// Extracts the value at the given index from the given [Row].
 fn extract_value(row: &Row, idx: usize) -> Result<JsonValue, DbError> {
     let column = &row.columns()[idx];
@@ -164,6 +95,70 @@ fn extract_value(row: &Row, idx: usize) -> Result<JsonValue, DbError> {
             None => Ok(JsonValue::Null),
         },
         _ => unimplemented!(),
+    }
+}
+
+/// Represents a PostgreSQL database connection pool
+#[derive(Debug)]
+pub struct TokioPostgresPool {
+    pool: Pool,
+}
+
+impl TokioPostgresPool {
+    /// Connect to a PostgreSQL database using the given url, which should be of the form
+    /// postgresql:///DATABASE_NAME
+    pub async fn connect(url: &str) -> Result<Self, DbError> {
+        match url.starts_with("postgresql:///") {
+            true => {
+                let mut cfg = Config::new();
+                let db_name = url
+                    .strip_prefix("postgresql:///")
+                    .ok_or(DbError::ConnectError("Invalid PostgreSQL URL".to_string()))?;
+                cfg.dbname = Some(db_name.to_string());
+                let pool = cfg
+                    .create_pool(Some(Runtime::Tokio1), NoTls)
+                    .map_err(|err| DbError::ConnectError(format!("Error creating pool: {err}")))?;
+                Ok(Self { pool })
+            }
+            false => Err(DbError::ConnectError(format!(
+                "Invalid PostgreSQL URL: '{url}'"
+            ))),
+        }
+    }
+
+    /// Query the database's metadata to retrieve the columns associated with a given table.
+    async fn get_columns(&self, table: &str) -> Result<Vec<String>, DbError> {
+        let mut columns = vec![];
+        let sql = format!(
+            r#"SELECT
+                 "columns"."column_name"::TEXT AS "name"
+               FROM
+                 "information_schema"."columns" "columns"
+               WHERE
+                 "columns"."table_schema" IN (
+                   SELECT REGEXP_SPLIT_TO_TABLE("setting", ', ')
+                   FROM "pg_settings"
+                   WHERE "name" = 'search_path'
+                 )
+                 AND "columns"."table_name" = $1
+               ORDER BY "columns"."ordinal_position""#
+        );
+
+        for row in self.query(&sql, params![&table]).await? {
+            match row
+                .get("name")
+                .and_then(|name| name.as_str().and_then(|name| Some(name)))
+            {
+                Some(column) => columns.push(column.to_string()),
+                None => {
+                    return Err(DbError::DataError(format!(
+                        "Error getting columns for table '{table}'"
+                    )));
+                }
+            };
+        }
+
+        Ok(columns)
     }
 }
 
