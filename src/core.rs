@@ -44,6 +44,7 @@ pub fn jsonrows_to_stringrows(rows: &[JsonRow]) -> Vec<StringRow> {
 }
 
 /// Defines the supported database kinds.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DbKind {
     SQLite,
     PostgreSQL,
