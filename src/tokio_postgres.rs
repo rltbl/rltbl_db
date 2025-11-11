@@ -474,7 +474,7 @@ impl DbQuery for TokioPostgresPool {
         &self,
         table: &str,
         rows: &[&JsonRow],
-        filtered_by: &[&str],
+        returning: &[&str],
     ) -> Result<Vec<JsonRow>, DbError> {
         // Begin by verifying that the given table name is valid, which has the side-effect of
         // removing any enclosing double-quotes:
@@ -492,19 +492,24 @@ impl DbQuery for TokioPostgresPool {
             )));
         }
 
-        // Use the `filtered_by` argument to restrict the RETURNING clause, defaulting
-        // to '*' if `filtered_by` is empty:
-        let returning = match filtered_by.is_empty() {
+        // Use the `returning` argument to restrict the RETURNING clause, defaulting
+        // to '*' if `returning` is empty:
+        let returning = match returning.is_empty() {
             true => "*".to_string(),
-            false => filtered_by
-                .iter()
-                // TODO: Should we log a warning when filtered_by contains non-existent
-                // columns?
-                // TODO: Try to remove the call to .to_string() here:
-                .filter(|col| columns.contains(&col.to_string()))
-                .map(|col| *col)
-                .collect::<Vec<_>>()
-                .join(", "),
+            false => {
+                let mut returned_columns = vec![];
+                for column in returning {
+                    let column = column.to_string();
+                    if columns.contains(&column) {
+                        returned_columns.push(column);
+                    } else {
+                        return Err(DbError::InputError(format!(
+                            "Returning column '{column}' does not exist in table '{table}'"
+                        )));
+                    }
+                }
+                returned_columns.join(", ")
+            }
         };
 
         let mut rows_to_return = vec![];

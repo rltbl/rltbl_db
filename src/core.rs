@@ -376,14 +376,15 @@ pub trait DbQuery {
     /// use NULL as the value of that column when inserting the row to the table.
     fn insert(&self, table: &str, rows: &[&JsonRow]) -> impl Future<Output = Result<(), DbError>>;
 
-    /// Insert JSON rows into the given table and then return the inserted data, filtered by the
-    /// given list of columns, if any. If an input row does not have a key for a column, use NULL
-    /// as the value of that column when inserting the row to the table.
+    /// Insert the given JSON rows into the given table, and then return the columns from the
+    /// inserted data that are included in `returning`, or all of the inserted data if `returning`
+    /// is an empty list. If an input row does not have a key for a column, use NULL as the value
+    /// of that column when inserting the row to the table.
     fn insert_returning(
         &self,
         table: &str,
         rows: &[&JsonRow],
-        filtered_by: &[&str],
+        returning: &[&str],
     ) -> impl Future<Output = Result<Vec<JsonRow>, DbError>>;
 
     /// Drop the given table from the database.

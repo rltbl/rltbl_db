@@ -176,13 +176,13 @@ impl DbQuery for AnyPool {
         &self,
         table: &str,
         rows: &[&JsonRow],
-        filtered_by: &[&str],
+        returning: &[&str],
     ) -> Result<Vec<JsonRow>, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
-            AnyPool::Rusqlite(pool) => pool.insert_returning(table, rows, filtered_by).await,
+            AnyPool::Rusqlite(pool) => pool.insert_returning(table, rows, returning).await,
             #[cfg(feature = "tokio-postgres")]
-            AnyPool::TokioPostgres(pool) => pool.insert_returning(table, rows, filtered_by).await,
+            AnyPool::TokioPostgres(pool) => pool.insert_returning(table, rows, returning).await,
         }
     }
 
