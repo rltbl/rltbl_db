@@ -2,7 +2,7 @@
 
 use crate::{
     core::{
-        DbError, DbKind, DbQuery, IntoParams, JsonRow, JsonValue, ParamValue, Params,
+        DbError, DbKind, DbQuery, IntoParams, JsonRow, JsonValue, ParamValue, Params, parameterize,
         validate_table_name,
     },
     params,
@@ -64,7 +64,8 @@ impl RusqlitePool {
     }
 }
 
-// TODO: Move the location of this function within this file to before the definition of RusqlitePool.
+// TODO: Move the location of this function within this file to before the definition of
+// RusqlitePool.
 /// Query a database using the given prepared statement and parameters.
 fn query_prepared(
     stmt: &mut Statement<'_>,
@@ -402,35 +403,7 @@ impl DbQuery for RusqlitePool {
             for column in &columns {
                 param_idx += 1;
                 cells.push(format!("${param_idx}"));
-                let param = match row.get(column) {
-                    Some(json_value) => match json_value {
-                        JsonValue::Null => ParamValue::Null,
-                        JsonValue::Bool(flag) => ParamValue::Boolean(*flag),
-                        JsonValue::Number(number) => {
-                            if number.is_i64() {
-                                ParamValue::BigInteger(number.as_i64().unwrap())
-                            } else if number.is_f64() {
-                                ParamValue::BigReal(number.as_f64().unwrap())
-                            } else {
-                                return Err(DbError::DataError(format!(
-                                    "Unsupported number: {number} is neither i64 nor f64"
-                                )));
-                            }
-                        }
-                        JsonValue::String(text) => ParamValue::Text(text.to_string()),
-                        JsonValue::Array(values) => {
-                            return Err(DbError::InputError(format!(
-                                "JSON Arrays not supported: {values:?}"
-                            )));
-                        }
-                        JsonValue::Object(map) => {
-                            return Err(DbError::InputError(format!(
-                                "JSON Objects not supported: {map:?}"
-                            )));
-                        }
-                    },
-                    None => ParamValue::Null,
-                };
+                let param = parameterize(row, column)?;
                 params_to_be_bound.push(param);
             }
             let line_to_bind = format!("({})", cells.join(", "));
@@ -513,35 +486,7 @@ impl DbQuery for RusqlitePool {
             for column in &columns {
                 param_idx += 1;
                 cells.push(format!("${param_idx}"));
-                let param = match row.get(column) {
-                    Some(json_value) => match json_value {
-                        JsonValue::Null => ParamValue::Null,
-                        JsonValue::Bool(flag) => ParamValue::Boolean(*flag),
-                        JsonValue::Number(number) => {
-                            if number.is_i64() {
-                                ParamValue::BigInteger(number.as_i64().unwrap())
-                            } else if number.is_f64() {
-                                ParamValue::BigReal(number.as_f64().unwrap())
-                            } else {
-                                return Err(DbError::DataError(format!(
-                                    "Unsupported number: {number} is neither i64 nor f64"
-                                )));
-                            }
-                        }
-                        JsonValue::String(text) => ParamValue::Text(text.to_string()),
-                        JsonValue::Array(values) => {
-                            return Err(DbError::InputError(format!(
-                                "JSON Arrays not supported: {values:?}"
-                            )));
-                        }
-                        JsonValue::Object(map) => {
-                            return Err(DbError::InputError(format!(
-                                "JSON Objects not supported: {map:?}"
-                            )));
-                        }
-                    },
-                    None => ParamValue::Null,
-                };
+                let param = parameterize(row, column)?;
                 params_to_be_bound.push(param);
             }
             let line_to_bind = format!("({})", cells.join(", "));

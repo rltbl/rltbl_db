@@ -274,6 +274,41 @@ macro_rules! params {
     }};
 }
 
+/// Given a [JsonRow] and one of the columns in that row, return a [ParamValue] representing the
+/// value of the column in the row.
+pub fn parameterize(row: &JsonRow, column: &str) -> Result<ParamValue, DbError> {
+    let param = match row.get(column) {
+        Some(json_value) => match json_value {
+            JsonValue::Null => ParamValue::Null,
+            JsonValue::Bool(flag) => ParamValue::Boolean(*flag),
+            JsonValue::Number(number) => {
+                if number.is_i64() {
+                    ParamValue::BigInteger(number.as_i64().unwrap())
+                } else if number.is_f64() {
+                    ParamValue::BigReal(number.as_f64().unwrap())
+                } else {
+                    return Err(DbError::DataError(format!(
+                        "Unsupported number: {number} is neither i64 nor f64"
+                    )));
+                }
+            }
+            JsonValue::String(text) => ParamValue::Text(text.to_string()),
+            JsonValue::Array(values) => {
+                return Err(DbError::InputError(format!(
+                    "JSON Arrays not supported: {values:?}"
+                )));
+            }
+            JsonValue::Object(map) => {
+                return Err(DbError::InputError(format!(
+                    "JSON Objects not supported: {map:?}"
+                )));
+            }
+        },
+        None => ParamValue::Null,
+    };
+    Ok(param)
+}
+
 pub trait DbQuery {
     /// Get the kind of SQL database: SQLite or PostgreSQL.
     fn kind(&self) -> DbKind;
