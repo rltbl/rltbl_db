@@ -136,6 +136,19 @@ impl DbQuery for AnyPool {
         }
     }
 
+    async fn query_strings(
+        &self,
+        sql: &str,
+        params: impl IntoParams + Send,
+    ) -> Result<Vec<String>, DbError> {
+        match self {
+            #[cfg(feature = "rusqlite")]
+            AnyPool::Rusqlite(pool) => pool.query_strings(sql, params).await,
+            #[cfg(feature = "tokio-postgres")]
+            AnyPool::TokioPostgres(pool) => pool.query_strings(sql, params).await,
+        }
+    }
+
     async fn query_u64(&self, sql: &str, params: impl IntoParams + Send) -> Result<u64, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]

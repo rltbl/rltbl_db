@@ -18,6 +18,17 @@ lazy_static! {
     static ref VALID_TABLE_NAME_REGEX: Regex = Regex::new(VALID_TABLE_NAME_MATCH_STR).unwrap();
 }
 
+/// Convert a JSON Value to a String,
+/// without quoting for JSON Value::String,
+/// and treating JSON Value::Null as "NULL".
+pub fn jsonvalue_to_string(value: &JsonValue) -> String {
+    match value {
+        JsonValue::String(string) => string.to_string(),
+        JsonValue::Null => "NULL".to_string(),
+        _ => value.to_string(),
+    }
+}
+
 /// Defines the supported database kinds.
 pub enum DbKind {
     SQLite,
@@ -429,6 +440,13 @@ pub trait DbQuery {
         sql: &str,
         params: impl IntoParams + Send,
     ) -> impl Future<Output = Result<String, DbError>> + Send;
+
+    /// Execute a SQL command, returning a vector of strings: the first value for each row.
+    fn query_strings(
+        &self,
+        sql: &str,
+        params: impl IntoParams + Send,
+    ) -> impl Future<Output = Result<Vec<String>, DbError>> + Send;
 
     /// Execute a SQL command, returning a single unsigned integer.
     fn query_u64(
