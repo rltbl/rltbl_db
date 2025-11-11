@@ -3,7 +3,7 @@
 use crate::{
     core::{
         DbError, DbKind, DbQuery, IntoParams, JsonRow, JsonValue, ParamValue, Params, StringRow,
-        jsonrow_to_stringrow, jsonrows_to_stringrows, jsonvalue_to_string, parameterize,
+        json_row_to_string_row, json_rows_to_string_rows, json_value_to_string, parameterize,
         validate_table_name,
     },
     params,
@@ -322,7 +322,7 @@ impl DbQuery for RusqlitePool {
         params: impl IntoParams + Send,
     ) -> Result<String, DbError> {
         let value = self.query_value(sql, params).await?;
-        Ok(jsonvalue_to_string(&value))
+        Ok(json_value_to_string(&value))
     }
 
     /// Implements [DbQuery::query_string()] for SQLite.
@@ -334,7 +334,7 @@ impl DbQuery for RusqlitePool {
         let rows = self.query(sql, params).await?;
         rows.iter()
             .map(|row| match row.values().nth(0) {
-                Some(value) => Ok(jsonvalue_to_string(value)),
+                Some(value) => Ok(json_value_to_string(value)),
                 None => Err(DbError::DataError("Empty row".to_owned())),
             })
             .collect()
@@ -347,7 +347,7 @@ impl DbQuery for RusqlitePool {
         params: impl IntoParams + Send,
     ) -> Result<StringRow, DbError> {
         let row = self.query_row(sql, params).await?;
-        Ok(jsonrow_to_stringrow(&row))
+        Ok(json_row_to_string_row(&row))
     }
 
     /// Implements [DbQuery::query_string_rows()] for SQLite.
@@ -357,7 +357,7 @@ impl DbQuery for RusqlitePool {
         params: impl IntoParams + Send,
     ) -> Result<Vec<StringRow>, DbError> {
         let rows = self.query(sql, params).await?;
-        Ok(jsonrows_to_stringrows(&rows))
+        Ok(json_rows_to_string_rows(&rows))
     }
 
     /// Implements [DbQuery::query_u64()] for SQLite.

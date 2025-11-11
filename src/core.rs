@@ -23,7 +23,7 @@ lazy_static! {
 /// Convert a JSON Value to a String,
 /// without quoting for JSON Value::String,
 /// and treating JSON Value::Null as "NULL".
-pub fn jsonvalue_to_string(value: &JsonValue) -> String {
+pub fn json_value_to_string(value: &JsonValue) -> String {
     match value {
         JsonValue::String(string) => string.to_string(),
         JsonValue::Null => "NULL".to_string(),
@@ -32,15 +32,15 @@ pub fn jsonvalue_to_string(value: &JsonValue) -> String {
 }
 
 /// Convert a row of JSON Values to a row of Strings.
-pub fn jsonrow_to_stringrow(row: &JsonRow) -> StringRow {
+pub fn json_row_to_string_row(row: &JsonRow) -> StringRow {
     row.iter()
-        .map(|(key, value)| (key.clone(), jsonvalue_to_string(value)))
+        .map(|(key, value)| (key.clone(), json_value_to_string(value)))
         .collect()
 }
 
 /// Convert a vector of JSON rows to a vector of String rows.
-pub fn jsonrows_to_stringrows(rows: &[JsonRow]) -> Vec<StringRow> {
-    rows.iter().map(|row| jsonrow_to_stringrow(row)).collect()
+pub fn json_rows_to_string_rows(rows: &[JsonRow]) -> Vec<StringRow> {
+    rows.iter().map(|row| json_row_to_string_row(row)).collect()
 }
 
 /// Defines the supported database kinds.
@@ -104,7 +104,7 @@ impl Into<String> for ParamValue {
     fn into(self) -> String {
         match self {
             ParamValue::Null => String::new(),
-            ParamValue::Boolean(bool) => bool.to_string(),
+            ParamValue::Boolean(val) => val.to_string(),
             ParamValue::SmallInteger(number) => number.to_string(),
             ParamValue::Integer(number) => number.to_string(),
             ParamValue::BigInteger(number) => number.to_string(),
@@ -277,7 +277,7 @@ impl ParamValue {
     pub fn from_json(value: JsonValue) -> Self {
         match &value {
             JsonValue::Null => Self::Null,
-            JsonValue::Bool(bool) => Self::Boolean(*bool),
+            JsonValue::Bool(val) => Self::Boolean(*val),
             JsonValue::Number(number) => {
                 if number.is_u64() {
                     Self::from(number.as_u64().unwrap())
