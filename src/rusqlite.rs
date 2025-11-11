@@ -185,6 +185,14 @@ impl RusqlitePool {
         let pool = cfg
             .create_pool(Runtime::Tokio1)
             .map_err(|err| DbError::ConnectError(format!("Error creating pool: {err}")))?;
+        // TODO: Replace unwrap() with Err()
+        let conn = pool.get().await.unwrap();
+        conn.interact(|conn| {
+            let mut stmt = conn.prepare("PRAGMA foreign_keys = ON").unwrap();
+            let _ = stmt.query([]).unwrap();
+        })
+        .await
+        .unwrap();
         Ok(Self { pool })
     }
 
@@ -1024,5 +1032,69 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(json!({"count": 4}), json!(row));
+    }
+
+    #[tokio::test]
+    async fn test_foreign_keys() {
+        foreign_keys().await.unwrap();
+    }
+
+    async fn foreign_keys() -> Result<(), DbError> {
+        let pool = RusqlitePool::connect(":memory:").await.unwrap();
+        let table1 = "test_foreign1";
+        let table2 = "test_foreign2";
+        pool.execute_batch(&format!(
+            "DROP TABLE IF EXISTS {table1};\
+             DROP TABLE IF EXISTS {table2};\
+             CREATE TABLE {table1} (\
+                 foo TEXT PRIMARY KEY\
+             );\
+             CREATE TABLE {table2} (\
+                 foo TEXT REFERENCES {table1}(foo)\
+             );",
+        ))
+        .await
+        .unwrap();
+
+        pool.insert(table1, &[&json!({"foo": "TEXT"}).as_object().unwrap()])
+            .await
+            .unwrap();
+
+        pool.insert(table2, &[&json!({"foo": "TEXT"}).as_object().unwrap()])
+            .await
+            .unwrap();
+
+        for i in 1..100 {
+            let conn = pool.pool.get().await.unwrap();
+            match conn
+                .interact(move |conn| {
+                    let mut stmt =
+                        conn.prepare(&format!("DELETE FROM {table1}"))
+                            .map_err(|err| {
+                                DbError::DatabaseError(format!("Error preparing statement: {err}"))
+                            })?;
+                    query_prepared(&mut stmt, ()).map_err(|err| {
+                        DbError::DatabaseError(format!("Error querying prepared statement: {err}"))
+                    })?;
+                    Ok(())
+                })
+                .await
+                .map_err(|err| DbError::DatabaseError(err.to_string()))?
+                .map_err(|err: DbError| DbError::DatabaseError(err.to_string()))
+            {
+                Err(e) => {
+                    assert_eq!(
+                        e.to_string(),
+                        "Error querying prepared statement: FOREIGN KEY constraint failed"
+                    )
+                }
+                Ok(_) => {
+                    return Err(DbError::DatabaseError(
+                        "Expected foreign key constraint error".to_string(),
+                    ));
+                }
+            }
+        }
+        Ok(())
     }
 }
