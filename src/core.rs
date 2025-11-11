@@ -1,13 +1,16 @@
 //! # rltbl/rltbl_db
 
+use indexmap::IndexMap;
 use lazy_static::lazy_static;
 use regex::Regex;
 use rust_decimal::Decimal;
+use serde::{Deserialize, Serialize};
 use serde_json::Map as JsonMap;
 use std::future::Future;
 
 pub type JsonValue = serde_json::Value;
 pub type JsonRow = JsonMap<String, JsonValue>;
+pub type StringRow = IndexMap<String, String>;
 
 /// Represents a valid database table name.
 static VALID_TABLE_NAME_MATCH_STR: &str = r"^[A-Za-z_][0-9A-Za-z_]*$";
@@ -17,7 +20,31 @@ lazy_static! {
     static ref VALID_TABLE_NAME_REGEX: Regex = Regex::new(VALID_TABLE_NAME_MATCH_STR).unwrap();
 }
 
+/// Convert a JSON Value to a String,
+/// without quoting for JSON Value::String,
+/// and treating JSON Value::Null as "NULL".
+pub fn json_value_to_string(value: &JsonValue) -> String {
+    match value {
+        JsonValue::String(string) => string.to_string(),
+        JsonValue::Null => "NULL".to_string(),
+        _ => value.to_string(),
+    }
+}
+
+/// Convert a row of JSON Values to a row of Strings.
+pub fn json_row_to_string_row(row: &JsonRow) -> StringRow {
+    row.iter()
+        .map(|(key, value)| (key.clone(), json_value_to_string(value)))
+        .collect()
+}
+
+/// Convert a vector of JSON rows to a vector of String rows.
+pub fn json_rows_to_string_rows(rows: &[JsonRow]) -> Vec<StringRow> {
+    rows.iter().map(|row| json_row_to_string_row(row)).collect()
+}
+
 /// Defines the supported database kinds.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DbKind {
     SQLite,
     PostgreSQL,
@@ -51,7 +78,7 @@ impl std::fmt::Display for DbError {
 }
 
 /// Value types for [query parameters](Params)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub enum ParamValue {
     /// Represents a NULL value. Can be used with any column type.
     Null,
@@ -71,6 +98,28 @@ pub enum ParamValue {
     Numeric(Decimal),
     /// Use with TEXT and VARCHAR column types or equivalent.
     Text(String),
+}
+
+impl Into<String> for ParamValue {
+    fn into(self) -> String {
+        match self {
+            ParamValue::Null => String::new(),
+            ParamValue::Boolean(val) => val.to_string(),
+            ParamValue::SmallInteger(number) => number.to_string(),
+            ParamValue::Integer(number) => number.to_string(),
+            ParamValue::BigInteger(number) => number.to_string(),
+            ParamValue::Real(number) => number.to_string(),
+            ParamValue::BigReal(number) => number.to_string(),
+            ParamValue::Numeric(decimal) => decimal.to_string(),
+            ParamValue::Text(string) => string.to_string(),
+        }
+    }
+}
+
+impl Into<String> for &ParamValue {
+    fn into(self) -> String {
+        self.clone().into()
+    }
 }
 
 // Implementations of attempted conversions of various types into ParamValues:
@@ -188,6 +237,62 @@ impl From<bool> for ParamValue {
 impl From<()> for ParamValue {
     fn from(_: ()) -> Self {
         ParamValue::Null
+    }
+}
+
+// f32 and f64 don't implement PartialEq, so we have to do it ourselves.
+impl PartialEq for ParamValue {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (ParamValue::Null, ParamValue::Null) => true,
+            (ParamValue::Boolean(a), ParamValue::Boolean(b)) => a == b,
+            (ParamValue::SmallInteger(a), ParamValue::SmallInteger(b)) => a == b,
+            (ParamValue::Integer(a), ParamValue::Integer(b)) => a == b,
+            (ParamValue::BigInteger(a), ParamValue::BigInteger(b)) => a == b,
+            (ParamValue::Real(a), ParamValue::Real(b)) => {
+                if a.is_finite() && b.is_finite() {
+                    a == b
+                } else {
+                    false
+                }
+            }
+            (ParamValue::BigReal(a), ParamValue::BigReal(b)) => {
+                if a.is_finite() && b.is_finite() {
+                    a == b
+                } else {
+                    false
+                }
+            }
+            (ParamValue::Numeric(a), ParamValue::Numeric(b)) => a == b,
+            (ParamValue::Text(a), ParamValue::Text(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for ParamValue {}
+
+impl ParamValue {
+    /// Convert a serde_json Value to a ParamValue.
+    pub fn from_json(value: JsonValue) -> Self {
+        match &value {
+            JsonValue::Null => Self::Null,
+            JsonValue::Bool(val) => Self::Boolean(*val),
+            JsonValue::Number(number) => {
+                if number.is_u64() {
+                    Self::from(number.as_u64().unwrap())
+                } else if number.is_i64() {
+                    Self::from(number.as_i64().unwrap())
+                } else if number.is_f64() {
+                    Self::BigReal(number.as_f64().unwrap())
+                } else {
+                    Self::Text(value.to_string())
+                }
+            }
+            JsonValue::String(string) => Self::Text(string.to_string()),
+            JsonValue::Array(_) => Self::Text(value.to_string()),
+            JsonValue::Object(_) => Self::Text(value.to_string()),
+        }
     }
 }
 
@@ -350,6 +455,27 @@ pub trait DbQuery {
         sql: &str,
         params: impl IntoParams + Send,
     ) -> impl Future<Output = Result<String, DbError>> + Send;
+
+    /// Execute a SQL command, returning a vector of strings: the first value for each row.
+    fn query_strings(
+        &self,
+        sql: &str,
+        params: impl IntoParams + Send,
+    ) -> impl Future<Output = Result<Vec<String>, DbError>> + Send;
+
+    /// Execute a SQL command, returning a row of strings.
+    fn query_string_row(
+        &self,
+        sql: &str,
+        params: impl IntoParams + Send,
+    ) -> impl Future<Output = Result<StringRow, DbError>> + Send;
+
+    /// Execute a SQL command, returning a vector of rows of strings.
+    fn query_string_rows(
+        &self,
+        sql: &str,
+        params: impl IntoParams + Send,
+    ) -> impl Future<Output = Result<Vec<StringRow>, DbError>> + Send;
 
     /// Execute a SQL command, returning a single unsigned integer.
     fn query_u64(
