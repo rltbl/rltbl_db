@@ -3,6 +3,7 @@
 use lazy_static::lazy_static;
 use regex::Regex;
 use rust_decimal::Decimal;
+use serde::{Deserialize, Serialize};
 use serde_json::Map as JsonMap;
 use std::future::Future;
 
@@ -51,7 +52,7 @@ impl std::fmt::Display for DbError {
 }
 
 /// Value types for [query parameters](Params)
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub enum ParamValue {
     /// Represents a NULL value. Can be used with any column type.
     Null,
@@ -71,6 +72,28 @@ pub enum ParamValue {
     Numeric(Decimal),
     /// Use with TEXT and VARCHAR column types or equivalent.
     Text(String),
+}
+
+impl Into<String> for ParamValue {
+    fn into(self) -> String {
+        match self {
+            ParamValue::Null => String::new(),
+            ParamValue::Boolean(bool) => bool.to_string(),
+            ParamValue::SmallInteger(number) => number.to_string(),
+            ParamValue::Integer(number) => number.to_string(),
+            ParamValue::BigInteger(number) => number.to_string(),
+            ParamValue::Real(number) => number.to_string(),
+            ParamValue::BigReal(number) => number.to_string(),
+            ParamValue::Numeric(decimal) => decimal.to_string(),
+            ParamValue::Text(string) => string.to_string(),
+        }
+    }
+}
+
+impl Into<String> for &ParamValue {
+    fn into(self) -> String {
+        self.clone().into()
+    }
 }
 
 // Implementations of attempted conversions of various types into ParamValues:
@@ -188,6 +211,62 @@ impl From<bool> for ParamValue {
 impl From<()> for ParamValue {
     fn from(_: ()) -> Self {
         ParamValue::Null
+    }
+}
+
+// f32 and f64 don't implement PartialEq, so we have to do it ourselves.
+impl PartialEq for ParamValue {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (ParamValue::Null, ParamValue::Null) => true,
+            (ParamValue::Boolean(a), ParamValue::Boolean(b)) => a == b,
+            (ParamValue::SmallInteger(a), ParamValue::SmallInteger(b)) => a == b,
+            (ParamValue::Integer(a), ParamValue::Integer(b)) => a == b,
+            (ParamValue::BigInteger(a), ParamValue::BigInteger(b)) => a == b,
+            (ParamValue::Real(a), ParamValue::Real(b)) => {
+                if a.is_finite() && b.is_finite() {
+                    a == b
+                } else {
+                    false
+                }
+            }
+            (ParamValue::BigReal(a), ParamValue::BigReal(b)) => {
+                if a.is_finite() && b.is_finite() {
+                    a == b
+                } else {
+                    false
+                }
+            }
+            (ParamValue::Numeric(a), ParamValue::Numeric(b)) => a == b,
+            (ParamValue::Text(a), ParamValue::Text(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for ParamValue {}
+
+impl ParamValue {
+    /// Convert a serde_json Value to a ParamValue.
+    pub fn from_json(value: JsonValue) -> Self {
+        match &value {
+            JsonValue::Null => Self::Null,
+            JsonValue::Bool(bool) => Self::Boolean(*bool),
+            JsonValue::Number(number) => {
+                if number.is_u64() {
+                    Self::from(number.as_u64().unwrap())
+                } else if number.is_i64() {
+                    Self::from(number.as_i64().unwrap())
+                } else if number.is_f64() {
+                    Self::BigReal(number.as_f64().unwrap())
+                } else {
+                    Self::Text(value.to_string())
+                }
+            }
+            JsonValue::String(string) => Self::Text(string.to_string()),
+            JsonValue::Array(_) => Self::Text(value.to_string()),
+            JsonValue::Object(_) => Self::Text(value.to_string()),
+        }
     }
 }
 
