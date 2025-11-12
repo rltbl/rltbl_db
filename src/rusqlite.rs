@@ -211,12 +211,13 @@ impl DbQuery for RusqlitePool {
                 "true" | "1" => Ok(ParamValue::Boolean(true)),
                 _ => Ok(ParamValue::Boolean(false)),
             },
-            "int" | "integer" | "int8" => match value.parse::<i64>() {
+            "int" | "integer" | "int8" | "bigint" => match value.parse::<i64>() {
                 Ok(int) => Ok(ParamValue::BigInteger(int)),
                 Err(_) => err(),
             },
-            "real" => match value.parse::<f32>() {
-                Ok(float) => Ok(ParamValue::Real(float)),
+            // TODO: This might not be the right place for "numeric"
+            "real" | "numeric" => match value.parse::<f64>() {
+                Ok(float) => Ok(ParamValue::BigReal(float)),
                 Err(_) => err(),
             },
             _ => Err(DbError::DatatypeError(format!(
@@ -227,8 +228,13 @@ impl DbQuery for RusqlitePool {
 
     /// Implements [DbQuery::convert_json()] for SQLite.
     fn convert_json(&self, sql_type: &str, value: &JsonValue) -> Result<ParamValue, DbError> {
-        let string = json_value_to_string(value);
-        self.parse(sql_type, &string)
+        match value {
+            serde_json::Value::Null => Ok(ParamValue::Null),
+            _ => {
+                let string = json_value_to_string(value);
+                self.parse(sql_type, &string)
+            }
+        }
     }
 
     /// Implements [DbQuery::columns()] for SQLite.

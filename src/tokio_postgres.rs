@@ -184,8 +184,13 @@ impl DbQuery for TokioPostgresPool {
 
     /// Implements [DbQuery::convert_json()] for PostgreSQL.
     fn convert_json(&self, sql_type: &str, value: &JsonValue) -> Result<ParamValue, DbError> {
-        let string = json_value_to_string(value);
-        self.parse(sql_type, &string)
+        match value {
+            serde_json::Value::Null => Ok(ParamValue::Null),
+            _ => {
+                let string = json_value_to_string(value);
+                self.parse(sql_type, &string)
+            }
+        }
     }
 
     /// Implements [DbQuery::columns()] for PostgreSQL.
