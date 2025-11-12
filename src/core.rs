@@ -11,6 +11,7 @@ use std::future::Future;
 pub type JsonValue = serde_json::Value;
 pub type JsonRow = JsonMap<String, JsonValue>;
 pub type StringRow = IndexMap<String, String>;
+pub type ColumnMap = IndexMap<String, String>;
 
 /// Represents a valid database table name.
 static VALID_TABLE_NAME_MATCH_STR: &str = r"^[A-Za-z_][0-9A-Za-z_]*$";
@@ -62,6 +63,8 @@ pub enum DbError {
     DataError(String),
     /// An error that originated from the database.
     DatabaseError(String),
+    /// An error with the data type of a value.
+    DatatypeError(String),
 }
 
 impl std::error::Error for DbError {}
@@ -72,7 +75,8 @@ impl std::fmt::Display for DbError {
             DbError::ConnectError(err)
             | DbError::DataError(err)
             | DbError::InputError(err)
-            | DbError::DatabaseError(err) => write!(f, "{err}"),
+            | DbError::DatabaseError(err)
+            | DbError::DatatypeError(err) => write!(f, "{err}"),
         }
     }
 }
@@ -379,44 +383,20 @@ macro_rules! params {
     }};
 }
 
-/// Given a [JsonRow] and one of the columns in that row, return a [ParamValue] representing the
-/// value of the column in the row.
-pub fn parameterize(row: &JsonRow, column: &str) -> Result<ParamValue, DbError> {
-    let param = match row.get(column) {
-        Some(json_value) => match json_value {
-            JsonValue::Null => ParamValue::Null,
-            JsonValue::Bool(flag) => ParamValue::Boolean(*flag),
-            JsonValue::Number(number) => {
-                if number.is_i64() {
-                    ParamValue::BigInteger(number.as_i64().unwrap())
-                } else if number.is_f64() {
-                    ParamValue::BigReal(number.as_f64().unwrap())
-                } else {
-                    return Err(DbError::DataError(format!(
-                        "Unsupported number: {number} is neither i64 nor f64"
-                    )));
-                }
-            }
-            JsonValue::String(text) => ParamValue::Text(text.to_string()),
-            JsonValue::Array(values) => {
-                return Err(DbError::InputError(format!(
-                    "JSON Arrays not supported: {values:?}"
-                )));
-            }
-            JsonValue::Object(map) => {
-                return Err(DbError::InputError(format!(
-                    "JSON Objects not supported: {map:?}"
-                )));
-            }
-        },
-        None => ParamValue::Null,
-    };
-    Ok(param)
-}
-
 pub trait DbQuery {
     /// Get the kind of SQL database: SQLite or PostgreSQL.
     fn kind(&self) -> DbKind;
+
+    /// Given a SQL type for this database and a string,
+    /// parse the string into the right ParamValue.
+    fn parse(&self, sql_type: &str, value: &str) -> Result<ParamValue, DbError>;
+
+    /// Given a SQL type for this database and a JSON Value,
+    /// convert the Value into the right ParamValue.
+    fn convert_json(&self, sql_type: &str, value: &JsonValue) -> Result<ParamValue, DbError>;
+
+    /// Given a table, return a map from column names to column SQL types.
+    fn columns(&self, table: &str) -> impl Future<Output = Result<ColumnMap, DbError>> + Send;
 
     /// Execute a SQL command, without a return value.
     fn execute(

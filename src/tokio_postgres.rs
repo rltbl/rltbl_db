@@ -2,8 +2,8 @@
 
 use crate::{
     core::{
-        DbError, DbKind, DbQuery, IntoParams, JsonRow, JsonValue, ParamValue, Params, StringRow,
-        json_row_to_string_row, json_rows_to_string_rows, json_value_to_string, parameterize,
+        ColumnMap, DbError, DbKind, DbQuery, IntoParams, JsonRow, JsonValue, ParamValue, Params,
+        StringRow, json_row_to_string_row, json_rows_to_string_rows, json_value_to_string,
         validate_table_name,
     },
     params,
@@ -129,14 +129,71 @@ impl TokioPostgresPool {
             ))),
         }
     }
+}
 
-    /// Query the database's metadata to retrieve the columns associated with a given table.
-    #[allow(dead_code)]
-    async fn get_columns(&self, table: &str) -> Result<Vec<String>, DbError> {
-        let mut columns = vec![];
+impl DbQuery for TokioPostgresPool {
+    /// Implements [DbQuery::kind()] for PostgreSQL.
+    fn kind(&self) -> DbKind {
+        DbKind::PostgreSQL
+    }
+
+    /// Implements [DbQuery::parse()] for PostgreSQL.
+    fn parse(&self, sql_type: &str, value: &str) -> Result<ParamValue, DbError> {
+        let err = || {
+            Err(DbError::DataError(format!(
+                "Could not parse '{sql_type}' from '{value}'"
+            )))
+        };
+        match sql_type.to_lowercase().as_str() {
+            "text" => Ok(ParamValue::Text(value.to_string())),
+            "bool" | "boolean" => match value.to_lowercase().as_str() {
+                // TODO: improve this
+                "true" | "1" => Ok(ParamValue::Boolean(true)),
+                _ => Ok(ParamValue::Boolean(false)),
+            },
+            "smallint" | "smallinteger" => match value.parse::<i16>() {
+                Ok(int) => Ok(ParamValue::SmallInteger(int)),
+                Err(_) => err(),
+            },
+            "int" | "integer" => match value.parse::<i32>() {
+                Ok(int) => Ok(ParamValue::Integer(int)),
+                Err(_) => err(),
+            },
+            "bigint" | "biginteger" => match value.parse::<i64>() {
+                Ok(int) => Ok(ParamValue::BigInteger(int)),
+                Err(_) => err(),
+            },
+            "real" => match value.parse::<f32>() {
+                Ok(float) => Ok(ParamValue::Real(float)),
+                Err(_) => err(),
+            },
+            "bigreal" => match value.parse::<f64>() {
+                Ok(float) => Ok(ParamValue::BigReal(float)),
+                Err(_) => err(),
+            },
+            "numeric" => match Decimal::try_from(value) {
+                Ok(dec) => Ok(ParamValue::Numeric(dec)),
+                Err(_) => err(),
+            },
+            _ => Err(DbError::DatatypeError(format!(
+                "Unhandled SQL type: {sql_type}"
+            ))),
+        }
+    }
+
+    /// Implements [DbQuery::convert_json()] for PostgreSQL.
+    fn convert_json(&self, sql_type: &str, value: &JsonValue) -> Result<ParamValue, DbError> {
+        let string = json_value_to_string(value);
+        self.parse(sql_type, &string)
+    }
+
+    /// Implements [DbQuery::columns()] for PostgreSQL.
+    async fn columns(&self, table: &str) -> Result<ColumnMap, DbError> {
+        let mut columns = ColumnMap::new();
         let sql = format!(
             r#"SELECT
-                 "columns"."column_name"::TEXT AS "name"
+                 "columns"."column_name"::TEXT,
+                 "columns"."data_type"::TEXT
                FROM
                  "information_schema"."columns" "columns"
                WHERE
@@ -150,12 +207,16 @@ impl TokioPostgresPool {
         );
 
         for row in self.query(&sql, params![&table]).await? {
-            match row
-                .get("name")
-                .and_then(|name| name.as_str().and_then(|name| Some(name)))
-            {
-                Some(column) => columns.push(column.to_string()),
-                None => {
+            match (
+                row.get("column_name")
+                    .and_then(|name| name.as_str().and_then(|name| Some(name))),
+                row.get("data_type")
+                    .and_then(|name| name.as_str().and_then(|name| Some(name))),
+            ) {
+                (Some(column), Some(sql_type)) => {
+                    columns.insert(column.to_string(), sql_type.to_string())
+                }
+                _ => {
                     return Err(DbError::DataError(format!(
                         "Error getting columns for table '{table}'"
                     )));
@@ -164,13 +225,6 @@ impl TokioPostgresPool {
         }
 
         Ok(columns)
-    }
-}
-
-impl DbQuery for TokioPostgresPool {
-    /// Implements [DbQuery::kind()] for PostgreSQL.
-    fn kind(&self) -> DbKind {
-        DbKind::PostgreSQL
     }
 
     /// Implements [DbQuery::execute()] for PostgreSQL.
@@ -430,6 +484,7 @@ impl DbQuery for TokioPostgresPool {
         // removing any enclosing double-quotes:
         let table = validate_table_name(table)?;
 
+        let column_map = self.columns(&table).await?;
         let column_names = columns
             .iter()
             .map(|c| format!(r#""{c}""#))
@@ -469,7 +524,15 @@ impl DbQuery for TokioPostgresPool {
             for column in columns {
                 param_idx += 1;
                 cells.push(format!("${param_idx}"));
-                let param = parameterize(row, column)?;
+                let param = match row.get(*column) {
+                    Some(value) => {
+                        let sql_type = column_map.get(*column).ok_or(DbError::InputError(
+                            format!("Column '{column}' does not exist in table '{table}'"),
+                        ))?;
+                        self.convert_json(sql_type, value)?
+                    }
+                    None => ParamValue::Null,
+                };
                 params_to_be_bound.push(param);
             }
             let line_to_bind = format!("({})", cells.join(", "));
@@ -500,6 +563,7 @@ impl DbQuery for TokioPostgresPool {
         // removing any enclosing double-quotes:
         let table = validate_table_name(table)?;
 
+        let column_map = self.columns(&table).await?;
         let column_names = columns
             .iter()
             .map(|c| format!(r#""{c}""#))
@@ -548,7 +612,15 @@ impl DbQuery for TokioPostgresPool {
             for column in columns {
                 param_idx += 1;
                 cells.push(format!("${param_idx}"));
-                let param = parameterize(row, column)?;
+                let param = match row.get(*column) {
+                    Some(value) => {
+                        let sql_type = column_map.get(*column).ok_or(DbError::InputError(
+                            format!("Column '{column}' does not exist in table '{table}'"),
+                        ))?;
+                        self.convert_json(sql_type, value)?
+                    }
+                    None => ParamValue::Null,
+                };
                 params_to_be_bound.push(param);
             }
             let line_to_bind = format!("({})", cells.join(", "));
@@ -1111,12 +1183,15 @@ mod tests {
         .await
         .unwrap();
 
-        let columns = pool.get_columns(table1).await.unwrap();
-        assert_eq!(columns, ["foo"]);
+        let columns = pool.columns(table1).await.unwrap();
+        assert_eq!(
+            columns,
+            ColumnMap::from([("foo".to_owned(), "text".to_owned())])
+        );
         pool.drop_table(table1).await.unwrap();
 
-        let columns: Vec<String> = pool.get_columns(table1).await.unwrap();
-        assert_eq!(columns, Vec::<String>::new());
+        let columns = pool.columns(table1).await.unwrap();
+        assert_eq!(columns.is_empty(), true);
 
         // Clean up.
         pool.drop_table(table2).await.unwrap();

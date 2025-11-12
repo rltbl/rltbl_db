@@ -2,8 +2,8 @@
 
 use crate::{
     core::{
-        DbError, DbKind, DbQuery, IntoParams, JsonRow, JsonValue, ParamValue, Params, StringRow,
-        json_row_to_string_row, json_rows_to_string_rows, json_value_to_string, parameterize,
+        ColumnMap, DbError, DbKind, DbQuery, IntoParams, JsonRow, JsonValue, ParamValue, Params,
+        StringRow, json_row_to_string_row, json_rows_to_string_rows, json_value_to_string,
         validate_table_name,
     },
     params,
@@ -188,35 +188,76 @@ impl RusqlitePool {
             .map_err(|err| DbError::ConnectError(format!("Error creating pool: {err}")))?;
         Ok(Self { pool })
     }
-
-    /// Query the database's metadata to retrieve the columns associated with a given table.
-    #[allow(dead_code)]
-    async fn get_columns(&self, table: &str) -> Result<Vec<String>, DbError> {
-        let mut columns = vec![];
-        for row in self
-            .query("SELECT name FROM PRAGMA_TABLE_INFO($1)", params![&table])
-            .await?
-        {
-            match row
-                .get("name")
-                .and_then(|name| name.as_str().and_then(|name| Some(name)))
-            {
-                Some(column) => columns.push(column.to_string()),
-                None => {
-                    return Err(DbError::DataError(format!(
-                        "Error getting columns for table '{table}'"
-                    )));
-                }
-            };
-        }
-        Ok(columns)
-    }
 }
 
 impl DbQuery for RusqlitePool {
     /// Implements [DbQuery::kind()] for SQLite.
     fn kind(&self) -> DbKind {
         DbKind::SQLite
+    }
+
+    /// Implements [DbQuery::parse()] for SQLite.
+    fn parse(&self, sql_type: &str, value: &str) -> Result<ParamValue, DbError> {
+        let err = || {
+            Err(DbError::DataError(format!(
+                "Could not parse '{sql_type}' from '{value}'"
+            )))
+        };
+        match sql_type.to_lowercase().as_str() {
+            "text" => Ok(ParamValue::Text(value.to_string())),
+            "bool" => match value.to_lowercase().as_str() {
+                // TODO: improve this
+                "true" | "1" => Ok(ParamValue::Boolean(true)),
+                _ => Ok(ParamValue::Boolean(false)),
+            },
+            "int" | "integer" | "int8" => match value.parse::<i64>() {
+                Ok(int) => Ok(ParamValue::BigInteger(int)),
+                Err(_) => err(),
+            },
+            "real" => match value.parse::<f32>() {
+                Ok(float) => Ok(ParamValue::Real(float)),
+                Err(_) => err(),
+            },
+            _ => Err(DbError::DatatypeError(format!(
+                "Unhandled SQL type: {sql_type}"
+            ))),
+        }
+    }
+
+    /// Implements [DbQuery::convert_json()] for SQLite.
+    fn convert_json(&self, sql_type: &str, value: &JsonValue) -> Result<ParamValue, DbError> {
+        let string = json_value_to_string(value);
+        self.parse(sql_type, &string)
+    }
+
+    /// Implements [DbQuery::columns()] for SQLite.
+    async fn columns(&self, table: &str) -> Result<ColumnMap, DbError> {
+        let mut columns = ColumnMap::new();
+        let sql = format!(
+            r#"SELECT name, type
+               FROM pragma_table_info($1)
+               ORDER BY name;"#,
+        );
+
+        for row in self.query(&sql, params![&table]).await? {
+            match (
+                row.get("name")
+                    .and_then(|name| name.as_str().and_then(|name| Some(name))),
+                row.get("type")
+                    .and_then(|name| name.as_str().and_then(|name| Some(name))),
+            ) {
+                (Some(column), Some(sql_type)) => {
+                    columns.insert(column.to_string(), sql_type.to_string())
+                }
+                _ => {
+                    return Err(DbError::DataError(format!(
+                        "Error getting columns for table '{table}'"
+                    )));
+                }
+            };
+        }
+
+        Ok(columns)
     }
 
     /// Implements [DbQuery::execute()] for SQLite.
@@ -401,6 +442,7 @@ impl DbQuery for RusqlitePool {
         // removing any enclosing double-quotes:
         let table = validate_table_name(table)?;
 
+        let column_map = self.columns(&table).await?;
         let column_names = columns
             .iter()
             .map(|c| format!(r#""{c}""#))
@@ -440,7 +482,15 @@ impl DbQuery for RusqlitePool {
             for column in columns {
                 param_idx += 1;
                 cells.push(format!("${param_idx}"));
-                let param = parameterize(row, column)?;
+                let param = match row.get(*column) {
+                    Some(value) => {
+                        let sql_type = column_map.get(*column).ok_or(DbError::InputError(
+                            format!("Column '{column}' does not exist in table '{table}'"),
+                        ))?;
+                        self.convert_json(sql_type, value)?
+                    }
+                    None => ParamValue::Null,
+                };
                 params_to_be_bound.push(param);
             }
             let line_to_bind = format!("({})", cells.join(", "));
@@ -471,6 +521,7 @@ impl DbQuery for RusqlitePool {
         // removing any enclosing double-quotes:
         let table = validate_table_name(table)?;
 
+        let column_map = self.columns(&table).await?;
         let column_names = columns
             .iter()
             .map(|c| format!(r#""{c}""#))
@@ -519,7 +570,15 @@ impl DbQuery for RusqlitePool {
             for column in columns {
                 param_idx += 1;
                 cells.push(format!("${param_idx}"));
-                let param = parameterize(row, column)?;
+                let param = match row.get(*column) {
+                    Some(value) => {
+                        let sql_type = column_map.get(*column).ok_or(DbError::InputError(
+                            format!("Column '{column}' does not exist in table '{table}'"),
+                        ))?;
+                        self.convert_json(sql_type, value)?
+                    }
+                    None => ParamValue::Null,
+                };
                 params_to_be_bound.push(param);
             }
             let line_to_bind = format!("({})", cells.join(", "));
@@ -998,11 +1057,15 @@ mod tests {
         .await
         .unwrap();
 
-        let columns = pool.get_columns(table).await.unwrap();
-        assert_eq!(columns, ["foo"]);
+        let columns = pool.columns(table).await.unwrap();
+        assert_eq!(
+            columns,
+            ColumnMap::from([("foo".to_owned(), "TEXT".to_owned())])
+        );
         pool.drop_table(table).await.unwrap();
-        let columns: Vec<String> = pool.get_columns(table).await.unwrap();
-        assert_eq!(columns, Vec::<String>::new());
+
+        let columns = pool.columns(table).await.unwrap();
+        assert_eq!(columns.is_empty(), true);
     }
 
     #[tokio::test]

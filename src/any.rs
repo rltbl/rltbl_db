@@ -14,7 +14,9 @@
 ///     Ok(value)
 /// }
 /// ```
-use crate::core::{DbError, DbKind, DbQuery, IntoParams, JsonRow, JsonValue, StringRow};
+use crate::core::{
+    ColumnMap, DbError, DbKind, DbQuery, IntoParams, JsonRow, JsonValue, ParamValue, StringRow,
+};
 
 #[cfg(feature = "rusqlite")]
 use crate::rusqlite::RusqlitePool;
@@ -63,6 +65,33 @@ impl DbQuery for AnyPool {
             AnyPool::Rusqlite(pool) => pool.kind(),
             #[cfg(feature = "tokio-postgres")]
             AnyPool::TokioPostgres(pool) => pool.kind(),
+        }
+    }
+
+    fn parse(&self, sql_type: &str, value: &str) -> Result<ParamValue, DbError> {
+        match self {
+            #[cfg(feature = "rusqlite")]
+            AnyPool::Rusqlite(pool) => pool.parse(sql_type, value),
+            #[cfg(feature = "tokio-postgres")]
+            AnyPool::TokioPostgres(pool) => pool.parse(sql_type, value),
+        }
+    }
+
+    fn convert_json(&self, sql_type: &str, value: &JsonValue) -> Result<ParamValue, DbError> {
+        match self {
+            #[cfg(feature = "rusqlite")]
+            AnyPool::Rusqlite(pool) => pool.convert_json(sql_type, value),
+            #[cfg(feature = "tokio-postgres")]
+            AnyPool::TokioPostgres(pool) => pool.convert_json(sql_type, value),
+        }
+    }
+
+    async fn columns(&self, table: &str) -> Result<ColumnMap, DbError> {
+        match self {
+            #[cfg(feature = "rusqlite")]
+            AnyPool::Rusqlite(pool) => pool.columns(table).await,
+            #[cfg(feature = "tokio-postgres")]
+            AnyPool::TokioPostgres(pool) => pool.columns(table).await,
         }
     }
 
