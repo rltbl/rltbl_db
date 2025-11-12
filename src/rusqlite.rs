@@ -190,6 +190,7 @@ impl RusqlitePool {
     }
 
     /// Query the database's metadata to retrieve the columns associated with a given table.
+    #[allow(dead_code)]
     async fn get_columns(&self, table: &str) -> Result<Vec<String>, DbError> {
         let mut columns = vec![];
         for row in self
@@ -390,13 +391,21 @@ impl DbQuery for RusqlitePool {
     }
 
     /// Implements [DbQuery::insert()] for SQLite.
-    async fn insert(&self, table: &str, rows: &[&JsonRow]) -> Result<(), DbError> {
+    async fn insert(
+        &self,
+        table: &str,
+        columns: &[&str],
+        rows: &[&JsonRow],
+    ) -> Result<(), DbError> {
         // Begin by verifying that the given table name is valid, which has the side-effect of
         // removing any enclosing double-quotes:
         let table = validate_table_name(table)?;
 
-        // Retrieve the names of all of the table's columns from the database's metadata:
-        let columns = self.get_columns(&table).await?;
+        let column_names = columns
+            .iter()
+            .map(|c| format!(r#""{c}""#))
+            .collect::<Vec<_>>()
+            .join(", ");
         if columns.len() > MAX_PARAMS_SQLITE {
             return Err(DbError::InputError(format!(
                 "Unable to insert to table '{}', which has more columns ({}) than the \
@@ -415,7 +424,7 @@ impl DbQuery for RusqlitePool {
             // we have so far and then reset all of the counters and collections:
             if param_idx + columns.len() > MAX_PARAMS_SQLITE {
                 let sql = format!(
-                    r#"INSERT INTO "{table}" VALUES
+                    r#"INSERT INTO "{table}" ({column_names}) VALUES
                        {}"#,
                     lines_to_bind.join(",\n")
                 );
@@ -428,7 +437,7 @@ impl DbQuery for RusqlitePool {
             // Optimization to avoid repeated heap allocations while processing a single given row:
             params_to_be_bound.reserve(columns.len());
             let mut cells: Vec<String> = Vec::with_capacity(columns.len());
-            for column in &columns {
+            for column in columns {
                 param_idx += 1;
                 cells.push(format!("${param_idx}"));
                 let param = parameterize(row, column)?;
@@ -441,7 +450,7 @@ impl DbQuery for RusqlitePool {
         // If there is anything left to insert, insert it now:
         if lines_to_bind.len() > 0 {
             let sql = format!(
-                r#"INSERT INTO "{table}" VALUES
+                r#"INSERT INTO "{table}" ({column_names}) VALUES
                    {}"#,
                 lines_to_bind.join(",\n")
             );
@@ -454,6 +463,7 @@ impl DbQuery for RusqlitePool {
     async fn insert_returning(
         &self,
         table: &str,
+        columns: &[&str],
         rows: &[&JsonRow],
         returning: &[&str],
     ) -> Result<Vec<JsonRow>, DbError> {
@@ -461,8 +471,11 @@ impl DbQuery for RusqlitePool {
         // removing any enclosing double-quotes:
         let table = validate_table_name(table)?;
 
-        // Retrieve the names of all of the table's columns from the database's metadata:
-        let columns = self.get_columns(&table).await?;
+        let column_names = columns
+            .iter()
+            .map(|c| format!(r#""{c}""#))
+            .collect::<Vec<_>>()
+            .join(", ");
         if columns.len() > MAX_PARAMS_SQLITE {
             return Err(DbError::InputError(format!(
                 "Unable to insert to table '{}', which has more columns ({}) than the \
@@ -477,20 +490,7 @@ impl DbQuery for RusqlitePool {
         // to '*' if `returning` is empty:
         let returning = match returning.is_empty() {
             true => "*".to_string(),
-            false => {
-                let mut returned_columns = vec![];
-                for column in returning {
-                    let column = column.to_string();
-                    if columns.contains(&column) {
-                        returned_columns.push(column);
-                    } else {
-                        return Err(DbError::InputError(format!(
-                            "Returning column '{column}' does not exist in table '{table}'"
-                        )));
-                    }
-                }
-                returned_columns.join(", ")
-            }
+            false => returning.join(", "),
         };
 
         let mut rows_to_return = vec![];
@@ -502,7 +502,7 @@ impl DbQuery for RusqlitePool {
             // we have so far and then reset all of the counters and collections:
             if param_idx + columns.len() > MAX_PARAMS_SQLITE {
                 let sql = format!(
-                    r#"INSERT INTO "{table}" VALUES
+                    r#"INSERT INTO "{table}" ({column_names}) VALUES
                        {}
                        RETURNING {returning}"#,
                     lines_to_bind.join(",\n")
@@ -516,7 +516,7 @@ impl DbQuery for RusqlitePool {
             // Optimization to avoid repeated heap allocations while processing a single given row:
             params_to_be_bound.reserve(columns.len());
             let mut cells: Vec<String> = Vec::with_capacity(columns.len());
-            for column in &columns {
+            for column in columns {
                 param_idx += 1;
                 cells.push(format!("${param_idx}"));
                 let param = parameterize(row, column)?;
@@ -529,7 +529,7 @@ impl DbQuery for RusqlitePool {
         // If there is anything left to insert, insert it now:
         if lines_to_bind.len() > 0 {
             let sql = format!(
-                r#"INSERT INTO "{table}" VALUES
+                r#"INSERT INTO "{table}" ({column_names}) VALUES
                    {}
                    RETURNING {returning}"#,
                 lines_to_bind.join(",\n")
@@ -876,6 +876,7 @@ mod tests {
         // Insert rows:
         pool.insert(
             "test_insert",
+            &["text_value", "int_value", "bool_value"],
             &[
                 &json!({"text_value": "TEXT"}).as_object().unwrap(),
                 &json!({"int_value": 1, "bool_value": true})
@@ -929,6 +930,7 @@ mod tests {
         let rows = pool
             .insert_returning(
                 "test_insert",
+                &["text_value", "int_value", "bool_value"],
                 &[
                     &json!({"text_value": "TEXT"}).as_object().unwrap(),
                     &json!({"int_value": 1, "bool_value": true})
@@ -960,6 +962,7 @@ mod tests {
         let rows = pool
             .insert_returning(
                 "test_insert",
+                &["text_value", "int_value", "bool_value"],
                 &[
                     &json!({"text_value": "TEXT"}).as_object().unwrap(),
                     &json!({"int_value": 1, "bool_value": true})

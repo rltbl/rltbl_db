@@ -178,7 +178,7 @@ impl From<u32> for ParamValue {
 
 impl From<u64> for ParamValue {
     fn from(item: u64) -> Self {
-        if usize::BITS <= 63 {
+        if item <= i64::MAX as u64 {
             ParamValue::BigInteger(item as i64)
         } else {
             ParamValue::Numeric(Decimal::from(item))
@@ -500,7 +500,12 @@ pub trait DbQuery {
 
     /// Insert JSON rows into the given table. If an input row does not have a key for a column,
     /// use NULL as the value of that column when inserting the row to the table.
-    fn insert(&self, table: &str, rows: &[&JsonRow]) -> impl Future<Output = Result<(), DbError>>;
+    fn insert(
+        &self,
+        table: &str,
+        columns: &[&str],
+        rows: &[&JsonRow],
+    ) -> impl Future<Output = Result<(), DbError>>;
 
     /// Insert the given JSON rows into the given table, and then return the columns from the
     /// inserted data that are included in `returning`, or all of the inserted data if `returning`
@@ -509,6 +514,7 @@ pub trait DbQuery {
     fn insert_returning(
         &self,
         table: &str,
+        columns: &[&str],
         rows: &[&JsonRow],
         returning: &[&str],
     ) -> impl Future<Output = Result<Vec<JsonRow>, DbError>>;
