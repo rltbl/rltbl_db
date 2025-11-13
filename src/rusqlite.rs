@@ -207,15 +207,15 @@ impl DbQuery for RusqlitePool {
         match sql_type.to_lowercase().as_str() {
             "text" => Ok(ParamValue::Text(value.to_string())),
             "bool" => match value.to_lowercase().as_str() {
-                // TODO: improve this
                 "true" | "1" => Ok(ParamValue::Boolean(true)),
-                _ => Ok(ParamValue::Boolean(false)),
+                "false" | "0" => Ok(ParamValue::Boolean(false)),
+                _ => err(),
             },
             "int" | "integer" | "int8" | "bigint" => match value.parse::<i64>() {
                 Ok(int) => Ok(ParamValue::BigInteger(int)),
                 Err(_) => err(),
             },
-            // TODO: This might not be the right place for "numeric"
+            // NOTE: We are treating NUMERIC as an f64 here and for tokio-postgres.
             "real" | "numeric" => match value.parse::<f64>() {
                 Ok(float) => Ok(ParamValue::BigReal(float)),
                 Err(_) => err(),
