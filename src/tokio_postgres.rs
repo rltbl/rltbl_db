@@ -2,7 +2,8 @@
 
 use crate::{
     core::{
-        DbError, DbKind, DbQuery, IntoParams, JsonRow, JsonValue, ParamValue, Params, parameterize,
+        DbError, DbKind, DbQuery, IntoParams, JsonRow, JsonValue, ParamValue, Params, StringRow,
+        json_row_to_string_row, json_rows_to_string_rows, json_value_to_string, parameterize,
         validate_table_name,
     },
     params,
@@ -349,10 +350,42 @@ impl DbQuery for TokioPostgresPool {
         params: impl IntoParams + Send,
     ) -> Result<String, DbError> {
         let value = self.query_value(sql, params).await?;
-        match value.as_str() {
-            Some(str_val) => Ok(str_val.to_string()),
-            None => Ok(value.to_string()),
-        }
+        Ok(json_value_to_string(&value))
+    }
+
+    /// Implements [DbQuery::query_strings()] for PostgreSQL.
+    async fn query_strings(
+        &self,
+        sql: &str,
+        params: impl IntoParams + Send,
+    ) -> Result<Vec<String>, DbError> {
+        let rows = self.query(sql, params).await?;
+        rows.iter()
+            .map(|row| match row.values().nth(0) {
+                Some(value) => Ok(json_value_to_string(value)),
+                None => Err(DbError::DataError("Empty row".to_owned())),
+            })
+            .collect()
+    }
+
+    /// Implements [DbQuery::query_string_row()] for SQLite.
+    async fn query_string_row(
+        &self,
+        sql: &str,
+        params: impl IntoParams + Send,
+    ) -> Result<StringRow, DbError> {
+        let row = self.query_row(sql, params).await?;
+        Ok(json_row_to_string_row(&row))
+    }
+
+    /// Implements [DbQuery::query_string_rows()] for SQLite.
+    async fn query_string_rows(
+        &self,
+        sql: &str,
+        params: impl IntoParams + Send,
+    ) -> Result<Vec<StringRow>, DbError> {
+        let rows = self.query(sql, params).await?;
+        Ok(json_rows_to_string_rows(&rows))
     }
 
     /// Implements [DbQuery::query_u64()] for PostgreSQL.
@@ -575,14 +608,29 @@ mod tests {
             .to_string();
         assert_eq!("foo", value);
 
-        let value = pool.query_string(select_sql, &["foo"]).await.unwrap();
-        assert_eq!("foo", value);
+        let string = pool.query_string(select_sql, &["foo"]).await.unwrap();
+        assert_eq!("foo", string);
+
+        let strings = pool.query_strings(select_sql, &["foo"]).await.unwrap();
+        assert_eq!(vec!["foo".to_owned()], strings);
 
         let row = pool.query_row(select_sql, &["foo"]).await.unwrap();
         assert_eq!(json!(row), json!({"value":"foo"}));
 
         let rows = pool.query(select_sql, &["foo"]).await.unwrap();
         assert_eq!(json!(rows), json!([{"value":"foo"}]));
+
+        let string_row = pool.query_string_row(select_sql, &["foo"]).await.unwrap();
+        assert_eq!(
+            StringRow::from([("value".to_owned(), "foo".to_owned())]),
+            string_row
+        );
+
+        let string_rows = pool.query_string_rows(select_sql, &["foo"]).await.unwrap();
+        assert_eq!(
+            vec![StringRow::from([("value".to_owned(), "foo".to_owned())])],
+            string_rows
+        );
 
         // Clean up:
         pool.drop_table("test_table_text").await.unwrap();
@@ -623,23 +671,29 @@ mod tests {
                 .unwrap();
             assert_eq!(1, value);
 
-            let value = pool.query_u64(&select_sql, params.clone()).await.unwrap();
-            assert_eq!(1, value);
+            let unsigned = pool.query_u64(&select_sql, params.clone()).await.unwrap();
+            assert_eq!(1, unsigned);
 
-            let value = pool.query_i64(&select_sql, params.clone()).await.unwrap();
-            assert_eq!(1, value);
+            let signed = pool.query_i64(&select_sql, params.clone()).await.unwrap();
+            assert_eq!(1, signed);
 
-            let value = pool
+            let string = pool
                 .query_string(&select_sql, params.clone())
                 .await
                 .unwrap();
-            assert_eq!("1", value);
+            assert_eq!("1", string);
+
+            let strings = pool
+                .query_strings(&select_sql, params.clone())
+                .await
+                .unwrap();
+            assert_eq!(vec!["1".to_owned()], strings);
 
             let row = pool.query_row(&select_sql, params.clone()).await.unwrap();
-            assert_eq!(json!(row), json!({format!("{column}"):1}));
+            assert_eq!(json!(row), json!({column:1}));
 
             let rows = pool.query(&select_sql, params.clone()).await.unwrap();
-            assert_eq!(json!(rows), json!([{format!("{column}"):1}]));
+            assert_eq!(json!(rows), json!([{column:1}]));
         }
 
         // Clean up:
@@ -671,11 +725,14 @@ mod tests {
             .unwrap();
         assert_eq!("1.05", format!("{value:.2}"));
 
-        let value = pool.query_f64(select_sql, &[1.0_f64]).await.unwrap();
-        assert_eq!(1.05, value);
+        let float = pool.query_f64(select_sql, &[1.0_f64]).await.unwrap();
+        assert_eq!(1.05, float);
 
-        let value = pool.query_string(select_sql, &[1.0_f64]).await.unwrap();
-        assert_eq!("1.05", value);
+        let string = pool.query_string(select_sql, &[1.0_f64]).await.unwrap();
+        assert_eq!("1.05", string);
+
+        let strings = pool.query_strings(select_sql, &[1.0_f64]).await.unwrap();
+        assert_eq!(vec!["1.05".to_owned()], strings);
 
         let row = pool.query_row(select_sql, &[1.0_f64]).await.unwrap();
         assert_eq!(json!(row), json!({"value":1.05}));
