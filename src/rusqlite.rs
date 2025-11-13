@@ -2,11 +2,12 @@
 
 use crate::{
     core::{
-        DbError, DbKind, DbQuery, IntoParams, JsonRow, JsonValue, ParamValue, Params, StringRow,
-        json_row_to_string_row, json_rows_to_string_rows, json_value_to_string, parameterize,
+        ColumnMap, DbError, DbKind, DbQuery, IntoParams, JsonRow, JsonValue, ParamValue, Params,
+        StringRow, json_row_to_string_row, json_rows_to_string_rows, json_value_to_string,
         validate_table_name,
     },
     params,
+    shared::insert,
 };
 
 use deadpool_sqlite::{
@@ -188,34 +189,82 @@ impl RusqlitePool {
             .map_err(|err| DbError::ConnectError(format!("Error creating pool: {err}")))?;
         Ok(Self { pool })
     }
-
-    /// Query the database's metadata to retrieve the columns associated with a given table.
-    async fn get_columns(&self, table: &str) -> Result<Vec<String>, DbError> {
-        let mut columns = vec![];
-        for row in self
-            .query("SELECT name FROM PRAGMA_TABLE_INFO($1)", params![&table])
-            .await?
-        {
-            match row
-                .get("name")
-                .and_then(|name| name.as_str().and_then(|name| Some(name)))
-            {
-                Some(column) => columns.push(column.to_string()),
-                None => {
-                    return Err(DbError::DataError(format!(
-                        "Error getting columns for table '{table}'"
-                    )));
-                }
-            };
-        }
-        Ok(columns)
-    }
 }
 
 impl DbQuery for RusqlitePool {
     /// Implements [DbQuery::kind()] for SQLite.
     fn kind(&self) -> DbKind {
         DbKind::SQLite
+    }
+
+    /// Implements [DbQuery::parse()] for SQLite.
+    fn parse(&self, sql_type: &str, value: &str) -> Result<ParamValue, DbError> {
+        let err = || {
+            Err(DbError::DataError(format!(
+                "Could not parse '{sql_type}' from '{value}'"
+            )))
+        };
+        match sql_type.to_lowercase().as_str() {
+            "text" => Ok(ParamValue::Text(value.to_string())),
+            "bool" => match value.to_lowercase().as_str() {
+                "true" | "1" => Ok(ParamValue::Boolean(true)),
+                "false" | "0" => Ok(ParamValue::Boolean(false)),
+                _ => err(),
+            },
+            "int" | "integer" | "int8" | "bigint" => match value.parse::<i64>() {
+                Ok(int) => Ok(ParamValue::BigInteger(int)),
+                Err(_) => err(),
+            },
+            // NOTE: We are treating NUMERIC as an f64 here and for tokio-postgres.
+            "real" | "numeric" => match value.parse::<f64>() {
+                Ok(float) => Ok(ParamValue::BigReal(float)),
+                Err(_) => err(),
+            },
+            _ => Err(DbError::DatatypeError(format!(
+                "Unhandled SQL type: {sql_type}"
+            ))),
+        }
+    }
+
+    /// Implements [DbQuery::convert_json()] for SQLite.
+    fn convert_json(&self, sql_type: &str, value: &JsonValue) -> Result<ParamValue, DbError> {
+        match value {
+            serde_json::Value::Null => Ok(ParamValue::Null),
+            _ => {
+                let string = json_value_to_string(value);
+                self.parse(sql_type, &string)
+            }
+        }
+    }
+
+    /// Implements [DbQuery::columns()] for SQLite.
+    async fn columns(&self, table: &str) -> Result<ColumnMap, DbError> {
+        let mut columns = ColumnMap::new();
+        let sql = format!(
+            r#"SELECT name, type
+               FROM pragma_table_info($1)
+               ORDER BY name;"#,
+        );
+
+        for row in self.query(&sql, params![&table]).await? {
+            match (
+                row.get("name")
+                    .and_then(|name| name.as_str().and_then(|name| Some(name))),
+                row.get("type")
+                    .and_then(|name| name.as_str().and_then(|name| Some(name))),
+            ) {
+                (Some(column), Some(sql_type)) => {
+                    columns.insert(column.to_string(), sql_type.to_string())
+                }
+                _ => {
+                    return Err(DbError::DataError(format!(
+                        "Error getting columns for table '{table}'"
+                    )));
+                }
+            };
+        }
+
+        Ok(columns)
     }
 
     /// Implements [DbQuery::execute()] for SQLite.
@@ -390,63 +439,13 @@ impl DbQuery for RusqlitePool {
     }
 
     /// Implements [DbQuery::insert()] for SQLite.
-    async fn insert(&self, table: &str, rows: &[&JsonRow]) -> Result<(), DbError> {
-        // Begin by verifying that the given table name is valid, which has the side-effect of
-        // removing any enclosing double-quotes:
-        let table = validate_table_name(table)?;
-
-        // Retrieve the names of all of the table's columns from the database's metadata:
-        let columns = self.get_columns(&table).await?;
-        if columns.len() > MAX_PARAMS_SQLITE {
-            return Err(DbError::InputError(format!(
-                "Unable to insert to table '{}', which has more columns ({}) than the \
-                 maximum number of variables ({}) allowed in a SQL statement by SQLite.",
-                table,
-                columns.len(),
-                MAX_PARAMS_SQLITE,
-            )));
-        }
-
-        let mut lines_to_bind: Vec<String> = Vec::new();
-        let mut params_to_be_bound: Vec<ParamValue> = Vec::new();
-        let mut param_idx = 0;
-        for row in rows {
-            // If we have reached SQLite's limit on the number of bound parameters, insert what
-            // we have so far and then reset all of the counters and collections:
-            if param_idx + columns.len() > MAX_PARAMS_SQLITE {
-                let sql = format!(
-                    r#"INSERT INTO "{table}" VALUES
-                       {}"#,
-                    lines_to_bind.join(",\n")
-                );
-                self.query(&sql, params_to_be_bound.clone()).await?;
-                lines_to_bind.clear();
-                params_to_be_bound.clear();
-                param_idx = 0;
-            }
-
-            // Optimization to avoid repeated heap allocations while processing a single given row:
-            params_to_be_bound.reserve(columns.len());
-            let mut cells: Vec<String> = Vec::with_capacity(columns.len());
-            for column in &columns {
-                param_idx += 1;
-                cells.push(format!("${param_idx}"));
-                let param = parameterize(row, column)?;
-                params_to_be_bound.push(param);
-            }
-            let line_to_bind = format!("({})", cells.join(", "));
-            lines_to_bind.push(line_to_bind);
-        }
-
-        // If there is anything left to insert, insert it now:
-        if lines_to_bind.len() > 0 {
-            let sql = format!(
-                r#"INSERT INTO "{table}" VALUES
-                   {}"#,
-                lines_to_bind.join(",\n")
-            );
-            self.query(&sql, params_to_be_bound.clone()).await?;
-        }
+    async fn insert(
+        &self,
+        table: &str,
+        columns: &[&str],
+        rows: &[&JsonRow],
+    ) -> Result<(), DbError> {
+        insert(self, &MAX_PARAMS_SQLITE, table, columns, rows, false, &[]).await?;
         Ok(())
     }
 
@@ -454,89 +453,20 @@ impl DbQuery for RusqlitePool {
     async fn insert_returning(
         &self,
         table: &str,
+        columns: &[&str],
         rows: &[&JsonRow],
         returning: &[&str],
     ) -> Result<Vec<JsonRow>, DbError> {
-        // Begin by verifying that the given table name is valid, which has the side-effect of
-        // removing any enclosing double-quotes:
-        let table = validate_table_name(table)?;
-
-        // Retrieve the names of all of the table's columns from the database's metadata:
-        let columns = self.get_columns(&table).await?;
-        if columns.len() > MAX_PARAMS_SQLITE {
-            return Err(DbError::InputError(format!(
-                "Unable to insert to table '{}', which has more columns ({}) than the \
-                 maximum number of variables ({}) allowed in a SQL statement by SQLite.",
-                table,
-                columns.len(),
-                MAX_PARAMS_SQLITE,
-            )));
-        }
-
-        // Use the `returning` argument to restrict the RETURNING clause, defaulting
-        // to '*' if `returning` is empty:
-        let returning = match returning.is_empty() {
-            true => "*".to_string(),
-            false => {
-                let mut returned_columns = vec![];
-                for column in returning {
-                    let column = column.to_string();
-                    if columns.contains(&column) {
-                        returned_columns.push(column);
-                    } else {
-                        return Err(DbError::InputError(format!(
-                            "Returning column '{column}' does not exist in table '{table}'"
-                        )));
-                    }
-                }
-                returned_columns.join(", ")
-            }
-        };
-
-        let mut rows_to_return = vec![];
-        let mut lines_to_bind: Vec<String> = Vec::new();
-        let mut params_to_be_bound: Vec<ParamValue> = Vec::new();
-        let mut param_idx = 0;
-        for row in rows {
-            // If we have reached SQLite's limit on the number of bound parameters, insert what
-            // we have so far and then reset all of the counters and collections:
-            if param_idx + columns.len() > MAX_PARAMS_SQLITE {
-                let sql = format!(
-                    r#"INSERT INTO "{table}" VALUES
-                       {}
-                       RETURNING {returning}"#,
-                    lines_to_bind.join(",\n")
-                );
-                rows_to_return.append(&mut self.query(&sql, params_to_be_bound.clone()).await?);
-                lines_to_bind.clear();
-                params_to_be_bound.clear();
-                param_idx = 0;
-            }
-
-            // Optimization to avoid repeated heap allocations while processing a single given row:
-            params_to_be_bound.reserve(columns.len());
-            let mut cells: Vec<String> = Vec::with_capacity(columns.len());
-            for column in &columns {
-                param_idx += 1;
-                cells.push(format!("${param_idx}"));
-                let param = parameterize(row, column)?;
-                params_to_be_bound.push(param);
-            }
-            let line_to_bind = format!("({})", cells.join(", "));
-            lines_to_bind.push(line_to_bind);
-        }
-
-        // If there is anything left to insert, insert it now:
-        if lines_to_bind.len() > 0 {
-            let sql = format!(
-                r#"INSERT INTO "{table}" VALUES
-                   {}
-                   RETURNING {returning}"#,
-                lines_to_bind.join(",\n")
-            );
-            rows_to_return.append(&mut self.query(&sql, params_to_be_bound).await?);
-        }
-        Ok(rows_to_return)
+        insert(
+            self,
+            &MAX_PARAMS_SQLITE,
+            table,
+            columns,
+            rows,
+            true,
+            returning,
+        )
+        .await
     }
 
     /// Implements [DbQuery::drop_table()] for SQLite.
@@ -876,6 +806,7 @@ mod tests {
         // Insert rows:
         pool.insert(
             "test_insert",
+            &["text_value", "int_value", "bool_value"],
             &[
                 &json!({"text_value": "TEXT"}).as_object().unwrap(),
                 &json!({"int_value": 1, "bool_value": true})
@@ -929,6 +860,7 @@ mod tests {
         let rows = pool
             .insert_returning(
                 "test_insert",
+                &["text_value", "int_value", "bool_value"],
                 &[
                     &json!({"text_value": "TEXT"}).as_object().unwrap(),
                     &json!({"int_value": 1, "bool_value": true})
@@ -960,6 +892,7 @@ mod tests {
         let rows = pool
             .insert_returning(
                 "test_insert",
+                &["text_value", "int_value", "bool_value"],
                 &[
                     &json!({"text_value": "TEXT"}).as_object().unwrap(),
                     &json!({"int_value": 1, "bool_value": true})
@@ -995,11 +928,15 @@ mod tests {
         .await
         .unwrap();
 
-        let columns = pool.get_columns(table).await.unwrap();
-        assert_eq!(columns, ["foo"]);
+        let columns = pool.columns(table).await.unwrap();
+        assert_eq!(
+            columns,
+            ColumnMap::from([("foo".to_owned(), "TEXT".to_owned())])
+        );
         pool.drop_table(table).await.unwrap();
-        let columns: Vec<String> = pool.get_columns(table).await.unwrap();
-        assert_eq!(columns, Vec::<String>::new());
+
+        let columns = pool.columns(table).await.unwrap();
+        assert_eq!(columns.is_empty(), true);
     }
 
     #[tokio::test]
