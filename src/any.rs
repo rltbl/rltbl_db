@@ -32,6 +32,31 @@ pub enum AnyPool {
 }
 
 impl AnyPool {
+    /// Get the DbKind for this connection URL.
+    pub fn connection_kind(url: &str) -> Result<DbKind, DbError> {
+        if url.starts_with("postgresql://") {
+            #[cfg(feature = "tokio-postgres")]
+            {
+                Ok(DbKind::PostgreSQL)
+            }
+            #[cfg(not(feature = "tokio-postgres"))]
+            {
+                Err(DbError::ConnectError(
+                    "PostgreSQL not configured".to_string(),
+                ))
+            }
+        } else {
+            #[cfg(feature = "rusqlite")]
+            {
+                Ok(DbKind::SQLite)
+            }
+            #[cfg(not(feature = "rusqlite"))]
+            {
+                Err(DbError::ConnectError("SQLite not configured".to_string()))
+            }
+        }
+    }
+
     /// Connect to the database located at the given URL.
     pub async fn connect(url: &str) -> Result<Self, DbError> {
         if url.starts_with("postgresql://") {
@@ -43,7 +68,9 @@ impl AnyPool {
             }
             #[cfg(not(feature = "tokio-postgres"))]
             {
-                Err(DbError::ConnectError("postgres not configured".to_string()))
+                Err(DbError::ConnectError(
+                    "PostgreSQL not configured".to_string(),
+                ))
             }
         } else {
             #[cfg(feature = "rusqlite")]
@@ -52,7 +79,7 @@ impl AnyPool {
             }
             #[cfg(not(feature = "rusqlite"))]
             {
-                Err(DbError::ConnectError("sqlite not configured".to_string()))
+                Err(DbError::ConnectError("SQLite not configured".to_string()))
             }
         }
     }
