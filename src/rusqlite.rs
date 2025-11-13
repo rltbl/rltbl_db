@@ -186,6 +186,7 @@ impl RusqlitePool {
         let pool = cfg
             .create_pool(Runtime::Tokio1)
             .map_err(|err| DbError::ConnectError(format!("Error creating pool: {err}")))?;
+        pool.resize(1);
         // TODO: Replace unwrap() with Err()
         let conn = pool.get().await.unwrap();
         conn.interact(|conn| {
