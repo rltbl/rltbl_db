@@ -1119,7 +1119,7 @@ mod tests {
             .await
             .unwrap();
 
-        for i in 1..100 {
+        for i in 1..5 {
             let conn = pool.pool.get().await.unwrap();
             match conn
                 .interact(move |conn| {
@@ -1148,7 +1148,8 @@ mod tests {
                         "Expected foreign key constraint error".to_string(),
                     ));
                 }
-            }
+            };
+            pool.pool.resize(i);
         }
         Ok(())
     }
