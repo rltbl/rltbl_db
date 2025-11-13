@@ -13,10 +13,12 @@ deadpool-postgres = { version = "0.14.1", features = ["rt_tokio_1"], optional = 
 deadpool-sqlite = { version = "0.12.1", features = ["bundled", "column_decltype"], optional = true }
 indexmap = "2.12.0"
 lazy_static = "1.5.0"
+rand = "0.9.2"
 regex = "1.12.2"
 rust_decimal = { version = "1.39.0", features = ["db-tokio-postgres", "macros"], optional = true }
 serde = { version = "1.0.226", features = ["derive"] }
 serde_json = { version = "1.0.145", features = ["preserve_order"] }
+tokio = { version = "1.47.1", features = ["rt-multi-thread"] }
 tokio-postgres = { version = "0.7.14", optional = true }
 
 [dev-dependencies]

@@ -1040,6 +1040,7 @@ dependencies = [
  "indexmap",
  "lazy_static",
  "pretty_assertions",
+ "rand 0.9.2",
  "regex",
  "rust_decimal",
  "serde",
