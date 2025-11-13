@@ -560,11 +560,8 @@ mod tests {
     use super::*;
 
     use crate::params;
-    use rand::Rng;
     use rust_decimal::dec;
     use serde_json::json;
-    use std::thread;
-    use tokio::time::Duration;
 
     #[tokio::test]
     async fn test_text_column_query() {
@@ -1091,23 +1088,12 @@ mod tests {
         assert_eq!(json!({"count": 4}), json!(row));
     }
 
-    #[tokio::test(flavor = "multi_thread")]
+    #[tokio::test]
     async fn test_foreign_keys() {
-        let mut spawned = vec![];
-        for i in 1..11 {
-            spawned.push(tokio::spawn(async move {
-                foreign_keys(i).await.unwrap();
-            }));
-        }
-        for i in spawned {
-            i.await.unwrap();
-        }
+        foreign_keys().await.unwrap();
     }
 
-    async fn foreign_keys(thread: usize) -> Result<(), DbError> {
-        let timeout = rand::rng().random_range(0..200);
-        //println!("Thread {thread} sleeping for {timeout}ms");
-        thread::sleep(Duration::from_millis(timeout));
+    async fn foreign_keys() -> Result<(), DbError> {
         let pool = RusqlitePool::connect(":memory:").await.unwrap();
         let table1 = "test_foreign1";
         let table2 = "test_foreign2";
@@ -1132,36 +1118,37 @@ mod tests {
             .await
             .unwrap();
 
-        let conn = pool.pool.get().await.unwrap();
-        match conn
-            .interact(move |conn| {
-                let mut stmt = conn
-                    .prepare(&format!("DELETE FROM {table1}"))
-                    .map_err(|err| {
-                        DbError::DatabaseError(format!("Error preparing statement: {err}"))
+        for i in 1..100 {
+            let conn = pool.pool.get().await.unwrap();
+            match conn
+                .interact(move |conn| {
+                    let mut stmt =
+                        conn.prepare(&format!("DELETE FROM {table1}"))
+                            .map_err(|err| {
+                                DbError::DatabaseError(format!("Error preparing statement: {err}"))
+                            })?;
+                    query_prepared(&mut stmt, ()).map_err(|err| {
+                        DbError::DatabaseError(format!("Error querying prepared statement: {err}"))
                     })?;
-                query_prepared(&mut stmt, ()).map_err(|err| {
-                    DbError::DatabaseError(format!("Error querying prepared statement: {err}"))
-                })?;
-                Ok(())
-            })
-            .await
-            .map_err(|err| DbError::DatabaseError(err.to_string()))?
-            .map_err(|err: DbError| DbError::DatabaseError(err.to_string()))
-        {
-            Err(e) => {
-                assert_eq!(
-                    e.to_string(),
-                    "Error querying prepared statement: FOREIGN KEY constraint failed"
-                );
-                println!("Success for thread {thread}!");
+                    Ok(())
+                })
+                .await
+                .map_err(|err| DbError::DatabaseError(err.to_string()))?
+                .map_err(|err: DbError| DbError::DatabaseError(err.to_string()))
+            {
+                Err(e) => {
+                    assert_eq!(
+                        e.to_string(),
+                        "Error querying prepared statement: FOREIGN KEY constraint failed"
+                    )
+                }
+                Ok(_) => {
+                    return Err(DbError::DatabaseError(
+                        "Expected foreign key constraint error".to_string(),
+                    ));
+                }
             }
-            Ok(_) => {
-                return Err(DbError::DatabaseError(
-                    "Expected foreign key constraint error".to_string(),
-                ));
-            }
-        };
+        }
         Ok(())
     }
 }
