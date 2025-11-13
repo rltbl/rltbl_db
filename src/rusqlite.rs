@@ -1120,6 +1120,7 @@ mod tests {
             .unwrap();
 
         for i in 1..5 {
+            pool.pool.resize(1);
             let conn = pool.pool.get().await.unwrap();
             match conn
                 .interact(move |conn| {
@@ -1149,7 +1150,7 @@ mod tests {
                     ));
                 }
             };
-            pool.pool.resize(i);
+            pool.pool.resize(0);
         }
         Ok(())
     }
