@@ -7,7 +7,7 @@ use crate::{
         validate_table_name,
     },
     params,
-    shared::insert,
+    shared::{insert, update},
 };
 
 use deadpool_postgres::{Config, Pool, Runtime};
@@ -517,7 +517,14 @@ impl DbQuery for TokioPostgresPool {
 
     /// Implements [DbQuery::update()] for PostgreSQL.
     async fn update(&self, table: &str, rows: &[&JsonRow]) -> Result<(), DbError> {
-        todo!()
+        match self.keys(table).await {
+            Ok(keys) => {
+                let keys = keys.iter().map(|key| key.as_str()).collect::<Vec<_>>();
+                update(self, table, &keys, rows, false, &[]).await?;
+                Ok(())
+            }
+            Err(err) => Err(err),
+        }
     }
 
     /// Implements [DbQuery::update_returning()] for PostgreSQL.
@@ -527,7 +534,13 @@ impl DbQuery for TokioPostgresPool {
         rows: &[&JsonRow],
         returning: &[&str],
     ) -> Result<Vec<JsonRow>, DbError> {
-        todo!()
+        match self.keys(table).await {
+            Ok(keys) => {
+                let keys = keys.iter().map(|key| key.as_str()).collect::<Vec<_>>();
+                update(self, table, &keys, rows, false, returning).await
+            }
+            Err(err) => Err(err),
+        }
     }
 
     /// Implements [DbQuery::drop_table()] for PostgreSQL. Note (see
@@ -1194,5 +1207,10 @@ mod tests {
 
         // Clean up:
         pool.drop_table("test_input_params").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_keys() {
+        // TODO: ...
     }
 }

@@ -7,8 +7,7 @@ use crate::{
         validate_table_name,
     },
     params,
-    // TODO: Possibly refactor update() into shared.rs as well (we'll see).
-    shared::insert,
+    shared::{insert, update},
 };
 
 use deadpool_sqlite::{
@@ -494,7 +493,14 @@ impl DbQuery for RusqlitePool {
 
     /// Implements [DbQuery::update()] for SQLite.
     async fn update(&self, table: &str, rows: &[&JsonRow]) -> Result<(), DbError> {
-        todo!()
+        match self.keys(table).await {
+            Ok(keys) => {
+                let keys = keys.iter().map(|key| key.as_str()).collect::<Vec<_>>();
+                update(self, table, &keys, rows, false, &[]).await?;
+                Ok(())
+            }
+            Err(err) => Err(err),
+        }
     }
 
     /// Implements [DbQuery::update_returning()] for SQLite.
@@ -504,7 +510,13 @@ impl DbQuery for RusqlitePool {
         rows: &[&JsonRow],
         returning: &[&str],
     ) -> Result<Vec<JsonRow>, DbError> {
-        todo!()
+        match self.keys(table).await {
+            Ok(keys) => {
+                let keys = keys.iter().map(|key| key.as_str()).collect::<Vec<_>>();
+                update(self, table, &keys, rows, false, returning).await
+            }
+            Err(err) => Err(err),
+        }
     }
 
     /// Implements [DbQuery::drop_table()] for SQLite.

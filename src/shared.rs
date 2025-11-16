@@ -1,5 +1,6 @@
 use crate::core::{DbError, DbQuery, JsonRow, ParamValue, validate_table_name};
 
+/// TODO: Add docstring here.
 pub(crate) async fn insert(
     pool: &impl DbQuery,
     max_params: &usize,
@@ -90,4 +91,19 @@ pub(crate) async fn insert(
         rows_to_return.append(&mut pool.query(&sql, params_to_be_bound).await?);
     }
     Ok(rows_to_return)
+}
+
+/// TODO: Add docstring here.
+pub(crate) async fn update(
+    pool: &impl DbQuery,
+    table: &str,
+    keys: &[&str],
+    rows: &[&JsonRow],
+    with_returning: bool,
+    returning: &[&str],
+) -> Result<Vec<JsonRow>, DbError> {
+    if keys.is_empty() {
+        return Err(DbError::InputError("Keys must not be empty.".to_string()));
+    }
+    todo!()
 }
