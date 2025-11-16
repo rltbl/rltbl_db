@@ -408,7 +408,7 @@ pub trait DbQuery {
     /// Given a table, return a map from column names to column SQL types.
     fn columns(&self, table: &str) -> impl Future<Output = Result<ColumnMap, DbError>> + Send;
 
-    // TODO (eventually): This function should also retrieve unique and foreign keys.
+    // TODO: Consider combining this function with columns().
     /// Retrieve the primary key columns for a given table.
     fn keys(&self, table: &str) -> impl Future<Output = Result<Vec<String>, DbError>> + Send;
 

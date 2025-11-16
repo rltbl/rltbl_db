@@ -234,7 +234,7 @@ impl DbQuery for TokioPostgresPool {
     }
 
     /// Implements [DbQuery::keys()] for PostgreSQL.
-    async fn keys(&self, table: &str) -> Result<Vec<String>, DbError> {
+    async fn keys(&self, _table: &str) -> Result<Vec<String>, DbError> {
         todo!()
     }
 
@@ -520,7 +520,7 @@ impl DbQuery for TokioPostgresPool {
         match self.keys(table).await {
             Ok(keys) => {
                 let keys = keys.iter().map(|key| key.as_str()).collect::<Vec<_>>();
-                update(self, table, &keys, rows, false, &[]).await?;
+                update(self, &MAX_PARAMS_POSTGRES, table, &keys, rows, false, &[]).await?;
                 Ok(())
             }
             Err(err) => Err(err),
@@ -537,7 +537,16 @@ impl DbQuery for TokioPostgresPool {
         match self.keys(table).await {
             Ok(keys) => {
                 let keys = keys.iter().map(|key| key.as_str()).collect::<Vec<_>>();
-                update(self, table, &keys, rows, false, returning).await
+                update(
+                    self,
+                    &MAX_PARAMS_POSTGRES,
+                    table,
+                    &keys,
+                    rows,
+                    false,
+                    returning,
+                )
+                .await
             }
             Err(err) => Err(err),
         }

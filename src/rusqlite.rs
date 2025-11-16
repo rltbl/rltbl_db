@@ -496,7 +496,7 @@ impl DbQuery for RusqlitePool {
         match self.keys(table).await {
             Ok(keys) => {
                 let keys = keys.iter().map(|key| key.as_str()).collect::<Vec<_>>();
-                update(self, table, &keys, rows, false, &[]).await?;
+                update(self, &MAX_PARAMS_SQLITE, table, &keys, rows, false, &[]).await?;
                 Ok(())
             }
             Err(err) => Err(err),
@@ -513,7 +513,16 @@ impl DbQuery for RusqlitePool {
         match self.keys(table).await {
             Ok(keys) => {
                 let keys = keys.iter().map(|key| key.as_str()).collect::<Vec<_>>();
-                update(self, table, &keys, rows, false, returning).await
+                update(
+                    self,
+                    &MAX_PARAMS_SQLITE,
+                    table,
+                    &keys,
+                    rows,
+                    true,
+                    returning,
+                )
+                .await
             }
             Err(err) => Err(err),
         }
@@ -1086,5 +1095,95 @@ mod tests {
 
         assert_eq!(pool.keys("test_keys1").await.unwrap(), ["foo"]);
         assert_eq!(pool.keys("test_keys2").await.unwrap(), ["foo", "bar"]);
+    }
+
+    #[tokio::test]
+    async fn test_update_returning() {
+        let pool = RusqlitePool::connect(":memory:").await.unwrap();
+        pool.execute(
+            &format!(
+                "CREATE TABLE test_update_returning (\
+                   foo INT,\
+                   bar INT,\
+                   car INT,\
+                   dar INT,\
+                   ear INT,\
+                   PRIMARY KEY (foo, bar)\
+                 )",
+            ),
+            (),
+        )
+        .await
+        .unwrap();
+
+        pool.insert(
+            "test_update_returning",
+            &["foo", "bar"],
+            &[
+                &json!({"foo": 1, "bar": 1}).as_object().unwrap(),
+                &json!({"foo": 2, "bar": 2}).as_object().unwrap(),
+                &json!({"foo": 3, "bar": 3}).as_object().unwrap(),
+            ],
+        )
+        .await
+        .unwrap();
+
+        let rows = pool
+            .update_returning(
+                "test_update_returning",
+                &[
+                    &json!({
+                        "foo": 1,
+                        "bar": 1,
+                        "car": 10,
+                        "dar": 11,
+                        "ear": 12,
+                    })
+                    .as_object()
+                    .unwrap(),
+                    &json!({
+                        "foo": 2,
+                        "bar": 2,
+                        "car": 13,
+                        "dar": 14,
+                        "ear": 15,
+                    })
+                    .as_object()
+                    .unwrap(),
+                    &json!({
+                        "foo": 3,
+                        "bar": 3,
+                        "car": 16,
+                        "dar": 17,
+                        "ear": 18,
+                    })
+                    .as_object()
+                    .unwrap(),
+                ],
+                &["car", "dar", "ear"],
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            json!(rows),
+            json!([
+                {
+                    "car": json!(10),
+                    "dar": json!(11),
+                    "ear": json!(12),
+                },
+                {
+                    "car": json!(13),
+                    "dar": json!(14),
+                    "ear": json!(15),
+                },
+                {
+                    "car": json!(16),
+                    "dar": json!(17),
+                    "ear": json!(18),
+                },
+            ])
+        );
     }
 }

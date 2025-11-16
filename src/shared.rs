@@ -1,4 +1,5 @@
 use crate::core::{DbError, DbQuery, JsonRow, ParamValue, validate_table_name};
+use indexmap::IndexMap;
 
 /// TODO: Add docstring here.
 pub(crate) async fn insert(
@@ -96,14 +97,107 @@ pub(crate) async fn insert(
 /// TODO: Add docstring here.
 pub(crate) async fn update(
     pool: &impl DbQuery,
+    max_params: &usize,
     table: &str,
     keys: &[&str],
     rows: &[&JsonRow],
     with_returning: bool,
     returning: &[&str],
 ) -> Result<Vec<JsonRow>, DbError> {
+    // The goal is to generate update statements that look something like the following, where
+    // "foo" and "bar", below, are the primary key columns for "my_table":
+    //
+    // UPDATE "my_table"
+    // SET "column_1" = CASE WHEN foo = _ AND bar = _ THEN _
+    //                       WHEN foo = _ AND bar = _ THEN _
+    //                       WHEN foo = _ AND bar = _ THEN _
+    //                       ELSE "column_1"
+    //                  END,
+    //     "column_2" = CASE WHEN foo = _ AND bar = _ THEN _
+    //                       WHEN foo = _ AND bar = _ THEN _
+    //                       WHEN foo = _ AND bar = _ THEN _
+    //                       ELSE "column_2"
+    //                  END;
+
     if keys.is_empty() {
         return Err(DbError::InputError("Keys must not be empty.".to_string()));
     }
-    todo!()
+
+    // We use the column_map to determine the SQL type of each parameter.
+    let column_map = pool.columns(&table).await?;
+
+    let mut when_clauses: IndexMap<String, Vec<String>> = IndexMap::new();
+    for row in rows {
+        let all_columns = row.keys().map(|key| key.as_str()).collect::<Vec<_>>();
+        if !keys.iter().all(|key| all_columns.contains(key)) {
+            return Err(DbError::InputError(
+                "All input rows must have all primary key columns defined".to_string(),
+            ));
+        }
+
+        // Filter out the key columns from the columns to update:
+        let columns_to_update = all_columns
+            .iter()
+            .filter(|column| !keys.contains(column))
+            .collect::<Vec<_>>();
+
+        // Generate a when clause for the key_combination, and push it to the entry for this
+        // column in the when_clauses map:
+        for column in columns_to_update {
+            let when_clause = {
+                let key_clause = keys
+                    .iter()
+                    .map(|key| {
+                        let val = row.get(&key.to_string()).unwrap();
+                        // TODO: Use params.
+                        format!(r#"{key} = {val}"#)
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" AND ");
+                let updated_value = row.get(&column.to_string()).unwrap();
+                format!("WHEN {key_clause} THEN {updated_value}")
+            };
+            match when_clauses.get_mut(&column.to_string()) {
+                Some(clauses) => {
+                    clauses.push(when_clause);
+                }
+                None => {
+                    when_clauses.insert(column.to_string(), vec![when_clause]);
+                }
+            };
+        }
+    }
+
+    let cases = {
+        let mut cases = vec![];
+        for (column, clauses) in when_clauses.iter() {
+            cases.push(format!(
+                r#"
+"{column}" = CASE
+{}
+ELSE "{column}"
+END"#,
+                clauses.join("\n")
+            ));
+        }
+        cases
+    };
+
+    let returning_clause = match with_returning {
+        true => match returning.is_empty() {
+            true => format!("\nRETURNING *"),
+            false => format!("\nRETURNING {}", returning.join(", ")),
+        },
+        false => String::new(),
+    };
+
+    let sql = format!(
+        r#"
+UPDATE "{table}"
+SET {}{returning_clause}"#,
+        cases.join(",")
+    );
+
+    let rows = pool.query(&sql, ()).await?;
+    Ok(rows)
 }
