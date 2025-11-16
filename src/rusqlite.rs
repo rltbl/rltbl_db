@@ -241,11 +241,10 @@ impl DbQuery for RusqlitePool {
     /// Implements [DbQuery::columns()] for SQLite.
     async fn columns(&self, table: &str) -> Result<ColumnMap, DbError> {
         let mut columns = ColumnMap::new();
-        let sql = format!(
-            r#"SELECT "name", "type"
-               FROM pragma_table_info($1)
-               ORDER BY "name""#,
-        );
+        let sql = r#"SELECT "name", "type"
+                     FROM pragma_table_info($1)
+                     ORDER BY "name""#
+            .to_string();
 
         for row in self.query(&sql, params![&table]).await? {
             match (
@@ -269,8 +268,26 @@ impl DbQuery for RusqlitePool {
     }
 
     /// Implements [DbQuery::keys()] for SQLite.
-    async fn keys(&self, table: &str) -> Result<String, DbError> {
-        todo!()
+    async fn keys(&self, table: &str) -> Result<Vec<String>, DbError> {
+        self.query(
+            r#"SELECT "name"
+               FROM pragma_table_info($1)
+               WHERE "pk" > 0
+               ORDER BY "pk""#,
+            params![&table],
+        )
+        .await?
+        .iter()
+        .map(|row| {
+            match row
+                .get("name")
+                .and_then(|name| name.as_str().and_then(|name| Some(name)))
+            {
+                Some(pk_col) => Ok(pk_col.to_string()),
+                None => Err(DbError::DataError("Empty row".to_owned())),
+            }
+        })
+        .collect()
     }
 
     /// Implements [DbQuery::execute()] for SQLite.
@@ -1036,5 +1053,26 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(json!({"count": 4}), json!(row));
+    }
+
+    #[tokio::test]
+    async fn test_keys() {
+        let pool = RusqlitePool::connect(":memory:").await.unwrap();
+        pool.execute_batch(&format!(
+            "CREATE TABLE test_keys1 (\
+                 foo TEXT PRIMARY KEY\
+             );\
+             CREATE TABLE test_keys2 (\
+                 foo TEXT,\
+                 bar TEXT,\
+                 car TEXT,
+                 PRIMARY KEY (foo, bar)\
+             )",
+        ))
+        .await
+        .unwrap();
+
+        assert_eq!(pool.keys("test_keys1").await.unwrap(), ["foo"]);
+        assert_eq!(pool.keys("test_keys2").await.unwrap(), ["foo", "bar"]);
     }
 }

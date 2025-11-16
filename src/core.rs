@@ -410,7 +410,7 @@ pub trait DbQuery {
 
     // TODO (eventually): This function should also retrieve unique and foreign keys.
     /// Retrieve the primary key columns for a given table.
-    fn keys(&self, table: &str) -> impl Future<Output = Result<String, DbError>> + Send;
+    fn keys(&self, table: &str) -> impl Future<Output = Result<Vec<String>, DbError>> + Send;
 
     /// Execute a SQL command, without a return value.
     fn execute(

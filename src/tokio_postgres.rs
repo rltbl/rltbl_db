@@ -234,7 +234,7 @@ impl DbQuery for TokioPostgresPool {
     }
 
     /// Implements [DbQuery::keys()] for PostgreSQL.
-    async fn keys(&self, table: &str) -> Result<String, DbError> {
+    async fn keys(&self, table: &str) -> Result<Vec<String>, DbError> {
         todo!()
     }
 

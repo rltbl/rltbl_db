@@ -122,7 +122,7 @@ impl DbQuery for AnyPool {
         }
     }
 
-    async fn keys(&self, table: &str) -> Result<String, DbError> {
+    async fn keys(&self, table: &str) -> Result<Vec<String>, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.keys(table).await,
