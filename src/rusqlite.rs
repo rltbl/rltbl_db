@@ -7,6 +7,7 @@ use crate::{
         validate_table_name,
     },
     params,
+    // TODO: Possibly refactor update() into shared.rs as well (we'll see).
     shared::insert,
 };
 
@@ -241,9 +242,9 @@ impl DbQuery for RusqlitePool {
     async fn columns(&self, table: &str) -> Result<ColumnMap, DbError> {
         let mut columns = ColumnMap::new();
         let sql = format!(
-            r#"SELECT name, type
+            r#"SELECT "name", "type"
                FROM pragma_table_info($1)
-               ORDER BY name;"#,
+               ORDER BY "name""#,
         );
 
         for row in self.query(&sql, params![&table]).await? {
@@ -265,6 +266,11 @@ impl DbQuery for RusqlitePool {
         }
 
         Ok(columns)
+    }
+
+    /// Implements [DbQuery::keys()] for SQLite.
+    async fn keys(&self, table: &str) -> Result<String, DbError> {
+        todo!()
     }
 
     /// Implements [DbQuery::execute()] for SQLite.
@@ -467,6 +473,21 @@ impl DbQuery for RusqlitePool {
             returning,
         )
         .await
+    }
+
+    /// Implements [DbQuery::update()] for SQLite.
+    async fn update(&self, table: &str, rows: &[&JsonRow]) -> Result<(), DbError> {
+        todo!()
+    }
+
+    /// Implements [DbQuery::update_returning()] for SQLite.
+    async fn update_returning(
+        &self,
+        table: &str,
+        rows: &[&JsonRow],
+        returning: &[&str],
+    ) -> Result<Vec<JsonRow>, DbError> {
+        todo!()
     }
 
     /// Implements [DbQuery::drop_table()] for SQLite.

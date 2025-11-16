@@ -408,6 +408,10 @@ pub trait DbQuery {
     /// Given a table, return a map from column names to column SQL types.
     fn columns(&self, table: &str) -> impl Future<Output = Result<ColumnMap, DbError>> + Send;
 
+    // TODO (eventually): This function should also retrieve unique and foreign keys.
+    /// Retrieve the primary key columns for a given table.
+    fn keys(&self, table: &str) -> impl Future<Output = Result<String, DbError>> + Send;
+
     /// Execute a SQL command, without a return value.
     fn execute(
         &self,
@@ -505,6 +509,17 @@ pub trait DbQuery {
         &self,
         table: &str,
         columns: &[&str],
+        rows: &[&JsonRow],
+        returning: &[&str],
+    ) -> impl Future<Output = Result<Vec<JsonRow>, DbError>>;
+
+    /// TODO: Add docstring
+    fn update(&self, table: &str, rows: &[&JsonRow]) -> impl Future<Output = Result<(), DbError>>;
+
+    /// TODO: Add docstring
+    fn update_returning(
+        &self,
+        table: &str,
         rows: &[&JsonRow],
         returning: &[&str],
     ) -> impl Future<Output = Result<Vec<JsonRow>, DbError>>;

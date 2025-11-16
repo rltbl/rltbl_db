@@ -233,6 +233,11 @@ impl DbQuery for TokioPostgresPool {
         Ok(columns)
     }
 
+    /// Implements [DbQuery::keys()] for PostgreSQL.
+    async fn keys(&self, table: &str) -> Result<String, DbError> {
+        todo!()
+    }
+
     /// Implements [DbQuery::execute()] for PostgreSQL.
     async fn execute(&self, sql: &str, params: impl IntoParams + Send) -> Result<(), DbError> {
         let params = params.into_params();
@@ -508,6 +513,21 @@ impl DbQuery for TokioPostgresPool {
             returning,
         )
         .await
+    }
+
+    /// Implements [DbQuery::update()] for PostgreSQL.
+    async fn update(&self, table: &str, rows: &[&JsonRow]) -> Result<(), DbError> {
+        todo!()
+    }
+
+    /// Implements [DbQuery::update_returning()] for PostgreSQL.
+    async fn update_returning(
+        &self,
+        table: &str,
+        rows: &[&JsonRow],
+        returning: &[&str],
+    ) -> Result<Vec<JsonRow>, DbError> {
+        todo!()
     }
 
     /// Implements [DbQuery::drop_table()] for PostgreSQL. Note (see
