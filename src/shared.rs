@@ -97,65 +97,116 @@ pub(crate) async fn insert(
 /// TODO: Add docstring here.
 pub(crate) async fn update(
     pool: &impl DbQuery,
+    // TODO: Use max_params to limit the number of parameters per updata batch.
     max_params: &usize,
     table: &str,
-    keys: &[&str],
+    primary_keys: &[&str],
     rows: &[&JsonRow],
     with_returning: bool,
     returning: &[&str],
 ) -> Result<Vec<JsonRow>, DbError> {
     // The goal is to generate update statements that look something like the following, where
-    // "foo" and "bar", below, are the primary key columns for "my_table":
+    // "pk_1" and "pk_2", below, are the primary key columns for "my_table":
     //
     // UPDATE "my_table"
-    // SET "column_1" = CASE WHEN foo = _ AND bar = _ THEN _
-    //                       WHEN foo = _ AND bar = _ THEN _
-    //                       WHEN foo = _ AND bar = _ THEN _
+    // SET "column_1" = CASE WHEN pk_1 = $1 AND pk_2 = $2 THEN $3
+    //                       WHEN pk_1 = $10 AND pk_2 = $11 THEN $12
+    //                       WHEN pk_1 = $19 AND pk_2 = $20 THEN $21
     //                       ELSE "column_1"
     //                  END,
-    //     "column_2" = CASE WHEN foo = _ AND bar = _ THEN _
-    //                       WHEN foo = _ AND bar = _ THEN _
-    //                       WHEN foo = _ AND bar = _ THEN _
+    //     "column_2" = CASE WHEN pk_1 = $4 AND pk_2 = $5 THEN $6
+    //                       WHEN pk_1 = $13 AND pk_2 = $14 THEN $15
+    //                       WHEN pk_1 = $22 AND pk_2 = $23 THEN $24
     //                       ELSE "column_2"
-    //                  END;
-
-    if keys.is_empty() {
-        return Err(DbError::InputError("Keys must not be empty.".to_string()));
+    //                  END,
+    //     "column_3" = CASE WHEN pk_1 = $7 AND pk_2 = $8 THEN $9
+    //                       WHEN pk_1 = $16 AND pk_2 = $17 THEN $18
+    //                       WHEN pk_1 = $25 AND pk_2 = $26 THEN $27
+    //                       ELSE "column_3"
+    //                  END,
+    if primary_keys.is_empty() {
+        return Err(DbError::InputError(
+            "Primary keys must not be empty.".to_string(),
+        ));
     }
 
     // We use the column_map to determine the SQL type of each parameter.
     let column_map = pool.columns(&table).await?;
+    if !primary_keys.iter().all(|pkey| {
+        column_map
+            .keys()
+            .map(|key| key.as_str())
+            .collect::<Vec<_>>()
+            .contains(pkey)
+    }) {
+        return Err(DbError::InputError(format!(
+            "The provided primary keys: {primary_keys:?} are not all in the table '{table}'"
+        )));
+    }
 
+    let mut params = vec![];
+    let mut param_idx = 0;
     let mut when_clauses: IndexMap<String, Vec<String>> = IndexMap::new();
     for row in rows {
-        let all_columns = row.keys().map(|key| key.as_str()).collect::<Vec<_>>();
-        if !keys.iter().all(|key| all_columns.contains(key)) {
+        let all_row_columns = row.keys().map(|key| key.as_str()).collect::<Vec<_>>();
+        if !primary_keys
+            .iter()
+            .all(|pkey| all_row_columns.contains(pkey))
+        {
             return Err(DbError::InputError(
                 "All input rows must have all primary key columns defined".to_string(),
             ));
         }
 
-        // Filter out the key columns from the columns to update:
-        let columns_to_update = all_columns
+        // Filter out the key columns from the row columns that need to be updated:
+        let row_columns_to_update = all_row_columns
             .iter()
-            .filter(|column| !keys.contains(column))
+            .filter(|column| !primary_keys.contains(column))
             .collect::<Vec<_>>();
 
-        // Generate a when clause for the key_combination, and push it to the entry for this
-        // column in the when_clauses map:
-        for column in columns_to_update {
+        // Generate a when clause for the primary key combination, and push it to the entry for
+        // this column in the when_clauses map:
+        for column in row_columns_to_update {
+            // TODO: Each of these column when-clauses will have an identical primary key
+            // combination, so it would be better if we reused the same parameter number binding
+            // for each rather than increment it every time. Only the binding for `updated_value`
+            // needs to increment.
             let when_clause = {
-                let key_clause = keys
+                let pkey_clause: Result<Vec<String>, DbError> = primary_keys
                     .iter()
                     .map(|key| {
-                        let val = row.get(&key.to_string()).unwrap();
-                        // TODO: Use params.
-                        format!(r#"{key} = {val}"#)
+                        // These two unwraps are safe because of the checks that have been
+                        // performed above:
+                        let sql_type = column_map.get(*key).unwrap();
+                        let value = row.get(&key.to_string()).unwrap();
+                        match pool.convert_json(sql_type, value) {
+                            Ok(value) => {
+                                params.push(value);
+                                param_idx += 1;
+                                // SQLite (or at any rate rusqlite) does not respect parameter
+                                // order if the prefix is '$'. The prefix must be '?' to allow
+                                // for out-of-order parameters.
+                                Ok(format!(r#"{key} = ?{param_idx}"#))
+                            }
+                            Err(err) => Err(err),
+                        }
                     })
-                    .collect::<Vec<_>>()
-                    .join(" AND ");
+                    .collect();
+                let pkey_clause = pkey_clause?.join(" AND ");
+
+                let sql_type = column_map.get(*column).ok_or(DbError::InputError(format!(
+                    "Column '{column}' does not exist in table '{table}'"
+                )))?;
+                // This unwrap is safe: we are iterating over row columns of which this is one.
+                // TODO: Can we eliminate the call to to_string() here?
                 let updated_value = row.get(&column.to_string()).unwrap();
-                format!("WHEN {key_clause} THEN {updated_value}")
+                let updated_value = pool.convert_json(sql_type, updated_value)?;
+                params.push(updated_value);
+                param_idx += 1;
+                // SQLite (or at any rate rusqlite) does not respect parameter
+                // order if the prefix is '$'. The prefix must be '?' to allow
+                // for out-of-order parameters.
+                format!("WHEN {pkey_clause} THEN ?{param_idx}")
             };
             match when_clauses.get_mut(&column.to_string()) {
                 Some(clauses) => {
@@ -198,6 +249,12 @@ SET {}{returning_clause}"#,
         cases.join(",")
     );
 
-    let rows = pool.query(&sql, ()).await?;
+    // println!("SQL:\n{sql}");
+    // for (i, param) in params.iter().enumerate() {
+    //     let i = i + 1;
+    //     println!("?{i}: {param:?}");
+    // }
+
+    let rows = pool.query(&sql, params).await?;
     Ok(rows)
 }

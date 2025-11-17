@@ -915,7 +915,7 @@ mod tests {
         .await
         .unwrap();
 
-        // No filtering:
+        // Without specific returning columns:
         let rows = pool
             .insert_returning(
                 "test_insert",
@@ -947,7 +947,7 @@ mod tests {
             }])
         );
 
-        // With filtering:
+        // With specific returning columns:
         let rows = pool
             .insert_returning(
                 "test_insert",
@@ -1103,11 +1103,11 @@ mod tests {
         pool.execute(
             &format!(
                 "CREATE TABLE test_update_returning (\
-                   foo INT,\
-                   bar INT,\
-                   car INT,\
-                   dar INT,\
-                   ear INT,\
+                   foo BIGINT,\
+                   bar BIGINT,\
+                   car BIGINT,\
+                   dar BIGINT,\
+                   ear BIGINT,\
                    PRIMARY KEY (foo, bar)\
                  )",
             ),
@@ -1185,5 +1185,36 @@ mod tests {
                 },
             ])
         );
+
+        let rows = pool
+            .query("SELECT * from test_update_returning", ())
+            .await
+            .unwrap();
+        assert_eq!(
+            json!(rows),
+            json!([
+                {
+                    "foo": json!(1),
+                    "bar": json!(1),
+                    "car": json!(10),
+                    "dar": json!(11),
+                    "ear": json!(12),
+                },
+                {
+                    "foo": json!(2),
+                    "bar": json!(2),
+                    "car": json!(13),
+                    "dar": json!(14),
+                    "ear": json!(15),
+                },
+                {
+                    "foo": json!(3),
+                    "bar": json!(3),
+                    "car": json!(16),
+                    "dar": json!(17),
+                    "ear": json!(18),
+                },
+            ])
+        )
     }
 }
