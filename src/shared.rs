@@ -1,4 +1,4 @@
-use crate::core::{DbError, DbQuery, JsonRow, ParamValue, validate_table_name};
+use crate::core::{DbError, DbKind, DbQuery, JsonRow, ParamValue, validate_table_name};
 use indexmap::IndexMap;
 
 /// TODO: Add docstring here.
@@ -98,7 +98,7 @@ pub(crate) async fn insert(
 pub(crate) async fn update(
     pool: &impl DbQuery,
     // TODO: Use max_params to limit the number of parameters per updata batch.
-    max_params: &usize,
+    _max_params: &usize,
     table: &str,
     primary_keys: &[&str],
     rows: &[&JsonRow],
@@ -110,18 +110,18 @@ pub(crate) async fn update(
     //
     // UPDATE "my_table"
     // SET "column_1" = CASE WHEN pk_1 = $1 AND pk_2 = $2 THEN $3
-    //                       WHEN pk_1 = $10 AND pk_2 = $11 THEN $12
-    //                       WHEN pk_1 = $19 AND pk_2 = $20 THEN $21
+    //                       WHEN pk_1 = $6 AND pk_2 = $7 THEN $8
+    //                       WHEN pk_1 = $11 AND pk_2 = $12 THEN $13
     //                       ELSE "column_1"
     //                  END,
-    //     "column_2" = CASE WHEN pk_1 = $4 AND pk_2 = $5 THEN $6
-    //                       WHEN pk_1 = $13 AND pk_2 = $14 THEN $15
-    //                       WHEN pk_1 = $22 AND pk_2 = $23 THEN $24
+    //     "column_2" = CASE WHEN pk_1 = $1 AND pk_2 = $2 THEN $4
+    //                       WHEN pk_1 = $6 AND pk_2 = $7 THEN $9
+    //                       WHEN pk_1 = $11 AND pk_2 = $12 THEN $14
     //                       ELSE "column_2"
     //                  END,
-    //     "column_3" = CASE WHEN pk_1 = $7 AND pk_2 = $8 THEN $9
-    //                       WHEN pk_1 = $16 AND pk_2 = $17 THEN $18
-    //                       WHEN pk_1 = $25 AND pk_2 = $26 THEN $27
+    //     "column_3" = CASE WHEN pk_1 = $1 AND pk_2 = $2 THEN $5
+    //                       WHEN pk_1 = $6 AND pk_2 = $7 THEN $10
+    //                       WHEN pk_1 = $25 AND pk_2 = $26 THEN $15
     //                       ELSE "column_3"
     //                  END,
     if primary_keys.is_empty() {
@@ -144,6 +144,10 @@ pub(crate) async fn update(
         )));
     }
 
+    let param_prefix = match pool.kind() {
+        DbKind::SQLite => "?",
+        DbKind::PostgreSQL => "$",
+    };
     let mut params = vec![];
     let mut param_idx = 0;
     let mut when_clauses: IndexMap<String, Vec<String>> = IndexMap::new();
@@ -158,6 +162,27 @@ pub(crate) async fn update(
             ));
         }
 
+        // The same primary key clause: "pk_1 = $N AND pk_2 = $M" (see the example above) will be
+        // used for every column that needs to be updated in this row.
+        let pkey_clause: Result<Vec<String>, DbError> = primary_keys
+            .iter()
+            .map(|key| {
+                // These two unwraps are safe because of the checks that have been
+                // performed above:
+                let sql_type = column_map.get(*key).unwrap();
+                let value = row.get(&key.to_string()).unwrap();
+                match pool.convert_json(sql_type, value) {
+                    Ok(value) => {
+                        params.push(value);
+                        param_idx += 1;
+                        Ok(format!(r#"{key} = {param_prefix}{param_idx}"#))
+                    }
+                    Err(err) => Err(err),
+                }
+            })
+            .collect();
+        let pkey_clause = pkey_clause?.join(" AND ");
+
         // Filter out the key columns from the row columns that need to be updated:
         let row_columns_to_update = all_row_columns
             .iter()
@@ -167,46 +192,16 @@ pub(crate) async fn update(
         // Generate a when clause for the primary key combination, and push it to the entry for
         // this column in the when_clauses map:
         for column in row_columns_to_update {
-            // TODO: Each of these column when-clauses will have an identical primary key
-            // combination, so it would be better if we reused the same parameter number binding
-            // for each rather than increment it every time. Only the binding for `updated_value`
-            // needs to increment.
             let when_clause = {
-                let pkey_clause: Result<Vec<String>, DbError> = primary_keys
-                    .iter()
-                    .map(|key| {
-                        // These two unwraps are safe because of the checks that have been
-                        // performed above:
-                        let sql_type = column_map.get(*key).unwrap();
-                        let value = row.get(&key.to_string()).unwrap();
-                        match pool.convert_json(sql_type, value) {
-                            Ok(value) => {
-                                params.push(value);
-                                param_idx += 1;
-                                // SQLite (or at any rate rusqlite) does not respect parameter
-                                // order if the prefix is '$'. The prefix must be '?' to allow
-                                // for out-of-order parameters.
-                                Ok(format!(r#"{key} = ?{param_idx}"#))
-                            }
-                            Err(err) => Err(err),
-                        }
-                    })
-                    .collect();
-                let pkey_clause = pkey_clause?.join(" AND ");
-
                 let sql_type = column_map.get(*column).ok_or(DbError::InputError(format!(
                     "Column '{column}' does not exist in table '{table}'"
                 )))?;
                 // This unwrap is safe: we are iterating over row columns of which this is one.
-                // TODO: Can we eliminate the call to to_string() here?
-                let updated_value = row.get(&column.to_string()).unwrap();
+                let updated_value = row.get(*column).unwrap();
                 let updated_value = pool.convert_json(sql_type, updated_value)?;
                 params.push(updated_value);
                 param_idx += 1;
-                // SQLite (or at any rate rusqlite) does not respect parameter
-                // order if the prefix is '$'. The prefix must be '?' to allow
-                // for out-of-order parameters.
-                format!("WHEN {pkey_clause} THEN ?{param_idx}")
+                format!("WHEN {pkey_clause} THEN {param_prefix}{param_idx}")
             };
             match when_clauses.get_mut(&column.to_string()) {
                 Some(clauses) => {
@@ -252,7 +247,7 @@ SET {}{returning_clause}"#,
     // println!("SQL:\n{sql}");
     // for (i, param) in params.iter().enumerate() {
     //     let i = i + 1;
-    //     println!("?{i}: {param:?}");
+    //     println!("{param_prefix}{i}: {param:?}");
     // }
 
     let rows = pool.query(&sql, params).await?;

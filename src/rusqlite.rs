@@ -1128,64 +1128,126 @@ mod tests {
         .await
         .unwrap();
 
-        let rows = pool
-            .update_returning(
-                "test_update_returning",
-                &[
-                    &json!({
-                        "foo": 1,
-                        "bar": 1,
-                        "car": 10,
-                        "dar": 11,
-                        "ear": 12,
-                    })
-                    .as_object()
-                    .unwrap(),
-                    &json!({
-                        "foo": 2,
-                        "bar": 2,
-                        "car": 13,
-                        "dar": 14,
-                        "ear": 15,
-                    })
-                    .as_object()
-                    .unwrap(),
-                    &json!({
-                        "foo": 3,
-                        "bar": 3,
-                        "car": 16,
-                        "dar": 17,
-                        "ear": 18,
-                    })
-                    .as_object()
-                    .unwrap(),
-                ],
-                &["car", "dar", "ear"],
-            )
+        let check_returning_rows = |rows: &Vec<JsonRow>| {
+            assert_eq!(
+                json!(rows),
+                json!([
+                    {
+                        "car": json!(10),
+                        "dar": json!(11),
+                        "ear": json!(12),
+                    },
+                    {
+                        "car": json!(13),
+                        "dar": json!(14),
+                        "ear": json!(15),
+                    },
+                    {
+                        "car": json!(16),
+                        "dar": json!(17),
+                        "ear": json!(18),
+                    },
+                ])
+            );
+        };
+
+        check_returning_rows(
+            &pool
+                .update_returning(
+                    "test_update_returning",
+                    &[
+                        &json!({
+                            "foo": 1,
+                            "bar": 1,
+                            "car": 10,
+                            "dar": 11,
+                            "ear": 12,
+                        })
+                        .as_object()
+                        .unwrap(),
+                        &json!({
+                            "foo": 2,
+                            "bar": 2,
+                            "car": 13,
+                            "dar": 14,
+                            "ear": 15,
+                        })
+                        .as_object()
+                        .unwrap(),
+                        &json!({
+                            "foo": 3,
+                            "bar": 3,
+                            "car": 16,
+                            "dar": 17,
+                            "ear": 18,
+                        })
+                        .as_object()
+                        .unwrap(),
+                    ],
+                    &["car", "dar", "ear"],
+                )
+                .await
+                .unwrap(),
+        );
+
+        // This is the same update as the first one above, just with the columns of the input
+        // rows to the update specified in a different order.
+        pool.execute("DELETE FROM test_update_returning", ())
             .await
             .unwrap();
 
-        assert_eq!(
-            json!(rows),
-            json!([
-                {
-                    "car": json!(10),
-                    "dar": json!(11),
-                    "ear": json!(12),
-                },
-                {
-                    "car": json!(13),
-                    "dar": json!(14),
-                    "ear": json!(15),
-                },
-                {
-                    "car": json!(16),
-                    "dar": json!(17),
-                    "ear": json!(18),
-                },
-            ])
+        pool.insert(
+            "test_update_returning",
+            &["foo", "bar"],
+            &[
+                &json!({"foo": 1, "bar": 1}).as_object().unwrap(),
+                &json!({"foo": 2, "bar": 2}).as_object().unwrap(),
+                &json!({"foo": 3, "bar": 3}).as_object().unwrap(),
+            ],
+        )
+        .await
+        .unwrap();
+
+        check_returning_rows(
+            &pool
+                .update_returning(
+                    "test_update_returning",
+                    &[
+                        &json!({
+                            "foo": 1,
+                            "car": 10,
+                            "bar": 1,
+                            "ear": 12,
+                            "dar": 11,
+                        })
+                        .as_object()
+                        .unwrap(),
+                        &json!({
+                            "ear": 15,
+                            "bar": 2,
+                            "car": 13,
+                            "dar": 14,
+                            "foo": 2,
+                        })
+                        .as_object()
+                        .unwrap(),
+                        &json!({
+                            "car": 16,
+                            "dar": 17,
+                            "ear": 18,
+                            "bar": 3,
+                            "foo": 3,
+                        })
+                        .as_object()
+                        .unwrap(),
+                    ],
+                    &["car", "dar", "ear"],
+                )
+                .await
+                .unwrap(),
         );
 
+        // Final sanity check on the values of all columns:
         let rows = pool
             .query("SELECT * from test_update_returning", ())
             .await
