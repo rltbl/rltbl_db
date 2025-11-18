@@ -1098,6 +1098,101 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_update() {
+        let pool = RusqlitePool::connect(":memory:").await.unwrap();
+        pool.execute(
+            &format!(
+                "CREATE TABLE test_update (\
+                   foo BIGINT,\
+                   bar BIGINT,\
+                   car BIGINT,\
+                   dar BIGINT,\
+                   ear BIGINT,\
+                   PRIMARY KEY (foo, bar)\
+                 )",
+            ),
+            (),
+        )
+        .await
+        .unwrap();
+
+        pool.insert(
+            "test_update",
+            &["foo", "bar"],
+            &[
+                &json!({"foo": 1, "bar": 1}).as_object().unwrap(),
+                &json!({"foo": 2, "bar": 2}).as_object().unwrap(),
+                &json!({"foo": 3, "bar": 3}).as_object().unwrap(),
+            ],
+        )
+        .await
+        .unwrap();
+
+        pool.update(
+            "test_update",
+            &[
+                &json!({
+                    "foo": 1,
+                    "bar": 1,
+                    "car": 10,
+                    "dar": 11,
+                    "ear": 12,
+                })
+                .as_object()
+                .unwrap(),
+                &json!({
+                    "foo": 2,
+                    "bar": 2,
+                    "car": 13,
+                    "dar": 14,
+                    "ear": 15,
+                })
+                .as_object()
+                .unwrap(),
+                &json!({
+                    "foo": 3,
+                    "bar": 3,
+                    "car": 16,
+                    "dar": 17,
+                    "ear": 18,
+                })
+                .as_object()
+                .unwrap(),
+            ],
+        )
+        .await
+        .unwrap();
+
+        let rows = pool.query("SELECT * from test_update", ()).await.unwrap();
+        assert_eq!(
+            json!(rows),
+            json!([
+                {
+                    "foo": json!(1),
+                    "bar": json!(1),
+                    "car": json!(10),
+                    "dar": json!(11),
+                    "ear": json!(12),
+                },
+                {
+                    "foo": json!(2),
+                    "bar": json!(2),
+                    "car": json!(13),
+                    "dar": json!(14),
+                    "ear": json!(15),
+                },
+                {
+                    "foo": json!(3),
+                    "bar": json!(3),
+                    "car": json!(16),
+                    "dar": json!(17),
+                    "ear": json!(18),
+                },
+            ])
+        )
+    }
+
+    #[tokio::test]
     async fn test_update_returning() {
         let pool = RusqlitePool::connect(":memory:").await.unwrap();
         pool.execute(
@@ -1191,7 +1286,7 @@ mod tests {
         );
 
         // This is the same update as the first one above, just with the columns of the input
-        // rows to the update specified in a different order.
+        // rows to the update, as well as the rows themselves, specified in a different order.
         pool.execute("DELETE FROM test_update_returning", ())
             .await
             .unwrap();
@@ -1214,20 +1309,20 @@ mod tests {
                     "test_update_returning",
                     &[
                         &json!({
-                            "foo": 1,
-                            "car": 10,
-                            "bar": 1,
-                            "ear": 12,
-                            "dar": 11,
-                        })
-                        .as_object()
-                        .unwrap(),
-                        &json!({
                             "ear": 15,
                             "bar": 2,
                             "car": 13,
                             "dar": 14,
                             "foo": 2,
+                        })
+                        .as_object()
+                        .unwrap(),
+                        &json!({
+                            "foo": 1,
+                            "car": 10,
+                            "bar": 1,
+                            "ear": 12,
+                            "dar": 11,
                         })
                         .as_object()
                         .unwrap(),

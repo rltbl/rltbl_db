@@ -1,7 +1,10 @@
 use crate::core::{DbError, DbKind, DbQuery, JsonRow, ParamValue, validate_table_name};
 use indexmap::IndexMap;
 
-/// TODO: Add docstring here.
+/// Insert the given rows, which have the given columns, to the given table using the given
+/// queryable pool and optional returning clause (set with_returning = false to turn this off).
+/// When generating the insert statements, do not use more than max_params bound parameters at
+/// one time.
 pub(crate) async fn insert(
     pool: &impl DbQuery,
     max_params: &usize,
@@ -94,11 +97,63 @@ pub(crate) async fn insert(
     Ok(rows_to_return)
 }
 
-/// TODO: Add docstring here.
+// Private function for generating an UPDATE statement for the given table using the given
+// when clauses and returning vector.
+fn generate_update_statement(
+    table: &str,
+    pkey_clauses: &Vec<String>,
+    when_clauses: &IndexMap<String, Vec<String>>,
+    with_returning: bool,
+    returning: &[&str],
+) -> String {
+    let cases = {
+        let mut cases = vec![];
+        for (column, clauses) in when_clauses.iter() {
+            cases.push(format!(
+                r#"
+"{column}" = CASE
+{}
+END"#,
+                clauses.join("\n")
+            ));
+        }
+        cases
+    };
+
+    // A where clause is required to restrict the rows that are updated to only those that
+    // correspond to the given primary key combinations.
+    let where_clause = pkey_clauses
+        .iter()
+        .map(|pkey_clause| format!("({pkey_clause})"))
+        .collect::<Vec<_>>()
+        .join(" OR ");
+    let where_clause = format!("\nWHERE {where_clause}");
+
+    // The returning clause is optional.
+    let returning_clause = match with_returning {
+        true => match returning.is_empty() {
+            true => format!("\nRETURNING *"),
+            false => format!("\nRETURNING {}", returning.join(", ")),
+        },
+        false => String::new(),
+    };
+
+    // The SQL to be returned:
+    format!(
+        r#"
+UPDATE "{table}"
+SET {}{where_clause}{returning_clause}"#,
+        cases.join(",")
+    )
+}
+
+/// Update the given rows in the given table, which has the given primary keys, using the given
+/// queryable pool and optional returning clause (set with_returning = false to turn this off).
+/// When generating the update statements, do not use more than max_params bound parameters at
+/// one time.
 pub(crate) async fn update(
     pool: &impl DbQuery,
-    // TODO: Use max_params to limit the number of parameters per updata batch.
-    _max_params: &usize,
+    max_params: &usize,
     table: &str,
     primary_keys: &[&str],
     rows: &[&JsonRow],
@@ -106,24 +161,23 @@ pub(crate) async fn update(
     returning: &[&str],
 ) -> Result<Vec<JsonRow>, DbError> {
     // The goal is to generate update statements that look something like the following, where
-    // "pk_1" and "pk_2", below, are the primary key columns for "my_table":
+    // "pk1" and "pk2", below, are the primary key columns for "my_table":
     //
-    // UPDATE "my_table"
-    // SET "column_1" = CASE WHEN pk_1 = $1 AND pk_2 = $2 THEN $3
-    //                       WHEN pk_1 = $6 AND pk_2 = $7 THEN $8
-    //                       WHEN pk_1 = $11 AND pk_2 = $12 THEN $13
-    //                       ELSE "column_1"
-    //                  END,
-    //     "column_2" = CASE WHEN pk_1 = $1 AND pk_2 = $2 THEN $4
-    //                       WHEN pk_1 = $6 AND pk_2 = $7 THEN $9
-    //                       WHEN pk_1 = $11 AND pk_2 = $12 THEN $14
-    //                       ELSE "column_2"
-    //                  END,
-    //     "column_3" = CASE WHEN pk_1 = $1 AND pk_2 = $2 THEN $5
-    //                       WHEN pk_1 = $6 AND pk_2 = $7 THEN $10
-    //                       WHEN pk_1 = $25 AND pk_2 = $26 THEN $15
-    //                       ELSE "column_3"
-    //                  END,
+    // UPDATE my_table
+    // SET column1 = CASE WHEN pk1 = $1 AND pk2 = $2 THEN $3
+    //                    WHEN pk1 = $6 AND pk2 = $7 THEN $8
+    //                    WHEN pk1 = $11 AND pk2 = $12 THEN $13
+    //               END,
+    //     column2 = CASE WHEN pk1 = $1 AND pk2 = $2 THEN $4
+    //                    WHEN pk1 = $6 AND pk2 = $7 THEN $9
+    //                    WHEN pk1 = $11 AND pk2 = $12 THEN $14
+    //               END,
+    //     column3 = CASE WHEN pk1 = $1 AND pk2 = $2 THEN $5
+    //                    WHEN pk1 = $6 AND pk2 = $7 THEN $10
+    //                    WHEN pk1 = $11 AND pk2 = $12 THEN $15
+    //               END
+    //     WHERE (pk1 = $1 AND pk2 = $2) OR (pk1 = $6 AND pk2 = $7) OR (pk1 = $11 AND pk2 = $12)
+    //     RETURNING column1, column2, column3
     if primary_keys.is_empty() {
         return Err(DbError::InputError(
             "Primary keys must not be empty.".to_string(),
@@ -144,12 +198,17 @@ pub(crate) async fn update(
         )));
     }
 
+    // Although SQLite allows '$' as a prefix, it is required to use '?' to represent integer
+    // literals (see https://sqlite.org/c3ref/bind_blob.html) which is what we need to be able
+    // to generate them out of order as in the above example.
     let param_prefix = match pool.kind() {
         DbKind::SQLite => "?",
         DbKind::PostgreSQL => "$",
     };
+    let mut rows_to_return = vec![];
     let mut params = vec![];
     let mut param_idx = 0;
+    let mut pkey_clauses = vec![];
     let mut when_clauses: IndexMap<String, Vec<String>> = IndexMap::new();
     for row in rows {
         let all_row_columns = row.keys().map(|key| key.as_str()).collect::<Vec<_>>();
@@ -162,8 +221,34 @@ pub(crate) async fn update(
             ));
         }
 
-        // The same primary key clause: "pk_1 = $N AND pk_2 = $M" (see the example above) will be
-        // used for every column that needs to be updated in this row.
+        if param_idx + all_row_columns.len() > *max_params {
+            // It is extremely unlikely but possible in principle that a single row requires
+            // more parameters than are allowed, but we check to be sure:
+            if pkey_clauses.is_empty() {
+                return Err(DbError::InputError(format!(
+                    "Number of parameters required to update row exceeds the maximum allowable"
+                )));
+            }
+            // Generate a bulk update statement for all of the rows we have processed so far
+            // and append any returned rows to the rows to return:
+            let sql = generate_update_statement(
+                table,
+                &pkey_clauses,
+                &when_clauses,
+                with_returning,
+                returning,
+            );
+            rows_to_return.append(&mut pool.query(&sql, params.clone()).await?);
+            // Clear all of the counters, maps, and parameter vectors we have been using to
+            // generate the UPDATE sql:
+            param_idx = 0;
+            params.clear();
+            pkey_clauses.clear();
+            when_clauses.clear();
+        }
+
+        // The same primary key clause, e.g., "pk_1 = $N AND pk_2 = $M" (see the example above)
+        // will be used for every column that needs to be updated in this row.
         let pkey_clause: Result<Vec<String>, DbError> = primary_keys
             .iter()
             .map(|key| {
@@ -182,6 +267,8 @@ pub(crate) async fn update(
             })
             .collect();
         let pkey_clause = pkey_clause?.join(" AND ");
+        // TODO: Try and eliminate the call to to_string() if possible:
+        pkey_clauses.push(pkey_clause.to_string());
 
         // Filter out the key columns from the row columns that need to be updated:
         let row_columns_to_update = all_row_columns
@@ -189,8 +276,8 @@ pub(crate) async fn update(
             .filter(|column| !primary_keys.contains(column))
             .collect::<Vec<_>>();
 
-        // Generate a when clause for the primary key combination, and push it to the entry for
-        // this column in the when_clauses map:
+        // Generate a when clause corresponding to the primary key combination, for each column,
+        // and add the generated when_clauses to the when_clauses map:
         for column in row_columns_to_update {
             let when_clause = {
                 let sql_type = column_map.get(*column).ok_or(DbError::InputError(format!(
@@ -214,42 +301,15 @@ pub(crate) async fn update(
         }
     }
 
-    let cases = {
-        let mut cases = vec![];
-        for (column, clauses) in when_clauses.iter() {
-            cases.push(format!(
-                r#"
-"{column}" = CASE
-{}
-ELSE "{column}"
-END"#,
-                clauses.join("\n")
-            ));
-        }
-        cases
-    };
-
-    let returning_clause = match with_returning {
-        true => match returning.is_empty() {
-            true => format!("\nRETURNING *"),
-            false => format!("\nRETURNING {}", returning.join(", ")),
-        },
-        false => String::new(),
-    };
-
-    let sql = format!(
-        r#"
-UPDATE "{table}"
-SET {}{returning_clause}"#,
-        cases.join(",")
+    // Generate the final update statement, append any returned rows to rows_to_return,
+    // then return everything.
+    let sql = generate_update_statement(
+        table,
+        &pkey_clauses,
+        &when_clauses,
+        with_returning,
+        returning,
     );
-
-    // println!("SQL:\n{sql}");
-    // for (i, param) in params.iter().enumerate() {
-    //     let i = i + 1;
-    //     println!("{param_prefix}{i}: {param:?}");
-    // }
-
-    let rows = pool.query(&sql, params).await?;
-    Ok(rows)
+    rows_to_return.append(&mut pool.query(&sql, params).await?);
+    Ok(rows_to_return)
 }
