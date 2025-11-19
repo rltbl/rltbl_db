@@ -122,12 +122,12 @@ impl DbQuery for AnyPool {
         }
     }
 
-    async fn keys(&self, table: &str) -> Result<Vec<String>, DbError> {
+    async fn primary_keys(&self, table: &str) -> Result<Vec<String>, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
-            AnyPool::Rusqlite(pool) => pool.keys(table).await,
+            AnyPool::Rusqlite(pool) => pool.primary_keys(table).await,
             #[cfg(feature = "tokio-postgres")]
-            AnyPool::TokioPostgres(pool) => pool.keys(table).await,
+            AnyPool::TokioPostgres(pool) => pool.primary_keys(table).await,
         }
     }
 

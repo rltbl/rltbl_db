@@ -113,6 +113,7 @@ fn generate_update_statement(
                 r#"
 "{column}" = CASE
 {}
+ELSE "{column}"
 END"#,
                 clauses.join("\n")
             ));
@@ -167,14 +168,17 @@ pub(crate) async fn update(
     // SET column1 = CASE WHEN pk1 = $1 AND pk2 = $2 THEN $3
     //                    WHEN pk1 = $6 AND pk2 = $7 THEN $8
     //                    WHEN pk1 = $11 AND pk2 = $12 THEN $13
+    //                    ELSE column1
     //               END,
     //     column2 = CASE WHEN pk1 = $1 AND pk2 = $2 THEN $4
     //                    WHEN pk1 = $6 AND pk2 = $7 THEN $9
     //                    WHEN pk1 = $11 AND pk2 = $12 THEN $14
+    //                    ELSE column2
     //               END,
     //     column3 = CASE WHEN pk1 = $1 AND pk2 = $2 THEN $5
     //                    WHEN pk1 = $6 AND pk2 = $7 THEN $10
     //                    WHEN pk1 = $11 AND pk2 = $12 THEN $15
+    //                    ELSE column3
     //               END
     //     WHERE (pk1 = $1 AND pk2 = $2) OR (pk1 = $6 AND pk2 = $7) OR (pk1 = $11 AND pk2 = $12)
     //     RETURNING column1, column2, column3

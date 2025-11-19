@@ -410,7 +410,10 @@ pub trait DbQuery {
 
     // TODO: Consider combining this function with columns().
     /// Retrieve the primary key columns for a given table.
-    fn keys(&self, table: &str) -> impl Future<Output = Result<Vec<String>, DbError>> + Send;
+    fn primary_keys(
+        &self,
+        table: &str,
+    ) -> impl Future<Output = Result<Vec<String>, DbError>> + Send;
 
     /// Execute a SQL command, without a return value.
     fn execute(
@@ -513,10 +516,15 @@ pub trait DbQuery {
         returning: &[&str],
     ) -> impl Future<Output = Result<Vec<JsonRow>, DbError>>;
 
-    /// TODO: Add docstring
+    /// Update the given table using the given JSON rows. The table should have a primary key
+    /// and any columns included in the primary key should be present within each input row.
+    /// The primary key column values will be used as a way of identifying the rows to update,
+    /// while the other columns in the row will be updated to the given new values.
     fn update(&self, table: &str, rows: &[&JsonRow]) -> impl Future<Output = Result<(), DbError>>;
 
-    /// TODO: Add docstring
+    /// Like [DbQuery::update()], but in addition this function also returns the columns from the
+    /// updated data that are included in `returning`, or all of the updated data if `returning`
+    /// is an empty list.
     fn update_returning(
         &self,
         table: &str,

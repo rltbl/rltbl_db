@@ -266,8 +266,8 @@ impl DbQuery for RusqlitePool {
         Ok(columns)
     }
 
-    /// Implements [DbQuery::keys()] for SQLite.
-    async fn keys(&self, table: &str) -> Result<Vec<String>, DbError> {
+    /// Implements [DbQuery::primary_keys()] for SQLite.
+    async fn primary_keys(&self, table: &str) -> Result<Vec<String>, DbError> {
         self.query(
             r#"SELECT "name"
                FROM pragma_table_info($1)
@@ -493,7 +493,7 @@ impl DbQuery for RusqlitePool {
 
     /// Implements [DbQuery::update()] for SQLite.
     async fn update(&self, table: &str, rows: &[&JsonRow]) -> Result<(), DbError> {
-        match self.keys(table).await {
+        match self.primary_keys(table).await {
             Ok(keys) => {
                 let keys = keys.iter().map(|key| key.as_str()).collect::<Vec<_>>();
                 update(self, &MAX_PARAMS_SQLITE, table, &keys, rows, false, &[]).await?;
@@ -510,7 +510,7 @@ impl DbQuery for RusqlitePool {
         rows: &[&JsonRow],
         returning: &[&str],
     ) -> Result<Vec<JsonRow>, DbError> {
-        match self.keys(table).await {
+        match self.primary_keys(table).await {
             Ok(keys) => {
                 let keys = keys.iter().map(|key| key.as_str()).collect::<Vec<_>>();
                 update(
@@ -1077,40 +1077,44 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_keys() {
+    async fn test_primary_keys() {
         let pool = RusqlitePool::connect(":memory:").await.unwrap();
-        pool.execute_batch(&format!(
-            "CREATE TABLE test_keys1 (\
+        pool.execute_batch(
+            "CREATE TABLE test_primary_keys1 (\
                  foo TEXT PRIMARY KEY\
              );\
-             CREATE TABLE test_keys2 (\
+             CREATE TABLE test_primary_keys2 (\
                  foo TEXT,\
                  bar TEXT,\
                  car TEXT,
                  PRIMARY KEY (foo, bar)\
              )",
-        ))
+        )
         .await
         .unwrap();
 
-        assert_eq!(pool.keys("test_keys1").await.unwrap(), ["foo"]);
-        assert_eq!(pool.keys("test_keys2").await.unwrap(), ["foo", "bar"]);
+        assert_eq!(
+            pool.primary_keys("test_primary_keys1").await.unwrap(),
+            ["foo"]
+        );
+        assert_eq!(
+            pool.primary_keys("test_primary_keys2").await.unwrap(),
+            ["foo", "bar"]
+        );
     }
 
     #[tokio::test]
     async fn test_update() {
         let pool = RusqlitePool::connect(":memory:").await.unwrap();
         pool.execute(
-            &format!(
-                "CREATE TABLE test_update (\
-                   foo BIGINT,\
-                   bar BIGINT,\
-                   car BIGINT,\
-                   dar BIGINT,\
-                   ear BIGINT,\
-                   PRIMARY KEY (foo, bar)\
-                 )",
-            ),
+            "CREATE TABLE test_update (\
+               foo BIGINT,\
+               bar BIGINT,\
+               car BIGINT,\
+               dar BIGINT,\
+               ear BIGINT,\
+               PRIMARY KEY (foo, bar)\
+             )",
             (),
         )
         .await
@@ -1196,16 +1200,14 @@ mod tests {
     async fn test_update_returning() {
         let pool = RusqlitePool::connect(":memory:").await.unwrap();
         pool.execute(
-            &format!(
-                "CREATE TABLE test_update_returning (\
-                   foo BIGINT,\
-                   bar BIGINT,\
-                   car BIGINT,\
-                   dar BIGINT,\
-                   ear BIGINT,\
-                   PRIMARY KEY (foo, bar)\
-                 )",
-            ),
+            "CREATE TABLE test_update_returning (\
+               foo BIGINT,\
+               bar BIGINT,\
+               car BIGINT,\
+               dar BIGINT,\
+               ear BIGINT,\
+               PRIMARY KEY (foo, bar)\
+             )",
             (),
         )
         .await
