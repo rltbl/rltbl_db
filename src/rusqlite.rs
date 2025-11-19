@@ -7,7 +7,7 @@ use crate::{
         validate_table_name,
     },
     params,
-    shared::insert,
+    shared::{insert, update},
 };
 
 use deadpool_sqlite::{
@@ -240,11 +240,10 @@ impl DbQuery for RusqlitePool {
     /// Implements [DbQuery::columns()] for SQLite.
     async fn columns(&self, table: &str) -> Result<ColumnMap, DbError> {
         let mut columns = ColumnMap::new();
-        let sql = format!(
-            r#"SELECT name, type
-               FROM pragma_table_info($1)
-               ORDER BY name;"#,
-        );
+        let sql = r#"SELECT "name", "type"
+                     FROM pragma_table_info($1)
+                     ORDER BY "name""#
+            .to_string();
 
         for row in self.query(&sql, params![&table]).await? {
             match (
@@ -265,6 +264,29 @@ impl DbQuery for RusqlitePool {
         }
 
         Ok(columns)
+    }
+
+    /// Implements [DbQuery::primary_keys()] for SQLite.
+    async fn primary_keys(&self, table: &str) -> Result<Vec<String>, DbError> {
+        self.query(
+            r#"SELECT "name"
+               FROM pragma_table_info($1)
+               WHERE "pk" > 0
+               ORDER BY "pk""#,
+            params![&table],
+        )
+        .await?
+        .iter()
+        .map(|row| {
+            match row
+                .get("name")
+                .and_then(|name| name.as_str().and_then(|name| Some(name)))
+            {
+                Some(pk_col) => Ok(pk_col.to_string()),
+                None => Err(DbError::DataError("Empty row".to_owned())),
+            }
+        })
+        .collect()
     }
 
     /// Implements [DbQuery::execute()] for SQLite.
@@ -467,6 +489,43 @@ impl DbQuery for RusqlitePool {
             returning,
         )
         .await
+    }
+
+    /// Implements [DbQuery::update()] for SQLite.
+    async fn update(&self, table: &str, rows: &[&JsonRow]) -> Result<(), DbError> {
+        match self.primary_keys(table).await {
+            Ok(keys) => {
+                let keys = keys.iter().map(|key| key.as_str()).collect::<Vec<_>>();
+                update(self, &MAX_PARAMS_SQLITE, table, &keys, rows, false, &[]).await?;
+                Ok(())
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    /// Implements [DbQuery::update_returning()] for SQLite.
+    async fn update_returning(
+        &self,
+        table: &str,
+        rows: &[&JsonRow],
+        returning: &[&str],
+    ) -> Result<Vec<JsonRow>, DbError> {
+        match self.primary_keys(table).await {
+            Ok(keys) => {
+                let keys = keys.iter().map(|key| key.as_str()).collect::<Vec<_>>();
+                update(
+                    self,
+                    &MAX_PARAMS_SQLITE,
+                    table,
+                    &keys,
+                    rows,
+                    true,
+                    returning,
+                )
+                .await
+            }
+            Err(err) => Err(err),
+        }
     }
 
     /// Implements [DbQuery::drop_table()] for SQLite.
@@ -856,7 +915,7 @@ mod tests {
         .await
         .unwrap();
 
-        // No filtering:
+        // Without specific returning columns:
         let rows = pool
             .insert_returning(
                 "test_insert",
@@ -888,7 +947,7 @@ mod tests {
             }])
         );
 
-        // With filtering:
+        // With specific returning columns:
         let rows = pool
             .insert_returning(
                 "test_insert",
@@ -1015,5 +1074,305 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(json!({"count": 4}), json!(row));
+    }
+
+    #[tokio::test]
+    async fn test_primary_keys() {
+        let pool = RusqlitePool::connect(":memory:").await.unwrap();
+        pool.execute_batch(
+            "CREATE TABLE test_primary_keys1 (\
+                 foo TEXT PRIMARY KEY\
+             );\
+             CREATE TABLE test_primary_keys2 (\
+                 foo TEXT,\
+                 bar TEXT,\
+                 car TEXT,
+                 PRIMARY KEY (foo, bar)\
+             )",
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            pool.primary_keys("test_primary_keys1").await.unwrap(),
+            ["foo"]
+        );
+        assert_eq!(
+            pool.primary_keys("test_primary_keys2").await.unwrap(),
+            ["foo", "bar"]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update() {
+        let pool = RusqlitePool::connect(":memory:").await.unwrap();
+        pool.execute(
+            "CREATE TABLE test_update (\
+               foo BIGINT PRIMARY KEY,\
+               bar BIGINT,\
+               car BIGINT,\
+               dar BIGINT,\
+               ear BIGINT
+             )",
+            (),
+        )
+        .await
+        .unwrap();
+
+        pool.insert(
+            "test_update",
+            &["foo"],
+            &[
+                &json!({"foo": 1}).as_object().unwrap(),
+                &json!({"foo": 2}).as_object().unwrap(),
+                &json!({"foo": 3}).as_object().unwrap(),
+            ],
+        )
+        .await
+        .unwrap();
+
+        pool.update(
+            "test_update",
+            &[
+                &json!({
+                    "foo": 1,
+                    "bar": 10,
+                    "car": 11,
+                    "dar": 12,
+                    "ear": 13,
+                })
+                .as_object()
+                .unwrap(),
+                &json!({
+                    "foo": 2,
+                    "bar": 14,
+                    "car": 15,
+                    "dar": 16,
+                    "ear": 17,
+                })
+                .as_object()
+                .unwrap(),
+                &json!({
+                    "foo": 3,
+                    "bar": 18,
+                    "car": 19,
+                    "dar": 20,
+                    "ear": 21,
+                })
+                .as_object()
+                .unwrap(),
+            ],
+        )
+        .await
+        .unwrap();
+
+        let rows = pool.query("SELECT * from test_update", ()).await.unwrap();
+        assert_eq!(
+            json!(rows),
+            json!([
+                {
+                    "foo": json!(1),
+                    "bar": json!(10),
+                    "car": json!(11),
+                    "dar": json!(12),
+                    "ear": json!(13),
+                },
+                {
+                    "foo": json!(2),
+                    "bar": json!(14),
+                    "car": json!(15),
+                    "dar": json!(16),
+                    "ear": json!(17),
+                },
+                {
+                    "foo": json!(3),
+                    "bar": json!(18),
+                    "car": json!(19),
+                    "dar": json!(20),
+                    "ear": json!(21),
+                },
+            ])
+        )
+    }
+
+    #[tokio::test]
+    async fn test_update_returning() {
+        let pool = RusqlitePool::connect(":memory:").await.unwrap();
+        pool.execute(
+            "CREATE TABLE test_update_returning (\
+               foo BIGINT,\
+               bar BIGINT,\
+               car BIGINT,\
+               dar BIGINT,\
+               ear BIGINT,\
+               PRIMARY KEY (foo, bar)\
+             )",
+            (),
+        )
+        .await
+        .unwrap();
+
+        pool.insert(
+            "test_update_returning",
+            &["foo", "bar"],
+            &[
+                &json!({"foo": 1, "bar": 1}).as_object().unwrap(),
+                &json!({"foo": 2, "bar": 2}).as_object().unwrap(),
+                &json!({"foo": 3, "bar": 3}).as_object().unwrap(),
+            ],
+        )
+        .await
+        .unwrap();
+
+        let check_returning_rows = |rows: &Vec<JsonRow>| {
+            assert_eq!(
+                json!(rows),
+                json!([
+                    {
+                        "car": json!(10),
+                        "dar": json!(11),
+                        "ear": json!(12),
+                    },
+                    {
+                        "car": json!(13),
+                        "dar": json!(14),
+                        "ear": json!(15),
+                    },
+                    {
+                        "car": json!(16),
+                        "dar": json!(17),
+                        "ear": json!(18),
+                    },
+                ])
+            );
+        };
+
+        check_returning_rows(
+            &pool
+                .update_returning(
+                    "test_update_returning",
+                    &[
+                        &json!({
+                            "foo": 1,
+                            "bar": 1,
+                            "car": 10,
+                            "dar": 11,
+                            "ear": 12,
+                        })
+                        .as_object()
+                        .unwrap(),
+                        &json!({
+                            "foo": 2,
+                            "bar": 2,
+                            "car": 13,
+                            "dar": 14,
+                            "ear": 15,
+                        })
+                        .as_object()
+                        .unwrap(),
+                        &json!({
+                            "foo": 3,
+                            "bar": 3,
+                            "car": 16,
+                            "dar": 17,
+                            "ear": 18,
+                        })
+                        .as_object()
+                        .unwrap(),
+                    ],
+                    &["car", "dar", "ear"],
+                )
+                .await
+                .unwrap(),
+        );
+
+        // This is the same update as the first one above, just with the columns of the input
+        // rows to the update, as well as the rows themselves, specified in a different order.
+        pool.execute("DELETE FROM test_update_returning", ())
+            .await
+            .unwrap();
+
+        pool.insert(
+            "test_update_returning",
+            &["foo", "bar"],
+            &[
+                &json!({"foo": 1, "bar": 1}).as_object().unwrap(),
+                &json!({"foo": 2, "bar": 2}).as_object().unwrap(),
+                &json!({"foo": 3, "bar": 3}).as_object().unwrap(),
+            ],
+        )
+        .await
+        .unwrap();
+
+        check_returning_rows(
+            &pool
+                .update_returning(
+                    "test_update_returning",
+                    &[
+                        &json!({
+                            "ear": 15,
+                            "bar": 2,
+                            "car": 13,
+                            "dar": 14,
+                            "foo": 2,
+                        })
+                        .as_object()
+                        .unwrap(),
+                        &json!({
+                            "foo": 1,
+                            "car": 10,
+                            "bar": 1,
+                            "ear": 12,
+                            "dar": 11,
+                        })
+                        .as_object()
+                        .unwrap(),
+                        &json!({
+                            "car": 16,
+                            "dar": 17,
+                            "ear": 18,
+                            "bar": 3,
+                            "foo": 3,
+                        })
+                        .as_object()
+                        .unwrap(),
+                    ],
+                    &["car", "dar", "ear"],
+                )
+                .await
+                .unwrap(),
+        );
+
+        // Final sanity check on the values of all columns:
+        let rows = pool
+            .query("SELECT * from test_update_returning", ())
+            .await
+            .unwrap();
+        assert_eq!(
+            json!(rows),
+            json!([
+                {
+                    "foo": json!(1),
+                    "bar": json!(1),
+                    "car": json!(10),
+                    "dar": json!(11),
+                    "ear": json!(12),
+                },
+                {
+                    "foo": json!(2),
+                    "bar": json!(2),
+                    "car": json!(13),
+                    "dar": json!(14),
+                    "ear": json!(15),
+                },
+                {
+                    "foo": json!(3),
+                    "bar": json!(3),
+                    "car": json!(16),
+                    "dar": json!(17),
+                    "ear": json!(18),
+                },
+            ])
+        )
     }
 }
