@@ -1108,12 +1108,11 @@ mod tests {
         let pool = RusqlitePool::connect(":memory:").await.unwrap();
         pool.execute(
             "CREATE TABLE test_update (\
-               foo BIGINT,\
+               foo BIGINT PRIMARY KEY,\
                bar BIGINT,\
                car BIGINT,\
                dar BIGINT,\
-               ear BIGINT,\
-               PRIMARY KEY (foo, bar)\
+               ear BIGINT
              )",
             (),
         )
@@ -1122,11 +1121,11 @@ mod tests {
 
         pool.insert(
             "test_update",
-            &["foo", "bar"],
+            &["foo"],
             &[
-                &json!({"foo": 1, "bar": 1}).as_object().unwrap(),
-                &json!({"foo": 2, "bar": 2}).as_object().unwrap(),
-                &json!({"foo": 3, "bar": 3}).as_object().unwrap(),
+                &json!({"foo": 1}).as_object().unwrap(),
+                &json!({"foo": 2}).as_object().unwrap(),
+                &json!({"foo": 3}).as_object().unwrap(),
             ],
         )
         .await
@@ -1137,28 +1136,28 @@ mod tests {
             &[
                 &json!({
                     "foo": 1,
-                    "bar": 1,
-                    "car": 10,
-                    "dar": 11,
-                    "ear": 12,
+                    "bar": 10,
+                    "car": 11,
+                    "dar": 12,
+                    "ear": 13,
                 })
                 .as_object()
                 .unwrap(),
                 &json!({
                     "foo": 2,
-                    "bar": 2,
-                    "car": 13,
-                    "dar": 14,
-                    "ear": 15,
+                    "bar": 14,
+                    "car": 15,
+                    "dar": 16,
+                    "ear": 17,
                 })
                 .as_object()
                 .unwrap(),
                 &json!({
                     "foo": 3,
-                    "bar": 3,
-                    "car": 16,
-                    "dar": 17,
-                    "ear": 18,
+                    "bar": 18,
+                    "car": 19,
+                    "dar": 20,
+                    "ear": 21,
                 })
                 .as_object()
                 .unwrap(),
@@ -1173,24 +1172,24 @@ mod tests {
             json!([
                 {
                     "foo": json!(1),
-                    "bar": json!(1),
-                    "car": json!(10),
-                    "dar": json!(11),
-                    "ear": json!(12),
+                    "bar": json!(10),
+                    "car": json!(11),
+                    "dar": json!(12),
+                    "ear": json!(13),
                 },
                 {
                     "foo": json!(2),
-                    "bar": json!(2),
-                    "car": json!(13),
-                    "dar": json!(14),
-                    "ear": json!(15),
+                    "bar": json!(14),
+                    "car": json!(15),
+                    "dar": json!(16),
+                    "ear": json!(17),
                 },
                 {
                     "foo": json!(3),
-                    "bar": json!(3),
-                    "car": json!(16),
-                    "dar": json!(17),
-                    "ear": json!(18),
+                    "bar": json!(18),
+                    "car": json!(19),
+                    "dar": json!(20),
+                    "ear": json!(21),
                 },
             ])
         )

@@ -106,7 +106,7 @@ fn generate_update_statement(
     with_returning: bool,
     returning: &[&str],
 ) -> String {
-    let cases = {
+    let case_clause = {
         let mut cases = vec![];
         for (column, clauses) in when_clauses.iter() {
             cases.push(format!(
@@ -118,7 +118,7 @@ END"#,
                 clauses.join("\n")
             ));
         }
-        cases
+        cases.join(",")
     };
 
     // A where clause is required to restrict the rows that are updated to only those that
@@ -143,8 +143,7 @@ END"#,
     format!(
         r#"
 UPDATE "{table}"
-SET {}{where_clause}{returning_clause}"#,
-        cases.join(",")
+SET {case_clause}{where_clause}{returning_clause}"#,
     )
 }
 
@@ -161,7 +160,7 @@ pub(crate) async fn update(
     with_returning: bool,
     returning: &[&str],
 ) -> Result<Vec<JsonRow>, DbError> {
-    // The goal is to generate update statements that look something like the following, where
+    // This function generates update statements that look something like the following, where
     // "pk1" and "pk2", below, are the primary key columns for "my_table":
     //
     // UPDATE my_table
@@ -271,7 +270,6 @@ pub(crate) async fn update(
             })
             .collect();
         let pkey_clause = pkey_clause?.join(" AND ");
-        // TODO: Try and eliminate the call to to_string() if possible:
         pkey_clauses.push(pkey_clause.to_string());
 
         // Filter out the key columns from the row columns that need to be updated:
