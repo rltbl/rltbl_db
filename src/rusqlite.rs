@@ -7,7 +7,7 @@ use crate::{
         validate_table_name,
     },
     params,
-    shared::{insert, update},
+    shared::{EditType, edit},
 };
 
 use deadpool_sqlite::{
@@ -467,7 +467,17 @@ impl DbQuery for RusqlitePool {
         columns: &[&str],
         rows: &[&JsonRow],
     ) -> Result<(), DbError> {
-        insert(self, &MAX_PARAMS_SQLITE, table, columns, rows, false, &[]).await?;
+        edit(
+            self,
+            &EditType::Insert,
+            &MAX_PARAMS_SQLITE,
+            table,
+            columns,
+            rows,
+            false,
+            &[],
+        )
+        .await?;
         Ok(())
     }
 
@@ -479,8 +489,9 @@ impl DbQuery for RusqlitePool {
         rows: &[&JsonRow],
         returning: &[&str],
     ) -> Result<Vec<JsonRow>, DbError> {
-        insert(
+        edit(
             self,
+            &EditType::Insert,
             &MAX_PARAMS_SQLITE,
             table,
             columns,
@@ -498,7 +509,17 @@ impl DbQuery for RusqlitePool {
         columns: &[&str],
         rows: &[&JsonRow],
     ) -> Result<(), DbError> {
-        update(self, &MAX_PARAMS_SQLITE, table, columns, rows, false, &[]).await?;
+        edit(
+            self,
+            &EditType::Update,
+            &MAX_PARAMS_SQLITE,
+            table,
+            columns,
+            rows,
+            false,
+            &[],
+        )
+        .await?;
         Ok(())
     }
 
@@ -510,8 +531,9 @@ impl DbQuery for RusqlitePool {
         rows: &[&JsonRow],
         returning: &[&str],
     ) -> Result<Vec<JsonRow>, DbError> {
-        update(
+        edit(
             self,
+            &EditType::Update,
             &MAX_PARAMS_SQLITE,
             table,
             columns,

@@ -7,7 +7,7 @@ use crate::{
         validate_table_name,
     },
     params,
-    shared::{insert, update},
+    shared::{EditType, edit},
 };
 
 use deadpool_postgres::{Config, Pool, Runtime};
@@ -518,7 +518,17 @@ impl DbQuery for TokioPostgresPool {
         columns: &[&str],
         rows: &[&JsonRow],
     ) -> Result<(), DbError> {
-        insert(self, &MAX_PARAMS_POSTGRES, table, columns, rows, false, &[]).await?;
+        edit(
+            self,
+            &EditType::Insert,
+            &MAX_PARAMS_POSTGRES,
+            table,
+            columns,
+            rows,
+            false,
+            &[],
+        )
+        .await?;
         Ok(())
     }
 
@@ -530,8 +540,9 @@ impl DbQuery for TokioPostgresPool {
         rows: &[&JsonRow],
         returning: &[&str],
     ) -> Result<Vec<JsonRow>, DbError> {
-        insert(
+        edit(
             self,
+            &EditType::Insert,
             &MAX_PARAMS_POSTGRES,
             table,
             columns,
@@ -549,7 +560,17 @@ impl DbQuery for TokioPostgresPool {
         columns: &[&str],
         rows: &[&JsonRow],
     ) -> Result<(), DbError> {
-        update(self, &MAX_PARAMS_POSTGRES, table, columns, rows, false, &[]).await?;
+        edit(
+            self,
+            &EditType::Update,
+            &MAX_PARAMS_POSTGRES,
+            table,
+            columns,
+            rows,
+            false,
+            &[],
+        )
+        .await?;
         Ok(())
     }
 
@@ -561,8 +582,9 @@ impl DbQuery for TokioPostgresPool {
         rows: &[&JsonRow],
         returning: &[&str],
     ) -> Result<Vec<JsonRow>, DbError> {
-        update(
+        edit(
             self,
+            &EditType::Update,
             &MAX_PARAMS_POSTGRES,
             table,
             columns,
