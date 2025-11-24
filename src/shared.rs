@@ -15,6 +15,57 @@ impl Display for EditType {
     }
 }
 
+// TODO: Add comment here
+fn generate_update_statement(
+    table: &str,
+    columns: &[&str],
+    set_clause: &str,
+    where_clause: &str,
+    returning_clause: &str,
+    lines_to_bind: &Vec<String>,
+) -> String {
+    // Quote the column names to avoid potential clashes with database keywords:
+    let quoted_columns = columns
+        .iter()
+        .map(|c| format!(r#""{c}""#))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    format!(
+        r#"WITH "source" ({quoted_columns}) AS (
+             VALUES
+             {}
+           )
+           UPDATE "{table}"
+           SET {set_clause}
+           FROM "source"
+           WHERE {where_clause}{returning_clause}"#,
+        lines_to_bind.join(",\n")
+    )
+}
+
+// TODO: Add comment here
+fn generate_insert_statement(
+    table: &str,
+    columns: &[&str],
+    returning_clause: &str,
+    lines_to_bind: &Vec<String>,
+) -> String {
+    // Quote the column names to avoid potential clashes with database keywords:
+    let quoted_columns = columns
+        .iter()
+        .map(|c| format!(r#""{c}""#))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    format!(
+        r#"INSERT INTO "{table}" ({quoted_columns})
+           VALUES
+           {}{returning_clause}"#,
+        lines_to_bind.join(",\n")
+    )
+}
+
 /// Edit the given rows in the given table using the given queryable pool and optional returning
 /// clause (set with_returning = false to turn this off). When generating the SQL statements
 /// used to edit the table, do not use more than max_params bound parameters at a time. If more
@@ -63,13 +114,6 @@ pub(crate) async fn edit(
         false => String::new(),
     };
 
-    // Quote the column names to avoid potential clashes with database keywords:
-    let quoted_columns = columns
-        .iter()
-        .map(|c| format!(r#""{c}""#))
-        .collect::<Vec<_>>()
-        .join(", ");
-
     let (set_clause, where_clause) = match edit_type {
         EditType::Update => {
             let primary_keys = match pool.primary_keys(&table).await? {
@@ -116,31 +160,25 @@ pub(crate) async fn edit(
         DbKind::PostgreSQL => "$",
     };
     let mut rows_to_return = vec![];
-    let mut lines_to_bind: Vec<String> = Vec::new();
-    let mut params_to_be_bound: Vec<ParamValue> = Vec::new();
+    let mut lines_to_bind = Vec::new();
+    let mut params_to_be_bound = Vec::new();
     let mut param_idx = 0;
     for row in rows {
         // If we have reached the limit on the number of bound parameters, edit the rows that
         // we have processed so far and then reset all of the counters and collections:
         if param_idx + columns.len() > *max_params {
             let sql = match edit_type {
-                EditType::Update => format!(
-                    r#"WITH "source" ({quoted_columns}) AS (
-                         VALUES
-                         {}
-                       )
-                       UPDATE "{table}"
-                       SET {set_clause}
-                       FROM "source"
-                       WHERE {where_clause}{returning_clause}"#,
-                    lines_to_bind.join(",\n")
+                EditType::Update => generate_update_statement(
+                    &table,
+                    columns,
+                    &set_clause,
+                    &where_clause,
+                    &returning_clause,
+                    &lines_to_bind,
                 ),
-                EditType::Insert => format!(
-                    r#"INSERT INTO "{table}" ({quoted_columns})
-                       VALUES
-                       {}{returning_clause}"#,
-                    lines_to_bind.join(",\n")
-                ),
+                EditType::Insert => {
+                    generate_insert_statement(&table, columns, &returning_clause, &lines_to_bind)
+                }
             };
             rows_to_return.append(&mut pool.query(&sql, params_to_be_bound.clone()).await?);
             lines_to_bind.clear();
@@ -176,24 +214,19 @@ pub(crate) async fn edit(
     // If there is anything left to insert, insert it now:
     if lines_to_bind.len() > 0 {
         let sql = match edit_type {
-            EditType::Update => format!(
-                r#"WITH "source" ({quoted_columns}) AS (
-                     VALUES
-                     {}
-                   )
-                   UPDATE "{table}"
-                   SET {set_clause}
-                   FROM "source"
-                   WHERE {where_clause}{returning_clause}"#,
-                lines_to_bind.join(",\n")
+            EditType::Update => generate_update_statement(
+                &table,
+                columns,
+                &set_clause,
+                &where_clause,
+                &returning_clause,
+                &lines_to_bind,
             ),
-            EditType::Insert => format!(
-                r#"INSERT INTO "{table}" ({quoted_columns})
-                   VALUES
-                   {}{returning_clause}"#,
-                lines_to_bind.join(",\n")
-            ),
+            EditType::Insert => {
+                generate_insert_statement(&table, columns, &returning_clause, &lines_to_bind)
+            }
         };
+
         rows_to_return.append(&mut pool.query(&sql, params_to_be_bound).await?);
     }
     Ok(rows_to_return)
