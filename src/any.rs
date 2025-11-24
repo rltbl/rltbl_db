@@ -298,26 +298,34 @@ impl DbQuery for AnyPool {
         }
     }
 
-    async fn update(&self, table: &str, rows: &[&JsonRow]) -> Result<(), DbError> {
+    async fn update(
+        &self,
+        table: &str,
+        columns: &[&str],
+        rows: &[&JsonRow],
+    ) -> Result<(), DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
-            AnyPool::Rusqlite(pool) => pool.update(table, rows).await,
+            AnyPool::Rusqlite(pool) => pool.update(table, columns, rows).await,
             #[cfg(feature = "tokio-postgres")]
-            AnyPool::TokioPostgres(pool) => pool.update(table, rows).await,
+            AnyPool::TokioPostgres(pool) => pool.update(table, columns, rows).await,
         }
     }
 
     async fn update_returning(
         &self,
         table: &str,
+        columns: &[&str],
         rows: &[&JsonRow],
         returning: &[&str],
     ) -> Result<Vec<JsonRow>, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
-            AnyPool::Rusqlite(pool) => pool.update_returning(table, rows, returning).await,
+            AnyPool::Rusqlite(pool) => pool.update_returning(table, columns, rows, returning).await,
             #[cfg(feature = "tokio-postgres")]
-            AnyPool::TokioPostgres(pool) => pool.update_returning(table, rows, returning).await,
+            AnyPool::TokioPostgres(pool) => {
+                pool.update_returning(table, columns, rows, returning).await
+            }
         }
     }
 

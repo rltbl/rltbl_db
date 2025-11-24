@@ -543,40 +543,34 @@ impl DbQuery for TokioPostgresPool {
     }
 
     /// Implements [DbQuery::update()] for PostgreSQL.
-    async fn update(&self, table: &str, rows: &[&JsonRow]) -> Result<(), DbError> {
-        match self.primary_keys(table).await {
-            Ok(keys) => {
-                let keys = keys.iter().map(|key| key.as_str()).collect::<Vec<_>>();
-                update(self, &MAX_PARAMS_POSTGRES, table, &keys, rows, false, &[]).await?;
-                Ok(())
-            }
-            Err(err) => Err(err),
-        }
+    async fn update(
+        &self,
+        table: &str,
+        columns: &[&str],
+        rows: &[&JsonRow],
+    ) -> Result<(), DbError> {
+        update(self, &MAX_PARAMS_POSTGRES, table, columns, rows, false, &[]).await?;
+        Ok(())
     }
 
     /// Implements [DbQuery::update_returning()] for PostgreSQL.
     async fn update_returning(
         &self,
         table: &str,
+        columns: &[&str],
         rows: &[&JsonRow],
         returning: &[&str],
     ) -> Result<Vec<JsonRow>, DbError> {
-        match self.primary_keys(table).await {
-            Ok(keys) => {
-                let keys = keys.iter().map(|key| key.as_str()).collect::<Vec<_>>();
-                update(
-                    self,
-                    &MAX_PARAMS_POSTGRES,
-                    table,
-                    &keys,
-                    rows,
-                    true,
-                    returning,
-                )
-                .await
-            }
-            Err(err) => Err(err),
-        }
+        update(
+            self,
+            &MAX_PARAMS_POSTGRES,
+            table,
+            columns,
+            rows,
+            true,
+            returning,
+        )
+        .await
     }
 
     /// Implements [DbQuery::drop_table()] for PostgreSQL. Note (see
@@ -1311,6 +1305,7 @@ mod tests {
 
         pool.update(
             "test_update",
+            &["foo", "bar", "car", "dar", "ear"],
             &[
                 &json!({
                     "foo": 1,
@@ -1394,7 +1389,7 @@ mod tests {
 
         pool.insert(
             "test_update_returning",
-            &["foo", "bar"],
+            &["foo", "bar", "car", "dar", "ear"],
             &[
                 &json!({"foo": 1, "bar": 1}).as_object().unwrap(),
                 &json!({"foo": 2, "bar": 2}).as_object().unwrap(),
@@ -1405,32 +1400,33 @@ mod tests {
         .unwrap();
 
         let check_returning_rows = |rows: &Vec<JsonRow>| {
-            assert_eq!(
-                json!(rows),
-                json!([
-                    {
+            assert!(rows.iter().all(|row| {
+                [
+                    json!({
                         "car": json!(10),
                         "dar": json!(11),
                         "ear": json!(12),
-                    },
-                    {
+                    }),
+                    json!({
                         "car": json!(13),
                         "dar": json!(14),
                         "ear": json!(15),
-                    },
-                    {
+                    }),
+                    json!({
                         "car": json!(16),
                         "dar": json!(17),
                         "ear": json!(18),
-                    },
-                ])
-            );
+                    }),
+                ]
+                .contains(&json!(row))
+            }));
         };
 
         check_returning_rows(
             &pool
                 .update_returning(
                     "test_update_returning",
+                    &["foo", "bar", "car", "dar", "ear"],
                     &[
                         &json!({
                             "foo": 1,
@@ -1488,6 +1484,7 @@ mod tests {
             &pool
                 .update_returning(
                     "test_update_returning",
+                    &["foo", "bar", "car", "dar", "ear"],
                     &[
                         &json!({
                             "ear": 15,
@@ -1528,31 +1525,31 @@ mod tests {
             .query("SELECT * from test_update_returning", ())
             .await
             .unwrap();
-        assert_eq!(
-            json!(rows),
-            json!([
-                {
+        assert!(rows.iter().all(|row| {
+            [
+                json!({
                     "foo": json!(1),
                     "bar": json!(1),
                     "car": json!(10),
                     "dar": json!(11),
                     "ear": json!(12),
-                },
-                {
+                }),
+                json!({
                     "foo": json!(2),
                     "bar": json!(2),
                     "car": json!(13),
                     "dar": json!(14),
                     "ear": json!(15),
-                },
-                {
+                }),
+                json!({
                     "foo": json!(3),
                     "bar": json!(3),
                     "car": json!(16),
                     "dar": json!(17),
                     "ear": json!(18),
-                },
-            ])
-        )
+                }),
+            ]
+            .contains(&json!(row))
+        }));
     }
 }

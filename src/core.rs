@@ -520,7 +520,12 @@ pub trait DbQuery {
     /// and any columns included in the primary key should be present within each input row.
     /// The primary key column values will be used as a way of identifying the rows to update,
     /// while the other columns in the row will be updated to the given new values.
-    fn update(&self, table: &str, rows: &[&JsonRow]) -> impl Future<Output = Result<(), DbError>>;
+    fn update(
+        &self,
+        table: &str,
+        columns: &[&str],
+        rows: &[&JsonRow],
+    ) -> impl Future<Output = Result<(), DbError>>;
 
     /// Like [DbQuery::update()], but in addition this function also returns the columns from the
     /// updated data that are included in `returning`, or all of the updated data if `returning`
@@ -528,6 +533,7 @@ pub trait DbQuery {
     fn update_returning(
         &self,
         table: &str,
+        columns: &[&str],
         rows: &[&JsonRow],
         returning: &[&str],
     ) -> impl Future<Output = Result<Vec<JsonRow>, DbError>>;
