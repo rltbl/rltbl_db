@@ -45,7 +45,7 @@ fn generate_update_statement(
     )
 }
 
-// Generate a SQL UPDATE statement for the given table and columns using the given clauses
+// Generate a SQL INSERT statement for the given table and columns using the given clauses
 // and the given value lines.
 fn generate_insert_statement(
     table: &str,
