@@ -15,14 +15,15 @@ impl Display for EditType {
     }
 }
 
-// TODO: Add comment here
+// Generate a SQL UPDATE statement for the given table and columns using the given clauses
+// and the given value lines.
 fn generate_update_statement(
     table: &str,
     columns: &[&str],
     set_clause: &str,
     where_clause: &str,
     returning_clause: &str,
-    lines_to_bind: &Vec<String>,
+    value_lines: &Vec<String>,
 ) -> String {
     // Quote the column names to avoid potential clashes with database keywords:
     let quoted_columns = columns
@@ -40,16 +41,17 @@ fn generate_update_statement(
            SET {set_clause}
            FROM "source"
            WHERE {where_clause}{returning_clause}"#,
-        lines_to_bind.join(",\n")
+        value_lines.join(",\n")
     )
 }
 
-// TODO: Add comment here
+// Generate a SQL UPDATE statement for the given table and columns using the given clauses
+// and the given value lines.
 fn generate_insert_statement(
     table: &str,
     columns: &[&str],
     returning_clause: &str,
-    lines_to_bind: &Vec<String>,
+    value_lines: &Vec<String>,
 ) -> String {
     // Quote the column names to avoid potential clashes with database keywords:
     let quoted_columns = columns
@@ -62,7 +64,7 @@ fn generate_insert_statement(
         r#"INSERT INTO "{table}" ({quoted_columns})
            VALUES
            {}{returning_clause}"#,
-        lines_to_bind.join(",\n")
+        value_lines.join(",\n")
     )
 }
 
