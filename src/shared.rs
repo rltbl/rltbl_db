@@ -1,6 +1,7 @@
 use crate::core::{DbError, DbKind, DbQuery, JsonRow, ParamValue, validate_table_name};
 use std::fmt::Display;
 
+#[derive(PartialEq, Eq)]
 pub(crate) enum EditType {
     Insert,
     Update,
@@ -196,13 +197,20 @@ pub(crate) async fn edit(
                 "Column '{column}' does not exist in table '{table}'"
             )))?;
             param_idx += 1;
-            match pool.kind() {
-                DbKind::SQLite => cells.push(format!("{param_prefix}{param_idx}")),
-                DbKind::PostgreSQL => cells.push(format!(
+            // In the CTE we generate for UPDATE statements
+            // tokio-postgres can't infer the types of the VALUES,
+            // so we explicitly cast the first row of VALUES.
+            if *edit_type == EditType::Update
+                && pool.kind() == DbKind::PostgreSQL
+                && lines_to_bind.len() == 0
+            {
+                cells.push(format!(
                     "{param_prefix}{param_idx}::{}",
                     sql_type.to_uppercase()
-                )),
-            };
+                ));
+            } else {
+                cells.push(format!("{param_prefix}{param_idx}"));
+            }
             let param = match row.get(*column) {
                 Some(value) => pool.convert_json(sql_type, value)?,
                 None => ParamValue::Null,
