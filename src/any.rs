@@ -122,6 +122,15 @@ impl DbQuery for AnyPool {
         }
     }
 
+    async fn primary_keys(&self, table: &str) -> Result<Vec<String>, DbError> {
+        match self {
+            #[cfg(feature = "rusqlite")]
+            AnyPool::Rusqlite(pool) => pool.primary_keys(table).await,
+            #[cfg(feature = "tokio-postgres")]
+            AnyPool::TokioPostgres(pool) => pool.primary_keys(table).await,
+        }
+    }
+
     async fn execute(&self, sql: &str, params: impl IntoParams + Send) -> Result<(), DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
@@ -285,6 +294,37 @@ impl DbQuery for AnyPool {
             #[cfg(feature = "tokio-postgres")]
             AnyPool::TokioPostgres(pool) => {
                 pool.insert_returning(table, columns, rows, returning).await
+            }
+        }
+    }
+
+    async fn update(
+        &self,
+        table: &str,
+        columns: &[&str],
+        rows: &[&JsonRow],
+    ) -> Result<(), DbError> {
+        match self {
+            #[cfg(feature = "rusqlite")]
+            AnyPool::Rusqlite(pool) => pool.update(table, columns, rows).await,
+            #[cfg(feature = "tokio-postgres")]
+            AnyPool::TokioPostgres(pool) => pool.update(table, columns, rows).await,
+        }
+    }
+
+    async fn update_returning(
+        &self,
+        table: &str,
+        columns: &[&str],
+        rows: &[&JsonRow],
+        returning: &[&str],
+    ) -> Result<Vec<JsonRow>, DbError> {
+        match self {
+            #[cfg(feature = "rusqlite")]
+            AnyPool::Rusqlite(pool) => pool.update_returning(table, columns, rows, returning).await,
+            #[cfg(feature = "tokio-postgres")]
+            AnyPool::TokioPostgres(pool) => {
+                pool.update_returning(table, columns, rows, returning).await
             }
         }
     }

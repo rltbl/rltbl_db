@@ -408,6 +408,13 @@ pub trait DbQuery {
     /// Given a table, return a map from column names to column SQL types.
     fn columns(&self, table: &str) -> impl Future<Output = Result<ColumnMap, DbError>> + Send;
 
+    // TODO: Consider combining this function with columns().
+    /// Retrieve the primary key columns for a given table.
+    fn primary_keys(
+        &self,
+        table: &str,
+    ) -> impl Future<Output = Result<Vec<String>, DbError>> + Send;
+
     /// Execute a SQL command, without a return value.
     fn execute(
         &self,
@@ -502,6 +509,28 @@ pub trait DbQuery {
     /// is an empty list. If an input row does not have a key for a column, use NULL as the value
     /// of that column when inserting the row to the table.
     fn insert_returning(
+        &self,
+        table: &str,
+        columns: &[&str],
+        rows: &[&JsonRow],
+        returning: &[&str],
+    ) -> impl Future<Output = Result<Vec<JsonRow>, DbError>>;
+
+    /// Update the given table using the given JSON rows. The table should have a primary key
+    /// and any columns included in the primary key should be present within each input row.
+    /// The primary key column values will be used as a way of identifying the rows to update,
+    /// while the other columns in the row will be updated to the given new values.
+    fn update(
+        &self,
+        table: &str,
+        columns: &[&str],
+        rows: &[&JsonRow],
+    ) -> impl Future<Output = Result<(), DbError>>;
+
+    /// Like [DbQuery::update()], but in addition this function also returns the columns from the
+    /// updated data that are included in `returning`, or all of the updated data if `returning`
+    /// is an empty list.
+    fn update_returning(
         &self,
         table: &str,
         columns: &[&str],
