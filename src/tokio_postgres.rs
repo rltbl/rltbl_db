@@ -172,8 +172,11 @@ impl DbQuery for TokioPostgresPool {
                 Ok(float) => Ok(ParamValue::BigReal(float)),
                 Err(_) => err(),
             },
-            "numeric" => match Decimal::try_from(value) {
-                Ok(dec) => Ok(ParamValue::Numeric(dec)),
+            // WARN: Treat NUMERIC as an f64.
+            "numeric" => match value.parse::<f64>() {
+                Ok(float) => Ok(ParamValue::Numeric(
+                    Decimal::from_f64_retain(float).unwrap_or_default(),
+                )),
                 Err(_) => err(),
             },
             _ => Err(DbError::DatatypeError(format!(
