@@ -122,7 +122,9 @@ impl TokioPostgresPool {
                 cfg.dbname = Some(db_name.to_string());
                 let pool = cfg
                     .create_pool(Some(Runtime::Tokio1), NoTls)
-                    .map_err(|err| DbError::ConnectError(format!("Error creating pool: {err}")))?;
+                    .map_err(|err| {
+                        DbError::ConnectError(format!("Error creating pool: {err:?}"))
+                    })?;
                 Ok(Self { pool })
             }
             false => Err(DbError::ConnectError(format!(
@@ -252,11 +254,11 @@ impl DbQuery for TokioPostgresPool {
             .pool
             .get()
             .await
-            .map_err(|err| DbError::ConnectError(format!("Unable to get pool: {err}")))?;
+            .map_err(|err| DbError::ConnectError(format!("Unable to get pool: {err:?}")))?;
         client
             .batch_execute(sql)
             .await
-            .map_err(|err| DbError::DatabaseError(format!("Error in query(): {err}")))?;
+            .map_err(|err| DbError::DatabaseError(format!("Error in query(): {err:?}")))?;
         Ok(())
     }
 
@@ -271,19 +273,19 @@ impl DbQuery for TokioPostgresPool {
             .pool
             .get()
             .await
-            .map_err(|err| DbError::ConnectError(format!("Unable to get pool: {err}")))?;
+            .map_err(|err| DbError::ConnectError(format!("Unable to get pool: {err:?}")))?;
 
         // The expected types of all of the parameters as reported by the database via prepare():
         let param_pg_types = client
             .prepare(sql)
             .await
-            .map_err(|err| DbError::DatabaseError(format!("Error preparing statement: {err}")))?
+            .map_err(|err| DbError::DatabaseError(format!("Error preparing statement: {err:?}")))?
             .params()
             .to_vec();
 
         let mut params: Vec<Box<dyn ToSql + Sync + Send>> = Vec::new();
         let gen_err = |param: &ParamValue, sql_type: &str| -> String {
-            format!("Param {param:?} is wrong type for {sql_type}")
+            format!("Param {param:?} is wrong type for {sql_type} in query: {sql}")
         };
         match into_params {
             Params::None => (),
@@ -361,7 +363,7 @@ impl DbQuery for TokioPostgresPool {
         let rows = client
             .query(sql, &query_params)
             .await
-            .map_err(|err| DbError::DatabaseError(format!("Error in query(): {err}")))?;
+            .map_err(|err| DbError::DatabaseError(format!("Error in query(): {err:?}")))?;
         let mut json_rows = vec![];
         for row in &rows {
             let mut json_row = JsonRow::new();
