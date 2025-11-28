@@ -23,8 +23,7 @@ impl Display for EditType {
 fn generate_update_statement(
     table: &str,
     columns: &[&str],
-    set_clause: &str,
-    where_clause: &str,
+    primary_keys: &Vec<String>,
     returning_clause: &str,
     value_lines: &Vec<String>,
 ) -> String {
@@ -34,6 +33,19 @@ fn generate_update_statement(
         .map(|c| format!(r#""{c}""#))
         .collect::<Vec<_>>()
         .join(", ");
+
+    let set_clause = columns
+        .iter()
+        .filter(|column| !primary_keys.contains(&column.to_string()))
+        .map(|column| format!(r#""{column}" = "source"."{column}""#))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let where_clause = primary_keys
+        .iter()
+        .map(|pk| format!(r#""{table}"."{pk}" = "source"."{pk}""#,))
+        .collect::<Vec<_>>()
+        .join(" AND ");
 
     format!(
         r#"WITH "source" ({quoted_columns}) AS (
@@ -75,8 +87,7 @@ VALUES
 fn generate_upsert_statement(
     table: &str,
     columns: &[&str],
-    constraint_clause: &str,
-    set_clause: &str,
+    primary_keys: &Vec<String>,
     returning_clause: &str,
     value_lines: &Vec<String>,
 ) -> String {
@@ -86,15 +97,26 @@ fn generate_upsert_statement(
         .collect::<Vec<_>>()
         .join(", ");
 
-    let sql = format!(
+    let constraint_clause = primary_keys
+        .iter()
+        .map(|pk| format!(r#""{pk}""#))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let set_clause = columns
+        .iter()
+        .filter(|column| !primary_keys.contains(&column.to_string()))
+        .map(|column| format!(r#""{column}" = "excluded"."{column}""#))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    format!(
         r#"INSERT INTO "{table}" ({quoted_columns})
 VALUES
 {}
 ON CONFLICT ({constraint_clause}) DO UPDATE SET {set_clause}{returning_clause}"#,
         value_lines.join(",\n"),
-    );
-    println!("SQL: {sql}");
-    sql
+    )
 }
 
 /// Edit the given rows in the given table using the given queryable pool and optional returning
@@ -145,51 +167,29 @@ pub(crate) async fn edit(
         false => String::new(),
     };
 
-    let (constraint_clause, set_clause, where_clause) = match edit_type {
-        EditType::Update | EditType::Upsert => {
-            let primary_keys = match pool.primary_keys(&table).await? {
-                primary_keys if primary_keys.is_empty() => {
-                    return Err(DbError::InputError(
-                        "Primary keys must not be empty.".to_string(),
-                    ));
-                }
-                primary_keys
-                    if !primary_keys
-                        .iter()
-                        .all(|pkey| columns.contains(&pkey.as_str())) =>
-                {
-                    return Err(DbError::InputError(format!(
-                        "Not all of the table's primary keys: {primary_keys:?} are in {columns:?}"
-                    )));
-                }
-                primary_keys => primary_keys,
-            };
-            let constraint_clause = primary_keys
-                .iter()
-                .map(|pk| format!(r#""{pk}""#))
-                .collect::<Vec<_>>()
-                .join(", ");
-            let set_clause = columns
-                .iter()
-                .filter(|column| !primary_keys.contains(&column.to_string()))
-                .map(|column| match edit_type {
-                    EditType::Update => format!(r#""{column}" = "source"."{column}""#),
-                    EditType::Upsert => format!(r#""{column}" = "excluded"."{column}""#),
-                    EditType::Insert => unreachable!(),
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
-            let where_clause = primary_keys
-                .iter()
-                .map(|pk| format!(r#""{table}"."{pk}" = "source"."{pk}""#,))
-                .collect::<Vec<_>>()
-                .join(" AND ");
-            (constraint_clause, set_clause, where_clause)
-        }
-        // The clauses are only applicable to updates and upserts. We just return empty strings
-        // otherwise:
-        EditType::Insert => (String::new(), String::new(), String::new()),
+    let primary_keys = match edit_type {
+        EditType::Update | EditType::Upsert => match pool.primary_keys(&table).await? {
+            primary_keys if primary_keys.is_empty() => {
+                return Err(DbError::InputError(
+                    "Primary keys must not be empty.".to_string(),
+                ));
+            }
+            primary_keys
+                if !primary_keys
+                    .iter()
+                    .all(|pkey| columns.contains(&pkey.as_str())) =>
+            {
+                return Err(DbError::InputError(format!(
+                    "Not all of the table's primary keys: {primary_keys:?} are in {columns:?}"
+                )));
+            }
+            primary_keys => primary_keys,
+        },
+        // Since we don't need a list of the table's primary keys to do an insert, we save
+        // the database access and just return an empty list here:
+        EditType::Insert => vec![],
     };
+
     // We use the column_map to determine the SQL type of each parameter.
     let column_map = pool.columns(&table).await?;
     // Although SQLite allows '$' as a prefix, it is required to use '?' to represent integer
@@ -214,8 +214,7 @@ pub(crate) async fn edit(
             EditType::Update => generate_update_statement(
                 &table,
                 columns,
-                &set_clause,
-                &where_clause,
+                &primary_keys,
                 &returning_clause,
                 &lines_to_bind,
             ),
@@ -225,8 +224,7 @@ pub(crate) async fn edit(
             EditType::Upsert => generate_upsert_statement(
                 &table,
                 columns,
-                &constraint_clause,
-                &set_clause,
+                &primary_keys,
                 &returning_clause,
                 &lines_to_bind,
             ),
