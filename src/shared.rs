@@ -71,6 +71,24 @@ fn generate_insert_statement(
     )
 }
 
+// TODO: Add comment.
+fn generate_upsert_statement(
+    table: &str,
+    columns: &[&str],
+    primary_keys: &Vec<String>,
+    returning_clause: &str,
+    value_lines: &Vec<String>,
+) -> String {
+    // Quote the column names to avoid potential clashes with database keywords:
+    let quoted_columns = columns
+        .iter()
+        .map(|c| format!(r#""{c}""#))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    todo!()
+}
+
 /// Edit the given rows in the given table using the given queryable pool and optional returning
 /// clause (set with_returning = false to turn this off). When generating the SQL statements
 /// used to edit the table, do not use more than max_params bound parameters at a time. If more
@@ -119,25 +137,30 @@ pub(crate) async fn edit(
         false => String::new(),
     };
 
+    let primary_keys = match edit_type {
+        EditType::Update | EditType::Upsert => match pool.primary_keys(&table).await? {
+            primary_keys if primary_keys.is_empty() => {
+                return Err(DbError::InputError(
+                    "Primary keys must not be empty.".to_string(),
+                ));
+            }
+            primary_keys
+                if !primary_keys
+                    .iter()
+                    .all(|pkey| columns.contains(&pkey.as_str())) =>
+            {
+                return Err(DbError::InputError(format!(
+                    "Not all of the table's primary keys: {primary_keys:?} are in {columns:?}"
+                )));
+            }
+            primary_keys => primary_keys,
+        },
+        // Primary key information isn't needed for an INSERT.
+        EditType::Insert => vec![],
+    };
+
     let (set_clause, where_clause) = match edit_type {
         EditType::Update => {
-            let primary_keys = match pool.primary_keys(&table).await? {
-                primary_keys if primary_keys.is_empty() => {
-                    return Err(DbError::InputError(
-                        "Primary keys must not be empty.".to_string(),
-                    ));
-                }
-                primary_keys
-                    if !primary_keys
-                        .iter()
-                        .all(|pkey| columns.contains(&pkey.as_str())) =>
-                {
-                    return Err(DbError::InputError(format!(
-                        "Not all of the table's primary keys: {primary_keys:?} are in {columns:?}"
-                    )));
-                }
-                primary_keys => primary_keys,
-            };
             let set_clause = columns
                 .iter()
                 .filter(|column| !primary_keys.contains(&column.to_string()))
@@ -152,11 +175,9 @@ pub(crate) async fn edit(
             (set_clause, where_clause)
         }
         // The SET and WHERE clauses are only applicable to updates so we just return
-        // empty strings in the case of an insert:
-        EditType::Insert => (String::new(), String::new()),
-        EditType::Upsert => todo!(),
+        // empty strings otherwise:
+        EditType::Insert | EditType::Upsert => (String::new(), String::new()),
     };
-
     // We use the column_map to determine the SQL type of each parameter.
     let column_map = pool.columns(&table).await?;
     // Although SQLite allows '$' as a prefix, it is required to use '?' to represent integer
@@ -169,28 +190,53 @@ pub(crate) async fn edit(
     let mut lines_to_bind = Vec::new();
     let mut params_to_be_bound = Vec::new();
     let mut param_idx = 0;
+
+    // Closure used to edit the table by executing a SQL statement using the given data and SQL
+    // clauses. After executing the statement, the lines and parameters to bind / be bound
+    // are cleared, and any rows returned by the query are returned to the caller.
+    let execute_batch_edit_and_reset = async |lines_to_bind: &mut Vec<String>,
+                                              param_idx: &mut usize,
+                                              params_to_be_bound: &mut Vec<ParamValue>|
+           -> Result<Vec<JsonRow>, DbError> {
+        let sql = match edit_type {
+            EditType::Update => generate_update_statement(
+                &table,
+                columns,
+                &set_clause,
+                &where_clause,
+                &returning_clause,
+                &lines_to_bind,
+            ),
+            EditType::Insert => {
+                generate_insert_statement(&table, columns, &returning_clause, &lines_to_bind)
+            }
+            EditType::Upsert => generate_upsert_statement(
+                &table,
+                columns,
+                &primary_keys,
+                &returning_clause,
+                &lines_to_bind,
+            ),
+        };
+        let rows = pool.query(&sql, params_to_be_bound.clone()).await?;
+        lines_to_bind.clear();
+        params_to_be_bound.clear();
+        *param_idx = 0;
+        Ok(rows)
+    };
+
     for row in rows {
         // If we have reached the limit on the number of bound parameters, edit the rows that
         // we have processed so far and then reset all of the counters and collections:
         if param_idx + columns.len() > *max_params {
-            let sql = match edit_type {
-                EditType::Update => generate_update_statement(
-                    &table,
-                    columns,
-                    &set_clause,
-                    &where_clause,
-                    &returning_clause,
-                    &lines_to_bind,
-                ),
-                EditType::Insert => {
-                    generate_insert_statement(&table, columns, &returning_clause, &lines_to_bind)
-                }
-                EditType::Upsert => todo!(),
-            };
-            rows_to_return.append(&mut pool.query(&sql, params_to_be_bound.clone()).await?);
-            lines_to_bind.clear();
-            params_to_be_bound.clear();
-            param_idx = 0;
+            rows_to_return.append(
+                &mut execute_batch_edit_and_reset(
+                    &mut lines_to_bind,
+                    &mut param_idx,
+                    &mut params_to_be_bound,
+                )
+                .await?,
+            );
         }
 
         // Optimization to avoid repeated heap allocations while processing a single given row:
@@ -225,24 +271,16 @@ pub(crate) async fn edit(
         lines_to_bind.push(line_to_bind);
     }
 
-    // If there is anything left to insert, insert it now:
+    // If there is anything left to edit, do it now:
     if lines_to_bind.len() > 0 {
-        let sql = match edit_type {
-            EditType::Update => generate_update_statement(
-                &table,
-                columns,
-                &set_clause,
-                &where_clause,
-                &returning_clause,
-                &lines_to_bind,
-            ),
-            EditType::Insert => {
-                generate_insert_statement(&table, columns, &returning_clause, &lines_to_bind)
-            }
-            EditType::Upsert => todo!(),
-        };
-
-        rows_to_return.append(&mut pool.query(&sql, params_to_be_bound).await?);
+        rows_to_return.append(
+            &mut execute_batch_edit_and_reset(
+                &mut lines_to_bind,
+                &mut param_idx,
+                &mut params_to_be_bound,
+            )
+            .await?,
+        );
     }
     Ok(rows_to_return)
 }
