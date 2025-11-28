@@ -329,6 +329,37 @@ impl DbQuery for AnyPool {
         }
     }
 
+    async fn upsert(
+        &self,
+        table: &str,
+        columns: &[&str],
+        rows: &[&JsonRow],
+    ) -> Result<(), DbError> {
+        match self {
+            #[cfg(feature = "rusqlite")]
+            AnyPool::Rusqlite(pool) => pool.upsert(table, columns, rows).await,
+            #[cfg(feature = "tokio-postgres")]
+            AnyPool::TokioPostgres(pool) => pool.upsert(table, columns, rows).await,
+        }
+    }
+
+    async fn upsert_returning(
+        &self,
+        table: &str,
+        columns: &[&str],
+        rows: &[&JsonRow],
+        returning: &[&str],
+    ) -> Result<Vec<JsonRow>, DbError> {
+        match self {
+            #[cfg(feature = "rusqlite")]
+            AnyPool::Rusqlite(pool) => pool.upsert_returning(table, columns, rows, returning).await,
+            #[cfg(feature = "tokio-postgres")]
+            AnyPool::TokioPostgres(pool) => {
+                pool.upsert_returning(table, columns, rows, returning).await
+            }
+        }
+    }
+
     async fn drop_table(&self, table: &str) -> Result<(), DbError> {
         match self {
             #[cfg(feature = "rusqlite")]

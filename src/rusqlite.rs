@@ -544,6 +544,48 @@ impl DbQuery for RusqlitePool {
         .await
     }
 
+    /// Implements [DbQuery::upsert()] for SQLite.
+    async fn upsert(
+        &self,
+        table: &str,
+        columns: &[&str],
+        rows: &[&JsonRow],
+    ) -> Result<(), DbError> {
+        edit(
+            self,
+            &EditType::Upsert,
+            &MAX_PARAMS_SQLITE,
+            table,
+            columns,
+            rows,
+            false,
+            &[],
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Implements [DbQuery::upsert_returning()] for SQLite.
+    async fn upsert_returning(
+        &self,
+        table: &str,
+        columns: &[&str],
+        rows: &[&JsonRow],
+        returning: &[&str],
+    ) -> Result<Vec<JsonRow>, DbError> {
+        edit(
+            self,
+            &EditType::Upsert,
+            &MAX_PARAMS_SQLITE,
+            table,
+            columns,
+            rows,
+            true,
+            returning,
+        )
+        .await
+    }
+
     /// Implements [DbQuery::drop_table()] for SQLite.
     async fn drop_table(&self, table: &str) -> Result<(), DbError> {
         let table = validate_table_name(table)?;

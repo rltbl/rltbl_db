@@ -538,6 +538,23 @@ pub trait DbQuery {
         returning: &[&str],
     ) -> impl Future<Output = Result<Vec<JsonRow>, DbError>>;
 
+    /// TODO: Add docstring here.
+    fn upsert(
+        &self,
+        table: &str,
+        columns: &[&str],
+        rows: &[&JsonRow],
+    ) -> impl Future<Output = Result<(), DbError>>;
+
+    /// TODO: Add docstring here.
+    fn upsert_returning(
+        &self,
+        table: &str,
+        columns: &[&str],
+        rows: &[&JsonRow],
+        returning: &[&str],
+    ) -> impl Future<Output = Result<Vec<JsonRow>, DbError>>;
+
     /// Drop the given table from the database.
     fn drop_table(&self, table: &str) -> impl Future<Output = Result<(), DbError>>;
 }

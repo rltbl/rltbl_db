@@ -5,6 +5,7 @@ use std::fmt::Display;
 pub(crate) enum EditType {
     Insert,
     Update,
+    Upsert,
 }
 
 impl Display for EditType {
@@ -12,6 +13,7 @@ impl Display for EditType {
         match self {
             EditType::Update => write!(f, "UPDATE"),
             EditType::Insert => write!(f, "INSERT"),
+            EditType::Upsert => write!(f, "UPSERT"),
         }
     }
 }
@@ -152,6 +154,7 @@ pub(crate) async fn edit(
         // The SET and WHERE clauses are only applicable to updates so we just return
         // empty strings in the case of an insert:
         EditType::Insert => (String::new(), String::new()),
+        EditType::Upsert => todo!(),
     };
 
     // We use the column_map to determine the SQL type of each parameter.
@@ -182,6 +185,7 @@ pub(crate) async fn edit(
                 EditType::Insert => {
                     generate_insert_statement(&table, columns, &returning_clause, &lines_to_bind)
                 }
+                EditType::Upsert => todo!(),
             };
             rows_to_return.append(&mut pool.query(&sql, params_to_be_bound.clone()).await?);
             lines_to_bind.clear();
@@ -197,11 +201,11 @@ pub(crate) async fn edit(
                 "Column '{column}' does not exist in table '{table}'"
             )))?;
             param_idx += 1;
-            // In the CTE we generate for UPDATE statements
-            // tokio-postgres can't infer the types of the VALUES,
-            // so we explicitly cast the first row of VALUES.
+            // In the CTE we generate for UPDATE statements, tokio-postgres can't infer the types
+            // of the VALUES, so we explicitly cast them.
             if *edit_type == EditType::Update
                 && pool.kind() == DbKind::PostgreSQL
+                // We only need to cast the first value row. The rest are inferred by Postgres:
                 && lines_to_bind.len() == 0
             {
                 cells.push(format!(
@@ -235,6 +239,7 @@ pub(crate) async fn edit(
             EditType::Insert => {
                 generate_insert_statement(&table, columns, &returning_clause, &lines_to_bind)
             }
+            EditType::Upsert => todo!(),
         };
 
         rows_to_return.append(&mut pool.query(&sql, params_to_be_bound).await?);

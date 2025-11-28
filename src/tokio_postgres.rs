@@ -600,6 +600,48 @@ impl DbQuery for TokioPostgresPool {
         .await
     }
 
+    /// Implements [DbQuery::upsert()] for PostgreSQL.
+    async fn upsert(
+        &self,
+        table: &str,
+        columns: &[&str],
+        rows: &[&JsonRow],
+    ) -> Result<(), DbError> {
+        edit(
+            self,
+            &EditType::Upsert,
+            &MAX_PARAMS_POSTGRES,
+            table,
+            columns,
+            rows,
+            false,
+            &[],
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Implements [DbQuery::upsert_returning()] for PostgreSQL.
+    async fn upsert_returning(
+        &self,
+        table: &str,
+        columns: &[&str],
+        rows: &[&JsonRow],
+        returning: &[&str],
+    ) -> Result<Vec<JsonRow>, DbError> {
+        edit(
+            self,
+            &EditType::Upsert,
+            &MAX_PARAMS_POSTGRES,
+            table,
+            columns,
+            rows,
+            true,
+            returning,
+        )
+        .await
+    }
+
     /// Implements [DbQuery::drop_table()] for PostgreSQL. Note (see
     /// <https://www.postgresql.org/docs/current/sql-droptable.html>), that in the case of a
     /// dependent foreign key constraint, only the constraint will be removed, not the dependent
