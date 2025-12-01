@@ -83,7 +83,8 @@ VALUES
     )
 }
 
-// TODO: Add comment.
+// Generate SQL statement of the form:
+// INSERT INTO <table> VALUES <tuples> ON CONFLICT (<primary key constraint>) DO UPDATE ...
 fn generate_upsert_statement(
     table: &str,
     columns: &[&str],

@@ -504,10 +504,9 @@ pub trait DbQuery {
         rows: &[&JsonRow],
     ) -> impl Future<Output = Result<(), DbError>>;
 
-    /// Insert the given JSON rows into the given table, and then return the columns from the
+    /// Like [DbQuery::insert()], but in addition this function also returns the columns from the
     /// inserted data that are included in `returning`, or all of the inserted data if `returning`
-    /// is an empty list. If an input row does not have a key for a column, use NULL as the value
-    /// of that column when inserting the row to the table.
+    /// is an empty list.
     fn insert_returning(
         &self,
         table: &str,
@@ -538,7 +537,8 @@ pub trait DbQuery {
         returning: &[&str],
     ) -> impl Future<Output = Result<Vec<JsonRow>, DbError>>;
 
-    /// TODO: Add docstring here.
+    /// Attempt to insert the given rows to the given table, similarly to [DbQuery::insert()].
+    /// In case there is a conflict, update the table instead, similarly to [DbQuery::update()].
     fn upsert(
         &self,
         table: &str,
@@ -546,7 +546,9 @@ pub trait DbQuery {
         rows: &[&JsonRow],
     ) -> impl Future<Output = Result<(), DbError>>;
 
-    /// TODO: Add docstring here.
+    /// Like [DbQuery::upsert()], but in addition this function also returns the columns from the
+    /// upserted data that are included in `returning`, or all of the upserted data if `returning`
+    /// is an empty list.
     fn upsert_returning(
         &self,
         table: &str,
