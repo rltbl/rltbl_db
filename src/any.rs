@@ -14,9 +14,7 @@
 ///     Ok(value)
 /// }
 /// ```
-use crate::core::{
-    ColumnMap, DbError, DbKind, DbQuery, IntoParams, JsonRow, JsonValue, ParamValue, StringRow,
-};
+use crate::core::{ColumnMap, DbError, DbKind, DbQuery, IntoParams, JsonRow, ParamValue};
 
 #[cfg(feature = "rusqlite")]
 use crate::rusqlite::RusqlitePool;
@@ -104,15 +102,6 @@ impl DbQuery for AnyPool {
         }
     }
 
-    fn convert_json(&self, sql_type: &str, value: &JsonValue) -> Result<ParamValue, DbError> {
-        match self {
-            #[cfg(feature = "rusqlite")]
-            AnyPool::Rusqlite(pool) => pool.convert_json(sql_type, value),
-            #[cfg(feature = "tokio-postgres")]
-            AnyPool::TokioPostgres(pool) => pool.convert_json(sql_type, value),
-        }
-    }
-
     async fn columns(&self, table: &str) -> Result<ColumnMap, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
@@ -128,15 +117,6 @@ impl DbQuery for AnyPool {
             AnyPool::Rusqlite(pool) => pool.primary_keys(table).await,
             #[cfg(feature = "tokio-postgres")]
             AnyPool::TokioPostgres(pool) => pool.primary_keys(table).await,
-        }
-    }
-
-    async fn execute(&self, sql: &str, params: impl IntoParams + Send) -> Result<(), DbError> {
-        match self {
-            #[cfg(feature = "rusqlite")]
-            AnyPool::Rusqlite(pool) => pool.execute(sql, params).await,
-            #[cfg(feature = "tokio-postgres")]
-            AnyPool::TokioPostgres(pool) => pool.execute(sql, params).await,
         }
     }
 
@@ -159,111 +139,6 @@ impl DbQuery for AnyPool {
             AnyPool::Rusqlite(pool) => pool.query(sql, params).await,
             #[cfg(feature = "tokio-postgres")]
             AnyPool::TokioPostgres(pool) => pool.query(sql, params).await,
-        }
-    }
-
-    async fn query_row(
-        &self,
-        sql: &str,
-        params: impl IntoParams + Send,
-    ) -> Result<JsonRow, DbError> {
-        match self {
-            #[cfg(feature = "rusqlite")]
-            AnyPool::Rusqlite(pool) => pool.query_row(sql, params).await,
-            #[cfg(feature = "tokio-postgres")]
-            AnyPool::TokioPostgres(pool) => pool.query_row(sql, params).await,
-        }
-    }
-
-    async fn query_value(
-        &self,
-        sql: &str,
-        params: impl IntoParams + Send,
-    ) -> Result<JsonValue, DbError> {
-        match self {
-            #[cfg(feature = "rusqlite")]
-            AnyPool::Rusqlite(pool) => pool.query_value(sql, params).await,
-            #[cfg(feature = "tokio-postgres")]
-            AnyPool::TokioPostgres(pool) => pool.query_value(sql, params).await,
-        }
-    }
-
-    async fn query_string(
-        &self,
-        sql: &str,
-        params: impl IntoParams + Send,
-    ) -> Result<String, DbError> {
-        match self {
-            #[cfg(feature = "rusqlite")]
-            AnyPool::Rusqlite(pool) => pool.query_string(sql, params).await,
-            #[cfg(feature = "tokio-postgres")]
-            AnyPool::TokioPostgres(pool) => pool.query_string(sql, params).await,
-        }
-    }
-
-    async fn query_strings(
-        &self,
-        sql: &str,
-        params: impl IntoParams + Send,
-    ) -> Result<Vec<String>, DbError> {
-        match self {
-            #[cfg(feature = "rusqlite")]
-            AnyPool::Rusqlite(pool) => pool.query_strings(sql, params).await,
-            #[cfg(feature = "tokio-postgres")]
-            AnyPool::TokioPostgres(pool) => pool.query_strings(sql, params).await,
-        }
-    }
-
-    async fn query_string_row(
-        &self,
-        sql: &str,
-        params: impl IntoParams + Send,
-    ) -> Result<StringRow, DbError> {
-        match self {
-            #[cfg(feature = "rusqlite")]
-            AnyPool::Rusqlite(pool) => pool.query_string_row(sql, params).await,
-            #[cfg(feature = "tokio-postgres")]
-            AnyPool::TokioPostgres(pool) => pool.query_string_row(sql, params).await,
-        }
-    }
-
-    async fn query_string_rows(
-        &self,
-        sql: &str,
-        params: impl IntoParams + Send,
-    ) -> Result<Vec<StringRow>, DbError> {
-        match self {
-            #[cfg(feature = "rusqlite")]
-            AnyPool::Rusqlite(pool) => pool.query_string_rows(sql, params).await,
-            #[cfg(feature = "tokio-postgres")]
-            AnyPool::TokioPostgres(pool) => pool.query_string_rows(sql, params).await,
-        }
-    }
-
-    async fn query_u64(&self, sql: &str, params: impl IntoParams + Send) -> Result<u64, DbError> {
-        match self {
-            #[cfg(feature = "rusqlite")]
-            AnyPool::Rusqlite(pool) => pool.query_u64(sql, params).await,
-            #[cfg(feature = "tokio-postgres")]
-            AnyPool::TokioPostgres(pool) => pool.query_u64(sql, params).await,
-        }
-    }
-
-    async fn query_i64(&self, sql: &str, params: impl IntoParams + Send) -> Result<i64, DbError> {
-        match self {
-            #[cfg(feature = "rusqlite")]
-            AnyPool::Rusqlite(pool) => pool.query_i64(sql, params).await,
-            #[cfg(feature = "tokio-postgres")]
-            AnyPool::TokioPostgres(pool) => pool.query_i64(sql, params).await,
-        }
-    }
-
-    async fn query_f64(&self, sql: &str, params: impl IntoParams + Send) -> Result<f64, DbError> {
-        match self {
-            #[cfg(feature = "rusqlite")]
-            AnyPool::Rusqlite(pool) => pool.query_f64(sql, params).await,
-            #[cfg(feature = "tokio-postgres")]
-            AnyPool::TokioPostgres(pool) => pool.query_f64(sql, params).await,
         }
     }
 
@@ -373,6 +248,7 @@ impl DbQuery for AnyPool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::JsonValue;
     use crate::params;
     use rust_decimal::dec;
     use serde_json::json;

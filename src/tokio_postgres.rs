@@ -3,7 +3,6 @@
 use crate::{
     core::{
         ColumnMap, DbError, DbKind, DbQuery, IntoParams, JsonRow, JsonValue, ParamValue, Params,
-        StringRow, json_row_to_string_row, json_rows_to_string_rows, json_value_to_string,
         validate_table_name,
     },
     params,
@@ -187,17 +186,6 @@ impl DbQuery for TokioPostgresPool {
         }
     }
 
-    /// Implements [DbQuery::convert_json()] for PostgreSQL.
-    fn convert_json(&self, sql_type: &str, value: &JsonValue) -> Result<ParamValue, DbError> {
-        match value {
-            serde_json::Value::Null => Ok(ParamValue::Null),
-            _ => {
-                let string = json_value_to_string(value);
-                self.parse(sql_type, &string)
-            }
-        }
-    }
-
     /// Implements [DbQuery::columns()] for PostgreSQL.
     async fn columns(&self, table: &str) -> Result<ColumnMap, DbError> {
         let mut columns = ColumnMap::new();
@@ -268,16 +256,6 @@ impl DbQuery for TokioPostgresPool {
             }
         })
         .collect()
-    }
-
-    /// Implements [DbQuery::execute()] for PostgreSQL.
-    async fn execute(&self, sql: &str, params: impl IntoParams + Send) -> Result<(), DbError> {
-        let params = params.into_params();
-        match params {
-            Params::None => self.query(sql, ()).await?,
-            _ => self.query(sql, params).await?,
-        };
-        Ok(())
     }
 
     /// Implements [DbQuery::execute_batch()] for PostgreSQL
@@ -406,114 +384,6 @@ impl DbQuery for TokioPostgresPool {
             json_rows.push(json_row);
         }
         Ok(json_rows)
-    }
-
-    /// Implements [DbQuery::query_row()] for PostgreSQL.
-    async fn query_row(
-        &self,
-        sql: &str,
-        params: impl IntoParams + Send,
-    ) -> Result<JsonRow, DbError> {
-        let rows = self.query(sql, params).await?;
-        if rows.len() > 1 {
-            return Err(DbError::DataError(
-                "More than one row returned for query_row()".to_string(),
-            ));
-        }
-        match rows.into_iter().nth(0) {
-            Some(row) => Ok(row),
-            None => Err(DbError::DataError("No rows found".to_string())),
-        }
-    }
-
-    /// Implements [DbQuery::query_value()] for PostgreSQL.
-    async fn query_value(
-        &self,
-        sql: &str,
-        params: impl IntoParams + Send,
-    ) -> Result<JsonValue, DbError> {
-        let row = self.query_row(sql, params).await?;
-        if row.values().len() > 1 {
-            return Err(DbError::DataError(
-                "More than one value returned for query_value()".to_string(),
-            ));
-        }
-        match row.into_iter().map(|(_, v)| v).next() {
-            Some(value) => Ok(value),
-            None => Err(DbError::DataError("No values found".into())),
-        }
-    }
-
-    /// Implements [DbQuery::query_string()] for PostgreSQL.
-    async fn query_string(
-        &self,
-        sql: &str,
-        params: impl IntoParams + Send,
-    ) -> Result<String, DbError> {
-        let value = self.query_value(sql, params).await?;
-        Ok(json_value_to_string(&value))
-    }
-
-    /// Implements [DbQuery::query_strings()] for PostgreSQL.
-    async fn query_strings(
-        &self,
-        sql: &str,
-        params: impl IntoParams + Send,
-    ) -> Result<Vec<String>, DbError> {
-        let rows = self.query(sql, params).await?;
-        rows.iter()
-            .map(|row| match row.values().nth(0) {
-                Some(value) => Ok(json_value_to_string(value)),
-                None => Err(DbError::DataError("Empty row".to_owned())),
-            })
-            .collect()
-    }
-
-    /// Implements [DbQuery::query_string_row()] for PostgreSQL.
-    async fn query_string_row(
-        &self,
-        sql: &str,
-        params: impl IntoParams + Send,
-    ) -> Result<StringRow, DbError> {
-        let row = self.query_row(sql, params).await?;
-        Ok(json_row_to_string_row(&row))
-    }
-
-    /// Implements [DbQuery::query_string_rows()] for PostgreSQL.
-    async fn query_string_rows(
-        &self,
-        sql: &str,
-        params: impl IntoParams + Send,
-    ) -> Result<Vec<StringRow>, DbError> {
-        let rows = self.query(sql, params).await?;
-        Ok(json_rows_to_string_rows(&rows))
-    }
-
-    /// Implements [DbQuery::query_u64()] for PostgreSQL.
-    async fn query_u64(&self, sql: &str, params: impl IntoParams + Send) -> Result<u64, DbError> {
-        let value = self.query_value(sql, params).await?;
-        match value.as_u64() {
-            Some(val) => Ok(val),
-            None => Err(DbError::DataError(format!("Not a u64: {value}"))),
-        }
-    }
-
-    /// Implements [DbQuery::query_i64()] for PostgreSQL.
-    async fn query_i64(&self, sql: &str, params: impl IntoParams + Send) -> Result<i64, DbError> {
-        let value = self.query_value(sql, params).await?;
-        match value.as_i64() {
-            Some(val) => Ok(val),
-            None => Err(DbError::DataError(format!("Not a i64: {value}"))),
-        }
-    }
-
-    /// Implements [DbQuery::query_f64()] for PostgreSQL.
-    async fn query_f64(&self, sql: &str, params: impl IntoParams + Send) -> Result<f64, DbError> {
-        let value = self.query_value(sql, params).await?;
-        match value.as_f64() {
-            Some(val) => Ok(val),
-            None => Err(DbError::DataError(format!("Not a f64: {value}"))),
-        }
     }
 
     /// Implements [DbQuery::insert()] for PostgreSQL
@@ -659,6 +529,7 @@ impl DbQuery for TokioPostgresPool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::{JsonValue, StringRow};
     use crate::params;
     use pretty_assertions::assert_eq;
     use rust_decimal::dec;

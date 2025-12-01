@@ -1,5 +1,6 @@
 //! # rltbl/rltbl_db
 
+use async_trait::async_trait;
 use indexmap::IndexMap;
 use lazy_static::lazy_static;
 use regex::Regex;
@@ -393,6 +394,7 @@ macro_rules! params {
     }};
 }
 
+#[async_trait]
 pub trait DbQuery {
     /// Get the kind of SQL database: SQLite or PostgreSQL.
     fn kind(&self) -> DbKind;
@@ -403,7 +405,15 @@ pub trait DbQuery {
 
     /// Given a SQL type for this database and a JSON Value,
     /// convert the Value into the right ParamValue.
-    fn convert_json(&self, sql_type: &str, value: &JsonValue) -> Result<ParamValue, DbError>;
+    fn convert_json(&self, sql_type: &str, value: &JsonValue) -> Result<ParamValue, DbError> {
+        match value {
+            serde_json::Value::Null => Ok(ParamValue::Null),
+            _ => {
+                let string = json_value_to_string(value);
+                self.parse(sql_type, &string)
+            }
+        }
+    }
 
     /// Given a table, return a map from column names to column SQL types.
     fn columns(&self, table: &str) -> impl Future<Output = Result<ColumnMap, DbError>> + Send;
@@ -416,11 +426,14 @@ pub trait DbQuery {
     ) -> impl Future<Output = Result<Vec<String>, DbError>> + Send;
 
     /// Execute a SQL command, without a return value.
-    fn execute(
-        &self,
-        sql: &str,
-        params: impl IntoParams + Send,
-    ) -> impl Future<Output = Result<(), DbError>> + Send;
+    async fn execute(&self, sql: &str, params: impl IntoParams + Send) -> Result<(), DbError> {
+        let params = params.into_params();
+        match params {
+            Params::None => self.query(sql, ()).await?,
+            _ => self.query(sql, params).await?,
+        };
+        Ok(())
+    }
 
     /// Sequentially execute a semicolon-delimited list of statements, without parameters.
     fn execute_batch(&self, sql: &str) -> impl Future<Output = Result<(), DbError>> + Send;
@@ -433,67 +446,114 @@ pub trait DbQuery {
     ) -> impl Future<Output = Result<Vec<JsonRow>, DbError>> + Send;
 
     /// Execute a SQL command, returning a single JSON row.
-    fn query_row(
+    async fn query_row(
         &self,
         sql: &str,
         params: impl IntoParams + Send,
-    ) -> impl Future<Output = Result<JsonRow, DbError>> + Send;
+    ) -> Result<JsonRow, DbError> {
+        let rows = self.query(&sql, params).await?;
+        if rows.len() > 1 {
+            return Err(DbError::DataError(
+                "More than one row returned for query_row()".to_string(),
+            ));
+        }
+        match rows.into_iter().next() {
+            Some(row) => Ok(row),
+            None => Err(DbError::DataError("No row found".to_string())),
+        }
+    }
 
     /// Execute a SQL command, returning a single JSON value.
-    fn query_value(
+    async fn query_value(
         &self,
         sql: &str,
         params: impl IntoParams + Send,
-    ) -> impl Future<Output = Result<JsonValue, DbError>> + Send;
+    ) -> Result<JsonValue, DbError> {
+        let row = self.query_row(sql, params).await?;
+        if row.len() > 1 {
+            return Err(DbError::DataError(
+                "More than one value returned for query_value()".to_string(),
+            ));
+        }
+        match row.values().next() {
+            Some(value) => Ok(value.clone()),
+            None => Err(DbError::DataError("No values found".to_string())),
+        }
+    }
 
     /// Execute a SQL command, returning a single string.
-    fn query_string(
+    async fn query_string(
         &self,
         sql: &str,
         params: impl IntoParams + Send,
-    ) -> impl Future<Output = Result<String, DbError>> + Send;
+    ) -> Result<String, DbError> {
+        let value = self.query_value(sql, params).await?;
+        Ok(json_value_to_string(&value))
+    }
 
     /// Execute a SQL command, returning a vector of strings: the first value for each row.
-    fn query_strings(
+    async fn query_strings(
         &self,
         sql: &str,
         params: impl IntoParams + Send,
-    ) -> impl Future<Output = Result<Vec<String>, DbError>> + Send;
+    ) -> Result<Vec<String>, DbError> {
+        let rows = self.query(sql, params).await?;
+        rows.iter()
+            .map(|row| match row.values().nth(0) {
+                Some(value) => Ok(json_value_to_string(value)),
+                None => Err(DbError::DataError("Empty row".to_owned())),
+            })
+            .collect()
+    }
 
     /// Execute a SQL command, returning a row of strings.
-    fn query_string_row(
+    async fn query_string_row(
         &self,
         sql: &str,
         params: impl IntoParams + Send,
-    ) -> impl Future<Output = Result<StringRow, DbError>> + Send;
+    ) -> Result<StringRow, DbError> {
+        let row = self.query_row(sql, params).await?;
+        Ok(json_row_to_string_row(&row))
+    }
 
     /// Execute a SQL command, returning a vector of rows of strings.
-    fn query_string_rows(
+    async fn query_string_rows(
         &self,
         sql: &str,
         params: impl IntoParams + Send,
-    ) -> impl Future<Output = Result<Vec<StringRow>, DbError>> + Send;
+    ) -> Result<Vec<StringRow>, DbError> {
+        let rows = self.query(sql, params).await?;
+        Ok(json_rows_to_string_rows(&rows))
+    }
 
     /// Execute a SQL command, returning a single unsigned integer.
-    fn query_u64(
-        &self,
-        sql: &str,
-        params: impl IntoParams + Send,
-    ) -> impl Future<Output = Result<u64, DbError>> + Send;
+    async fn query_u64(&self, sql: &str, params: impl IntoParams + Send) -> Result<u64, DbError> {
+        let value = self.query_value(sql, params).await?;
+        match value.as_u64() {
+            Some(val) => Ok(val),
+            None => Err(DbError::DataError(format!(
+                "Not an unsigned integer: {value}"
+            ))),
+        }
+    }
 
     /// Execute a SQL command, returning a single signed integer.
-    fn query_i64(
-        &self,
-        sql: &str,
-        params: impl IntoParams + Send,
-    ) -> impl Future<Output = Result<i64, DbError>> + Send;
+    async fn query_i64(&self, sql: &str, params: impl IntoParams + Send) -> Result<i64, DbError> {
+        let value = self.query_value(sql, params).await?;
+        match value.as_i64() {
+            Some(val) => Ok(val),
+            None => Err(DbError::DataError(format!("Not an integer: {value}"))),
+        }
+    }
 
     /// Execute a SQL command, returning a single float.
-    fn query_f64(
-        &self,
-        sql: &str,
-        params: impl IntoParams + Send,
-    ) -> impl Future<Output = Result<f64, DbError>> + Send;
+    async fn query_f64(&self, sql: &str, params: impl IntoParams + Send) -> Result<f64, DbError> {
+        let value = self.query_value(sql, params).await?;
+        match value.as_f64() {
+            Some(val) => Ok(val),
+            None => Err(DbError::DataError(format!("Not an float: {value}"))),
+        }
+    }
 
     /// Insert JSON rows into the given table. If an input row does not have a key for a column,
     /// use NULL as the value of that column when inserting the row to the table.

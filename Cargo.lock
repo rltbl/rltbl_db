@@ -1034,6 +1034,7 @@ name = "rltbl_db"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum",
  "deadpool-postgres",
  "deadpool-sqlite",

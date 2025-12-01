@@ -3,7 +3,6 @@
 use crate::{
     core::{
         ColumnMap, DbError, DbKind, DbQuery, IntoParams, JsonRow, JsonValue, ParamValue, Params,
-        StringRow, json_row_to_string_row, json_rows_to_string_rows, json_value_to_string,
         validate_table_name,
     },
     params,
@@ -226,17 +225,6 @@ impl DbQuery for RusqlitePool {
         }
     }
 
-    /// Implements [DbQuery::convert_json()] for SQLite.
-    fn convert_json(&self, sql_type: &str, value: &JsonValue) -> Result<ParamValue, DbError> {
-        match value {
-            serde_json::Value::Null => Ok(ParamValue::Null),
-            _ => {
-                let string = json_value_to_string(value);
-                self.parse(sql_type, &string)
-            }
-        }
-    }
-
     /// Implements [DbQuery::columns()] for SQLite.
     async fn columns(&self, table: &str) -> Result<ColumnMap, DbError> {
         let mut columns = ColumnMap::new();
@@ -289,16 +277,6 @@ impl DbQuery for RusqlitePool {
         .collect()
     }
 
-    /// Implements [DbQuery::execute()] for SQLite.
-    async fn execute(&self, sql: &str, params: impl IntoParams + Send) -> Result<(), DbError> {
-        let params = params.into_params();
-        match params {
-            Params::None => self.query(sql, ()).await?,
-            _ => self.query(sql, params).await?,
-        };
-        Ok(())
-    }
-
     /// Implements [DbQuery::execute_batch()] for PostgreSQL
     async fn execute_batch(&self, sql: &str) -> Result<(), DbError> {
         let conn = self
@@ -348,116 +326,6 @@ impl DbQuery for RusqlitePool {
             .map_err(|err| DbError::DatabaseError(err.to_string()))?
             .map_err(|err| DbError::DatabaseError(err.to_string()))?;
         Ok(rows)
-    }
-
-    /// Implements [DbQuery::query_row()] for SQLite.
-    async fn query_row(
-        &self,
-        sql: &str,
-        params: impl IntoParams + Send,
-    ) -> Result<JsonRow, DbError> {
-        let rows = self.query(&sql, params).await?;
-        if rows.len() > 1 {
-            return Err(DbError::DataError(
-                "More than one row returned for query_row()".to_string(),
-            ));
-        }
-        match rows.iter().next() {
-            Some(row) => Ok(row.clone()),
-            None => Err(DbError::DataError("No row found".to_string())),
-        }
-    }
-
-    /// Implements [DbQuery::query_value()] for SQLite.
-    async fn query_value(
-        &self,
-        sql: &str,
-        params: impl IntoParams + Send,
-    ) -> Result<JsonValue, DbError> {
-        let row = self.query_row(sql, params).await?;
-        if row.len() > 1 {
-            return Err(DbError::DataError(
-                "More than one value returned for query_value()".to_string(),
-            ));
-        }
-        match row.values().next() {
-            Some(value) => Ok(value.clone()),
-            None => Err(DbError::DataError("No values found".to_string())),
-        }
-    }
-
-    /// Implements [DbQuery::query_string()] for SQLite.
-    async fn query_string(
-        &self,
-        sql: &str,
-        params: impl IntoParams + Send,
-    ) -> Result<String, DbError> {
-        let value = self.query_value(sql, params).await?;
-        Ok(json_value_to_string(&value))
-    }
-
-    /// Implements [DbQuery::query_string()] for SQLite.
-    async fn query_strings(
-        &self,
-        sql: &str,
-        params: impl IntoParams + Send,
-    ) -> Result<Vec<String>, DbError> {
-        let rows = self.query(sql, params).await?;
-        rows.iter()
-            .map(|row| match row.values().nth(0) {
-                Some(value) => Ok(json_value_to_string(value)),
-                None => Err(DbError::DataError("Empty row".to_owned())),
-            })
-            .collect()
-    }
-
-    /// Implements [DbQuery::query_string_row()] for SQLite.
-    async fn query_string_row(
-        &self,
-        sql: &str,
-        params: impl IntoParams + Send,
-    ) -> Result<StringRow, DbError> {
-        let row = self.query_row(sql, params).await?;
-        Ok(json_row_to_string_row(&row))
-    }
-
-    /// Implements [DbQuery::query_string_rows()] for SQLite.
-    async fn query_string_rows(
-        &self,
-        sql: &str,
-        params: impl IntoParams + Send,
-    ) -> Result<Vec<StringRow>, DbError> {
-        let rows = self.query(sql, params).await?;
-        Ok(json_rows_to_string_rows(&rows))
-    }
-
-    /// Implements [DbQuery::query_u64()] for SQLite.
-    async fn query_u64(&self, sql: &str, params: impl IntoParams + Send) -> Result<u64, DbError> {
-        let value = self.query_value(sql, params).await?;
-        match value.as_u64() {
-            Some(val) => Ok(val),
-            None => Err(DbError::DataError(format!(
-                "Not an unsigned integer: {value}"
-            ))),
-        }
-    }
-
-    /// Implements [DbQuery::query_i64()] for SQLite.
-    async fn query_i64(&self, sql: &str, params: impl IntoParams + Send) -> Result<i64, DbError> {
-        let value = self.query_value(sql, params).await?;
-        match value.as_i64() {
-            Some(val) => Ok(val),
-            None => Err(DbError::DataError(format!("Not an integer: {value}"))),
-        }
-    }
-
-    /// Implements [DbQuery::query_f64()] for SQLite.
-    async fn query_f64(&self, sql: &str, params: impl IntoParams + Send) -> Result<f64, DbError> {
-        let value = self.query_value(sql, params).await?;
-        match value.as_f64() {
-            Some(val) => Ok(val),
-            None => Err(DbError::DataError(format!("Not an float: {value}"))),
-        }
     }
 
     /// Implements [DbQuery::insert()] for SQLite.
@@ -598,6 +466,7 @@ impl DbQuery for RusqlitePool {
 mod tests {
     use super::*;
 
+    use crate::core::{JsonValue, StringRow};
     use crate::params;
     use rust_decimal::dec;
     use serde_json::json;
