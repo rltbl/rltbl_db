@@ -5,10 +5,10 @@ use axum::{
     routing::get,
 };
 use rltbl_db::{any::AnyPool, core::DbQuery};
-use std::sync::Arc;
+use std::{marker::Sync, sync::Arc};
 use tower_service::Service;
 
-async fn get_root(State(pool): State<Arc<impl DbQuery>>) -> impl IntoResponse {
+async fn get_root(State(pool): State<Arc<impl DbQuery + Sync>>) -> impl IntoResponse {
     let value = pool
         .query_value("SELECT value FROM test LIMIT 1", ())
         .await

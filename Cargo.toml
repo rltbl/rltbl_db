@@ -9,6 +9,7 @@ categories = ["database"]
 readme = "README.md"
 
 [dependencies]
+async-trait = "0.1.89"
 deadpool-postgres = { version = "0.14.1", features = ["rt_tokio_1"], optional = true }
 deadpool-sqlite = { version = "0.12.1", features = ["bundled", "column_decltype"], optional = true }
 indexmap = "2.12.0"
