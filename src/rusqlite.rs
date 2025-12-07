@@ -2,8 +2,8 @@
 
 use crate::{
     core::{
-        ColumnMap, DbError, DbKind, DbQuery, IntoParams, JsonRow, JsonValue, ParamValue, Params,
-        validate_table_name,
+        CachingStrategy, ColumnMap, DbError, DbKind, DbQuery, IntoParams, JsonRow, JsonValue,
+        ParamValue, Params, validate_table_name,
     },
     params,
     shared::{EditType, edit},
@@ -328,6 +328,20 @@ impl DbQuery for RusqlitePool {
         Ok(rows)
     }
 
+    /// Implements [DbQuery::cache()] for SQLite.
+    async fn cache(
+        &self,
+        sql: &str,
+        params: impl IntoParams + Send,
+        _tables: &[&str],
+        strategy: &CachingStrategy,
+    ) -> Result<Vec<JsonRow>, DbError> {
+        match strategy {
+            CachingStrategy::None => self.query(sql, params).await,
+            _ => todo!(),
+        }
+    }
+
     /// Implements [DbQuery::insert()] for SQLite.
     async fn insert(
         &self,
@@ -556,5 +570,14 @@ mod tests {
         // So, perhaps, this is tu quoque an argument that the behaviour below is acceptable for
         // sqlite.
         assert_eq!(json!(rows), json!([{"MAX(bool_value)": 1}]));
+    }
+
+    #[tokio::test]
+    #[should_panic]
+    async fn test_cache() {
+        let pool = RusqlitePool::connect(":memory:").await.unwrap();
+        pool.cache("TODO", (), &["TODO"], &CachingStrategy::TruncateAll)
+            .await
+            .unwrap();
     }
 }

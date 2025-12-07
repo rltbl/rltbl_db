@@ -7,8 +7,7 @@ use regex::Regex;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use serde_json::Map as JsonMap;
-use std::fmt::Display;
-use std::future::Future;
+use std::{fmt::Display, future::Future, str::FromStr};
 
 pub type JsonValue = serde_json::Value;
 pub type JsonRow = JsonMap<String, JsonValue>;
@@ -371,6 +370,76 @@ macro_rules! params {
     }};
 }
 
+/// Default size for the in-memory cache
+pub static DEFAULT_MEMORY_CACHE_SIZE: usize = 1000;
+
+/// Strategy to use when caching query results
+pub enum CachingStrategy {
+    None,
+    TruncateAll,
+    Truncate,
+    Trigger,
+    Memory(usize),
+}
+
+/// The structure used to look up query results in the in-memory cache:
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct MemoryCacheKey {
+    pub tables: String,
+    pub statement: String,
+    pub parameters: String,
+}
+
+impl FromStr for CachingStrategy {
+    type Err = DbError;
+
+    fn from_str(strategy: &str) -> Result<Self, DbError> {
+        match strategy.to_lowercase().as_str() {
+            "none" => Ok(CachingStrategy::None),
+            "truncate_all" => Ok(CachingStrategy::TruncateAll),
+            "truncate" => Ok(CachingStrategy::Truncate),
+            "trigger" => Ok(CachingStrategy::Trigger),
+            strategy if strategy.starts_with("memory") => {
+                let elems = strategy.split(":").collect::<Vec<_>>();
+                let cache_size = {
+                    if elems.len() < 2 {
+                        DEFAULT_MEMORY_CACHE_SIZE
+                    } else {
+                        let cache_size = elems[1];
+                        match cache_size.parse::<usize>() {
+                            Ok(0) => DEFAULT_MEMORY_CACHE_SIZE,
+                            Ok(size) => size,
+                            Err(err) => return Err(DbError::InputError(format!(
+                                "Error parsing memory cache size specification: '{cache_size}': \
+                                 {err}"
+                            ))
+                            .into()),
+                        }
+                    }
+                };
+                Ok(CachingStrategy::Memory(cache_size))
+            }
+            _ => {
+                return Err(
+                    DbError::InputError(format!("Unrecognized strategy: {strategy}")).into(),
+                );
+            }
+        }
+    }
+}
+
+impl Display for CachingStrategy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CachingStrategy::None => write!(f, "none"),
+            CachingStrategy::TruncateAll => write!(f, "truncate_all"),
+            CachingStrategy::Truncate => write!(f, "truncate"),
+            CachingStrategy::Trigger => write!(f, "trigger"),
+            CachingStrategy::Memory(size) => write!(f, "memory:{size}"),
+        }
+    }
+}
+
 #[async_trait]
 pub trait DbQuery {
     /// Get the kind of SQL database: SQLite or PostgreSQL.
@@ -420,6 +489,17 @@ pub trait DbQuery {
         &self,
         sql: &str,
         params: impl IntoParams + Send,
+    ) -> impl Future<Output = Result<Vec<JsonRow>, DbError>> + Send;
+
+    /// Execute a SQL command, returning a vector of JSON rows. If the result of the command exists
+    /// in the cache, get the value from it instead of from the table(s) actually mentioned in the
+    /// command, using the given [CachingStrategy].
+    fn cache(
+        &self,
+        sql: &str,
+        params: impl IntoParams + Send,
+        tables: &[&str],
+        strategy: &CachingStrategy,
     ) -> impl Future<Output = Result<Vec<JsonRow>, DbError>> + Send;
 
     /// Execute a SQL command, returning a single JSON row.

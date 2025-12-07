@@ -2,8 +2,8 @@
 
 use crate::{
     core::{
-        ColumnMap, DbError, DbKind, DbQuery, IntoParams, JsonRow, JsonValue, ParamValue, Params,
-        validate_table_name,
+        CachingStrategy, ColumnMap, DbError, DbKind, DbQuery, IntoParams, JsonRow, JsonValue,
+        ParamValue, Params, validate_table_name,
     },
     params,
     shared::{EditType, edit},
@@ -386,6 +386,20 @@ impl DbQuery for TokioPostgresPool {
         Ok(json_rows)
     }
 
+    /// Implements [DbQuery::cache()] for SQLite.
+    async fn cache(
+        &self,
+        sql: &str,
+        params: impl IntoParams + Send,
+        _tables: &[&str],
+        strategy: &CachingStrategy,
+    ) -> Result<Vec<JsonRow>, DbError> {
+        match strategy {
+            CachingStrategy::None => self.query(sql, params).await,
+            _ => todo!(),
+        }
+    }
+
     /// Implements [DbQuery::insert()] for PostgreSQL
     async fn insert(
         &self,
@@ -608,5 +622,16 @@ mod tests {
 
         // Clean up.
         pool.drop_table("test_table_indirect").await.unwrap();
+    }
+
+    #[tokio::test]
+    #[should_panic]
+    async fn test_cache() {
+        let pool = TokioPostgresPool::connect("postgresql:///rltbl_db")
+            .await
+            .unwrap();
+        pool.cache("TODO", (), &["TODO"], &CachingStrategy::TruncateAll)
+            .await
+            .unwrap();
     }
 }

@@ -14,7 +14,9 @@
 ///     Ok(value)
 /// }
 /// ```
-use crate::core::{ColumnMap, DbError, DbKind, DbQuery, IntoParams, JsonRow, ParamValue};
+use crate::core::{
+    CachingStrategy, ColumnMap, DbError, DbKind, DbQuery, IntoParams, JsonRow, ParamValue,
+};
 
 #[cfg(feature = "rusqlite")]
 use crate::rusqlite::RusqlitePool;
@@ -139,6 +141,21 @@ impl DbQuery for AnyPool {
             AnyPool::Rusqlite(pool) => pool.query(sql, params).await,
             #[cfg(feature = "tokio-postgres")]
             AnyPool::TokioPostgres(pool) => pool.query(sql, params).await,
+        }
+    }
+
+    async fn cache(
+        &self,
+        sql: &str,
+        params: impl IntoParams + Send,
+        tables: &[&str],
+        strategy: &CachingStrategy,
+    ) -> Result<Vec<JsonRow>, DbError> {
+        match self {
+            #[cfg(feature = "rusqlite")]
+            AnyPool::Rusqlite(pool) => pool.cache(sql, params, tables, strategy).await,
+            #[cfg(feature = "tokio-postgres")]
+            AnyPool::TokioPostgres(pool) => pool.cache(sql, params, tables, strategy).await,
         }
     }
 
