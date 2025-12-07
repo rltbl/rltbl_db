@@ -95,6 +95,24 @@ impl DbQuery for AnyPool {
         }
     }
 
+    fn set_caching_strategy(&mut self, strategy: &CachingStrategy) {
+        match self {
+            #[cfg(feature = "rusqlite")]
+            AnyPool::Rusqlite(pool) => pool.set_caching_strategy(strategy),
+            #[cfg(feature = "tokio-postgres")]
+            AnyPool::TokioPostgres(pool) => pool.set_caching_strategy(strategy),
+        }
+    }
+
+    async fn clear_cache(&self, tables: &[&str]) -> Result<(), DbError> {
+        match self {
+            #[cfg(feature = "rusqlite")]
+            AnyPool::Rusqlite(pool) => pool.clear_cache(tables).await,
+            #[cfg(feature = "tokio-postgres")]
+            AnyPool::TokioPostgres(pool) => pool.clear_cache(tables).await,
+        }
+    }
+
     fn parse(&self, sql_type: &str, value: &str) -> Result<ParamValue, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
@@ -146,16 +164,15 @@ impl DbQuery for AnyPool {
 
     async fn cache(
         &self,
+        tables: &[&str],
         sql: &str,
         params: impl IntoParams + Send,
-        tables: &[&str],
-        strategy: &CachingStrategy,
     ) -> Result<Vec<JsonRow>, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
-            AnyPool::Rusqlite(pool) => pool.cache(sql, params, tables, strategy).await,
+            AnyPool::Rusqlite(pool) => pool.cache(tables, sql, params).await,
             #[cfg(feature = "tokio-postgres")]
-            AnyPool::TokioPostgres(pool) => pool.cache(sql, params, tables, strategy).await,
+            AnyPool::TokioPostgres(pool) => pool.cache(tables, sql, params).await,
         }
     }
 

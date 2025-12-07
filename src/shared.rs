@@ -294,5 +294,9 @@ pub(crate) async fn edit(
             .await?,
         );
     }
+
+    // Delete dirty entries from the cache in accordance with our caching strategy:
+    pool.clear_cache(&[&table]).await?;
+
     Ok(rows_to_return)
 }

@@ -177,6 +177,7 @@ fn query_prepared(
 #[derive(Debug)]
 pub struct RusqlitePool {
     pool: Pool,
+    caching_strategy: CachingStrategy,
 }
 
 impl RusqlitePool {
@@ -186,7 +187,10 @@ impl RusqlitePool {
         let pool = cfg
             .create_pool(Runtime::Tokio1)
             .map_err(|err| DbError::ConnectError(format!("Error creating pool: {err}")))?;
-        Ok(Self { pool })
+        Ok(Self {
+            pool: pool,
+            caching_strategy: CachingStrategy::None,
+        })
     }
 }
 
@@ -194,6 +198,37 @@ impl DbQuery for RusqlitePool {
     /// Implements [DbQuery::kind()] for SQLite.
     fn kind(&self) -> DbKind {
         DbKind::SQLite
+    }
+
+    /// Implements [DbQuery::set_caching_strategy()] for SQLite.
+    fn set_caching_strategy(&mut self, strategy: &CachingStrategy) {
+        self.caching_strategy = *strategy;
+    }
+
+    /// Implements [DbQuery::clear_cache()] for SQLite.
+    async fn clear_cache(&self, _tables: &[&str]) -> Result<(), DbError> {
+        // TODO: It would be better to create the cache (if not exists) whenever a connection
+        // is made to the db, rather than having to check that it exists here:
+        match self
+            .query(
+                r#"SELECT 1 FROM "sqlite_master"
+                   WHERE "type" = 'table' AND "name" = 'cache'"#,
+                (),
+            )
+            .await?
+            .first()
+        {
+            None => Ok(()),
+            Some(_) => match self.caching_strategy {
+                CachingStrategy::None => Ok(()),
+                CachingStrategy::TruncateAll => {
+                    self.execute(r#"DELETE FROM "cache""#, ()).await?;
+                    // println!("CLEARED CACHE!");
+                    Ok(())
+                }
+                _ => todo!(),
+            },
+        }
     }
 
     /// Implements [DbQuery::parse()] for SQLite.
@@ -328,16 +363,81 @@ impl DbQuery for RusqlitePool {
         Ok(rows)
     }
 
+    // TODO: There are only a few minor differences between this function and the version
+    // implemented for tokio-postgres. Consider refactoring.
     /// Implements [DbQuery::cache()] for SQLite.
     async fn cache(
         &self,
+        tables: &[&str],
         sql: &str,
         params: impl IntoParams + Send,
-        _tables: &[&str],
-        strategy: &CachingStrategy,
     ) -> Result<Vec<JsonRow>, DbError> {
-        match strategy {
+        async fn inner_cache(
+            conn: &RusqlitePool,
+            tables: &[&str],
+            sql: &str,
+            params: impl IntoParams + Send,
+        ) -> Result<Vec<JsonRow>, DbError> {
+            // TODO: Consider moving the cache create statement to connect().
+            // If the cache table doesn't already exist, create it now:
+            conn.execute(
+                r#"CREATE TABLE IF NOT EXISTS "cache" (
+                     "tables" JSON,
+                     "statement" TEXT,
+                     "parameters" TEXT,
+                     "value" TEXT,
+                     PRIMARY KEY ("tables", "statement", "parameters")
+                   )"#,
+                (),
+            )
+            .await?;
+
+            let cache_sql = r#"SELECT ?1||rtrim(ltrim("value", '['), ']')||?2 AS "value"
+                               FROM "cache"
+                               WHERE CAST("tables" AS TEXT) = ?3
+                               AND "statement" = ?4
+                               AND "parameters" = ?5
+                               LIMIT 1"#;
+            let tables_param = format!("[{}]", tables.join(", "));
+            let params = &params.into_params();
+            let params_param = match params {
+                Params::None => "[]".to_string(),
+                Params::Positional(params) => {
+                    let params = params.iter().map(|p| p.into()).collect::<Vec<String>>();
+                    format!("[{}]", params.join(", "))
+                }
+            };
+            let cache_params = &["[", "]", &tables_param, sql, &params_param];
+
+            match conn.query_strings(&cache_sql, cache_params).await?.first() {
+                Some(values) => {
+                    let values: Vec<JsonRow> = match serde_json::from_str(&values) {
+                        Ok(values) => values,
+                        _ => {
+                            return Err(DbError::DataError(format!(
+                                "Invalid cache values: {values}"
+                            )));
+                        }
+                    };
+                    // println!("CACHE HIT!");
+                    Ok(values)
+                }
+                None => {
+                    // println!("CACHE MISS!");
+                    let json_rows = conn.query(sql, params).await?;
+                    let json_rows_content = json!(json_rows).to_string();
+                    let insert_sql = "INSERT INTO cache (tables, statement, parameters, value) \
+                                      VALUES (?1, ?2, ?3, ?4)";
+                    let insert_params = [&tables_param, sql, &params_param, &json_rows_content];
+                    conn.query(&insert_sql, &insert_params).await?;
+                    Ok(json_rows)
+                }
+            }
+        }
+
+        match self.caching_strategy {
             CachingStrategy::None => self.query(sql, params).await,
+            CachingStrategy::TruncateAll => inner_cache(self, tables, sql, params).await,
             _ => todo!(),
         }
     }
@@ -472,7 +572,9 @@ impl DbQuery for RusqlitePool {
     async fn drop_table(&self, table: &str) -> Result<(), DbError> {
         let table = validate_table_name(table)?;
         self.execute(&format!(r#"DROP TABLE IF EXISTS "{table}""#), ())
-            .await
+            .await?;
+        // Delete dirty entries from the cache in accordance with our caching strategy:
+        self.clear_cache(&[&table]).await
     }
 }
 
@@ -573,11 +675,111 @@ mod tests {
     }
 
     #[tokio::test]
-    #[should_panic]
     async fn test_cache() {
-        let pool = RusqlitePool::connect(":memory:").await.unwrap();
-        pool.cache("TODO", (), &["TODO"], &CachingStrategy::TruncateAll)
+        let mut pool = RusqlitePool::connect(":memory:").await.unwrap();
+        pool.set_caching_strategy(&CachingStrategy::TruncateAll);
+        pool.drop_table("test_table_caching").await.unwrap();
+        pool.execute(
+            "CREATE TABLE test_table_caching (\
+                 value TEXT
+             )",
+            (),
+        )
+        .await
+        .unwrap();
+
+        pool.insert(
+            "test_table_caching",
+            &["value"],
+            &[
+                &json!({"value": "alpha"}).as_object().unwrap(),
+                &json!({"value": "beta"}).as_object().unwrap(),
+            ],
+        )
+        .await
+        .unwrap();
+
+        let rows = pool
+            .cache(
+                &["test_table_caching"],
+                "SELECT * from test_table_caching",
+                (),
+            )
             .await
             .unwrap();
+
+        assert_eq!(
+            rows,
+            vec![
+                json!({"value": "alpha"}).as_object().unwrap().clone(),
+                json!({"value": "beta"}).as_object().unwrap().clone(),
+            ]
+        );
+
+        let rows = pool
+            .cache(
+                &["test_table_caching"],
+                "SELECT * from test_table_caching",
+                (),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            rows,
+            vec![
+                json!({"value": "alpha"}).as_object().unwrap().clone(),
+                json!({"value": "beta"}).as_object().unwrap().clone(),
+            ]
+        );
+
+        pool.insert(
+            "test_table_caching",
+            &["value"],
+            &[
+                &json!({"value": "gamma"}).as_object().unwrap(),
+                &json!({"value": "delta"}).as_object().unwrap(),
+            ],
+        )
+        .await
+        .unwrap();
+
+        let rows = pool
+            .cache(
+                &["test_table_caching"],
+                "SELECT * from test_table_caching",
+                (),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            rows,
+            vec![
+                json!({"value": "alpha"}).as_object().unwrap().clone(),
+                json!({"value": "beta"}).as_object().unwrap().clone(),
+                json!({"value": "gamma"}).as_object().unwrap().clone(),
+                json!({"value": "delta"}).as_object().unwrap().clone(),
+            ]
+        );
+
+        let rows = pool
+            .cache(
+                &["test_table_caching"],
+                "SELECT * from test_table_caching",
+                (),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            rows,
+            vec![
+                json!({"value": "alpha"}).as_object().unwrap().clone(),
+                json!({"value": "beta"}).as_object().unwrap().clone(),
+                json!({"value": "gamma"}).as_object().unwrap().clone(),
+                json!({"value": "delta"}).as_object().unwrap().clone(),
+            ]
+        );
     }
 }

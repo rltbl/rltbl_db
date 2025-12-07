@@ -374,6 +374,7 @@ macro_rules! params {
 pub static DEFAULT_MEMORY_CACHE_SIZE: usize = 1000;
 
 /// Strategy to use when caching query results
+#[derive(Clone, Copy, Debug)]
 pub enum CachingStrategy {
     None,
     TruncateAll,
@@ -445,6 +446,12 @@ pub trait DbQuery {
     /// Get the kind of SQL database: SQLite or PostgreSQL.
     fn kind(&self) -> DbKind;
 
+    /// Set the caching strategy.
+    fn set_caching_strategy(&mut self, strategy: &CachingStrategy);
+
+    /// Clear the cache entries for the given tables according to the current caching strategy.
+    fn clear_cache(&self, tables: &[&str]) -> impl Future<Output = Result<(), DbError>> + Send;
+
     /// Given a SQL type for this database and a string,
     /// parse the string into the right ParamValue.
     fn parse(&self, sql_type: &str, value: &str) -> Result<ParamValue, DbError>;
@@ -496,10 +503,9 @@ pub trait DbQuery {
     /// command, using the given [CachingStrategy].
     fn cache(
         &self,
+        tables: &[&str],
         sql: &str,
         params: impl IntoParams + Send,
-        tables: &[&str],
-        strategy: &CachingStrategy,
     ) -> impl Future<Output = Result<Vec<JsonRow>, DbError>> + Send;
 
     /// Execute a SQL command, returning a single JSON row.
