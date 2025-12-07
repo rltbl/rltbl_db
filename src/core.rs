@@ -23,29 +23,6 @@ lazy_static! {
     static ref VALID_TABLE_NAME_REGEX: Regex = Regex::new(VALID_TABLE_NAME_MATCH_STR).unwrap();
 }
 
-/// Convert a JSON Value to a String,
-/// without quoting for JSON Value::String,
-/// and treating JSON Value::Null as "NULL".
-pub fn json_value_to_string(value: &JsonValue) -> String {
-    match value {
-        JsonValue::String(string) => string.to_string(),
-        JsonValue::Null => "NULL".to_string(),
-        _ => value.to_string(),
-    }
-}
-
-/// Convert a row of JSON Values to a row of Strings.
-pub fn json_row_to_string_row(row: &JsonRow) -> StringRow {
-    row.iter()
-        .map(|(key, value)| (key.clone(), json_value_to_string(value)))
-        .collect()
-}
-
-/// Convert a vector of JSON rows to a vector of String rows.
-pub fn json_rows_to_string_rows(rows: &[JsonRow]) -> Vec<StringRow> {
-    rows.iter().map(|row| json_row_to_string_row(row)).collect()
-}
-
 /// Defines the supported database kinds.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DbKind {
@@ -619,6 +596,29 @@ pub trait DbQuery {
 
     /// Drop the given table from the database.
     fn drop_table(&self, table: &str) -> impl Future<Output = Result<(), DbError>>;
+}
+
+/// Convert a JSON Value to a String,
+/// without quoting for JSON Value::String,
+/// and treating JSON Value::Null as "NULL".
+pub fn json_value_to_string(value: &JsonValue) -> String {
+    match value {
+        JsonValue::String(string) => string.to_string(),
+        JsonValue::Null => "NULL".to_string(),
+        _ => value.to_string(),
+    }
+}
+
+/// Convert a row of JSON Values to a row of Strings.
+pub fn json_row_to_string_row(row: &JsonRow) -> StringRow {
+    row.iter()
+        .map(|(key, value)| (key.clone(), json_value_to_string(value)))
+        .collect()
+}
+
+/// Convert a vector of JSON rows to a vector of String rows.
+pub fn json_rows_to_string_rows(rows: &[JsonRow]) -> Vec<StringRow> {
+    rows.iter().map(|row| json_row_to_string_row(row)).collect()
 }
 
 /// Determines whether the given table name is a valid database table name. Valid database table
