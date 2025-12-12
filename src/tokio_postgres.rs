@@ -196,7 +196,7 @@ impl DbQuery for TokioPostgresPool {
     }
 
     /// Implements [DbQuery::clear_cache()] for PostgreSQL.
-    async fn clear_cache(&self, _tables: &[&str]) -> Result<(), DbError> {
+    async fn clear_cache(&self, tables: &[&str]) -> Result<(), DbError> {
         match self.caching_strategy {
             CachingStrategy::None => Ok(()),
             CachingStrategy::TruncateAll => {
@@ -204,7 +204,19 @@ impl DbQuery for TokioPostgresPool {
                 // println!("CACHE CLEARED");
                 Ok(())
             }
-            _ => todo!(),
+            CachingStrategy::Truncate => {
+                for table in tables {
+                    // TODO: If we can get JSONB to work, the operator should be "tables" ? $1,
+                    // where ? is a JSONB operator.
+                    println!("CLEARED CACHE FOR TABLE '{table}'!");
+                    let table = format!(r#"%{table}%"#);
+                    self.execute(r#"DELETE FROM "cache" WHERE "tables" LIKE $1"#, &[table])
+                        .await?;
+                }
+                Ok(())
+            }
+            CachingStrategy::Trigger => todo!(),
+            CachingStrategy::Memory(_) => todo!(),
         }
     }
 
@@ -470,6 +482,10 @@ impl DbQuery for TokioPostgresPool {
             sql: &str,
             params: impl IntoParams + Send,
         ) -> Result<Vec<JsonRow>, DbError> {
+            // TODO: If the caching strategy is trigger, then for each table in tables, check if a
+            // trigger has been defined on the table and if it hasn't then define one.
+            // See add_caching_trigger_ddl() in relatable.
+
             let cache_sql = r#"SELECT $1||rtrim(ltrim("value", '['), ']')||$2 AS "value"
                                FROM "cache"
                                WHERE "tables"::TEXT = $3
@@ -517,8 +533,10 @@ impl DbQuery for TokioPostgresPool {
 
         match self.caching_strategy {
             CachingStrategy::None => self.query(sql, params).await,
-            CachingStrategy::TruncateAll => inner_cache(self, tables, sql, params).await,
-            _ => todo!(),
+            CachingStrategy::TruncateAll | CachingStrategy::Truncate | CachingStrategy::Trigger => {
+                inner_cache(self, tables, sql, params).await
+            }
+            CachingStrategy::Memory(_) => todo!(),
         }
     }
 
@@ -750,7 +768,7 @@ mod tests {
         let mut pool = TokioPostgresPool::connect("postgresql:///rltbl_db")
             .await
             .unwrap();
-        pool.set_caching_strategy(&CachingStrategy::TruncateAll);
+        pool.set_caching_strategy(&CachingStrategy::Truncate);
         pool.drop_table("test_table_caching").await.unwrap();
         pool.execute(
             "CREATE TABLE test_table_caching (\

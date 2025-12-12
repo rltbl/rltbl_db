@@ -242,7 +242,7 @@ impl DbQuery for RusqlitePool {
     }
 
     /// Implements [DbQuery::clear_cache()] for SQLite.
-    async fn clear_cache(&self, _tables: &[&str]) -> Result<(), DbError> {
+    async fn clear_cache(&self, tables: &[&str]) -> Result<(), DbError> {
         match self.caching_strategy {
             CachingStrategy::None => Ok(()),
             CachingStrategy::TruncateAll => {
@@ -250,7 +250,17 @@ impl DbQuery for RusqlitePool {
                 // println!("CLEARED CACHE!");
                 Ok(())
             }
-            _ => todo!(),
+            CachingStrategy::Truncate => {
+                for table in tables {
+                    println!("CLEARED CACHE FOR TABLE '{table}'!");
+                    let table = format!(r#"%{table}%"#);
+                    self.execute(r#"DELETE FROM "cache" WHERE "tables" LIKE $1"#, &[table])
+                        .await?;
+                }
+                Ok(())
+            }
+            CachingStrategy::Trigger => todo!(),
+            CachingStrategy::Memory(_) => todo!(),
         }
     }
 
@@ -401,6 +411,10 @@ impl DbQuery for RusqlitePool {
             sql: &str,
             params: impl IntoParams + Send,
         ) -> Result<Vec<JsonRow>, DbError> {
+            // TODO: If the caching strategy is trigger, then for each table in tables, check if a
+            // trigger has been defined on the table and if it hasn't then define one.
+            // See add_caching_trigger_ddl() in relatable.
+
             let cache_sql = r#"SELECT ?1||rtrim(ltrim("value", '['), ']')||?2 AS "value"
                                FROM "cache"
                                WHERE CAST("tables" AS TEXT) = ?3
@@ -446,8 +460,10 @@ impl DbQuery for RusqlitePool {
 
         match self.caching_strategy {
             CachingStrategy::None => self.query(sql, params).await,
-            CachingStrategy::TruncateAll => inner_cache(self, tables, sql, params).await,
-            _ => todo!(),
+            CachingStrategy::TruncateAll | CachingStrategy::Truncate | CachingStrategy::Trigger => {
+                inner_cache(self, tables, sql, params).await
+            }
+            CachingStrategy::Memory(_) => todo!(),
         }
     }
 
@@ -686,7 +702,7 @@ mod tests {
     #[tokio::test]
     async fn test_cache() {
         let mut pool = RusqlitePool::connect(":memory:").await.unwrap();
-        pool.set_caching_strategy(&CachingStrategy::TruncateAll);
+        pool.set_caching_strategy(&CachingStrategy::Truncate);
         pool.drop_table("test_table_caching").await.unwrap();
         pool.execute(
             "CREATE TABLE test_table_caching (\
