@@ -121,15 +121,61 @@ impl TokioPostgresPool {
                     .strip_prefix("postgresql:///")
                     .ok_or(DbError::ConnectError("Invalid PostgreSQL URL".to_string()))?;
                 cfg.dbname = Some(db_name.to_string());
-                let pool = cfg
-                    .create_pool(Some(Runtime::Tokio1), NoTls)
-                    .map_err(|err| {
-                        DbError::ConnectError(format!("Error creating pool: {err:?}"))
-                    })?;
-                Ok(Self {
-                    pool: pool,
+
+                let conn = TokioPostgresPool {
+                    pool: cfg
+                        .create_pool(Some(Runtime::Tokio1), NoTls)
+                        .map_err(|err| {
+                            DbError::ConnectError(format!("Error creating pool: {err:?}"))
+                        })?,
                     caching_strategy: CachingStrategy::None,
-                })
+                };
+
+                // If the cache table doesn't already exist, create it now:
+                // TODO: The "tables" field should be JSONB.
+                match conn
+                    .execute(
+                        r#"CREATE TABLE IF NOT EXISTS "cache" (
+                             "tables" TEXT,
+                             "statement" TEXT,
+                             "parameters" TEXT,
+                             "value" TEXT,
+                             PRIMARY KEY ("tables", "statement", "parameters")
+                           )"#,
+                        (),
+                    )
+                    .await
+                {
+                    Ok(_) => Ok(conn),
+                    Err(_) => {
+                        // Since we are not using transactions, a race condition could occur in
+                        // which two or more threads are trying to create the cache at the same
+                        // time, triggering a primary key violation in the metadata table. So if
+                        // there is an error creating the cache table we just check that it exists
+                        // and if it does we assume that all is ok.
+                        match conn
+                            .query(
+                                r#"SELECT 1
+                                   FROM "information_schema"."tables"
+                                   WHERE "table_type" LIKE '%TABLE'
+                                     AND "table_name" = 'cache'
+                                     AND "table_schema" IN (
+                                       SELECT REGEXP_SPLIT_TO_TABLE("setting", ', ')
+                                       FROM "pg_settings"
+                                       WHERE "name" = 'search_path'
+                                     )"#,
+                                (),
+                            )
+                            .await?
+                            .first()
+                        {
+                            None => Err(DbError::DatabaseError(
+                                "The cache table could not be created".to_string(),
+                            )),
+                            Some(_) => Ok(conn),
+                        }
+                    }
+                }
             }
             false => Err(DbError::ConnectError(format!(
                 "Invalid PostgreSQL URL: '{url}'"
@@ -151,38 +197,14 @@ impl DbQuery for TokioPostgresPool {
 
     /// Implements [DbQuery::clear_cache()] for PostgreSQL.
     async fn clear_cache(&self, _tables: &[&str]) -> Result<(), DbError> {
-        // TODO: It would be better to create the cache (if not exists) whenever a connection
-        // is made to the db, rather than having to check that it exists here:
-        // println!("CLEARING CACHE");
-        match self
-            .query(
-                r#"SELECT 1
-                   FROM "information_schema"."tables"
-                   WHERE "table_type" LIKE '%TABLE'
-                     AND "table_name" = 'cache'
-                     AND "table_schema" IN (
-                       SELECT REGEXP_SPLIT_TO_TABLE("setting", ', ')
-                       FROM "pg_settings"
-                       WHERE "name" = 'search_path'
-                     )"#,
-                (),
-            )
-            .await?
-            .first()
-        {
-            None => {
-                // println!("NO CACHE TO CLEAR");
+        match self.caching_strategy {
+            CachingStrategy::None => Ok(()),
+            CachingStrategy::TruncateAll => {
+                self.execute(r#"TRUNCATE TABLE "cache""#, ()).await?;
+                // println!("CACHE CLEARED");
                 Ok(())
             }
-            Some(_) => match self.caching_strategy {
-                CachingStrategy::None => Ok(()),
-                CachingStrategy::TruncateAll => {
-                    self.execute(r#"TRUNCATE TABLE "cache""#, ()).await?;
-                    // println!("CACHE CLEARED");
-                    Ok(())
-                }
-                _ => todo!(),
-            },
+            _ => todo!(),
         }
     }
 
@@ -448,21 +470,6 @@ impl DbQuery for TokioPostgresPool {
             sql: &str,
             params: impl IntoParams + Send,
         ) -> Result<Vec<JsonRow>, DbError> {
-            // TODO: Consider moving the cache create statement to connect().
-            // If the cache table doesn't already exist, create it now:
-            // TODO: The "tables" field should be JSONB.
-            conn.execute(
-                r#"CREATE TABLE IF NOT EXISTS "cache" (
-                     "tables" TEXT,
-                     "statement" TEXT,
-                     "parameters" TEXT,
-                     "value" TEXT,
-                     PRIMARY KEY ("tables", "statement", "parameters")
-                   )"#,
-                (),
-            )
-            .await?;
-
             let cache_sql = r#"SELECT $1||rtrim(ltrim("value", '['), ']')||$2 AS "value"
                                FROM "cache"
                                WHERE "tables"::TEXT = $3
@@ -654,9 +661,6 @@ impl DbQuery for TokioPostgresPool {
     }
 }
 
-// TODO: Consider refactoring some of these tests, possibly into a separate shared_tests.rs
-// file, with functions defined to accept a DbQuery parameter. A lot of the tests in this module
-// have nearly identical code with the unit test module in rusqlite.rs.
 #[cfg(test)]
 mod tests {
     use super::*;
