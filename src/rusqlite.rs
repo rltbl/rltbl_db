@@ -241,27 +241,9 @@ impl DbQuery for RusqlitePool {
         self.caching_strategy = *strategy;
     }
 
-    /// Implements [DbQuery::clear_cache()] for SQLite.
-    async fn clear_cache(&self, tables: &[&str]) -> Result<(), DbError> {
-        match self.caching_strategy {
-            CachingStrategy::None => Ok(()),
-            CachingStrategy::TruncateAll => {
-                self.execute(r#"DELETE FROM "cache""#, ()).await?;
-                // println!("CLEARED CACHE!");
-                Ok(())
-            }
-            CachingStrategy::Truncate => {
-                for table in tables {
-                    println!("CLEARED CACHE FOR TABLE '{table}'!");
-                    let table = format!(r#"%{table}%"#);
-                    self.execute(r#"DELETE FROM "cache" WHERE "tables" LIKE $1"#, &[table])
-                        .await?;
-                }
-                Ok(())
-            }
-            CachingStrategy::Trigger => todo!(),
-            CachingStrategy::Memory(_) => todo!(),
-        }
+    /// Implements [DbQuery::get_caching_strategy()] for SQLite.
+    fn get_caching_strategy(&self) -> CachingStrategy {
+        self.caching_strategy
     }
 
     /// Implements [DbQuery::parse()] for SQLite.
@@ -394,77 +376,6 @@ impl DbQuery for RusqlitePool {
             .map_err(|err| DbError::DatabaseError(err.to_string()))?
             .map_err(|err| DbError::DatabaseError(err.to_string()))?;
         Ok(rows)
-    }
-
-    // TODO: There are only a few minor differences between this function and the version
-    // implemented for tokio-postgres. Consider refactoring.
-    /// Implements [DbQuery::cache()] for SQLite.
-    async fn cache(
-        &self,
-        tables: &[&str],
-        sql: &str,
-        params: impl IntoParams + Send,
-    ) -> Result<Vec<JsonRow>, DbError> {
-        async fn inner_cache(
-            conn: &RusqlitePool,
-            tables: &[&str],
-            sql: &str,
-            params: impl IntoParams + Send,
-        ) -> Result<Vec<JsonRow>, DbError> {
-            // TODO: If the caching strategy is trigger, then for each table in tables, check if a
-            // trigger has been defined on the table and if it hasn't then define one.
-            // See add_caching_trigger_ddl() in relatable.
-
-            let cache_sql = r#"SELECT ?1||rtrim(ltrim("value", '['), ']')||?2 AS "value"
-                               FROM "cache"
-                               WHERE CAST("tables" AS TEXT) = ?3
-                               AND "statement" = ?4
-                               AND "parameters" = ?5
-                               LIMIT 1"#;
-            let tables_param = format!("[{}]", tables.join(", "));
-            let params = &params.into_params();
-            let params_param = match params {
-                Params::None => "[]".to_string(),
-                Params::Positional(params) => {
-                    let params = params.iter().map(|p| p.into()).collect::<Vec<String>>();
-                    format!("[{}]", params.join(", "))
-                }
-            };
-            let cache_params = &["[", "]", &tables_param, sql, &params_param];
-
-            match conn.query_strings(&cache_sql, cache_params).await?.first() {
-                Some(values) => {
-                    let values: Vec<JsonRow> = match serde_json::from_str(&values) {
-                        Ok(values) => values,
-                        _ => {
-                            return Err(DbError::DataError(format!(
-                                "Invalid cache values: {values}"
-                            )));
-                        }
-                    };
-                    // println!("CACHE HIT!");
-                    Ok(values)
-                }
-                None => {
-                    // println!("CACHE MISS!");
-                    let json_rows = conn.query(sql, params).await?;
-                    let json_rows_content = json!(json_rows).to_string();
-                    let insert_sql = "INSERT INTO cache (tables, statement, parameters, value) \
-                                      VALUES (?1, ?2, ?3, ?4)";
-                    let insert_params = [&tables_param, sql, &params_param, &json_rows_content];
-                    conn.query(&insert_sql, &insert_params).await?;
-                    Ok(json_rows)
-                }
-            }
-        }
-
-        match self.caching_strategy {
-            CachingStrategy::None => self.query(sql, params).await,
-            CachingStrategy::TruncateAll | CachingStrategy::Truncate | CachingStrategy::Trigger => {
-                inner_cache(self, tables, sql, params).await
-            }
-            CachingStrategy::Memory(_) => todo!(),
-        }
     }
 
     /// Implements [DbQuery::insert()] for SQLite.

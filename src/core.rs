@@ -6,7 +6,7 @@ use lazy_static::lazy_static;
 use regex::Regex;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
-use serde_json::Map as JsonMap;
+use serde_json::{Map as JsonMap, json};
 use std::{fmt::Display, future::Future, str::FromStr};
 
 pub type JsonValue = serde_json::Value;
@@ -449,8 +449,125 @@ pub trait DbQuery {
     /// Set the caching strategy.
     fn set_caching_strategy(&mut self, strategy: &CachingStrategy);
 
+    /// Get the current caching strategy.
+    fn get_caching_strategy(&self) -> CachingStrategy;
+
     /// Clear the cache entries for the given tables according to the current caching strategy.
-    fn clear_cache(&self, tables: &[&str]) -> impl Future<Output = Result<(), DbError>> + Send;
+    async fn clear_cache(&self, tables: &[&str]) -> Result<(), DbError> {
+        match self.get_caching_strategy() {
+            CachingStrategy::None => Ok(()),
+            CachingStrategy::TruncateAll => {
+                self.execute(r#"DELETE FROM "cache""#, ()).await?;
+                // println!("CACHE CLEARED");
+                Ok(())
+            }
+            CachingStrategy::Truncate => {
+                let pref = match self.kind() {
+                    DbKind::SQLite => "?",
+                    DbKind::PostgreSQL => "$",
+                };
+                for table in tables {
+                    // TODO: If we can get JSONB to work, the operator should be "tables" ? $1,
+                    // where ? is a JSONB operator.
+                    let table = format!(r#"%{table}%"#);
+                    self.execute(
+                        &format!(r#"DELETE FROM "cache" WHERE "tables" LIKE {pref}1"#),
+                        &[table],
+                    )
+                    .await?;
+                    // println!("CLEARED CACHE FOR TABLE '{table}'!");
+                }
+                Ok(())
+            }
+            CachingStrategy::Trigger => todo!(),
+            CachingStrategy::Memory(_) => todo!(),
+        }
+    }
+
+    /// Execute a SQL command, returning a vector of JSON rows. If the result of the command exists
+    /// in the cache, get the value from it instead of from the table(s) actually mentioned in the
+    /// command, using the given [CachingStrategy].
+    async fn cache(
+        &self,
+        tables: &[&str],
+        sql: &str,
+        params: impl IntoParams + Send,
+    ) -> Result<Vec<JsonRow>, DbError> {
+        let inner_cache =
+            async |tables: &[&str], sql: &str, params: &Params| -> Result<Vec<JsonRow>, DbError> {
+                // Look in the cache to see if there is an entry corresponding to the given SQL
+                // string for the given tables and parameters. If so, return the data from the
+                // cache, otherwise execute the given SQL statement on the actualy specified
+                // tables.
+                let tables_cast = match self.kind() {
+                    DbKind::SQLite => r#"CAST("tables" AS TEXT)"#,
+                    DbKind::PostgreSQL => r#""tables"::TEXT"#,
+                };
+                let pref = match self.kind() {
+                    DbKind::SQLite => "?",
+                    DbKind::PostgreSQL => "$",
+                };
+                let cache_sql = format!(
+                    r#"SELECT {pref}1||rtrim(ltrim("value", '['), ']')||{pref}2 AS "value"
+                       FROM "cache"
+                       WHERE {tables_cast} = {pref}3
+                       AND "statement" = {pref}4
+                       AND "parameters" = {pref}5
+                       LIMIT 1"#
+                );
+                let tables_param = format!("[{}]", tables.join(", "));
+                let params_param = match params {
+                    Params::None => "[]".to_string(),
+                    Params::Positional(params) => {
+                        let params = params.iter().map(|p| p.into()).collect::<Vec<String>>();
+                        format!("[{}]", params.join(", "))
+                    }
+                };
+                let cache_params = &["[", "]", &tables_param, sql, &params_param];
+
+                match self.query_strings(&cache_sql, cache_params).await?.first() {
+                    Some(values) => {
+                        let values: Vec<JsonRow> = match serde_json::from_str(&values) {
+                            Ok(values) => values,
+                            _ => {
+                                return Err(DbError::DataError(format!(
+                                    "Invalid cache values: {values}"
+                                )));
+                            }
+                        };
+                        // println!("CACHE HIT!");
+                        Ok(values)
+                    }
+                    None => {
+                        // println!("CACHE MISS!");
+                        let json_rows = self.query(sql, params).await?;
+                        let json_rows_content = json!(json_rows).to_string();
+                        let insert_sql = format!(
+                            r#"INSERT INTO "cache"
+                               ("tables", "statement", "parameters", "value")
+                               VALUES ({pref}1, {pref}2, {pref}3, {pref}4)"#
+                        );
+                        let insert_params = [&tables_param, sql, &params_param, &json_rows_content];
+                        self.query(&insert_sql, &insert_params).await?;
+                        Ok(json_rows)
+                    }
+                }
+            };
+
+        match self.get_caching_strategy() {
+            CachingStrategy::None => self.query(sql, params).await,
+            CachingStrategy::TruncateAll | CachingStrategy::Truncate => {
+                inner_cache(tables, sql, &params.into_params()).await
+            }
+            CachingStrategy::Trigger => {
+                // TODO: If the caching strategy is trigger, then for each table in tables, check
+                // if a trigger has been defined on the table and if it hasn't then define one.
+                // See add_caching_trigger_ddl() in relatable.
+                inner_cache(tables, sql, &params.into_params()).await
+            }
+            CachingStrategy::Memory(_) => todo!(),
+        }
+    }
 
     /// Given a SQL type for this database and a string,
     /// parse the string into the right ParamValue.
@@ -494,16 +611,6 @@ pub trait DbQuery {
     /// Execute a SQL command, returning a vector of JSON rows.
     fn query(
         &self,
-        sql: &str,
-        params: impl IntoParams + Send,
-    ) -> impl Future<Output = Result<Vec<JsonRow>, DbError>> + Send;
-
-    /// Execute a SQL command, returning a vector of JSON rows. If the result of the command exists
-    /// in the cache, get the value from it instead of from the table(s) actually mentioned in the
-    /// command, using the given [CachingStrategy].
-    fn cache(
-        &self,
-        tables: &[&str],
         sql: &str,
         params: impl IntoParams + Send,
     ) -> impl Future<Output = Result<Vec<JsonRow>, DbError>> + Send;
