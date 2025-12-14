@@ -452,16 +452,21 @@ pub trait DbQuery {
     /// Get the current caching strategy.
     fn get_caching_strategy(&self) -> CachingStrategy;
 
-    /// Clear the cache entries for the given tables according to the current caching strategy.
+    /// Add caching triggers for the given tables.
+    fn ensure_caching_triggers_exist(
+        &self,
+        tables: &[&str],
+    ) -> impl Future<Output = Result<(), DbError>> + Send;
+
+    /// Clear the cache entries for the given tables, or everything if tables is an empty list.
     async fn clear_cache(&self, tables: &[&str]) -> Result<(), DbError> {
-        match self.get_caching_strategy() {
-            CachingStrategy::None => Ok(()),
-            CachingStrategy::TruncateAll => {
+        match tables.is_empty() {
+            true => {
                 self.execute(r#"DELETE FROM "cache""#, ()).await?;
                 // println!("CACHE CLEARED");
                 Ok(())
             }
-            CachingStrategy::Truncate => {
+            false => {
                 let pref = match self.kind() {
                     DbKind::SQLite => "?",
                     DbKind::PostgreSQL => "$",
@@ -479,8 +484,6 @@ pub trait DbQuery {
                 }
                 Ok(())
             }
-            CachingStrategy::Trigger => todo!(),
-            CachingStrategy::Memory(_) => todo!(),
         }
     }
 
@@ -560,9 +563,7 @@ pub trait DbQuery {
                 inner_cache(tables, sql, &params.into_params()).await
             }
             CachingStrategy::Trigger => {
-                // TODO: If the caching strategy is trigger, then for each table in tables, check
-                // if a trigger has been defined on the table and if it hasn't then define one.
-                // See add_caching_trigger_ddl() in relatable.
+                self.ensure_caching_triggers_exist(tables).await?;
                 inner_cache(tables, sql, &params.into_params()).await
             }
             CachingStrategy::Memory(_) => todo!(),

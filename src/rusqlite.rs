@@ -246,6 +246,53 @@ impl DbQuery for RusqlitePool {
         self.caching_strategy
     }
 
+    /// Implements [DbQuery::ensure_caching_triggers_exist()] for SQLite.
+    async fn ensure_caching_triggers_exist(&self, tables: &[&str]) -> Result<(), DbError> {
+        for table in tables {
+            let num_triggers = self
+                .query_u64(
+                    r#"SELECT COUNT(1)
+                       FROM sqlite_master
+                       WHERE type = 'trigger'
+                         AND name IN (?1, ?2, ?3)"#,
+                    &[
+                        &format!("{table}_cache_after_insert"),
+                        &format!("{table}_cache_after_update"),
+                        &format!("{table}_cache_after_delete"),
+                    ],
+                )
+                .await?;
+
+            // Only recreate the triggers if they don't all already exist:
+            if num_triggers != 3 {
+                // Note that parameters are not allowed in trigger creation statements in SQLite.
+                self.execute_batch(&format!(
+                    r#"DROP TRIGGER IF EXISTS "{table}_cache_after_insert";
+                       CREATE TRIGGER "{table}_cache_after_insert"
+                       AFTER INSERT ON "{table}"
+                       BEGIN
+                         DELETE FROM "cache" WHERE "tables" LIKE '%{table}%';
+                       END;
+                       DROP TRIGGER IF EXISTS "{table}_cache_after_update";
+                       CREATE TRIGGER "{table}_cache_after_update"
+                       AFTER UPDATE ON "{table}"
+                       BEGIN
+                         DELETE FROM "cache" WHERE "tables" LIKE '%{table}%';
+                       END;
+                       DROP TRIGGER IF EXISTS "{table}_cache_after_delete";
+                       CREATE TRIGGER "{table}_cache_after_delete"
+                       AFTER DELETE ON "{table}"
+                       BEGIN
+                         DELETE FROM "cache" WHERE "tables" LIKE '%{table}%';
+                       END"#,
+                    table = validate_table_name(table)?,
+                ))
+                .await?;
+            }
+        }
+        Ok(())
+    }
+
     /// Implements [DbQuery::parse()] for SQLite.
     fn parse(&self, sql_type: &str, value: &str) -> Result<ParamValue, DbError> {
         let err = || {
@@ -509,8 +556,22 @@ impl DbQuery for RusqlitePool {
         let table = validate_table_name(table)?;
         self.execute(&format!(r#"DROP TABLE IF EXISTS "{table}""#), ())
             .await?;
+
         // Delete dirty entries from the cache in accordance with our caching strategy:
-        self.clear_cache(&[&table]).await
+        match self.get_caching_strategy() {
+            CachingStrategy::None => (),
+            CachingStrategy::TruncateAll => {
+                self.clear_cache(&[]).await?;
+            }
+            // We clear the cache also in the case of a trigger, since the trigger will not
+            // be triggered when we drop the table (it will, rather, be dropped along with the
+            // table).
+            CachingStrategy::Truncate | CachingStrategy::Trigger => {
+                self.clear_cache(&[&table]).await?;
+            }
+            CachingStrategy::Memory(_) => todo!(),
+        };
+        Ok(())
     }
 }
 
@@ -613,7 +674,7 @@ mod tests {
     #[tokio::test]
     async fn test_cache() {
         let mut pool = RusqlitePool::connect(":memory:").await.unwrap();
-        pool.set_caching_strategy(&CachingStrategy::Truncate);
+        pool.set_caching_strategy(&CachingStrategy::Trigger);
         pool.drop_table("test_table_caching").await.unwrap();
         pool.execute(
             "CREATE TABLE test_table_caching (\

@@ -199,6 +199,61 @@ impl DbQuery for TokioPostgresPool {
         self.caching_strategy
     }
 
+    /// Implements [DbQuery::ensure_caching_triggers_exist()] for PostgreSQL.
+    async fn ensure_caching_triggers_exist(&self, tables: &[&str]) -> Result<(), DbError> {
+        for table in tables {
+            let num_triggers = self
+                .query_u64(
+                    r#"SELECT COUNT(1)
+                       FROM information_schema.triggers
+                       WHERE trigger_name IN ($1, $2, $3)
+                         AND "trigger_schema" IN (
+                           SELECT REGEXP_SPLIT_TO_TABLE("setting", ', ')
+                           FROM "pg_settings"
+                           WHERE "name" = 'search_path'
+                         )"#,
+                    &[
+                        &format!("{table}_cache_after_insert"),
+                        &format!("{table}_cache_after_update"),
+                        &format!("{table}_cache_after_delete"),
+                    ],
+                )
+                .await?;
+
+            // Only recreate the triggers if they don't all already exist:
+            if num_triggers != 3 {
+                // Note that parameters are not allowed in trigger creation statements in SQLite.
+                self.execute_batch(&format!(
+                    r#"CREATE OR REPLACE FUNCTION "clean_cache_for_{table}"()
+                         RETURNS TRIGGER
+                         LANGUAGE PLPGSQL
+                        AS
+                        $$
+                        BEGIN
+                          DELETE FROM "cache" WHERE "tables" LIKE '%{table}%';
+                          RETURN NEW;
+                        END;
+                        $$;
+                        DROP TRIGGER IF EXISTS "{table}_cache_after_insert" ON "{table}";
+                        CREATE TRIGGER "{table}_cache_after_insert"
+                          AFTER INSERT ON "{table}"
+                          EXECUTE FUNCTION "clean_cache_for_{table}"();
+                        DROP TRIGGER IF EXISTS "{table}_cache_after_update" ON "{table}";
+                        CREATE TRIGGER "{table}_cache_after_update"
+                          AFTER UPDATE ON "{table}"
+                          EXECUTE FUNCTION "clean_cache_for_{table}"();
+                        DROP TRIGGER IF EXISTS "{table}_cache_after_delete" ON "{table}";
+                        CREATE TRIGGER "{table}_cache_after_delete"
+                          AFTER DELETE ON "{table}"
+                          EXECUTE FUNCTION "clean_cache_for_{table}"()"#,
+                    table = validate_table_name(table)?,
+                ))
+                .await?;
+            }
+        }
+        Ok(())
+    }
+
     /// Implements [DbQuery::parse()] for PostgreSQL.
     fn parse(&self, sql_type: &str, value: &str) -> Result<ParamValue, DbError> {
         let err = || {
@@ -580,8 +635,22 @@ impl DbQuery for TokioPostgresPool {
         let table = validate_table_name(table)?;
         self.execute(&format!(r#"DROP TABLE IF EXISTS "{table}" CASCADE"#), ())
             .await?;
+
         // Delete dirty entries from the cache in accordance with our caching strategy:
-        self.clear_cache(&[&table]).await
+        match self.get_caching_strategy() {
+            CachingStrategy::None => (),
+            CachingStrategy::TruncateAll => {
+                self.clear_cache(&[]).await?;
+            }
+            // We clear the cache also in the case of a trigger, since the trigger will not
+            // be triggered when we drop the table (it will, rather, be dropped along with the
+            // table)
+            CachingStrategy::Truncate | CachingStrategy::Trigger => {
+                self.clear_cache(&[&table]).await?;
+            }
+            CachingStrategy::Memory(_) => todo!(),
+        };
+        Ok(())
     }
 }
 
@@ -674,7 +743,7 @@ mod tests {
         let mut pool = TokioPostgresPool::connect("postgresql:///rltbl_db")
             .await
             .unwrap();
-        pool.set_caching_strategy(&CachingStrategy::Truncate);
+        pool.set_caching_strategy(&CachingStrategy::Trigger);
         pool.drop_table("test_table_caching").await.unwrap();
         pool.execute(
             "CREATE TABLE test_table_caching (\

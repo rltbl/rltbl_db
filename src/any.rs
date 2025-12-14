@@ -113,6 +113,15 @@ impl DbQuery for AnyPool {
         }
     }
 
+    async fn ensure_caching_triggers_exist(&self, tables: &[&str]) -> Result<(), DbError> {
+        match self {
+            #[cfg(feature = "rusqlite")]
+            AnyPool::Rusqlite(pool) => pool.ensure_caching_triggers_exist(tables).await,
+            #[cfg(feature = "tokio-postgres")]
+            AnyPool::TokioPostgres(pool) => pool.ensure_caching_triggers_exist(tables).await,
+        }
+    }
+
     fn parse(&self, sql_type: &str, value: &str) -> Result<ParamValue, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
