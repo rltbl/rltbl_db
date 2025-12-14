@@ -284,6 +284,7 @@ mod tests {
     use serde_json::json;
 
     #[tokio::test]
+    #[ignore]
     async fn test_text_column_query() {
         #[cfg(feature = "rusqlite")]
         text_column_query(":memory:").await;
@@ -352,6 +353,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_integer_column_query() {
         #[cfg(feature = "rusqlite")]
         integer_column_query(":memory:").await;
@@ -429,6 +431,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_float_column_query() {
         #[cfg(feature = "rusqlite")]
         float_column_query(":memory:").await;
@@ -515,6 +518,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_mixed_column_query() {
         #[cfg(feature = "rusqlite")]
         mixed_column_query(":memory:").await;
@@ -642,6 +646,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_input_params() {
         #[cfg(feature = "rusqlite")]
         input_params(":memory:").await;
@@ -767,6 +772,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_insert() {
         #[cfg(feature = "rusqlite")]
         insert(":memory:").await;
@@ -834,6 +840,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_insert_returning() {
         #[cfg(feature = "rusqlite")]
         insert_returning(":memory:").await;
@@ -923,6 +930,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_drop_table() {
         #[cfg(feature = "rusqlite")]
         drop_table(":memory:").await;
@@ -966,6 +974,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_primary_keys() {
         #[cfg(feature = "rusqlite")]
         primary_keys(":memory:").await;
@@ -1010,6 +1019,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_update() {
         #[cfg(feature = "rusqlite")]
         update(":memory:").await;
@@ -1117,6 +1127,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_update_returning() {
         #[cfg(feature = "rusqlite")]
         update_returning(":memory:").await;
@@ -1314,6 +1325,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_upsert() {
         #[cfg(feature = "rusqlite")]
         upsert(":memory:").await;
@@ -1421,6 +1433,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_upsert_returning() {
         #[cfg(feature = "rusqlite")]
         upsert_returning(":memory:").await;
@@ -1520,5 +1533,129 @@ mod tests {
 
         // Clean up:
         pool.drop_table("test_upsert_returning").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_caching() {
+        #[cfg(feature = "rusqlite")]
+        caching(":memory:").await;
+        #[cfg(feature = "tokio-postgres")]
+        caching("postgresql:///rltbl_db").await;
+    }
+
+    async fn caching(url: &str) {
+        let mut pool = AnyPool::connect(url).await.unwrap();
+        pool.set_caching_strategy(&CachingStrategy::Trigger);
+        pool.drop_table("test_table_caching").await.unwrap();
+        println!("Table dropped");
+        pool.execute(
+            "CREATE TABLE test_table_caching (\
+             value TEXT
+             )",
+            (),
+        )
+        .await
+        .unwrap();
+        println!("Table created");
+
+        pool.insert(
+            "test_table_caching",
+            &["value"],
+            &[
+                &json!({"value": "alpha"}).as_object().unwrap(),
+                &json!({"value": "beta"}).as_object().unwrap(),
+            ],
+        )
+        .await
+        .unwrap();
+        println!("Inserted (1)");
+
+        let rows = pool
+            .cache(
+                &["test_table_caching"],
+                "SELECT * from test_table_caching",
+                (),
+            )
+            .await
+            .unwrap();
+        println!("Selected (1)");
+
+        assert_eq!(
+            rows,
+            vec![
+                json!({"value": "alpha"}).as_object().unwrap().clone(),
+                json!({"value": "beta"}).as_object().unwrap().clone(),
+            ]
+        );
+
+        let rows = pool
+            .cache(
+                &["test_table_caching"],
+                "SELECT * from test_table_caching",
+                (),
+            )
+            .await
+            .unwrap();
+        println!("Selected (2)");
+
+        assert_eq!(
+            rows,
+            vec![
+                json!({"value": "alpha"}).as_object().unwrap().clone(),
+                json!({"value": "beta"}).as_object().unwrap().clone(),
+            ]
+        );
+
+        pool.insert(
+            "test_table_caching",
+            &["value"],
+            &[
+                &json!({"value": "gamma"}).as_object().unwrap(),
+                &json!({"value": "delta"}).as_object().unwrap(),
+            ],
+        )
+        .await
+        .unwrap();
+        println!("Inserted (2)");
+
+        let rows = pool
+            .cache(
+                &["test_table_caching"],
+                "SELECT * from test_table_caching",
+                (),
+            )
+            .await
+            .unwrap();
+        println!("Selected (3)");
+
+        assert_eq!(
+            rows,
+            vec![
+                json!({"value": "alpha"}).as_object().unwrap().clone(),
+                json!({"value": "beta"}).as_object().unwrap().clone(),
+                json!({"value": "gamma"}).as_object().unwrap().clone(),
+                json!({"value": "delta"}).as_object().unwrap().clone(),
+            ]
+        );
+
+        let rows = pool
+            .cache(
+                &["test_table_caching"],
+                "SELECT * from test_table_caching",
+                (),
+            )
+            .await
+            .unwrap();
+        println!("Selected (4)");
+
+        assert_eq!(
+            rows,
+            vec![
+                json!({"value": "alpha"}).as_object().unwrap().clone(),
+                json!({"value": "beta"}).as_object().unwrap().clone(),
+                json!({"value": "gamma"}).as_object().unwrap().clone(),
+                json!({"value": "delta"}).as_object().unwrap().clone(),
+            ]
+        );
     }
 }

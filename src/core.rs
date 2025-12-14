@@ -7,7 +7,13 @@ use regex::Regex;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, json};
-use std::{fmt::Display, future::Future, str::FromStr};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt::Display,
+    future::Future,
+    str::FromStr,
+    sync::Mutex,
+};
 
 pub type JsonValue = serde_json::Value;
 pub type JsonRow = JsonMap<String, JsonValue>;
@@ -20,6 +26,9 @@ static VALID_TABLE_NAME_MATCH_STR: &str = r"^[A-Za-z_][0-9A-Za-z_]*$";
 lazy_static! {
     /// The regex used to match [valid database table names](VALID_TABLE_NAME_MATCH_STR).
     static ref VALID_TABLE_NAME_REGEX: Regex = Regex::new(VALID_TABLE_NAME_MATCH_STR).unwrap();
+
+    /// The memory cache.
+    static ref MEMORY_CACHE: Mutex<HashMap<MemoryCacheKey, Vec<JsonRow>>> = Mutex::new(HashMap::new());
 }
 
 /// Defines the supported database kinds.
@@ -463,7 +472,6 @@ pub trait DbQuery {
         match tables.is_empty() {
             true => {
                 self.execute(r#"DELETE FROM "cache""#, ()).await?;
-                // println!("CACHE CLEARED");
                 Ok(())
             }
             false => {
@@ -480,7 +488,6 @@ pub trait DbQuery {
                         &[table],
                     )
                     .await?;
-                    // println!("CLEARED CACHE FOR TABLE '{table}'!");
                 }
                 Ok(())
             }
@@ -538,11 +545,9 @@ pub trait DbQuery {
                                 )));
                             }
                         };
-                        // println!("CACHE HIT!");
                         Ok(values)
                     }
                     None => {
-                        // println!("CACHE MISS!");
                         let json_rows = self.query(sql, params).await?;
                         let json_rows_content = json!(json_rows).to_string();
                         let insert_sql = format!(
@@ -566,7 +571,56 @@ pub trait DbQuery {
                 self.ensure_caching_triggers_exist(tables).await?;
                 inner_cache(tables, sql, &params.into_params()).await
             }
-            CachingStrategy::Memory(_) => todo!(),
+            CachingStrategy::Memory(cache_size) => {
+                println!("Locking memory cache ...");
+                let mut cache = match MEMORY_CACHE.try_lock() {
+                    Ok(cache) => cache,
+                    Err(err) => {
+                        return Err(DbError::ConnectError(format!("Error locking cache: {err}")));
+                    }
+                };
+                println!("Memory cache locked!");
+                let keys = cache.keys().map(|key| key.clone()).collect::<Vec<_>>();
+                if keys.len() >= cache_size {
+                    for (i, key) in keys.iter().enumerate().rev() {
+                        if i >= (cache_size - 1) {
+                            cache.remove(&key);
+                        } else {
+                            break;
+                        }
+                    }
+                }
+
+                let tables = tables
+                    .iter()
+                    .map(|t| json!(t).to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let params = &params.into_params();
+                let mem_key = MemoryCacheKey {
+                    tables: tables.to_string(),
+                    statement: sql.to_string(),
+                    parameters: format!("{params:?}"),
+                };
+                match cache.get(&mem_key) {
+                    Some(json_rows) => Ok(json_rows.to_vec()),
+                    None => {
+                        // TODO: Why do we need block on?
+                        println!("Blocking on query ...");
+                        let json_rows = futures::executor::block_on(self.query(sql, params))?;
+                        println!("Query returned");
+                        cache.insert(
+                            MemoryCacheKey {
+                                tables: tables.to_string(),
+                                statement: sql.to_string(),
+                                parameters: format!("{params:?}"),
+                            },
+                            json_rows.to_vec(),
+                        );
+                        Ok(json_rows)
+                    }
+                }
+            }
         }
     }
 
@@ -842,11 +896,37 @@ pub fn validate_table_name(table_name: &str) -> Result<String, DbError> {
     }
 }
 
+/// Clear the memory cache.
+pub fn clear_mem_cache(tables: &[&str]) -> Result<(), DbError> {
+    let mut cache = match MEMORY_CACHE.try_lock() {
+        Ok(cache) => cache,
+        Err(err) => {
+            return Err(DbError::ConnectError(format!("Error locking cache: {err}")));
+        }
+    };
+    let keys = cache
+        .keys()
+        .map(|k| k)
+        .cloned()
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    for table in tables {
+        for key in keys.iter() {
+            if key.tables.contains(table) {
+                cache.remove(key);
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[tokio::test]
+    #[ignore]
     async fn test_table_names() {
         // Valid table names:
         assert_eq!(

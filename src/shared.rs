@@ -1,5 +1,6 @@
 use crate::core::{
-    CachingStrategy, DbError, DbKind, DbQuery, JsonRow, ParamValue, validate_table_name,
+    CachingStrategy, DbError, DbKind, DbQuery, JsonRow, ParamValue, clear_mem_cache,
+    validate_table_name,
 };
 use std::fmt::Display;
 
@@ -304,7 +305,7 @@ pub(crate) async fn edit(
         CachingStrategy::None | CachingStrategy::Trigger => (),
         CachingStrategy::TruncateAll => pool.clear_cache(&[]).await?,
         CachingStrategy::Truncate => pool.clear_cache(&[&table]).await?,
-        CachingStrategy::Memory(_) => todo!(),
+        CachingStrategy::Memory(_) => clear_mem_cache(&[&table])?,
     }
 
     Ok(rows_to_return)

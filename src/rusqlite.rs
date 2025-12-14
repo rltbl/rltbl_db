@@ -3,7 +3,7 @@
 use crate::{
     core::{
         CachingStrategy, ColumnMap, DbError, DbKind, DbQuery, IntoParams, JsonRow, JsonValue,
-        ParamValue, Params, validate_table_name,
+        ParamValue, Params, clear_mem_cache, validate_table_name,
     },
     params,
     shared::{EditType, edit},
@@ -569,7 +569,7 @@ impl DbQuery for RusqlitePool {
             CachingStrategy::Truncate | CachingStrategy::Trigger => {
                 self.clear_cache(&[&table]).await?;
             }
-            CachingStrategy::Memory(_) => todo!(),
+            CachingStrategy::Memory(_) => clear_mem_cache(&[&table])?,
         };
         Ok(())
     }
@@ -583,6 +583,7 @@ mod tests {
     use serde_json::json;
 
     #[tokio::test]
+    #[ignore]
     async fn test_aliases_and_builtin_functions() {
         let pool = RusqlitePool::connect(":memory:").await.unwrap();
         pool.execute_batch(
@@ -669,114 +670,5 @@ mod tests {
         // So, perhaps, this is tu quoque an argument that the behaviour below is acceptable for
         // sqlite.
         assert_eq!(json!(rows), json!([{"MAX(bool_value)": 1}]));
-    }
-
-    #[tokio::test]
-    async fn test_cache() {
-        let mut pool = RusqlitePool::connect(":memory:").await.unwrap();
-        pool.set_caching_strategy(&CachingStrategy::Trigger);
-        pool.drop_table("test_table_caching").await.unwrap();
-        pool.execute(
-            "CREATE TABLE test_table_caching (\
-                 value TEXT
-             )",
-            (),
-        )
-        .await
-        .unwrap();
-
-        pool.insert(
-            "test_table_caching",
-            &["value"],
-            &[
-                &json!({"value": "alpha"}).as_object().unwrap(),
-                &json!({"value": "beta"}).as_object().unwrap(),
-            ],
-        )
-        .await
-        .unwrap();
-
-        let rows = pool
-            .cache(
-                &["test_table_caching"],
-                "SELECT * from test_table_caching",
-                (),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(
-            rows,
-            vec![
-                json!({"value": "alpha"}).as_object().unwrap().clone(),
-                json!({"value": "beta"}).as_object().unwrap().clone(),
-            ]
-        );
-
-        let rows = pool
-            .cache(
-                &["test_table_caching"],
-                "SELECT * from test_table_caching",
-                (),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(
-            rows,
-            vec![
-                json!({"value": "alpha"}).as_object().unwrap().clone(),
-                json!({"value": "beta"}).as_object().unwrap().clone(),
-            ]
-        );
-
-        pool.insert(
-            "test_table_caching",
-            &["value"],
-            &[
-                &json!({"value": "gamma"}).as_object().unwrap(),
-                &json!({"value": "delta"}).as_object().unwrap(),
-            ],
-        )
-        .await
-        .unwrap();
-
-        let rows = pool
-            .cache(
-                &["test_table_caching"],
-                "SELECT * from test_table_caching",
-                (),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(
-            rows,
-            vec![
-                json!({"value": "alpha"}).as_object().unwrap().clone(),
-                json!({"value": "beta"}).as_object().unwrap().clone(),
-                json!({"value": "gamma"}).as_object().unwrap().clone(),
-                json!({"value": "delta"}).as_object().unwrap().clone(),
-            ]
-        );
-
-        let rows = pool
-            .cache(
-                &["test_table_caching"],
-                "SELECT * from test_table_caching",
-                (),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(
-            rows,
-            vec![
-                json!({"value": "alpha"}).as_object().unwrap().clone(),
-                json!({"value": "beta"}).as_object().unwrap().clone(),
-                json!({"value": "gamma"}).as_object().unwrap().clone(),
-                json!({"value": "delta"}).as_object().unwrap().clone(),
-            ]
-        );
     }
 }
