@@ -300,6 +300,7 @@ mod tests {
     use crate::params;
     use rust_decimal::dec;
     use serde_json::json;
+    use std::str::FromStr;
 
     #[tokio::test]
     #[ignore]
@@ -1563,117 +1564,126 @@ mod tests {
 
     async fn caching(url: &str) {
         let mut pool = AnyPool::connect(url).await.unwrap();
-        pool.set_caching_strategy(&CachingStrategy::Trigger);
-        pool.drop_table("test_table_caching").await.unwrap();
-        println!("Table dropped");
-        pool.execute(
-            "CREATE TABLE test_table_caching (\
-             value TEXT
+
+        async fn cache_with_strategy(pool: &mut AnyPool, strategy: &CachingStrategy) {
+            pool.set_caching_strategy(strategy);
+            pool.drop_table("test_table_caching").await.unwrap();
+            println!("Table dropped");
+            pool.execute(
+                "CREATE TABLE test_table_caching (\
+                 value TEXT
              )",
-            (),
-        )
-        .await
-        .unwrap();
-        println!("Table created");
-
-        pool.insert(
-            "test_table_caching",
-            &["value"],
-            &[
-                &json!({"value": "alpha"}).as_object().unwrap(),
-                &json!({"value": "beta"}).as_object().unwrap(),
-            ],
-        )
-        .await
-        .unwrap();
-        println!("Inserted (1)");
-
-        let rows = pool
-            .cache(
-                &["test_table_caching"],
-                "SELECT * from test_table_caching",
                 (),
             )
             .await
             .unwrap();
-        println!("Selected (1)");
+            println!("Table created");
 
-        assert_eq!(
-            rows,
-            vec![
-                json!({"value": "alpha"}).as_object().unwrap().clone(),
-                json!({"value": "beta"}).as_object().unwrap().clone(),
-            ]
-        );
-
-        let rows = pool
-            .cache(
-                &["test_table_caching"],
-                "SELECT * from test_table_caching",
-                (),
+            pool.insert(
+                "test_table_caching",
+                &["value"],
+                &[
+                    &json!({"value": "alpha"}).as_object().unwrap(),
+                    &json!({"value": "beta"}).as_object().unwrap(),
+                ],
             )
             .await
             .unwrap();
-        println!("Selected (2)");
+            println!("Inserted (1)");
 
-        assert_eq!(
-            rows,
-            vec![
-                json!({"value": "alpha"}).as_object().unwrap().clone(),
-                json!({"value": "beta"}).as_object().unwrap().clone(),
-            ]
-        );
+            let rows = pool
+                .cache(
+                    &["test_table_caching"],
+                    "SELECT * from test_table_caching",
+                    (),
+                )
+                .await
+                .unwrap();
+            println!("Selected (1)");
 
-        pool.insert(
-            "test_table_caching",
-            &["value"],
-            &[
-                &json!({"value": "gamma"}).as_object().unwrap(),
-                &json!({"value": "delta"}).as_object().unwrap(),
-            ],
-        )
-        .await
-        .unwrap();
-        println!("Inserted (2)");
+            assert_eq!(
+                rows,
+                vec![
+                    json!({"value": "alpha"}).as_object().unwrap().clone(),
+                    json!({"value": "beta"}).as_object().unwrap().clone(),
+                ]
+            );
 
-        let rows = pool
-            .cache(
-                &["test_table_caching"],
-                "SELECT * from test_table_caching",
-                (),
+            let rows = pool
+                .cache(
+                    &["test_table_caching"],
+                    "SELECT * from test_table_caching",
+                    (),
+                )
+                .await
+                .unwrap();
+            println!("Selected (2)");
+
+            assert_eq!(
+                rows,
+                vec![
+                    json!({"value": "alpha"}).as_object().unwrap().clone(),
+                    json!({"value": "beta"}).as_object().unwrap().clone(),
+                ]
+            );
+
+            pool.insert(
+                "test_table_caching",
+                &["value"],
+                &[
+                    &json!({"value": "gamma"}).as_object().unwrap(),
+                    &json!({"value": "delta"}).as_object().unwrap(),
+                ],
             )
             .await
             .unwrap();
-        println!("Selected (3)");
+            println!("Inserted (2)");
 
-        assert_eq!(
-            rows,
-            vec![
-                json!({"value": "alpha"}).as_object().unwrap().clone(),
-                json!({"value": "beta"}).as_object().unwrap().clone(),
-                json!({"value": "gamma"}).as_object().unwrap().clone(),
-                json!({"value": "delta"}).as_object().unwrap().clone(),
-            ]
-        );
+            let rows = pool
+                .cache(
+                    &["test_table_caching"],
+                    "SELECT * from test_table_caching",
+                    (),
+                )
+                .await
+                .unwrap();
+            println!("Selected (3)");
 
-        let rows = pool
-            .cache(
-                &["test_table_caching"],
-                "SELECT * from test_table_caching",
-                (),
-            )
-            .await
-            .unwrap();
-        println!("Selected (4)");
+            assert_eq!(
+                rows,
+                vec![
+                    json!({"value": "alpha"}).as_object().unwrap().clone(),
+                    json!({"value": "beta"}).as_object().unwrap().clone(),
+                    json!({"value": "gamma"}).as_object().unwrap().clone(),
+                    json!({"value": "delta"}).as_object().unwrap().clone(),
+                ]
+            );
 
-        assert_eq!(
-            rows,
-            vec![
-                json!({"value": "alpha"}).as_object().unwrap().clone(),
-                json!({"value": "beta"}).as_object().unwrap().clone(),
-                json!({"value": "gamma"}).as_object().unwrap().clone(),
-                json!({"value": "delta"}).as_object().unwrap().clone(),
-            ]
-        );
+            let rows = pool
+                .cache(
+                    &["test_table_caching"],
+                    "SELECT * from test_table_caching",
+                    (),
+                )
+                .await
+                .unwrap();
+            println!("Selected (4)");
+
+            assert_eq!(
+                rows,
+                vec![
+                    json!({"value": "alpha"}).as_object().unwrap().clone(),
+                    json!({"value": "beta"}).as_object().unwrap().clone(),
+                    json!({"value": "gamma"}).as_object().unwrap().clone(),
+                    json!({"value": "delta"}).as_object().unwrap().clone(),
+                ]
+            );
+        }
+
+        for caching_strategy in ["truncate_all", "truncate", "trigger"] {
+            let caching_strategy = CachingStrategy::from_str(caching_strategy).unwrap();
+            println!("CachingStrategy: {caching_strategy:?}");
+            cache_with_strategy(&mut pool, &caching_strategy).await;
+        }
     }
 }
