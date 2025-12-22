@@ -461,7 +461,10 @@ pub trait DbQuery {
     /// Get the current caching strategy.
     fn get_caching_strategy(&self) -> CachingStrategy;
 
-    /// Add caching triggers for the given tables.
+    /// Ensure that the cache table exists
+    fn ensure_cache_table_exists(&self) -> impl Future<Output = Result<(), DbError>> + Send;
+
+    /// Ensure that caching triggers exist for the given tables.
     fn ensure_caching_triggers_exist(
         &self,
         tables: &[&str],
@@ -469,26 +472,29 @@ pub trait DbQuery {
 
     /// Clear the cache entries for the given tables, or everything if tables is an empty list.
     async fn clear_cache(&self, tables: &[&str]) -> Result<(), DbError> {
-        match tables.is_empty() {
-            true => {
-                self.execute(r#"DELETE FROM "cache""#, ()).await?;
-                Ok(())
-            }
-            false => {
-                let pref = match self.kind() {
-                    DbKind::SQLite => "?",
-                    DbKind::PostgreSQL => "$",
-                };
-                for table in tables {
-                    let table = format!(r#"%{table}%"#);
-                    self.execute(
-                        &format!(r#"DELETE FROM "cache" WHERE "tables" LIKE {pref}1"#),
-                        &[table],
-                    )
-                    .await?;
+        match self.table_exists("cache").await? {
+            false => Ok(()),
+            true => match tables.is_empty() {
+                true => {
+                    self.execute(r#"DELETE FROM "cache""#, ()).await?;
+                    Ok(())
                 }
-                Ok(())
-            }
+                false => {
+                    let pref = match self.kind() {
+                        DbKind::SQLite => "?",
+                        DbKind::PostgreSQL => "$",
+                    };
+                    for table in tables {
+                        let table = format!(r#"%{table}%"#);
+                        self.execute(
+                            &format!(r#"DELETE FROM "cache" WHERE "tables" LIKE {pref}1"#),
+                            &[table],
+                        )
+                        .await?;
+                    }
+                    Ok(())
+                }
+            },
         }
     }
 
@@ -563,9 +569,11 @@ pub trait DbQuery {
         match self.get_caching_strategy() {
             CachingStrategy::None => self.query(sql, params).await,
             CachingStrategy::TruncateAll | CachingStrategy::Truncate => {
+                self.ensure_cache_table_exists().await?;
                 inner_cache(tables, sql, &params.into_params()).await
             }
             CachingStrategy::Trigger => {
+                self.ensure_cache_table_exists().await?;
                 self.ensure_caching_triggers_exist(tables).await?;
                 inner_cache(tables, sql, &params.into_params()).await
             }
@@ -839,6 +847,9 @@ pub trait DbQuery {
         rows: &[&JsonRow],
         returning: &[&str],
     ) -> impl Future<Output = Result<Vec<JsonRow>, DbError>>;
+
+    /// Check whether the given table exists in the database.
+    fn table_exists(&self, table: &str) -> impl Future<Output = Result<bool, DbError>> + Send;
 
     /// Drop the given table from the database.
     fn drop_table(&self, table: &str) -> impl Future<Output = Result<(), DbError>>;

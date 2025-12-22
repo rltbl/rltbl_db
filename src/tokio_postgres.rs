@@ -120,60 +120,15 @@ impl TokioPostgresPool {
                     .strip_prefix("postgresql:///")
                     .ok_or(DbError::ConnectError("Invalid PostgreSQL URL".to_string()))?;
                 cfg.dbname = Some(db_name.to_string());
-
-                let conn = TokioPostgresPool {
-                    pool: cfg
-                        .create_pool(Some(Runtime::Tokio1), NoTls)
-                        .map_err(|err| {
-                            DbError::ConnectError(format!("Error creating pool: {err:?}"))
-                        })?,
+                let pool = cfg
+                    .create_pool(Some(Runtime::Tokio1), NoTls)
+                    .map_err(|err| {
+                        DbError::ConnectError(format!("Error creating pool: {err:?}"))
+                    })?;
+                Ok(Self {
+                    pool: pool,
                     caching_strategy: CachingStrategy::None,
-                };
-
-                // If the cache table doesn't already exist, create it now:
-                match conn
-                    .execute(
-                        r#"CREATE TABLE IF NOT EXISTS "cache" (
-                             "tables" TEXT,
-                             "statement" TEXT,
-                             "parameters" TEXT,
-                             "value" TEXT,
-                             PRIMARY KEY ("tables", "statement", "parameters")
-                           )"#,
-                        (),
-                    )
-                    .await
-                {
-                    Ok(_) => Ok(conn),
-                    Err(_) => {
-                        // Since we are not using transactions, a race condition could occur in
-                        // which two or more threads are trying to create the cache at the same
-                        // time, triggering a primary key violation in the metadata table. So if
-                        // there is an error creating the cache table we just check that it exists
-                        // and if it does we assume that all is ok.
-                        match conn
-                            .query(
-                                r#"SELECT 1
-                                   FROM "information_schema"."tables"
-                                   WHERE "table_type" LIKE '%TABLE'
-                                     AND "table_name" = 'cache'
-                                     AND "table_schema" IN (
-                                       SELECT REGEXP_SPLIT_TO_TABLE("setting", ', ')
-                                       FROM "pg_settings"
-                                       WHERE "name" = 'search_path'
-                                     )"#,
-                                (),
-                            )
-                            .await?
-                            .first()
-                        {
-                            None => Err(DbError::DatabaseError(
-                                "The cache table could not be created".to_string(),
-                            )),
-                            Some(_) => Ok(conn),
-                        }
-                    }
-                }
+                })
             }
             false => Err(DbError::ConnectError(format!(
                 "Invalid PostgreSQL URL: '{url}'"
@@ -196,6 +151,53 @@ impl DbQuery for TokioPostgresPool {
     /// Implements [DbQuery::get_caching_strategy()] for PostgreSQL.
     fn get_caching_strategy(&self) -> CachingStrategy {
         self.caching_strategy
+    }
+
+    /// Implements [DbQuery::ensure_cache_table_exists()] for PostgreSQL.
+    async fn ensure_cache_table_exists(&self) -> Result<(), DbError> {
+        match self
+            .execute(
+                r#"CREATE TABLE IF NOT EXISTS "cache" (
+                     "tables" TEXT,
+                     "statement" TEXT,
+                     "parameters" TEXT,
+                     "value" TEXT,
+                     PRIMARY KEY ("tables", "statement", "parameters")
+                   )"#,
+                (),
+            )
+            .await
+        {
+            Ok(_) => Ok(()),
+            Err(_) => {
+                // Since we are not using transactions, a race condition could occur in
+                // which two or more threads are trying to create the cache at the same
+                // time, triggering a primary key violation in the metadata table. So if
+                // there is an error creating the cache table we just check that it exists
+                // and if it does we assume that all is ok.
+                match self
+                    .query(
+                        r#"SELECT 1
+                             FROM "information_schema"."tables"
+                             WHERE "table_type" LIKE '%TABLE'
+                               AND "table_name" = 'cache'
+                               AND "table_schema" IN (
+                                 SELECT REGEXP_SPLIT_TO_TABLE("setting", ', ')
+                                 FROM "pg_settings"
+                                 WHERE "name" = 'search_path'
+                               )"#,
+                        (),
+                    )
+                    .await?
+                    .first()
+                {
+                    None => Err(DbError::DatabaseError(
+                        "The cache table could not be created".to_string(),
+                    )),
+                    Some(_) => Ok(()),
+                }
+            }
+        }
     }
 
     /// Implements [DbQuery::ensure_caching_triggers_exist()] for PostgreSQL.
@@ -624,6 +626,29 @@ impl DbQuery for TokioPostgresPool {
             returning,
         )
         .await
+    }
+
+    /// Implements [DbQuery::table_exists()] for PostgreSQL.
+    async fn table_exists(&self, table: &str) -> Result<bool, DbError> {
+        match self
+            .query(
+                r#"SELECT 1
+                   FROM "information_schema"."tables"
+                   WHERE "table_type" LIKE '%TABLE'
+                     AND "table_name" = $1
+                     AND "table_schema" IN (
+                       SELECT REGEXP_SPLIT_TO_TABLE("setting", ', ')
+                       FROM "pg_settings"
+                       WHERE "name" = 'search_path'
+                     )"#,
+                &[table],
+            )
+            .await?
+            .first()
+        {
+            None => Ok(false),
+            Some(_) => Ok(true),
+        }
     }
 
     /// Implements [DbQuery::drop_table()] for PostgreSQL. Note (see

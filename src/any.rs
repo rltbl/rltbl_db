@@ -113,6 +113,15 @@ impl DbQuery for AnyPool {
         }
     }
 
+    async fn ensure_cache_table_exists(&self) -> Result<(), DbError> {
+        match self {
+            #[cfg(feature = "rusqlite")]
+            AnyPool::Rusqlite(pool) => pool.ensure_cache_table_exists().await,
+            #[cfg(feature = "tokio-postgres")]
+            AnyPool::TokioPostgres(pool) => pool.ensure_cache_table_exists().await,
+        }
+    }
+
     async fn ensure_caching_triggers_exist(&self, tables: &[&str]) -> Result<(), DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
@@ -261,6 +270,15 @@ impl DbQuery for AnyPool {
             AnyPool::TokioPostgres(pool) => {
                 pool.upsert_returning(table, columns, rows, returning).await
             }
+        }
+    }
+
+    async fn table_exists(&self, table: &str) -> Result<bool, DbError> {
+        match self {
+            #[cfg(feature = "rusqlite")]
+            AnyPool::Rusqlite(pool) => pool.table_exists(table).await,
+            #[cfg(feature = "tokio-postgres")]
+            AnyPool::TokioPostgres(pool) => pool.table_exists(table).await,
         }
     }
 

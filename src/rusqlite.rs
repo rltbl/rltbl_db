@@ -183,50 +183,14 @@ pub struct RusqlitePool {
 impl RusqlitePool {
     /// Connect to a SQLite database using the given url.
     pub async fn connect(url: &str) -> Result<Self, DbError> {
-        let conn = RusqlitePool {
-            pool: Config::new(url)
-                .create_pool(Runtime::Tokio1)
-                .map_err(|err| DbError::ConnectError(format!("Error creating pool: {err}")))?,
+        let cfg = Config::new(url);
+        let pool = cfg
+            .create_pool(Runtime::Tokio1)
+            .map_err(|err| DbError::ConnectError(format!("Error creating pool: {err}")))?;
+        Ok(Self {
+            pool: pool,
             caching_strategy: CachingStrategy::None,
-        };
-
-        // If the cache table doesn't already exist, create it now:
-        match conn
-            .execute(
-                r#"CREATE TABLE IF NOT EXISTS "cache" (
-                     "tables" TEXT,
-                     "statement" TEXT,
-                     "parameters" TEXT,
-                     "value" TEXT,
-                     PRIMARY KEY ("tables", "statement", "parameters")
-                   )"#,
-                (),
-            )
-            .await
-        {
-            Ok(_) => Ok(conn),
-            Err(_) => {
-                // Since we are not using transactions, a race condition could occur in
-                // which two or more threads are trying to create the cache at the same
-                // time, triggering a primary key violation in the metadata table. So if
-                // there is an error creating the cache table we just check that it exists
-                // and if it does we assume that all is ok.
-                match conn
-                    .query(
-                        r#"SELECT 1 FROM "sqlite_master"
-                           WHERE "type" = 'table' AND "name" = 'cache'"#,
-                        (),
-                    )
-                    .await?
-                    .first()
-                {
-                    None => Err(DbError::DatabaseError(
-                        "The cache table could not be created".to_string(),
-                    )),
-                    Some(_) => Ok(conn),
-                }
-            }
-        }
+        })
     }
 }
 
@@ -244,6 +208,46 @@ impl DbQuery for RusqlitePool {
     /// Implements [DbQuery::get_caching_strategy()] for SQLite.
     fn get_caching_strategy(&self) -> CachingStrategy {
         self.caching_strategy
+    }
+
+    /// Implements [DbQuery::ensure_cache_table_exists()] for SQLite.
+    async fn ensure_cache_table_exists(&self) -> Result<(), DbError> {
+        match self
+            .execute(
+                r#"CREATE TABLE IF NOT EXISTS "cache" (
+                     "tables" TEXT,
+                     "statement" TEXT,
+                     "parameters" TEXT,
+                     "value" TEXT,
+                     PRIMARY KEY ("tables", "statement", "parameters")
+                   )"#,
+                (),
+            )
+            .await
+        {
+            Ok(_) => Ok(()),
+            Err(_) => {
+                // Since we are not using transactions, a race condition could occur in
+                // which two or more threads are trying to create the cache at the same
+                // time, triggering a primary key violation in the metadata table. So if
+                // there is an error creating the cache table we just check that it exists
+                // and if it does we assume that all is ok.
+                match self
+                    .query(
+                        r#"SELECT 1 FROM "sqlite_master"
+                           WHERE "type" = 'table' AND "name" = 'cache'"#,
+                        (),
+                    )
+                    .await?
+                    .first()
+                {
+                    None => Err(DbError::DatabaseError(
+                        "The cache table could not be created".to_string(),
+                    )),
+                    Some(_) => Ok(()),
+                }
+            }
+        }
     }
 
     /// Implements [DbQuery::ensure_caching_triggers_exist()] for SQLite.
@@ -549,6 +553,22 @@ impl DbQuery for RusqlitePool {
             returning,
         )
         .await
+    }
+
+    /// Implements [DbQuery::table_exists()] for SQLite.
+    async fn table_exists(&self, table: &str) -> Result<bool, DbError> {
+        match self
+            .query(
+                r#"SELECT 1 FROM "sqlite_master"
+                   WHERE "type" = 'table' AND "name" = ?1"#,
+                &[table],
+            )
+            .await?
+            .first()
+        {
+            None => Ok(false),
+            Some(_) => Ok(true),
+        }
     }
 
     /// Implements [DbQuery::drop_table()] for SQLite.
