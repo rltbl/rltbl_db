@@ -281,15 +281,6 @@ impl DbQuery for AnyPool {
             AnyPool::TokioPostgres(pool) => pool.table_exists(table).await,
         }
     }
-
-    async fn drop_table(&self, table: &str) -> Result<(), DbError> {
-        match self {
-            #[cfg(feature = "rusqlite")]
-            AnyPool::Rusqlite(pool) => pool.drop_table(table).await,
-            #[cfg(feature = "tokio-postgres")]
-            AnyPool::TokioPostgres(pool) => pool.drop_table(table).await,
-        }
-    }
 }
 
 #[cfg(test)]

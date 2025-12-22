@@ -505,9 +505,9 @@ pub trait DbQuery {
         &self,
         tables: &[&str],
         sql: &str,
-        params: impl IntoParams + Send,
+        params: impl IntoParams + Send + Copy,
     ) -> Result<Vec<JsonRow>, DbError> {
-        let inner_cache =
+        let db_cache =
             async |tables: &[&str], sql: &str, params: &Params| -> Result<Vec<JsonRow>, DbError> {
                 // Look in the cache to see if there is an entry corresponding to the given SQL
                 // string for the given tables and parameters. If so, return the data from the
@@ -566,67 +566,69 @@ pub trait DbQuery {
                 }
             };
 
+        let memory_cache = |cache_size: usize| {
+            println!("Locking memory cache ...");
+            let mut cache = match MEMORY_CACHE.try_lock() {
+                Ok(cache) => cache,
+                Err(err) => {
+                    return Err(DbError::ConnectError(format!("Error locking cache: {err}")));
+                }
+            };
+            println!("Memory cache locked!");
+            let keys = cache.keys().map(|key| key.clone()).collect::<Vec<_>>();
+            if keys.len() >= cache_size {
+                for (i, key) in keys.iter().enumerate().rev() {
+                    if i >= (cache_size - 1) {
+                        cache.remove(&key);
+                    } else {
+                        break;
+                    }
+                }
+            }
+
+            let tables = tables
+                .iter()
+                .map(|t| json!(t).to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let params = &params.into_params();
+            let mem_key = MemoryCacheKey {
+                tables: tables.to_string(),
+                statement: sql.to_string(),
+                parameters: format!("{params:?}"),
+            };
+            match cache.get(&mem_key) {
+                Some(json_rows) => Ok(json_rows.to_vec()),
+                None => {
+                    // TODO: Why do we need block on?
+                    println!("Blocking on query ...");
+                    let json_rows = futures::executor::block_on(self.query(sql, params))?;
+                    println!("Query returned");
+                    cache.insert(
+                        MemoryCacheKey {
+                            tables: tables.to_string(),
+                            statement: sql.to_string(),
+                            parameters: format!("{params:?}"),
+                        },
+                        json_rows.to_vec(),
+                    );
+                    Ok(json_rows)
+                }
+            }
+        };
+
         match self.get_caching_strategy() {
             CachingStrategy::None => self.query(sql, params).await,
             CachingStrategy::TruncateAll | CachingStrategy::Truncate => {
                 self.ensure_cache_table_exists().await?;
-                inner_cache(tables, sql, &params.into_params()).await
+                db_cache(tables, sql, &params.into_params()).await
             }
             CachingStrategy::Trigger => {
                 self.ensure_cache_table_exists().await?;
                 self.ensure_caching_triggers_exist(tables).await?;
-                inner_cache(tables, sql, &params.into_params()).await
+                db_cache(tables, sql, &params.into_params()).await
             }
-            CachingStrategy::Memory(cache_size) => {
-                println!("Locking memory cache ...");
-                let mut cache = match MEMORY_CACHE.try_lock() {
-                    Ok(cache) => cache,
-                    Err(err) => {
-                        return Err(DbError::ConnectError(format!("Error locking cache: {err}")));
-                    }
-                };
-                println!("Memory cache locked!");
-                let keys = cache.keys().map(|key| key.clone()).collect::<Vec<_>>();
-                if keys.len() >= cache_size {
-                    for (i, key) in keys.iter().enumerate().rev() {
-                        if i >= (cache_size - 1) {
-                            cache.remove(&key);
-                        } else {
-                            break;
-                        }
-                    }
-                }
-
-                let tables = tables
-                    .iter()
-                    .map(|t| json!(t).to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let params = &params.into_params();
-                let mem_key = MemoryCacheKey {
-                    tables: tables.to_string(),
-                    statement: sql.to_string(),
-                    parameters: format!("{params:?}"),
-                };
-                match cache.get(&mem_key) {
-                    Some(json_rows) => Ok(json_rows.to_vec()),
-                    None => {
-                        // TODO: Why do we need block on?
-                        println!("Blocking on query ...");
-                        let json_rows = futures::executor::block_on(self.query(sql, params))?;
-                        println!("Query returned");
-                        cache.insert(
-                            MemoryCacheKey {
-                                tables: tables.to_string(),
-                                statement: sql.to_string(),
-                                parameters: format!("{params:?}"),
-                            },
-                            json_rows.to_vec(),
-                        );
-                        Ok(json_rows)
-                    }
-                }
-            }
+            CachingStrategy::Memory(cache_size) => memory_cache(cache_size),
         }
     }
 
@@ -851,8 +853,40 @@ pub trait DbQuery {
     /// Check whether the given table exists in the database.
     fn table_exists(&self, table: &str) -> impl Future<Output = Result<bool, DbError>> + Send;
 
-    /// Drop the given table from the database.
-    fn drop_table(&self, table: &str) -> impl Future<Output = Result<(), DbError>>;
+    /// Drop the given table from the database. Note that for PostgreSQL (see
+    /// <https://www.postgresql.org/docs/current/sql-droptable.html>), in the case of a
+    /// dependent foreign key constraint, only the constraint will be removed, not the dependent
+    /// table itself.
+    async fn drop_table(&self, table: &str) -> Result<(), DbError> {
+        let table = validate_table_name(table)?;
+        // Drop the table:
+        match self.kind() {
+            DbKind::PostgreSQL => {
+                self.execute(&format!(r#"DROP TABLE IF EXISTS "{table}" CASCADE"#), ())
+                    .await?
+            }
+            DbKind::SQLite => {
+                self.execute(&format!(r#"DROP TABLE IF EXISTS "{table}""#), ())
+                    .await?
+            }
+        };
+
+        // Delete dirty entries from the cache in accordance with our caching strategy:
+        match self.get_caching_strategy() {
+            CachingStrategy::None => (),
+            CachingStrategy::TruncateAll => {
+                self.clear_cache(&[]).await?;
+            }
+            // We clear the cache also in the case of a trigger, since the trigger will not
+            // be triggered when we drop the table (it will, rather, be dropped along with the
+            // table)
+            CachingStrategy::Truncate | CachingStrategy::Trigger => {
+                self.clear_cache(&[&table]).await?;
+            }
+            CachingStrategy::Memory(_) => clear_mem_cache(&[&table])?,
+        };
+        Ok(())
+    }
 }
 
 /// Convert a JSON Value to a String,

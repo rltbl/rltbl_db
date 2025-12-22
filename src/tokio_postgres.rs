@@ -3,7 +3,7 @@
 use crate::{
     core::{
         CachingStrategy, ColumnMap, DbError, DbKind, DbQuery, IntoParams, JsonRow, JsonValue,
-        ParamValue, Params, clear_mem_cache, validate_table_name,
+        ParamValue, Params, validate_table_name,
     },
     params,
     shared::{EditType, edit},
@@ -649,32 +649,6 @@ impl DbQuery for TokioPostgresPool {
             None => Ok(false),
             Some(_) => Ok(true),
         }
-    }
-
-    /// Implements [DbQuery::drop_table()] for PostgreSQL. Note (see
-    /// <https://www.postgresql.org/docs/current/sql-droptable.html>), that in the case of a
-    /// dependent foreign key constraint, only the constraint will be removed, not the dependent
-    /// table itself.
-    async fn drop_table(&self, table: &str) -> Result<(), DbError> {
-        let table = validate_table_name(table)?;
-        self.execute(&format!(r#"DROP TABLE IF EXISTS "{table}" CASCADE"#), ())
-            .await?;
-
-        // Delete dirty entries from the cache in accordance with our caching strategy:
-        match self.get_caching_strategy() {
-            CachingStrategy::None => (),
-            CachingStrategy::TruncateAll => {
-                self.clear_cache(&[]).await?;
-            }
-            // We clear the cache also in the case of a trigger, since the trigger will not
-            // be triggered when we drop the table (it will, rather, be dropped along with the
-            // table)
-            CachingStrategy::Truncate | CachingStrategy::Trigger => {
-                self.clear_cache(&[&table]).await?;
-            }
-            CachingStrategy::Memory(_) => clear_mem_cache(&[&table])?,
-        };
-        Ok(())
     }
 }
 

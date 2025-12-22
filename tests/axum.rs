@@ -37,6 +37,13 @@ async fn run_axum(url: &str) {
     .await
     .unwrap();
 
+    pool.cache(&["test"], "SELECT 1 FROM test", ())
+        .await
+        .unwrap();
+    pool.cache(&["test"], "SELECT 1 FROM test", ())
+        .await
+        .unwrap();
+
     let state = Arc::new(pool);
     let mut router: Router = Router::new().route("/", get(get_root)).with_state(state);
 
