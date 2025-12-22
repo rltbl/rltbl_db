@@ -131,7 +131,6 @@ impl TokioPostgresPool {
                 };
 
                 // If the cache table doesn't already exist, create it now:
-                // TODO: The "tables" field should be JSONB.
                 match conn
                     .execute(
                         r#"CREATE TABLE IF NOT EXISTS "cache" (

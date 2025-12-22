@@ -480,8 +480,6 @@ pub trait DbQuery {
                     DbKind::PostgreSQL => "$",
                 };
                 for table in tables {
-                    // TODO: If we can get JSONB to work, the operator should be "tables" ? $1,
-                    // where ? is a JSONB operator.
                     let table = format!(r#"%{table}%"#);
                     self.execute(
                         &format!(r#"DELETE FROM "cache" WHERE "tables" LIKE {pref}1"#),

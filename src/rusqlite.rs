@@ -194,7 +194,7 @@ impl RusqlitePool {
         match conn
             .execute(
                 r#"CREATE TABLE IF NOT EXISTS "cache" (
-                     "tables" JSON,
+                     "tables" TEXT,
                      "statement" TEXT,
                      "parameters" TEXT,
                      "value" TEXT,
