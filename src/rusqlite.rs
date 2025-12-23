@@ -580,7 +580,6 @@ mod tests {
     use serde_json::json;
 
     #[tokio::test]
-    #[ignore]
     async fn test_aliases_and_builtin_functions() {
         let pool = RusqlitePool::connect(":memory:").await.unwrap();
         pool.execute_batch(

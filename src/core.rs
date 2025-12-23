@@ -3,6 +3,7 @@
 use async_trait::async_trait;
 use indexmap::IndexMap;
 use lazy_static::lazy_static;
+use rand::seq::SliceRandom;
 use regex::Regex;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -505,7 +506,7 @@ pub trait DbQuery {
         &self,
         tables: &[&str],
         sql: &str,
-        params: impl IntoParams + Send + Copy,
+        params: impl IntoParams + Send + Copy + Sync,
     ) -> Result<Vec<JsonRow>, DbError> {
         let db_cache =
             async |tables: &[&str], sql: &str, params: &Params| -> Result<Vec<JsonRow>, DbError> {
@@ -517,16 +518,16 @@ pub trait DbQuery {
                     DbKind::SQLite => r#"CAST("tables" AS TEXT)"#,
                     DbKind::PostgreSQL => r#""tables"::TEXT"#,
                 };
-                let pref = match self.kind() {
+                let prefix = match self.kind() {
                     DbKind::SQLite => "?",
                     DbKind::PostgreSQL => "$",
                 };
                 let cache_sql = format!(
-                    r#"SELECT {pref}1||rtrim(ltrim("value", '['), ']')||{pref}2 AS "value"
+                    r#"SELECT {prefix}1||rtrim(ltrim("value", '['), ']')||{prefix}2 AS "value"
                        FROM "cache"
-                       WHERE {tables_cast} = {pref}3
-                       AND "statement" = {pref}4
-                       AND "parameters" = {pref}5
+                       WHERE {tables_cast} = {prefix}3
+                       AND "statement" = {prefix}4
+                       AND "parameters" = {prefix}5
                        LIMIT 1"#
                 );
                 let tables_param = format!("[{}]", tables.join(", "));
@@ -557,7 +558,7 @@ pub trait DbQuery {
                         let insert_sql = format!(
                             r#"INSERT INTO "cache"
                                ("tables", "statement", "parameters", "value")
-                               VALUES ({pref}1, {pref}2, {pref}3, {pref}4)"#
+                               VALUES ({prefix}1, {prefix}2, {prefix}3, {prefix}4)"#
                         );
                         let insert_params = [&tables_param, sql, &params_param, &json_rows_content];
                         self.query(&insert_sql, &insert_params).await?;
@@ -566,29 +567,14 @@ pub trait DbQuery {
                 }
             };
 
-        let memory_cache = |cache_size: usize| {
-            println!("Locking memory cache ...");
-            let mut cache = match MEMORY_CACHE.try_lock() {
-                Ok(cache) => cache,
-                Err(err) => {
-                    return Err(DbError::ConnectError(format!("Error locking cache: {err}")));
-                }
-            };
-            println!("Memory cache locked!");
-            let keys = cache.keys().map(|key| key.clone()).collect::<Vec<_>>();
-            if keys.len() >= cache_size {
-                for (i, key) in keys.iter().enumerate().rev() {
-                    if i >= (cache_size - 1) {
-                        cache.remove(&key);
-                    } else {
-                        break;
-                    }
-                }
-            }
-
+        let mem_cache = async |tables: &[&str],
+                               sql: &str,
+                               params: &Params,
+                               cache_size: usize|
+               -> Result<Vec<JsonRow>, DbError> {
             let tables = tables
                 .iter()
-                .map(|t| json!(t).to_string())
+                .map(|t| t.to_string())
                 .collect::<Vec<_>>()
                 .join(", ");
             let params = &params.into_params();
@@ -597,21 +583,44 @@ pub trait DbQuery {
                 statement: sql.to_string(),
                 parameters: format!("{params:?}"),
             };
-            match cache.get(&mem_key) {
-                Some(json_rows) => Ok(json_rows.to_vec()),
+            let cached_rows = {
+                let cache = match MEMORY_CACHE.try_lock() {
+                    Ok(cache) => cache,
+                    Err(err) => {
+                        return Err(DbError::ConnectError(format!("Error locking cache: {err}")));
+                    }
+                };
+                match cache.get(&mem_key) {
+                    Some(json_rows) => Some(json_rows.to_vec()),
+                    None => None,
+                }
+            };
+            match cached_rows {
+                Some(json_rows) => Ok(json_rows),
                 None => {
-                    // TODO: Why do we need block on?
-                    println!("Blocking on query ...");
-                    let json_rows = futures::executor::block_on(self.query(sql, params))?;
-                    println!("Query returned");
-                    cache.insert(
-                        MemoryCacheKey {
-                            tables: tables.to_string(),
-                            statement: sql.to_string(),
-                            parameters: format!("{params:?}"),
-                        },
-                        json_rows.to_vec(),
-                    );
+                    let json_rows = self.query(sql, params).await?;
+                    let mut cache = match MEMORY_CACHE.try_lock() {
+                        Ok(cache) => cache,
+                        Err(err) => {
+                            return Err(DbError::ConnectError(format!(
+                                "Error locking cache: {err}"
+                            )));
+                        }
+                    };
+                    let mut keys = cache.keys().map(|key| key.clone()).collect::<Vec<_>>();
+                    // If the number of keys exceeds the allowed cache size, remove any extra keys.
+                    // The keys to be removed are decided at random.
+                    if keys.len() >= cache_size {
+                        keys.shuffle(&mut rand::rng());
+                        for (i, key) in keys.iter().enumerate().rev() {
+                            if i >= (cache_size - 1) {
+                                cache.remove(&key);
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                    cache.insert(mem_key, json_rows.to_vec());
                     Ok(json_rows)
                 }
             }
@@ -628,7 +637,10 @@ pub trait DbQuery {
                 self.ensure_caching_triggers_exist(tables).await?;
                 db_cache(tables, sql, &params.into_params()).await
             }
-            CachingStrategy::Memory(cache_size) => memory_cache(cache_size),
+            CachingStrategy::Memory(cache_size) => {
+                let rows = mem_cache(tables, sql, &params.into_params(), cache_size).await?;
+                Ok(rows)
+            }
         }
     }
 
@@ -969,7 +981,6 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    #[ignore]
     async fn test_table_names() {
         // Valid table names:
         assert_eq!(

@@ -660,7 +660,6 @@ mod tests {
     use serde_json::json;
 
     #[tokio::test]
-    #[ignore]
     async fn test_aliases_and_builtin_functions() {
         let pool = TokioPostgresPool::connect("postgresql:///rltbl_db")
             .await
