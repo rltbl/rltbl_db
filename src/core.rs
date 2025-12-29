@@ -15,6 +15,8 @@ use std::{
     str::FromStr,
     sync::Mutex,
 };
+use tree_sitter::{Node, Parser};
+use tree_sitter_sequel::LANGUAGE as SQL_LANGUAGE;
 
 pub type JsonValue = serde_json::Value;
 pub type JsonRow = JsonMap<String, JsonValue>;
@@ -647,147 +649,174 @@ pub trait DbQuery {
     /// parse the string into the right ParamValue.
     fn parse(&self, sql_type: &str, value: &str) -> Result<ParamValue, DbError>;
 
-    /// Parse the given SQL string into its constituents.
-    fn parse_statement_1(&self, sql: &str) -> Result<tree_sitter::Tree, DbError> {
-        let mut parser = tree_sitter::Parser::new();
+    /// Parse the given string, representing a series of (semi-colon-separated) SQL commands,
+    /// into their constituents and determine the tables that will be affected when the commands
+    /// are executed, if any. Commands that may potentially affect tables are: INSERT, UPDATE,
+    /// DELETE, and DROP TABLE. All other kinds of statements will be silently ignored.
+    fn get_modified_tables(&self, sql: &str) -> Result<HashSet<String>, DbError> {
+        // Validates that a given node is not an error node:
+        let check_for_error = |node: &Node<'_>| -> Result<(), DbError> {
+            if node.is_error() {
+                return Err(DbError::ParseError(format!(
+                    "Error parsing '{sql}': {node}"
+                )));
+            }
+            Ok(())
+        };
+
+        // Checks that the given node list is of the expected length:
+        fn verify_list_len(node_list: &Vec<Node<'_>>, len: usize) -> Result<(), DbError> {
+            if node_list.len() != len {
+                return Err(DbError::ParseError(format!(
+                    "Wrong number of values: {}. Expected: {}",
+                    node_list.len(),
+                    len
+                )));
+            }
+            Ok(())
+        }
+
+        // Instantiate the parser and read in the given sql string:
+        let mut parser = Parser::new();
         parser
-            .set_language(&tree_sitter_sequel::LANGUAGE.into())
-            .map_err(|err| DbError::ParseError(format!("Error parsing SQL: '{sql}': {err}")))?;
+            .set_language(&SQL_LANGUAGE.into())
+            .map_err(|err| DbError::ParseError(format!("Error setting language to SQL: {err}")))?;
         let tree = match parser.parse(sql, None) {
             Some(tree) => tree,
             None => return Err(DbError::ParseError(format!("Could not parse '{sql}'"))),
         };
 
-        let root_node = tree.root_node();
-        //println!("ROOT NODE: {:#?}", root_node);
-        if root_node.has_error() {
-            return Err(DbError::ParseError(format!(
-                "Error parsing '{sql}': {root_node}"
-            )));
+        // Collect the top-level statements:
+        let statements = {
+            let root_node = tree.root_node();
+            check_for_error(&root_node)?;
+            if root_node.kind().to_lowercase() != "program" {
+                return Err(DbError::ParseError(format!(
+                    "Unexpected root node kind: {}",
+                    root_node.kind()
+                )));
+            }
+            root_node
+                .children(&mut root_node.walk())
+                .filter(|child| child.kind().to_lowercase() == "statement")
+                .collect::<Vec<_>>()
+        };
+
+        // Determine the tables that will be modified:
+        let mut modified_tables = HashSet::new();
+        for statement in &statements {
+            check_for_error(&statement)?;
+            for instruction in statement.children(&mut tree.walk()) {
+                check_for_error(&instruction)?;
+                match instruction.kind().to_lowercase().as_str() {
+                    "insert" => {
+                        let table_name = {
+                            let object_ref = instruction
+                                .children(&mut instruction.walk())
+                                .filter(|child| child.kind().to_lowercase() == "object_reference")
+                                .collect::<Vec<_>>();
+                            verify_list_len(&object_ref, 1)?;
+                            let object_ref = object_ref[0];
+
+                            let identifier = object_ref
+                                .children(&mut object_ref.walk())
+                                .filter(|child| child.kind().to_lowercase() == "identifier")
+                                .collect::<Vec<_>>();
+                            verify_list_len(&identifier, 1)?;
+                            let identifier = identifier[0];
+
+                            validate_table_name(
+                                &sql.to_string()[identifier.start_byte()..identifier.end_byte()],
+                            )?
+                        };
+                        modified_tables.insert(table_name);
+                    }
+                    "update" => {
+                        let table_name = {
+                            let relation = instruction
+                                .children(&mut instruction.walk())
+                                .filter(|child| child.kind().to_lowercase() == "relation")
+                                .collect::<Vec<_>>();
+                            verify_list_len(&relation, 1)?;
+                            let relation = relation[0];
+
+                            let object_ref = relation
+                                .children(&mut relation.walk())
+                                .filter(|child| child.kind().to_lowercase() == "object_reference")
+                                .collect::<Vec<_>>();
+                            verify_list_len(&object_ref, 1)?;
+                            let object_ref = object_ref[0];
+
+                            let identifier = object_ref
+                                .children(&mut object_ref.walk())
+                                .filter(|child| child.kind().to_lowercase() == "identifier")
+                                .collect::<Vec<_>>();
+                            verify_list_len(&identifier, 1)?;
+                            let identifier = identifier[0];
+
+                            validate_table_name(
+                                &sql.to_string()[identifier.start_byte()..identifier.end_byte()],
+                            )?
+                        };
+                        modified_tables.insert(table_name);
+                    }
+                    "delete" => {
+                        let table_name = {
+                            let details =
+                                instruction
+                                    .next_sibling()
+                                    .ok_or(DbError::ParseError(format!(
+                                        "No details found for '{}'",
+                                        instruction.kind()
+                                    )))?;
+                            let object_ref = details
+                                .children(&mut details.walk())
+                                .filter(|child| child.kind().to_lowercase() == "object_reference")
+                                .collect::<Vec<_>>();
+                            verify_list_len(&object_ref, 1)?;
+                            let object_ref = object_ref[0];
+
+                            let identifier = object_ref
+                                .children(&mut object_ref.walk())
+                                .filter(|child| child.kind().to_lowercase() == "identifier")
+                                .collect::<Vec<_>>();
+                            verify_list_len(&identifier, 1)?;
+                            let identifier = identifier[0];
+
+                            validate_table_name(
+                                &sql.to_string()[identifier.start_byte()..identifier.end_byte()],
+                            )?
+                        };
+                        modified_tables.insert(table_name);
+                    }
+                    "drop_table" => {
+                        let table_name = {
+                            let object_ref = instruction
+                                .children(&mut instruction.walk())
+                                .filter(|child| child.kind().to_lowercase() == "object_reference")
+                                .collect::<Vec<_>>();
+                            verify_list_len(&object_ref, 1)?;
+                            let object_ref = object_ref[0];
+
+                            let identifier = object_ref
+                                .children(&mut object_ref.walk())
+                                .filter(|child| child.kind().to_lowercase() == "identifier")
+                                .collect::<Vec<_>>();
+                            verify_list_len(&identifier, 1)?;
+                            let identifier = identifier[0];
+
+                            validate_table_name(
+                                &sql.to_string()[identifier.start_byte()..identifier.end_byte()],
+                            )?
+                        };
+                        modified_tables.insert(table_name);
+                    }
+                    // Silently ignore all other kinds of instructions
+                    _ => (),
+                };
+            }
         }
-        if root_node.kind().to_lowercase() != "program" {
-            return Err(DbError::ParseError(format!(
-                "Unexpected root node kind: {}",
-                root_node.kind()
-            )));
-        }
-
-        let statement_node = root_node.child(0).ok_or(DbError::ParseError(format!(
-            "No child node found for '{}'",
-            root_node.kind()
-        )))?;
-        if statement_node.kind().to_lowercase() != "statement" {
-            return Err(DbError::ParseError(format!(
-                "Unexpected statement node kind: {}",
-                statement_node.kind()
-            )));
-        }
-
-        for statement in statement_node.children(&mut tree.walk()) {
-            match statement.kind().to_lowercase().as_str() {
-                "insert" => {
-                    let table_name = {
-                        let object_ref = statement
-                            .children(&mut statement.walk())
-                            .filter(|child| child.kind().to_lowercase() == "object_reference")
-                            .collect::<Vec<_>>();
-                        assert_eq!(object_ref.len(), 1);
-                        let object_ref = object_ref[0];
-
-                        let identifier = object_ref
-                            .children(&mut object_ref.walk())
-                            .filter(|child| child.kind().to_lowercase() == "identifier")
-                            .collect::<Vec<_>>();
-                        assert_eq!(identifier.len(), 1);
-                        let identifier = identifier[0];
-
-                        validate_table_name(
-                            &sql.to_string()[identifier.start_byte()..identifier.end_byte()],
-                        )?
-                    };
-                    println!("INSERT TABLE NAME: {table_name}");
-                }
-                "update" => {
-                    let table_name = {
-                        let relation = statement
-                            .children(&mut statement.walk())
-                            .filter(|child| child.kind().to_lowercase() == "relation")
-                            .collect::<Vec<_>>();
-                        assert_eq!(relation.len(), 1);
-                        let relation = relation[0];
-
-                        let object_ref = relation
-                            .children(&mut relation.walk())
-                            .filter(|child| child.kind().to_lowercase() == "object_reference")
-                            .collect::<Vec<_>>();
-                        assert_eq!(object_ref.len(), 1);
-                        let object_ref = object_ref[0];
-
-                        let identifier = object_ref
-                            .children(&mut object_ref.walk())
-                            .filter(|child| child.kind().to_lowercase() == "identifier")
-                            .collect::<Vec<_>>();
-                        assert_eq!(identifier.len(), 1);
-                        let identifier = identifier[0];
-
-                        validate_table_name(
-                            &sql.to_string()[identifier.start_byte()..identifier.end_byte()],
-                        )?
-                    };
-                    println!("UPDATE TABLE NAME: {table_name}");
-                }
-                "delete" => {
-                    let table_name = {
-                        let details = statement.next_sibling().ok_or(DbError::ParseError(
-                            format!("No details found for '{}'", statement.kind()),
-                        ))?;
-                        let object_ref = details
-                            .children(&mut details.walk())
-                            .filter(|child| child.kind().to_lowercase() == "object_reference")
-                            .collect::<Vec<_>>();
-                        assert_eq!(object_ref.len(), 1);
-                        let object_ref = object_ref[0];
-
-                        let identifier = object_ref
-                            .children(&mut object_ref.walk())
-                            .filter(|child| child.kind().to_lowercase() == "identifier")
-                            .collect::<Vec<_>>();
-                        assert_eq!(identifier.len(), 1);
-                        let identifier = identifier[0];
-
-                        validate_table_name(
-                            &sql.to_string()[identifier.start_byte()..identifier.end_byte()],
-                        )?
-                    };
-                    println!("DELETE TABLE NAME: {table_name}");
-                }
-                "drop_table" => {
-                    let table_name = {
-                        let object_ref = statement
-                            .children(&mut statement.walk())
-                            .filter(|child| child.kind().to_lowercase() == "object_reference")
-                            .collect::<Vec<_>>();
-                        assert_eq!(object_ref.len(), 1);
-                        let object_ref = object_ref[0];
-
-                        let identifier = object_ref
-                            .children(&mut object_ref.walk())
-                            .filter(|child| child.kind().to_lowercase() == "identifier")
-                            .collect::<Vec<_>>();
-                        assert_eq!(identifier.len(), 1);
-                        let identifier = identifier[0];
-
-                        validate_table_name(
-                            &sql.to_string()[identifier.start_byte()..identifier.end_byte()],
-                        )?
-                    };
-                    println!("DROP TABLE NAME: {table_name}");
-                }
-                _ => unimplemented!(),
-            };
-        }
-
-        Ok(tree.clone())
+        Ok(modified_tables)
     }
 
     /// Given a SQL type for this database and a JSON Value,

@@ -1671,60 +1671,133 @@ mod tests {
 
     async fn sql_parsing(url: &str) {
         let pool = AnyPool::connect(url).await.unwrap();
+        let prefix = match pool.kind() {
+            DbKind::SQLite => "?",
+            DbKind::PostgreSQL => "$",
+        };
 
-        // This works:
-        let _sql_parts = pool
-            .parse_statement_1(r#"INSERT INTO "foo" VALUES (1, 2,3)"#)
-            .unwrap();
+        // Single statements, possibly with parameters:
 
-        // This works:
-        let _sql_parts = pool
-            .parse_statement_1(
-                r#"with bar as (select * from alpha),
-                        mar as (select * from beta)
-                     insert into gamma
-                     select alpha.*
-                     from alpha, beta
-                     where alpha.value = beta.value"#,
+        let tables: Vec<_> = pool
+            .get_modified_tables(&format!(
+                r#"INSERT INTO "alpha" VALUES ({prefix}1, {prefix}2, {prefix}3)"#
+            ))
+            .unwrap()
+            .into_iter()
+            .collect();
+        assert_eq!(tables, ["alpha"]);
+
+        let tables: Vec<_> = pool
+            .get_modified_tables(
+                r#"WITH bar AS (SELECT * FROM alpha),
+                        mar AS (SELECT * FROM beta)
+                   INSERT INTO gamma
+                   SELECT alpha.*
+                   FROM alpha, beta
+                   WHERE alpha.value = beta.value"#,
             )
-            .unwrap();
+            .unwrap()
+            .into_iter()
+            .collect();
+        assert_eq!(tables, ["gamma"]);
 
-        // This works:
-        let _sql_parts = pool
-            .parse_statement_1(r#"UPDATE "foo" set bar = 1 WHERE bar = 10"#)
-            .unwrap();
+        let tables: Vec<_> = pool
+            .get_modified_tables(&format!(
+                r#"UPDATE "delta" set bar = {prefix}1 WHERE bar = {prefix}2"#
+            ))
+            .unwrap()
+            .into_iter()
+            .collect();
+        assert_eq!(tables, ["delta"]);
 
-        // This works:
-        let _sql_parts = pool
-            .parse_statement_1(
-                r#"with bar as (select * from test),
-                        mar as (select * from test)
-                     update test
-                     set value = bar.value
-                     from bar, mar
-                     where bar.value = 'foo' and bar.value = mar.value"#,
+        let tables: Vec<_> = pool
+            .get_modified_tables(&format!(
+                r#"WITH bar AS (SELECT * FROM test),
+                        mar AS (SELECT * FROM test)
+                   UPDATE delta
+                   SET value = bar.value
+                   FROM bar, mar
+                   WHERE bar.value = {prefix}1 AND bar.value = mar.value"#,
+            ))
+            .unwrap()
+            .into_iter()
+            .collect();
+        assert_eq!(tables, ["delta"]);
+
+        let tables: Vec<_> = pool
+            .get_modified_tables(&format!(r#"DELETE FROM "epsilon" WHERE bar >= {prefix}1"#))
+            .unwrap()
+            .into_iter()
+            .collect();
+        assert_eq!(tables, ["epsilon"]);
+
+        let tables: Vec<_> = pool
+            .get_modified_tables(
+                r#"WITH bar AS (SELECT * FROM test),
+                        mar AS (SELECT * FROM test)
+                   DELETE FROM lambda WHERE value IN (SELECT value FROM bar)"#,
             )
-            .unwrap();
+            .unwrap()
+            .into_iter()
+            .collect();
+        assert_eq!(tables, ["lambda"]);
 
-        // TODO: Support delete.
-        let _sql_parts = pool
-            .parse_statement_1(r#"DELETE FROM "foo" WHERE bar >= 10"#)
-            .unwrap();
+        let tables: Vec<_> = pool
+            .get_modified_tables(r#"DROP TABLE "rho""#)
+            .unwrap()
+            .into_iter()
+            .collect();
+        assert_eq!(tables, ["rho"]);
 
-        // TODO: Support a CTE version of delete.
-        let _sql_parts = pool.parse_statement_1(
-            r#"with bar as (select * from test),
-                    mar as (select * from test)
-                 delete from test where value in (select value from bar)"#,
+        let tables: Vec<_> = pool
+            .get_modified_tables(r#"DROP TABLE IF EXISTS "phi" CASCADE"#)
+            .unwrap()
+            .into_iter()
+            .collect();
+        assert_eq!(tables, ["phi"]);
+
+        // Multiple statements, no parameters:
+
+        let sql = r#"
+            INSERT INTO "alpha" VALUES (1, 2, 3);
+
+            WITH bar AS (SELECT * FROM alpha),
+                 mar AS (SELECT * FROM beta)
+            INSERT INTO gamma
+            SELECT alpha.*
+            FROM alpha, beta
+            WHERE alpha.value = beta.value;
+
+            UPDATE "delta" SET bar = 1 WHERE bar = 10;
+
+            WITH bar AS (SELECT * FROM test),
+                 mar AS (SELECT * FROM test)
+            UPDATE phi
+            SET value = bar.value
+            FROM bar, mar
+            WHERE bar.value = 'foo' AND bar.value = mar.value;
+
+            DELETE FROM "psi" WHERE bar >= 10;
+
+            WITH bar AS (SELECT * FROM test),
+                 mar AS (SELECT * FROM test)
+            DELETE FROM lambda WHERE value IN (SELECT value FROM bar);
+
+            DROP TABLE "rho";
+
+            DROP TABLE IF EXISTS "sigma" CASCADE"#;
+
+        let mut tables: Vec<_> = pool
+            .get_modified_tables(&sql)
+            .unwrap()
+            .into_iter()
+            .collect();
+        tables.sort();
+        assert_eq!(
+            tables,
+            [
+                "alpha", "delta", "gamma", "lambda", "phi", "psi", "rho", "sigma"
+            ]
         );
-
-        // TODO: Support drop.
-        let _sql_parts = pool.parse_statement_1(r#"DROP TABLE "foo""#);
-
-        let _sql_parts = pool.parse_statement_1(r#"DROP TABLE IF EXISTS "foo" CASCADE"#);
-
-        // TODO: Anything else?
-
-        //assert_eq!(1, 2);
     }
 }
