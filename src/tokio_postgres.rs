@@ -244,7 +244,7 @@ impl DbQuery for TokioPostgresPool {
     /// Implements [DbQuery::parse()] for PostgreSQL.
     fn parse(&self, sql_type: &str, value: &str) -> Result<ParamValue, DbError> {
         let err = || {
-            Err(DbError::DataError(format!(
+            Err(DbError::ParseError(format!(
                 "Could not parse '{sql_type}' from '{value}'"
             )))
         };

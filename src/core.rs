@@ -65,6 +65,8 @@ pub enum DbError {
     DatabaseError(String),
     /// An error with the data type of a value.
     DatatypeError(String),
+    /// An error that occurred while attempting to parse a SQL string or value.
+    ParseError(String),
 }
 
 impl std::error::Error for DbError {}
@@ -76,7 +78,8 @@ impl std::fmt::Display for DbError {
             | DbError::DataError(err)
             | DbError::InputError(err)
             | DbError::DatabaseError(err)
-            | DbError::DatatypeError(err) => write!(f, "{err}"),
+            | DbError::DatatypeError(err)
+            | DbError::ParseError(err) => write!(f, "{err}"),
         }
     }
 }
@@ -643,6 +646,149 @@ pub trait DbQuery {
     /// Given a SQL type for this database and a string,
     /// parse the string into the right ParamValue.
     fn parse(&self, sql_type: &str, value: &str) -> Result<ParamValue, DbError>;
+
+    /// Parse the given SQL string into its constituents.
+    fn parse_statement_1(&self, sql: &str) -> Result<tree_sitter::Tree, DbError> {
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_sequel::LANGUAGE.into())
+            .map_err(|err| DbError::ParseError(format!("Error parsing SQL: '{sql}': {err}")))?;
+        let tree = match parser.parse(sql, None) {
+            Some(tree) => tree,
+            None => return Err(DbError::ParseError(format!("Could not parse '{sql}'"))),
+        };
+
+        let root_node = tree.root_node();
+        //println!("ROOT NODE: {:#?}", root_node);
+        if root_node.has_error() {
+            return Err(DbError::ParseError(format!(
+                "Error parsing '{sql}': {root_node}"
+            )));
+        }
+        if root_node.kind().to_lowercase() != "program" {
+            return Err(DbError::ParseError(format!(
+                "Unexpected root node kind: {}",
+                root_node.kind()
+            )));
+        }
+
+        let statement_node = root_node.child(0).ok_or(DbError::ParseError(format!(
+            "No child node found for '{}'",
+            root_node.kind()
+        )))?;
+        if statement_node.kind().to_lowercase() != "statement" {
+            return Err(DbError::ParseError(format!(
+                "Unexpected statement node kind: {}",
+                statement_node.kind()
+            )));
+        }
+
+        for statement in statement_node.children(&mut tree.walk()) {
+            match statement.kind().to_lowercase().as_str() {
+                "insert" => {
+                    let table_name = {
+                        let object_ref = statement
+                            .children(&mut statement.walk())
+                            .filter(|child| child.kind().to_lowercase() == "object_reference")
+                            .collect::<Vec<_>>();
+                        assert_eq!(object_ref.len(), 1);
+                        let object_ref = object_ref[0];
+
+                        let identifier = object_ref
+                            .children(&mut object_ref.walk())
+                            .filter(|child| child.kind().to_lowercase() == "identifier")
+                            .collect::<Vec<_>>();
+                        assert_eq!(identifier.len(), 1);
+                        let identifier = identifier[0];
+
+                        validate_table_name(
+                            &sql.to_string()[identifier.start_byte()..identifier.end_byte()],
+                        )?
+                    };
+                    println!("INSERT TABLE NAME: {table_name}");
+                }
+                "update" => {
+                    let table_name = {
+                        let relation = statement
+                            .children(&mut statement.walk())
+                            .filter(|child| child.kind().to_lowercase() == "relation")
+                            .collect::<Vec<_>>();
+                        assert_eq!(relation.len(), 1);
+                        let relation = relation[0];
+
+                        let object_ref = relation
+                            .children(&mut relation.walk())
+                            .filter(|child| child.kind().to_lowercase() == "object_reference")
+                            .collect::<Vec<_>>();
+                        assert_eq!(object_ref.len(), 1);
+                        let object_ref = object_ref[0];
+
+                        let identifier = object_ref
+                            .children(&mut object_ref.walk())
+                            .filter(|child| child.kind().to_lowercase() == "identifier")
+                            .collect::<Vec<_>>();
+                        assert_eq!(identifier.len(), 1);
+                        let identifier = identifier[0];
+
+                        validate_table_name(
+                            &sql.to_string()[identifier.start_byte()..identifier.end_byte()],
+                        )?
+                    };
+                    println!("UPDATE TABLE NAME: {table_name}");
+                }
+                "delete" => {
+                    let table_name = {
+                        let details = statement.next_sibling().ok_or(DbError::ParseError(
+                            format!("No details found for '{}'", statement.kind()),
+                        ))?;
+                        let object_ref = details
+                            .children(&mut details.walk())
+                            .filter(|child| child.kind().to_lowercase() == "object_reference")
+                            .collect::<Vec<_>>();
+                        assert_eq!(object_ref.len(), 1);
+                        let object_ref = object_ref[0];
+
+                        let identifier = object_ref
+                            .children(&mut object_ref.walk())
+                            .filter(|child| child.kind().to_lowercase() == "identifier")
+                            .collect::<Vec<_>>();
+                        assert_eq!(identifier.len(), 1);
+                        let identifier = identifier[0];
+
+                        validate_table_name(
+                            &sql.to_string()[identifier.start_byte()..identifier.end_byte()],
+                        )?
+                    };
+                    println!("DELETE TABLE NAME: {table_name}");
+                }
+                "drop_table" => {
+                    let table_name = {
+                        let object_ref = statement
+                            .children(&mut statement.walk())
+                            .filter(|child| child.kind().to_lowercase() == "object_reference")
+                            .collect::<Vec<_>>();
+                        assert_eq!(object_ref.len(), 1);
+                        let object_ref = object_ref[0];
+
+                        let identifier = object_ref
+                            .children(&mut object_ref.walk())
+                            .filter(|child| child.kind().to_lowercase() == "identifier")
+                            .collect::<Vec<_>>();
+                        assert_eq!(identifier.len(), 1);
+                        let identifier = identifier[0];
+
+                        validate_table_name(
+                            &sql.to_string()[identifier.start_byte()..identifier.end_byte()],
+                        )?
+                    };
+                    println!("DROP TABLE NAME: {table_name}");
+                }
+                _ => unimplemented!(),
+            };
+        }
+
+        Ok(tree.clone())
+    }
 
     /// Given a SQL type for this database and a JSON Value,
     /// convert the Value into the right ParamValue.
