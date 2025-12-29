@@ -24,11 +24,14 @@ pub type ColumnMap = IndexMap<String, String>;
 /// Represents a valid database table name.
 static VALID_TABLE_NAME_MATCH_STR: &str = r"^[A-Za-z_][0-9A-Za-z_]*$";
 
+/// Default size for the in-memory cache
+pub static DEFAULT_MEMORY_CACHE_SIZE: usize = 1000;
+
 lazy_static! {
     /// The regex used to match [valid database table names](VALID_TABLE_NAME_MATCH_STR).
     static ref VALID_TABLE_NAME_REGEX: Regex = Regex::new(VALID_TABLE_NAME_MATCH_STR).unwrap();
 
-    /// The memory cache.
+    /// The in-memory cache.
     static ref MEMORY_CACHE: Mutex<HashMap<MemoryCacheKey, Vec<JsonRow>>> = Mutex::new(HashMap::new());
 }
 
@@ -380,9 +383,6 @@ macro_rules! params {
     }};
 }
 
-/// Default size for the in-memory cache
-pub static DEFAULT_MEMORY_CACHE_SIZE: usize = 1000;
-
 /// Strategy to use when caching query results
 #[derive(Clone, Copy, Debug)]
 pub enum CachingStrategy {
@@ -394,7 +394,7 @@ pub enum CachingStrategy {
 }
 
 /// The structure used to look up query results in the in-memory cache:
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+#[derive(Clone, Eq, PartialEq, Hash)]
 pub struct MemoryCacheKey {
     pub tables: String,
     pub statement: String,
@@ -465,13 +465,15 @@ pub trait DbQuery {
     /// Ensure that the cache table exists
     fn ensure_cache_table_exists(&self) -> impl Future<Output = Result<(), DbError>> + Send;
 
-    /// Ensure that caching triggers exist for the given tables.
+    /// Ensure that caching triggers exist for the given tables. Note that this function calls
+    /// [DbQuery::ensure_cache_table_exists()] implicitly.
     fn ensure_caching_triggers_exist(
         &self,
         tables: &[&str],
     ) -> impl Future<Output = Result<(), DbError>> + Send;
 
-    /// Clear the cache entries for the given tables, or everything if tables is an empty list.
+    /// Clear the cache entries for the given tables (if the cache table exists), or clear the whole
+    /// cache if `tables` is an empty list.
     async fn clear_cache(&self, tables: &[&str]) -> Result<(), DbError> {
         match self.table_exists("cache").await? {
             false => Ok(()),
@@ -481,14 +483,14 @@ pub trait DbQuery {
                     Ok(())
                 }
                 false => {
-                    let pref = match self.kind() {
+                    let prefix = match self.kind() {
                         DbKind::SQLite => "?",
                         DbKind::PostgreSQL => "$",
                     };
                     for table in tables {
                         let table = format!(r#"%{table}%"#);
                         self.execute(
-                            &format!(r#"DELETE FROM "cache" WHERE "tables" LIKE {pref}1"#),
+                            &format!(r#"DELETE FROM "cache" WHERE "tables" LIKE {prefix}1"#),
                             &[table],
                         )
                         .await?;
@@ -542,15 +544,15 @@ pub trait DbQuery {
 
                 match self.query_strings(&cache_sql, cache_params).await?.first() {
                     Some(values) => {
-                        let values: Vec<JsonRow> = match serde_json::from_str(&values) {
-                            Ok(values) => values,
+                        let json_rows: Vec<JsonRow> = match serde_json::from_str(&values) {
+                            Ok(json_rows) => json_rows,
                             _ => {
                                 return Err(DbError::DataError(format!(
                                     "Invalid cache values: {values}"
                                 )));
                             }
                         };
-                        Ok(values)
+                        Ok(json_rows)
                     }
                     None => {
                         let json_rows = self.query(sql, params).await?;
@@ -572,14 +574,9 @@ pub trait DbQuery {
                                params: &Params,
                                cache_size: usize|
                -> Result<Vec<JsonRow>, DbError> {
-            let tables = tables
-                .iter()
-                .map(|t| t.to_string())
-                .collect::<Vec<_>>()
-                .join(", ");
             let params = &params.into_params();
             let mem_key = MemoryCacheKey {
-                tables: tables.to_string(),
+                tables: tables.join(", ").to_string(),
                 statement: sql.to_string(),
                 parameters: format!("{params:?}"),
             };
@@ -608,8 +605,8 @@ pub trait DbQuery {
                         }
                     };
                     let mut keys = cache.keys().map(|key| key.clone()).collect::<Vec<_>>();
-                    // If the number of keys exceeds the allowed cache size, remove any extra keys.
-                    // The keys to be removed are decided at random.
+                    // If the number of keys exceeds the allowed cache size, remove any extra keys
+                    // at random.
                     if keys.len() >= cache_size {
                         keys.shuffle(&mut rand::rng());
                         for (i, key) in keys.iter().enumerate().rev() {
@@ -633,7 +630,6 @@ pub trait DbQuery {
                 db_cache(tables, sql, &params.into_params()).await
             }
             CachingStrategy::Trigger => {
-                self.ensure_cache_table_exists().await?;
                 self.ensure_caching_triggers_exist(tables).await?;
                 db_cache(tables, sql, &params.into_params()).await
             }

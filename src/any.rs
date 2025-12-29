@@ -1559,7 +1559,7 @@ mod tests {
         pool.drop_table("test_table_caching").await.unwrap();
         pool.execute(
             "CREATE TABLE test_table_caching (\
-             value TEXT
+               value TEXT
              )",
             (),
         )

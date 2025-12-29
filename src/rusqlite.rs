@@ -232,19 +232,11 @@ impl DbQuery for RusqlitePool {
                 // time, triggering a primary key violation in the metadata table. So if
                 // there is an error creating the cache table we just check that it exists
                 // and if it does we assume that all is ok.
-                match self
-                    .query(
-                        r#"SELECT 1 FROM "sqlite_master"
-                           WHERE "type" = 'table' AND "name" = 'cache'"#,
-                        (),
-                    )
-                    .await?
-                    .first()
-                {
-                    None => Err(DbError::DatabaseError(
+                match self.table_exists("cache").await? {
+                    false => Err(DbError::DatabaseError(
                         "The cache table could not be created".to_string(),
                     )),
-                    Some(_) => Ok(()),
+                    true => Ok(()),
                 }
             }
         }
@@ -252,6 +244,7 @@ impl DbQuery for RusqlitePool {
 
     /// Implements [DbQuery::ensure_caching_triggers_exist()] for SQLite.
     async fn ensure_caching_triggers_exist(&self, tables: &[&str]) -> Result<(), DbError> {
+        self.ensure_cache_table_exists().await?;
         for table in tables {
             let num_triggers = self
                 .query_u64(
