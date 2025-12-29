@@ -1660,4 +1660,71 @@ mod tests {
             ]
         );
     }
+
+    #[tokio::test]
+    async fn test_sql_parsing() {
+        #[cfg(feature = "rusqlite")]
+        sql_parsing(":memory:").await;
+        #[cfg(feature = "tokio-postgres")]
+        sql_parsing("postgresql:///rltbl_db").await;
+    }
+
+    async fn sql_parsing(url: &str) {
+        let pool = AnyPool::connect(url).await.unwrap();
+
+        // This works:
+        let _sql_parts = pool
+            .parse_statement_1(r#"INSERT INTO "foo" VALUES (1, 2,3)"#)
+            .unwrap();
+
+        // This works:
+        let _sql_parts = pool
+            .parse_statement_1(
+                r#"with bar as (select * from alpha),
+                        mar as (select * from beta)
+                     insert into gamma
+                     select alpha.*
+                     from alpha, beta
+                     where alpha.value = beta.value"#,
+            )
+            .unwrap();
+
+        // This works:
+        let _sql_parts = pool
+            .parse_statement_1(r#"UPDATE "foo" set bar = 1 WHERE bar = 10"#)
+            .unwrap();
+
+        // This works:
+        let _sql_parts = pool
+            .parse_statement_1(
+                r#"with bar as (select * from test),
+                        mar as (select * from test)
+                     update test
+                     set value = bar.value
+                     from bar, mar
+                     where bar.value = 'foo' and bar.value = mar.value"#,
+            )
+            .unwrap();
+
+        // TODO: Support delete.
+        let _sql_parts = pool
+            .parse_statement_1(r#"DELETE FROM "foo" WHERE bar >= 10"#)
+            .unwrap();
+
+        // TODO: Support a CTE version of delete.
+        let _sql_parts = pool.parse_statement_1(
+            r#"with bar as (select * from test),
+                    mar as (select * from test)
+                 delete from test where value in (select value from bar)"#,
+        );
+
+        // TODO: Support drop.
+        let _sql_parts = pool.parse_statement_1(r#"DROP TABLE "foo""#);
+
+        let _sql_parts = pool.parse_statement_1(r#"DROP TABLE IF EXISTS "foo" CASCADE"#);
+
+        // TODO: Anything else?
+
+        //assert_eq!(1, 2);
+    }
 }
