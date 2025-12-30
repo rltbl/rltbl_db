@@ -325,7 +325,12 @@ impl DbQuery for TokioPostgresPool {
             };
         }
 
-        Ok(columns)
+        match columns.is_empty() {
+            true => Err(DbError::DataError(format!(
+                "No information found for table '{table}'"
+            ))),
+            false => Ok(columns),
+        }
     }
 
     /// Implements [DbQuery::primary_keys()] for PostgreSQL.
@@ -371,6 +376,8 @@ impl DbQuery for TokioPostgresPool {
             .batch_execute(sql)
             .await
             .map_err(|err| DbError::DatabaseError(format!("Error in query(): {err:?}")))?;
+
+        self.clear_cache_for_modified_tables(sql).await?;
         Ok(())
     }
 
@@ -485,6 +492,8 @@ impl DbQuery for TokioPostgresPool {
             }
             json_rows.push(json_row);
         }
+
+        self.clear_cache_for_modified_tables(sql).await?;
         Ok(json_rows)
     }
 

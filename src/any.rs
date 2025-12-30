@@ -968,8 +968,10 @@ mod tests {
         );
         pool.drop_table(table1).await.unwrap();
 
-        let columns = pool.columns(table1).await.unwrap();
-        assert_eq!(columns.is_empty(), true);
+        match pool.columns(table1).await {
+            Ok(columns) => panic!("No columns expected for '{table1}' but got {columns:?}"),
+            Err(_) => (),
+        };
 
         // Clean up.
         pool.drop_table(table2).await.unwrap();
@@ -1534,7 +1536,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_caching() {
-        let all_strategies = ["truncate_all", "truncate", "trigger", "memory:5"]
+        let all_strategies = ["none", "truncate_all", "truncate", "trigger", "memory:5"]
             .iter()
             .map(|strategy| CachingStrategy::from_str(strategy).unwrap())
             .collect::<Vec<_>>();

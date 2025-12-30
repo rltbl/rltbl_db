@@ -323,7 +323,7 @@ impl DbQuery for RusqlitePool {
     async fn columns(&self, table: &str) -> Result<ColumnMap, DbError> {
         let mut columns = ColumnMap::new();
         let sql = r#"SELECT "name", "type"
-                     FROM pragma_table_info($1)
+                     FROM pragma_table_info(?1)
                      ORDER BY "name""#
             .to_string();
 
@@ -345,14 +345,19 @@ impl DbQuery for RusqlitePool {
             };
         }
 
-        Ok(columns)
+        match columns.is_empty() {
+            true => Err(DbError::DataError(format!(
+                "No information found for table '{table}'"
+            ))),
+            false => Ok(columns),
+        }
     }
 
     /// Implements [DbQuery::primary_keys()] for SQLite.
     async fn primary_keys(&self, table: &str) -> Result<Vec<String>, DbError> {
         self.query(
             r#"SELECT "name"
-               FROM pragma_table_info($1)
+               FROM pragma_table_info(?1)
                WHERE "pk" > 0
                ORDER BY "pk""#,
             params![&table],
@@ -378,9 +383,9 @@ impl DbQuery for RusqlitePool {
             .get()
             .await
             .map_err(|err| DbError::ConnectError(format!("Unable to get pool: {err}")))?;
-        let sql = sql.to_string();
+        let sql_string = sql.to_string();
         match conn
-            .interact(move |conn| match conn.execute_batch(&sql) {
+            .interact(move |conn| match conn.execute_batch(&sql_string) {
                 Err(err) => {
                     return Err(DbError::DatabaseError(format!("Error during query: {err}")));
                 }
@@ -389,7 +394,12 @@ impl DbQuery for RusqlitePool {
             .await
         {
             Err(err) => Err(DbError::DatabaseError(format!("Error during query: {err}"))),
-            Ok(_) => Ok(()),
+            Ok(_) => {
+                // We need to drop conn here to ensure that any changes to the db are persisted.
+                drop(conn);
+                self.clear_cache_for_modified_tables(sql).await?;
+                Ok(())
+            }
         }
     }
 
@@ -399,16 +409,16 @@ impl DbQuery for RusqlitePool {
         sql: &str,
         params: impl IntoParams + Send,
     ) -> Result<Vec<JsonRow>, DbError> {
-        let conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|err| DbError::ConnectError(format!("Error getting pool: {err}")))?;
-        let sql = sql.to_string();
-        let params: Params = params.into_params();
-        let rows = conn
-            .interact(move |conn| {
-                let mut stmt = conn.prepare(&sql).map_err(|err| {
+        let rows = {
+            let conn = self
+                .pool
+                .get()
+                .await
+                .map_err(|err| DbError::ConnectError(format!("Error getting pool: {err}")))?;
+            let sql_string = sql.to_string();
+            let params: Params = params.into_params();
+            conn.interact(move |conn| {
+                let mut stmt = conn.prepare(&sql_string).map_err(|err| {
                     DbError::DatabaseError(format!("Error preparing statement: {err}"))
                 })?;
                 let rows = query_prepared(&mut stmt, params).map_err(|err| {
@@ -418,7 +428,12 @@ impl DbQuery for RusqlitePool {
             })
             .await
             .map_err(|err| DbError::DatabaseError(err.to_string()))?
-            .map_err(|err| DbError::DatabaseError(err.to_string()))?;
+            .map_err(|err| DbError::DatabaseError(err.to_string()))?
+        };
+        // Note that we must allow `conn` to go out of scope (alternately we could explicitly
+        // call drop(conn)) to ensure that the query is persisted to the db before clearing the
+        // cache:
+        self.clear_cache_for_modified_tables(sql).await?;
         Ok(rows)
     }
 
@@ -590,7 +605,7 @@ mod tests {
         pool.execute(
             r#"INSERT INTO test_table_indirect
                (text_value, alt_text_value, float_value, int_value, bool_value)
-               VALUES ($1, $2, $3, $4, $5)"#,
+               VALUES (?1, ?2, ?3, ?4, ?5)"#,
             params!["foo", (), 1.05_f64, 1_i64, true],
         )
         .await
