@@ -303,8 +303,8 @@ pub(crate) async fn edit(
         // For a trigger strategy the cache entries for the table will be cleared automatically
         // whenever the table is modified so we do not need to do anything here.
         CachingStrategy::None | CachingStrategy::Trigger => (),
-        CachingStrategy::TruncateAll => pool.clear_cache(&[]).await?,
-        CachingStrategy::Truncate => pool.clear_cache(&[&table]).await?,
+        CachingStrategy::TruncateAll => pool.clear_db_cache(&[]).await?,
+        CachingStrategy::Truncate => pool.clear_db_cache(&[&table]).await?,
         CachingStrategy::Memory(_) => clear_mem_cache(&[&table])?,
     }
 

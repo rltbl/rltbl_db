@@ -389,7 +389,7 @@ macro_rules! params {
 }
 
 /// Strategy to use when caching query results
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CachingStrategy {
     None,
     TruncateAll,
@@ -477,9 +477,32 @@ pub trait DbQuery {
         tables: &[&str],
     ) -> impl Future<Output = Result<(), DbError>> + Send;
 
-    /// Clear the cache entries for the given tables (if the cache table exists), or clear the whole
-    /// cache if `tables` is an empty list.
-    async fn clear_cache(&self, tables: &[&str]) -> Result<(), DbError> {
+    /// Parse the given SQL string and determine which tables will be modified upon execution,
+    /// then clear the entries for those tables in the cache in accordance with the current
+    /// caching strategy.
+    async fn clear_cache_for_modified_tables(&self, sql: &str) -> Result<(), DbError> {
+        // Note that we check for modified tables even when we are using the trigger strategy,
+        // since the table could have been the target of a DROP TABLE statement.
+        if self.get_caching_strategy() != CachingStrategy::None {
+            let tables: Vec<_> = self.get_modified_tables(sql)?.into_iter().collect();
+            if !tables.is_empty() {
+                let tables: Vec<_> = tables.iter().map(|t| t.as_str()).collect();
+                match self.get_caching_strategy() {
+                    CachingStrategy::None => (),
+                    CachingStrategy::TruncateAll => self.clear_db_cache(&[]).await?,
+                    CachingStrategy::Truncate | CachingStrategy::Trigger => {
+                        self.clear_db_cache(&tables).await?
+                    }
+                    CachingStrategy::Memory(_) => clear_mem_cache(&tables)?,
+                };
+            }
+        }
+        Ok(())
+    }
+
+    /// If the cache table exists: Clear the cache entries for the given tables, or clear the
+    /// whole cache if `tables` is an empty list.
+    async fn clear_db_cache(&self, tables: &[&str]) -> Result<(), DbError> {
         match self.table_exists("cache").await? {
             false => Ok(()),
             true => match tables.is_empty() {
@@ -816,6 +839,13 @@ pub trait DbQuery {
                 };
             }
         }
+
+        // Queries to the cache table itself are never cached:
+        let modified_tables = modified_tables
+            .into_iter()
+            .filter(|table| *table != "cache")
+            .collect::<HashSet<_>>();
+
         Ok(modified_tables)
     }
 
@@ -1058,13 +1088,13 @@ pub trait DbQuery {
         match self.get_caching_strategy() {
             CachingStrategy::None => (),
             CachingStrategy::TruncateAll => {
-                self.clear_cache(&[]).await?;
+                self.clear_db_cache(&[]).await?;
             }
             // We clear the cache also in the case of a trigger, since the trigger will not
             // be triggered when we drop the table (it will, rather, be dropped along with the
             // table)
             CachingStrategy::Truncate | CachingStrategy::Trigger => {
-                self.clear_cache(&[&table]).await?;
+                self.clear_db_cache(&[&table]).await?;
             }
             CachingStrategy::Memory(_) => clear_mem_cache(&[&table])?,
         };
