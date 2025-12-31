@@ -675,4 +675,9 @@ mod tests {
         // sqlite.
         assert_eq!(json!(rows), json!([{"MAX(bool_value)": 1}]));
     }
+
+    #[tokio::test]
+    async fn test_max_params() {
+        let pool = RusqlitePool::connect(":memory:").await.unwrap();
+    }
 }
