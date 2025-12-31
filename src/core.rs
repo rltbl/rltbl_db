@@ -1154,6 +1154,16 @@ pub fn validate_table_name(table_name: &str) -> Result<String, DbError> {
     }
 }
 
+/// Retrieve the contents of the memory cache.
+pub fn get_memory_cache_contents() -> Result<HashMap<MemoryCacheKey, Vec<JsonRow>>, DbError> {
+    match MEMORY_CACHE.try_lock() {
+        Ok(cache) => Ok(cache.clone()),
+        Err(err) => {
+            return Err(DbError::ConnectError(format!("Error locking cache: {err}")));
+        }
+    }
+}
+
 /// Clear the memory cache.
 pub fn clear_mem_cache(tables: &[&str]) -> Result<(), DbError> {
     let mut cache = match MEMORY_CACHE.try_lock() {

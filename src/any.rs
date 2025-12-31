@@ -286,8 +286,7 @@ impl DbQuery for AnyPool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::JsonValue;
-    use crate::core::StringRow;
+    use crate::core::{CachingStrategy, JsonValue, StringRow, get_memory_cache_contents};
     use crate::params;
     use rust_decimal::dec;
     use serde_json::json;
@@ -1557,19 +1556,33 @@ mod tests {
     }
 
     async fn cache_with_strategy(pool: &mut AnyPool, strategy: &CachingStrategy) {
+        async fn count_cache_table_rows(pool: &mut AnyPool) -> u64 {
+            pool.query_u64("SELECT COUNT(1) from cache", ())
+                .await
+                .unwrap()
+        }
+
+        fn count_memory_cache_rows() -> u64 {
+            let cache = get_memory_cache_contents().unwrap();
+            cache.keys().len().try_into().unwrap()
+        }
+
         pool.set_caching_strategy(strategy);
-        pool.drop_table("test_table_caching").await.unwrap();
-        pool.execute(
-            "CREATE TABLE test_table_caching (\
-               value TEXT
+        pool.drop_table("test_table_caching_1").await.unwrap();
+        pool.drop_table("test_table_caching_2").await.unwrap();
+        pool.execute_batch(
+            "CREATE TABLE test_table_caching_1 (\
+               value TEXT \
+             );\
+             CREATE TABLE test_table_caching_2 (\
+               value TEXT \
              )",
-            (),
         )
         .await
         .unwrap();
 
         pool.insert(
-            "test_table_caching",
+            "test_table_caching_1",
             &["value"],
             &[
                 &json!({"value": "alpha"}).as_object().unwrap(),
@@ -1581,13 +1594,18 @@ mod tests {
 
         let rows = pool
             .cache(
-                &["test_table_caching"],
-                "SELECT * from test_table_caching",
+                &["test_table_caching_1"],
+                "SELECT * from test_table_caching_1",
                 (),
             )
             .await
             .unwrap();
 
+        match strategy {
+            CachingStrategy::None => (),
+            CachingStrategy::Memory(_) => assert_eq!(count_memory_cache_rows(), 1),
+            _ => assert_eq!(count_cache_table_rows(pool).await, 1),
+        };
         assert_eq!(
             rows,
             vec![
@@ -1598,13 +1616,18 @@ mod tests {
 
         let rows = pool
             .cache(
-                &["test_table_caching"],
-                "SELECT * from test_table_caching",
+                &["test_table_caching_1"],
+                "SELECT * from test_table_caching_1",
                 (),
             )
             .await
             .unwrap();
 
+        match strategy {
+            CachingStrategy::None => (),
+            CachingStrategy::Memory(_) => assert_eq!(count_memory_cache_rows(), 1),
+            _ => assert_eq!(count_cache_table_rows(pool).await, 1),
+        };
         assert_eq!(
             rows,
             vec![
@@ -1614,7 +1637,7 @@ mod tests {
         );
 
         pool.insert(
-            "test_table_caching",
+            "test_table_caching_1",
             &["value"],
             &[
                 &json!({"value": "gamma"}).as_object().unwrap(),
@@ -1624,10 +1647,40 @@ mod tests {
         .await
         .unwrap();
 
+        match strategy {
+            CachingStrategy::None => (),
+            CachingStrategy::Memory(_) => assert_eq!(count_memory_cache_rows(), 0),
+            _ => assert_eq!(count_cache_table_rows(pool).await, 0),
+        };
+
         let rows = pool
             .cache(
-                &["test_table_caching"],
-                "SELECT * from test_table_caching",
+                &["test_table_caching_1"],
+                "SELECT * from test_table_caching_1",
+                (),
+            )
+            .await
+            .unwrap();
+
+        match strategy {
+            CachingStrategy::None => (),
+            CachingStrategy::Memory(_) => assert_eq!(count_memory_cache_rows(), 1),
+            _ => assert_eq!(count_cache_table_rows(pool).await, 1),
+        };
+        assert_eq!(
+            rows,
+            vec![
+                json!({"value": "alpha"}).as_object().unwrap().clone(),
+                json!({"value": "beta"}).as_object().unwrap().clone(),
+                json!({"value": "gamma"}).as_object().unwrap().clone(),
+                json!({"value": "delta"}).as_object().unwrap().clone(),
+            ]
+        );
+
+        let rows = pool
+            .cache(
+                &["test_table_caching_1"],
+                "SELECT * from test_table_caching_1",
                 (),
             )
             .await
@@ -1643,15 +1696,60 @@ mod tests {
             ]
         );
 
+        pool.cache(
+            &["test_table_caching_1"],
+            "SELECT COUNT(1) FROM test_table_caching_1",
+            (),
+        )
+        .await
+        .unwrap();
+        pool.cache(
+            &["test_table_caching_2"],
+            "SELECT COUNT(1) FROM test_table_caching_2",
+            (),
+        )
+        .await
+        .unwrap();
+
+        match strategy {
+            CachingStrategy::None => (),
+            CachingStrategy::Memory(_) => assert_eq!(count_memory_cache_rows(), 3),
+            _ => assert_eq!(count_cache_table_rows(pool).await, 3),
+        };
+
+        pool.execute(
+            r#"INSERT INTO test_table_caching_1 VALUES ('rho'), ('sigma')"#,
+            (),
+        )
+        .await
+        .unwrap();
+
+        match strategy {
+            CachingStrategy::None => (),
+            CachingStrategy::Memory(_) => assert_eq!(count_memory_cache_rows(), 1),
+            CachingStrategy::Truncate | CachingStrategy::Trigger => {
+                assert_eq!(count_cache_table_rows(pool).await, 1)
+            }
+            CachingStrategy::TruncateAll => assert_eq!(count_cache_table_rows(pool).await, 0),
+        };
+
         let rows = pool
             .cache(
-                &["test_table_caching"],
-                "SELECT * from test_table_caching",
+                &["test_table_caching_1"],
+                "SELECT * from test_table_caching_1",
                 (),
             )
             .await
             .unwrap();
 
+        match strategy {
+            CachingStrategy::None => (),
+            CachingStrategy::Memory(_) => assert_eq!(count_memory_cache_rows(), 2),
+            CachingStrategy::Truncate | CachingStrategy::Trigger => {
+                assert_eq!(count_cache_table_rows(pool).await, 2)
+            }
+            CachingStrategy::TruncateAll => assert_eq!(count_cache_table_rows(pool).await, 1),
+        };
         assert_eq!(
             rows,
             vec![
@@ -1659,6 +1757,8 @@ mod tests {
                 json!({"value": "beta"}).as_object().unwrap().clone(),
                 json!({"value": "gamma"}).as_object().unwrap().clone(),
                 json!({"value": "delta"}).as_object().unwrap().clone(),
+                json!({"value": "rho"}).as_object().unwrap().clone(),
+                json!({"value": "sigma"}).as_object().unwrap().clone(),
             ]
         );
     }
