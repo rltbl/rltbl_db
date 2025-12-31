@@ -480,7 +480,11 @@ pub trait DbQuery {
     /// Parse the given string, representing a series of (semi-colon-separated) SQL commands,
     /// into their constituents and determine the tables that will be affected when the commands
     /// are executed, if any. Commands that may potentially affect tables are: INSERT, UPDATE,
-    /// DELETE, and DROP TABLE. All other kinds of statements will be silently ignored.
+    /// DELETE, and DROP TABLE. All other kinds of statements will be silently ignored. In
+    /// particular, table modifications that occur within a CTE are not recognized by this
+    /// function. Such table-modifying CTEs are supported by PostgreSQL (see
+    /// <https://www.postgresql.org/docs/current/queries-with.html#QUERIES-WITH-MODIFYING>) but
+    /// seemingly not by SQLite (see <https://sqlite.org/lang_with.html>).
     fn get_modified_tables(&self, sql: &str) -> Result<HashSet<String>, DbError> {
         // Validates that a given node is not an error node:
         let check_for_error = |node: &Node<'_>| -> Result<(), DbError> {
