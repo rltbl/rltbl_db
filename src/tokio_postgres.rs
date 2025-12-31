@@ -18,8 +18,9 @@ use tokio_postgres::{
 };
 
 /// The [maximum number of parameters](https://www.postgresql.org/docs/current/limits.html)
-/// that can be bound to a Postgres query is 65535. However, for some reason still unknown,
-/// tokio-postgres limits the actual number of parameters to just under half that number.
+/// that can be bound to a Postgres query is 65535. This has been true since at least PostgreSQL
+/// version 12. However, for some (unknown) reason, tokio-postgres limits the actual number of
+/// parameters to just under half that number.
 pub static MAX_PARAMS_POSTGRES: usize = 32765;
 
 /// Extracts the value at the given index from the given [Row].
@@ -732,7 +733,12 @@ mod tests {
         pool.drop_table("test_table_indirect").await.unwrap();
     }
 
+    /// This test is resource intensive and therefore ignored by default. It verifies that
+    /// using [MAX_PARAMS_POSTGRES] parameters in a query is indeed supported.
+    /// To run this and other ignored tests, use `cargo test -- --ignored` or
+    /// `cargo test -- --include-ignored`
     #[tokio::test]
+    #[ignore]
     async fn test_max_params() {
         let pool = TokioPostgresPool::connect("postgresql:///rltbl_db")
             .await
@@ -741,11 +747,11 @@ mod tests {
         pool.execute_batch(
             "DROP TABLE IF EXISTS test_max_params CASCADE;\
              CREATE TABLE test_max_params (\
-                 column1 TEXT,\
-                 column2 TEXT,\
-                 column3 TEXT,\
-                 column4 TEXT,\
-                 column5 TEXT\
+                 column1 INT,\
+                 column2 INT,\
+                 column3 INT,\
+                 column4 INT,\
+                 column5 INT\
              )",
         )
         .await
@@ -764,11 +770,11 @@ mod tests {
                 n + 3,
                 n + 4
             ));
-            params.push(format!("{}", n));
-            params.push(format!("{}", n + 1));
-            params.push(format!("{}", n + 2));
-            params.push(format!("{}", n + 3));
-            params.push(format!("{}", n + 4));
+            params.push(1);
+            params.push(1);
+            params.push(1);
+            params.push(1);
+            params.push(1);
             n += 5;
         }
         sql.push_str(&values.join(", "));

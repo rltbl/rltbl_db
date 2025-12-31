@@ -676,8 +676,51 @@ mod tests {
         assert_eq!(json!(rows), json!([{"MAX(bool_value)": 1}]));
     }
 
+    /// This test is resource intensive and therefore ignored by default. It verifies that
+    /// using [MAX_PARAMS_SQLITE] parameters in a query is indeed supported.
+    /// To run this and other ignored tests, use `cargo test -- --ignored` or
+    /// `cargo test -- --include-ignored`
     #[tokio::test]
+    #[ignore]
     async fn test_max_params() {
         let pool = RusqlitePool::connect(":memory:").await.unwrap();
+        pool.execute_batch(
+            "DROP TABLE IF EXISTS test_max_params;\
+             CREATE TABLE test_max_params (\
+                 column1 INT,\
+                 column2 INT,\
+                 column3 INT,\
+                 column4 INT,\
+                 column5 INT,\
+                 column6 INT\
+             )",
+        )
+        .await
+        .unwrap();
+
+        let mut sql = "INSERT INTO test_max_params VALUES ".to_string();
+        let mut values = vec![];
+        let mut params = vec![];
+        let mut n = 1;
+        while n <= MAX_PARAMS_SQLITE {
+            values.push(format!(
+                "(?{}, ?{}, ?{}, ?{}, ?{}, ?{})",
+                n,
+                n + 1,
+                n + 2,
+                n + 3,
+                n + 4,
+                n + 5
+            ));
+            params.push(1);
+            params.push(1);
+            params.push(1);
+            params.push(1);
+            params.push(1);
+            params.push(1);
+            n += 6;
+        }
+        sql.push_str(&values.join(", "));
+        pool.execute(&sql, params).await.unwrap();
     }
 }
