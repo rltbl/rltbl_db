@@ -1861,33 +1861,42 @@ mod tests {
         // Multiple statements, no parameters:
 
         let sql = r#"
-            INSERT INTO "alpha" VALUES (1, 2, 3);
+            INSERT INTO "alpha" VALUES (1, 2, 3), (4, 5, 6);
 
-            WITH bar AS (SELECT * FROM alpha),
-                 mar AS (SELECT * FROM beta)
             INSERT INTO gamma
             SELECT alpha.*
             FROM alpha, beta
             WHERE alpha.value = beta.value;
 
-            UPDATE "delta" SET bar = 1 WHERE bar = 10;
+            WITH t AS (
+              SELECT * from delta_base ORDER BY quality LIMIT 1
+            )
+            UPDATE delta SET price = t.price * 1.05;
 
-            WITH bar AS (SELECT * FROM test),
-                 mar AS (SELECT * FROM test)
-            UPDATE phi
-            SET value = bar.value
-            FROM bar, mar
-            WHERE bar.value = 'foo' AND bar.value = mar.value;
+            WITH t AS (
+              SELECT * FROM phi_base
+              WHERE
+                "date" >= '2010-10-01' AND
+                "date" < '2010-11-01'
+            )
+            INSERT INTO phi
+            SELECT * FROM t;
 
             DELETE FROM "psi" WHERE bar >= 10;
 
-            WITH bar AS (SELECT * FROM test),
-                 mar AS (SELECT * FROM test)
-            DELETE FROM lambda WHERE value IN (SELECT value FROM bar);
+            WITH RECURSIVE included_lambda(sub_lambda, lambda) AS (
+                SELECT sub_lambda, lambda FROM lambda WHERE lambda = 'our_product'
+              UNION ALL
+                SELECT p.sub_lambda, p.lambda
+                FROM included_lambda pr, lambda p
+                WHERE p.lambda = pr.sub_lambda
+            )
+            DELETE FROM lambda
+              WHERE lambda IN (SELECT lambda FROM included_lambda);
 
             DROP TABLE "rho";
 
-            DROP TABLE IF EXISTS "sigma" CASCADE"#;
+            DROP TABLE "sigma" CASCADE"#;
 
         let mut tables: Vec<_> = pool
             .get_modified_tables(&sql)
@@ -1898,7 +1907,7 @@ mod tests {
         assert_eq!(
             tables,
             [
-                "alpha", "delta", "gamma", "lambda", "phi", "psi", "rho", "sigma"
+                "alpha", "delta", "gamma", "lambda", "phi", "psi", "rho", "sigma",
             ]
         );
     }
