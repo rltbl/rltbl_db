@@ -721,9 +721,9 @@ pub trait DbQuery {
         tables: &[&str],
         sql: &str,
         params: impl IntoParams + Send + Copy + Sync,
-    ) -> Result<Vec<JsonRow>, DbError> {
+    ) -> Result<Vec<DbRow>, DbError> {
         let db_cache =
-            async |tables: &[&str], sql: &str, params: &Params| -> Result<Vec<JsonRow>, DbError> {
+            async |tables: &[&str], sql: &str, params: &Params| -> Result<Vec<DbRow>, DbError> {
                 // Look in the cache to see if there is an entry corresponding to the given SQL
                 // string for the given tables and parameters. If so, return the data from the
                 // cache, otherwise execute the given SQL statement on the actualy specified
@@ -764,10 +764,43 @@ pub trait DbQuery {
                                 )));
                             }
                         };
-                        Ok(json_rows)
+                        // TODO: Refactor (see point 2 of issue description)
+                        let db_rows: Vec<DbRow> = json_rows
+                            .into_iter()
+                            .map(|row| {
+                                row.into_iter()
+                                    .map(|(key, val)| (key, ParamValue::from_json(val)))
+                                    .collect()
+                            })
+                            .collect::<Vec<_>>();
+
+                        Ok(db_rows)
                     }
                     None => {
-                        let json_rows = self.query(sql, params).await?;
+                        let db_rows = self.query(sql, params).await?;
+                        // TODO: Refactor (see point 2 of issue description)
+                        let json_rows = {
+                            let mut json_rows = vec![];
+                            for row in &db_rows {
+                                let mut json_row = JsonRow::new();
+                                for (key, val) in row.iter() {
+                                    let val = match val {
+                                        ParamValue::Null => JsonValue::Null,
+                                        ParamValue::Boolean(flag) => json!(*flag),
+                                        ParamValue::SmallInteger(number) => json!(number),
+                                        ParamValue::Integer(number) => json!(number),
+                                        ParamValue::BigInteger(number) => json!(number),
+                                        ParamValue::Real(number) => json!(number),
+                                        ParamValue::BigReal(number) => json!(number),
+                                        ParamValue::Numeric(number) => json!(number),
+                                        ParamValue::Text(string) => json!(string),
+                                    };
+                                    json_row.insert(key.clone(), val);
+                                }
+                                json_rows.push(json_row);
+                            }
+                            json_rows
+                        };
                         let json_rows_content = json!(json_rows).to_string();
                         let insert_sql = format!(
                             r#"INSERT INTO "cache"
@@ -776,7 +809,7 @@ pub trait DbQuery {
                         );
                         let insert_params = [&tables_param, sql, &params_param, &json_rows_content];
                         self.query(&insert_sql, &insert_params).await?;
-                        Ok(json_rows)
+                        Ok(db_rows)
                     }
                 }
             };
@@ -785,7 +818,7 @@ pub trait DbQuery {
                                sql: &str,
                                params: &Params,
                                cache_size: usize|
-               -> Result<Vec<JsonRow>, DbError> {
+               -> Result<Vec<DbRow>, DbError> {
             let params = &params.into_params();
             let mem_key = MemoryCacheKey {
                 tables: tables.join(", ").to_string(),
@@ -805,9 +838,43 @@ pub trait DbQuery {
                 }
             };
             match cached_rows {
-                Some(json_rows) => Ok(json_rows),
+                Some(json_rows) => {
+                    // TODO: Refactor (see point 2 of issue description)
+                    let db_rows: Vec<DbRow> = json_rows
+                        .into_iter()
+                        .map(|row| {
+                            row.into_iter()
+                                .map(|(key, val)| (key, ParamValue::from_json(val)))
+                                .collect()
+                        })
+                        .collect::<Vec<_>>();
+                    Ok(db_rows)
+                }
                 None => {
-                    let json_rows = self.query(sql, params).await?;
+                    let db_rows = self.query(sql, params).await?;
+                    // TODO: Refactor (see point 2 of issue description)
+                    let json_rows = {
+                        let mut json_rows = vec![];
+                        for row in &db_rows {
+                            let mut json_row = JsonRow::new();
+                            for (key, val) in row.iter() {
+                                let val = match val {
+                                    ParamValue::Null => JsonValue::Null,
+                                    ParamValue::Boolean(flag) => json!(*flag),
+                                    ParamValue::SmallInteger(number) => json!(number),
+                                    ParamValue::Integer(number) => json!(number),
+                                    ParamValue::BigInteger(number) => json!(number),
+                                    ParamValue::Real(number) => json!(number),
+                                    ParamValue::BigReal(number) => json!(number),
+                                    ParamValue::Numeric(number) => json!(number),
+                                    ParamValue::Text(string) => json!(string),
+                                };
+                                json_row.insert(key.clone(), val);
+                            }
+                            json_rows.push(json_row);
+                        }
+                        json_rows
+                    };
                     let mut cache = match MEMORY_CACHE.try_lock() {
                         Ok(cache) => cache,
                         Err(err) => {
@@ -830,7 +897,7 @@ pub trait DbQuery {
                         }
                     }
                     cache.insert(mem_key, json_rows.to_vec());
-                    Ok(json_rows)
+                    Ok(db_rows)
                 }
             }
         };
@@ -896,20 +963,10 @@ pub trait DbQuery {
         &self,
         sql: &str,
         params: impl IntoParams + Send,
-    ) -> impl Future<Output = Result<Vec<JsonRow>, DbError>> + Send;
-
-    fn query_new(
-        &self,
-        sql: &str,
-        params: impl IntoParams + Send,
     ) -> impl Future<Output = Result<Vec<DbRow>, DbError>> + Send;
 
     /// Execute a SQL command, returning a single JSON row.
-    async fn query_row(
-        &self,
-        sql: &str,
-        params: impl IntoParams + Send,
-    ) -> Result<JsonRow, DbError> {
+    async fn query_row(&self, sql: &str, params: impl IntoParams + Send) -> Result<DbRow, DbError> {
         let rows = self.query(&sql, params).await?;
         if rows.len() > 1 {
             return Err(DbError::DataError(
@@ -927,7 +984,7 @@ pub trait DbQuery {
         &self,
         sql: &str,
         params: impl IntoParams + Send,
-    ) -> Result<JsonValue, DbError> {
+    ) -> Result<ParamValue, DbError> {
         let row = self.query_row(sql, params).await?;
         if row.len() > 1 {
             return Err(DbError::DataError(
@@ -947,7 +1004,7 @@ pub trait DbQuery {
         params: impl IntoParams + Send,
     ) -> Result<String, DbError> {
         let value = self.query_value(sql, params).await?;
-        Ok(json_value_to_string(&value))
+        Ok(value.into())
     }
 
     /// Execute a SQL command, returning a vector of strings: the first value for each row.
@@ -959,7 +1016,7 @@ pub trait DbQuery {
         let rows = self.query(sql, params).await?;
         rows.iter()
             .map(|row| match row.values().nth(0) {
-                Some(value) => Ok(json_value_to_string(value)),
+                Some(value) => Ok(value.into()),
                 None => Err(DbError::DataError("Empty row".to_owned())),
             })
             .collect()
@@ -972,7 +1029,10 @@ pub trait DbQuery {
         params: impl IntoParams + Send,
     ) -> Result<StringRow, DbError> {
         let row = self.query_row(sql, params).await?;
-        Ok(json_row_to_string_row(&row))
+        Ok(row
+            .iter()
+            .map(|(key, value)| (key.clone(), value.into()))
+            .collect())
     }
 
     /// Execute a SQL command, returning a vector of rows of strings.
@@ -981,37 +1041,74 @@ pub trait DbQuery {
         sql: &str,
         params: impl IntoParams + Send,
     ) -> Result<Vec<StringRow>, DbError> {
-        let rows = self.query(sql, params).await?;
-        Ok(json_rows_to_string_rows(&rows))
+        let rows = self
+            .query(sql, params)
+            .await?
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|(key, value)| (key.clone(), value.into()))
+                    .collect()
+            })
+            .collect();
+        Ok(rows)
     }
 
     /// Execute a SQL command, returning a single unsigned integer.
     async fn query_u64(&self, sql: &str, params: impl IntoParams + Send) -> Result<u64, DbError> {
         let value = self.query_value(sql, params).await?;
-        match value.as_u64() {
-            Some(val) => Ok(val),
-            None => Err(DbError::DataError(format!(
-                "Not an unsigned integer: {value}"
-            ))),
-        }
+        // TODO: Refactor
+        let value = match value {
+            ParamValue::Null => JsonValue::Null,
+            ParamValue::Boolean(flag) => json!(flag),
+            ParamValue::SmallInteger(number) => json!(number),
+            ParamValue::Integer(number) => json!(number),
+            ParamValue::BigInteger(number) => json!(number),
+            ParamValue::Real(number) => json!(number),
+            ParamValue::BigReal(number) => json!(number),
+            ParamValue::Numeric(number) => json!(number),
+            ParamValue::Text(string) => json!(string),
+        };
+        let value = value.as_u64().unwrap();
+        Ok(value)
     }
 
     /// Execute a SQL command, returning a single signed integer.
     async fn query_i64(&self, sql: &str, params: impl IntoParams + Send) -> Result<i64, DbError> {
         let value = self.query_value(sql, params).await?;
-        match value.as_i64() {
-            Some(val) => Ok(val),
-            None => Err(DbError::DataError(format!("Not an integer: {value}"))),
-        }
+        // TODO: Refactor
+        let value = match value {
+            ParamValue::Null => JsonValue::Null,
+            ParamValue::Boolean(flag) => json!(flag),
+            ParamValue::SmallInteger(number) => json!(number),
+            ParamValue::Integer(number) => json!(number),
+            ParamValue::BigInteger(number) => json!(number),
+            ParamValue::Real(number) => json!(number),
+            ParamValue::BigReal(number) => json!(number),
+            ParamValue::Numeric(number) => json!(number),
+            ParamValue::Text(string) => json!(string),
+        };
+        let value = value.as_i64().unwrap();
+        Ok(value)
     }
 
     /// Execute a SQL command, returning a single float.
     async fn query_f64(&self, sql: &str, params: impl IntoParams + Send) -> Result<f64, DbError> {
         let value = self.query_value(sql, params).await?;
-        match value.as_f64() {
-            Some(val) => Ok(val),
-            None => Err(DbError::DataError(format!("Not an float: {value}"))),
-        }
+        // TODO: Refactor
+        let value = match value {
+            ParamValue::Null => JsonValue::Null,
+            ParamValue::Boolean(flag) => json!(flag),
+            ParamValue::SmallInteger(number) => json!(number),
+            ParamValue::Integer(number) => json!(number),
+            ParamValue::BigInteger(number) => json!(number),
+            ParamValue::Real(number) => json!(number),
+            ParamValue::BigReal(number) => json!(number),
+            ParamValue::Numeric(number) => json!(number),
+            ParamValue::Text(string) => json!(string),
+        };
+        let value = value.as_f64().unwrap();
+        Ok(value)
     }
 
     /// Insert JSON rows into the given table. If an input row does not have a key for a column,
@@ -1032,7 +1129,7 @@ pub trait DbQuery {
         columns: &[&str],
         rows: &[&DbRow],
         returning: &[&str],
-    ) -> impl Future<Output = Result<Vec<JsonRow>, DbError>>;
+    ) -> impl Future<Output = Result<Vec<DbRow>, DbError>>;
 
     /// Update the given table using the given JSON rows. The table should have a primary key
     /// and any columns included in the primary key should be present within each input row.
@@ -1054,7 +1151,7 @@ pub trait DbQuery {
         columns: &[&str],
         rows: &[&DbRow],
         returning: &[&str],
-    ) -> impl Future<Output = Result<Vec<JsonRow>, DbError>>;
+    ) -> impl Future<Output = Result<Vec<DbRow>, DbError>>;
 
     /// Attempt to insert the given rows to the given table, similarly to [DbQuery::insert()].
     /// In case there is a conflict, update the table instead, similarly to [DbQuery::update()].
@@ -1074,7 +1171,7 @@ pub trait DbQuery {
         columns: &[&str],
         rows: &[&DbRow],
         returning: &[&str],
-    ) -> impl Future<Output = Result<Vec<JsonRow>, DbError>>;
+    ) -> impl Future<Output = Result<Vec<DbRow>, DbError>>;
 
     /// Check whether the given table exists in the database.
     fn table_exists(&self, table: &str) -> impl Future<Output = Result<bool, DbError>> + Send;

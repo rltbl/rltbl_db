@@ -1,5 +1,5 @@
 use crate::core::{
-    CachingStrategy, DbError, DbKind, DbQuery, DbRow, JsonRow, ParamValue, clear_mem_cache,
+    CachingStrategy, DbError, DbKind, DbQuery, DbRow, ParamValue, clear_mem_cache,
     validate_table_name,
 };
 use std::fmt::Display;
@@ -136,7 +136,7 @@ pub(crate) async fn edit(
     rows: &[&DbRow],
     with_returning: bool,
     returning: &[&str],
-) -> Result<Vec<JsonRow>, DbError> {
+) -> Result<Vec<DbRow>, DbError> {
     // Begin by verifying that the given table name is valid, which has the side-effect of
     // removing any enclosing double-quotes:
     let table = validate_table_name(table)?;
@@ -213,7 +213,7 @@ pub(crate) async fn edit(
     let execute_batch_edit_and_reset = async |lines_to_bind: &mut Vec<String>,
                                               param_idx: &mut usize,
                                               params_to_be_bound: &mut Vec<ParamValue>|
-           -> Result<Vec<JsonRow>, DbError> {
+           -> Result<Vec<DbRow>, DbError> {
         let sql = match edit_type {
             EditType::Update => generate_update_statement(
                 &table,

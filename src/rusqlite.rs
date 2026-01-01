@@ -329,10 +329,8 @@ impl DbQuery for RusqlitePool {
 
         for row in self.query(&sql, params![&table]).await? {
             match (
-                row.get("name")
-                    .and_then(|name| name.as_str().and_then(|name| Some(name))),
-                row.get("type")
-                    .and_then(|name| name.as_str().and_then(|name| Some(name))),
+                row.get("name").and_then(|name| Some::<String>(name.into())),
+                row.get("type").and_then(|name| Some::<String>(name.into())),
             ) {
                 (Some(column), Some(sql_type)) => {
                     columns.insert(column.to_string(), sql_type.to_lowercase().to_string())
@@ -364,15 +362,12 @@ impl DbQuery for RusqlitePool {
         )
         .await?
         .iter()
-        .map(|row| {
-            match row
-                .get("name")
-                .and_then(|name| name.as_str().and_then(|name| Some(name)))
-            {
+        .map(
+            |row| match row.get("name").and_then(|name| Some::<String>(name.into())) {
                 Some(pk_col) => Ok(pk_col.to_string()),
                 None => Err(DbError::DataError("Empty row".to_owned())),
-            }
-        })
+            },
+        )
         .collect()
     }
 
@@ -405,39 +400,6 @@ impl DbQuery for RusqlitePool {
 
     /// Implements [DbQuery::query()] for SQLite.
     async fn query(
-        &self,
-        sql: &str,
-        params: impl IntoParams + Send,
-    ) -> Result<Vec<JsonRow>, DbError> {
-        let rows = {
-            let conn = self
-                .pool
-                .get()
-                .await
-                .map_err(|err| DbError::ConnectError(format!("Error getting pool: {err}")))?;
-            let sql_string = sql.to_string();
-            let params: Params = params.into_params();
-            conn.interact(move |conn| {
-                let mut stmt = conn.prepare(&sql_string).map_err(|err| {
-                    DbError::DatabaseError(format!("Error preparing statement: {err}"))
-                })?;
-                let rows = query_prepared(&mut stmt, params).map_err(|err| {
-                    DbError::DatabaseError(format!("Error querying prepared statement: {err}"))
-                })?;
-                Ok::<Vec<JsonRow>, DbError>(rows)
-            })
-            .await
-            .map_err(|err| DbError::DatabaseError(err.to_string()))?
-            .map_err(|err| DbError::DatabaseError(err.to_string()))?
-        };
-        // Note that we must allow `conn` to go out of scope (alternately we could explicitly
-        // call drop(conn)) to ensure that the query is persisted to the db before clearing the
-        // cache:
-        self.clear_cache_for_modified_tables(sql).await?;
-        Ok(rows)
-    }
-
-    async fn query_new(
         &self,
         sql: &str,
         params: impl IntoParams + Send,
@@ -500,7 +462,7 @@ impl DbQuery for RusqlitePool {
         columns: &[&str],
         rows: &[&DbRow],
         returning: &[&str],
-    ) -> Result<Vec<JsonRow>, DbError> {
+    ) -> Result<Vec<DbRow>, DbError> {
         edit(
             self,
             &EditType::Insert,
@@ -537,7 +499,7 @@ impl DbQuery for RusqlitePool {
         columns: &[&str],
         rows: &[&DbRow],
         returning: &[&str],
-    ) -> Result<Vec<JsonRow>, DbError> {
+    ) -> Result<Vec<DbRow>, DbError> {
         edit(
             self,
             &EditType::Update,
@@ -574,7 +536,7 @@ impl DbQuery for RusqlitePool {
         columns: &[&str],
         rows: &[&DbRow],
         returning: &[&str],
-    ) -> Result<Vec<JsonRow>, DbError> {
+    ) -> Result<Vec<DbRow>, DbError> {
         edit(
             self,
             &EditType::Upsert,
@@ -610,7 +572,7 @@ mod tests {
     use super::*;
 
     use crate::params;
-    use serde_json::json;
+    use indexmap::indexmap;
 
     #[tokio::test]
     async fn test_aliases_and_builtin_functions() {
@@ -641,7 +603,10 @@ mod tests {
             .query("SELECT MAX(int_value) FROM test_table_indirect", ())
             .await
             .unwrap();
-        assert_eq!(json!(rows), json!([{"MAX(int_value)": 1}]));
+        assert_eq!(
+            rows,
+            [indexmap! {"MAX(int_value)".into() => ParamValue::from(1_i64)}]
+        );
 
         // Test alias:
         let rows = pool
@@ -651,7 +616,10 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(json!(rows), json!([{"bool_value_alias": true}]));
+        assert_eq!(
+            rows,
+            [indexmap! {"bool_value_alias".into() => ParamValue::from(true)}]
+        );
 
         // Test aggregate with alias:
         let rows = pool
@@ -662,7 +630,10 @@ mod tests {
             .await
             .unwrap();
         // Note that the alias is not shown in the results:
-        assert_eq!(json!(rows), json!([{"max_int_value": 1}]));
+        assert_eq!(
+            rows,
+            [indexmap! {"max_int_value".into() => ParamValue::from(1_i64)}]
+        );
 
         // Test non-aggregate function:
         let rows = pool
@@ -672,7 +643,10 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(json!(rows), json!([{"CAST(int_value AS TEXT)": "1"}]));
+        assert_eq!(
+            rows,
+            [indexmap! {"CAST(int_value AS TEXT)".into() => ParamValue::from("1")}]
+        );
 
         // Test non-aggregate function with alias:
         let rows = pool
@@ -682,7 +656,10 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(json!(rows), json!([{"int_value_cast": "1"}]));
+        assert_eq!(
+            rows,
+            [indexmap! {"int_value_cast".into() => ParamValue::from("1")}]
+        );
 
         // Test functions over booleans:
         let rows = pool
@@ -698,7 +675,10 @@ mod tests {
         //          name and argument types. You might need to add explicit type casts.
         // So, perhaps, this is tu quoque an argument that the behaviour below is acceptable for
         // sqlite.
-        assert_eq!(json!(rows), json!([{"MAX(bool_value)": 1}]));
+        assert_eq!(
+            rows,
+            [indexmap! {"MAX(bool_value)".into() => ParamValue::from(1_i64)}]
+        );
     }
 
     /// This test is resource intensive and therefore ignored by default. It verifies that

@@ -13,13 +13,11 @@ use std::{marker::Sync, sync::Arc};
 use tower_service::Service;
 
 async fn get_root(State(pool): State<Arc<impl DbQuery + Sync>>) -> impl IntoResponse {
-    let value = pool
+    let value: String = pool
         .query_value("SELECT value FROM test LIMIT 1", ())
         .await
         .unwrap()
-        .as_str()
-        .unwrap()
-        .to_string();
+        .into();
     Html(value)
 }
 
