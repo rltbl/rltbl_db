@@ -501,10 +501,122 @@ impl DbQuery for TokioPostgresPool {
 
     async fn query_new(
         &self,
-        _sql: &str,
-        _params: impl IntoParams + Send,
+        sql: &str,
+        into_params: impl IntoParams + Send,
     ) -> Result<Vec<DbRow>, DbError> {
-        todo!()
+        let into_params = into_params.into_params();
+        let client = self
+            .pool
+            .get()
+            .await
+            .map_err(|err| DbError::ConnectError(format!("Unable to get pool: {err:?}")))?;
+
+        // The expected types of all of the parameters as reported by the database via prepare():
+        let param_pg_types = client
+            .prepare(sql)
+            .await
+            .map_err(|err| DbError::DatabaseError(format!("Error preparing statement: {err:?}")))?
+            .params()
+            .to_vec();
+
+        let mut params: Vec<Box<dyn ToSql + Sync + Send>> = Vec::new();
+        let gen_err = |param: &ParamValue, sql_type: &str| -> String {
+            format!("Param {param:?} is wrong type for {sql_type} in query: {sql}")
+        };
+        match into_params {
+            Params::None => (),
+            Params::Positional(plist) => {
+                for (i, param) in plist.iter().enumerate() {
+                    let pg_type = &param_pg_types[i];
+                    match pg_type {
+                        &Type::TEXT | &Type::VARCHAR | &Type::NAME => {
+                            match param {
+                                ParamValue::Null => params.push(Box::new(None::<String>)),
+                                ParamValue::Text(text) => params.push(Box::new(text.to_string())),
+                                _ => return Err(DbError::InputError(gen_err(&param, "TEXT"))),
+                            };
+                        }
+                        &Type::INT2 => {
+                            match param {
+                                ParamValue::Null => params.push(Box::new(None::<i16>)),
+                                ParamValue::SmallInteger(num) => params.push(Box::new(*num)),
+                                _ => return Err(DbError::InputError(gen_err(&param, "INT2"))),
+                            };
+                        }
+                        &Type::INT4 => {
+                            match param {
+                                ParamValue::Null => params.push(Box::new(None::<i32>)),
+                                ParamValue::Integer(num) => params.push(Box::new(*num)),
+                                _ => return Err(DbError::InputError(gen_err(&param, "INT4"))),
+                            };
+                        }
+                        &Type::INT8 => {
+                            match param {
+                                ParamValue::Null => params.push(Box::new(None::<i64>)),
+                                ParamValue::BigInteger(num) => params.push(Box::new(*num)),
+                                _ => return Err(DbError::InputError(gen_err(&param, "INT8"))),
+                            };
+                        }
+                        &Type::FLOAT4 => {
+                            match param {
+                                ParamValue::Null => params.push(Box::new(None::<f32>)),
+                                ParamValue::Real(num) => params.push(Box::new(*num)),
+                                _ => return Err(DbError::InputError(gen_err(&param, "FLOAT4"))),
+                            };
+                        }
+                        &Type::FLOAT8 => {
+                            match param {
+                                ParamValue::Null => params.push(Box::new(None::<f64>)),
+                                ParamValue::BigReal(num) => params.push(Box::new(*num)),
+                                _ => return Err(DbError::InputError(gen_err(&param, "FLOAT8"))),
+                            };
+                        }
+                        &Type::NUMERIC => {
+                            match param {
+                                ParamValue::Null => params.push(Box::new(None::<Decimal>)),
+                                ParamValue::Numeric(num) => params.push(Box::new(*num)),
+                                _ => return Err(DbError::InputError(gen_err(&param, "NUMERIC"))),
+                            };
+                        }
+                        &Type::BOOL => {
+                            match param {
+                                ParamValue::Null => params.push(Box::new(None::<bool>)),
+                                ParamValue::Boolean(flag) => params.push(Box::new(*flag)),
+                                _ => return Err(DbError::InputError(gen_err(&param, "BOOL"))),
+                            };
+                        }
+                        _ => unimplemented!(),
+                    };
+                }
+            }
+        };
+
+        // Finally, execute the query and return the results:
+        let query_params: Vec<&(dyn ToSql + Sync)> = params
+            .iter()
+            .map(|p| p.as_ref() as &(dyn ToSql + Sync))
+            .collect();
+        let rows = client
+            .query(sql, &query_params)
+            .await
+            .map_err(|err| DbError::DatabaseError(format!("Error in query(): {err:?}")))?
+            .iter()
+            .map(|row| {
+                row.columns()
+                    .iter()
+                    .enumerate()
+                    .map(|(i, column)| {
+                        (
+                            column.name().to_string(),
+                            ParamValue::from_json(extract_value(&row, i).unwrap()),
+                        )
+                    })
+                    .collect()
+            })
+            .collect();
+
+        self.clear_cache_for_modified_tables(sql).await?;
+        Ok(rows)
     }
 
     /// Implements [DbQuery::insert()] for PostgreSQL

@@ -17,7 +17,6 @@ use deadpool_sqlite::{
         types::{Null, ValueRef},
     },
 };
-use indexmap::IndexMap;
 use serde_json::json;
 
 /// The [maximum number of parameters](https://www.sqlite.org/limits.html#max_variable_number)
@@ -459,21 +458,20 @@ impl DbQuery for RusqlitePool {
                     DbError::DatabaseError(format!("Error preparing statement: {err}"))
                 })?;
                 let rows = query_prepared(&mut stmt, params)
-                    .map_err(|err| {
+                    .map_err(|err: DbError| {
                         DbError::DatabaseError(format!("Error querying prepared statement: {err}"))
                     })?
                     .into_iter()
                     .map(|row| {
                         row.into_iter()
                             .map(|(key, val)| (key, ParamValue::from_json(val)))
-                            .collect::<IndexMap<_, _>>()
+                            .collect()
                     })
-                    .collect::<Vec<_>>();
-                Ok::<Vec<DbRow>, DbError>(rows)
+                    .collect();
+                Ok(rows)
             })
             .await
-            .map_err(|err| DbError::DatabaseError(err.to_string()))?
-            .map_err(|err| DbError::DatabaseError(err.to_string()))?
+            .map_err(|err| DbError::DatabaseError(err.to_string()))??
         };
         self.clear_cache_for_modified_tables(sql).await?;
         Ok(rows)
