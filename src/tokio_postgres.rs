@@ -501,8 +501,8 @@ impl DbQuery for TokioPostgresPool {
 
     async fn query_new(
         &self,
-        sql: &str,
-        params: impl IntoParams + Send,
+        _sql: &str,
+        _params: impl IntoParams + Send,
     ) -> Result<Vec<DbRow>, DbError> {
         todo!()
     }

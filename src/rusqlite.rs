@@ -17,6 +17,7 @@ use deadpool_sqlite::{
         types::{Null, ValueRef},
     },
 };
+use indexmap::IndexMap;
 use serde_json::json;
 
 /// The [maximum number of parameters](https://www.sqlite.org/limits.html#max_variable_number)
@@ -442,7 +443,40 @@ impl DbQuery for RusqlitePool {
         sql: &str,
         params: impl IntoParams + Send,
     ) -> Result<Vec<DbRow>, DbError> {
-        todo!()
+        let rows = {
+            // Note that we must allow `conn` to go out of scope (alternately we could explicitly
+            // call drop(conn)) to ensure that the query is persisted to the db before clearing
+            // the cache.
+            let conn = self
+                .pool
+                .get()
+                .await
+                .map_err(|err| DbError::ConnectError(format!("Error getting pool: {err}")))?;
+            let sql_string = sql.to_string();
+            let params: Params = params.into_params();
+            conn.interact(move |conn| {
+                let mut stmt = conn.prepare(&sql_string).map_err(|err| {
+                    DbError::DatabaseError(format!("Error preparing statement: {err}"))
+                })?;
+                let rows = query_prepared(&mut stmt, params)
+                    .map_err(|err| {
+                        DbError::DatabaseError(format!("Error querying prepared statement: {err}"))
+                    })?
+                    .into_iter()
+                    .map(|row| {
+                        row.into_iter()
+                            .map(|(key, val)| (key, ParamValue::from_json(val)))
+                            .collect::<IndexMap<_, _>>()
+                    })
+                    .collect::<Vec<_>>();
+                Ok::<Vec<DbRow>, DbError>(rows)
+            })
+            .await
+            .map_err(|err| DbError::DatabaseError(err.to_string()))?
+            .map_err(|err| DbError::DatabaseError(err.to_string()))?
+        };
+        self.clear_cache_for_modified_tables(sql).await?;
+        Ok(rows)
     }
 
     /// Implements [DbQuery::insert()] for SQLite.
