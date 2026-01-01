@@ -15,7 +15,7 @@
 /// }
 /// ```
 use crate::core::{
-    CachingStrategy, ColumnMap, DbError, DbKind, DbQuery, IntoParams, JsonRow, ParamValue,
+    CachingStrategy, ColumnMap, DbError, DbKind, DbQuery, DbRow, IntoParams, JsonRow, ParamValue,
 };
 
 #[cfg(feature = "rusqlite")]
@@ -180,12 +180,7 @@ impl DbQuery for AnyPool {
         }
     }
 
-    async fn insert(
-        &self,
-        table: &str,
-        columns: &[&str],
-        rows: &[&JsonRow],
-    ) -> Result<(), DbError> {
+    async fn insert(&self, table: &str, columns: &[&str], rows: &[&DbRow]) -> Result<(), DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.insert(table, columns, rows).await,
@@ -198,7 +193,7 @@ impl DbQuery for AnyPool {
         &self,
         table: &str,
         columns: &[&str],
-        rows: &[&JsonRow],
+        rows: &[&DbRow],
         returning: &[&str],
     ) -> Result<Vec<JsonRow>, DbError> {
         match self {
@@ -211,12 +206,7 @@ impl DbQuery for AnyPool {
         }
     }
 
-    async fn update(
-        &self,
-        table: &str,
-        columns: &[&str],
-        rows: &[&JsonRow],
-    ) -> Result<(), DbError> {
+    async fn update(&self, table: &str, columns: &[&str], rows: &[&DbRow]) -> Result<(), DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.update(table, columns, rows).await,
@@ -229,7 +219,7 @@ impl DbQuery for AnyPool {
         &self,
         table: &str,
         columns: &[&str],
-        rows: &[&JsonRow],
+        rows: &[&DbRow],
         returning: &[&str],
     ) -> Result<Vec<JsonRow>, DbError> {
         match self {
@@ -242,12 +232,7 @@ impl DbQuery for AnyPool {
         }
     }
 
-    async fn upsert(
-        &self,
-        table: &str,
-        columns: &[&str],
-        rows: &[&JsonRow],
-    ) -> Result<(), DbError> {
+    async fn upsert(&self, table: &str, columns: &[&str], rows: &[&DbRow]) -> Result<(), DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.upsert(table, columns, rows).await,
@@ -260,7 +245,7 @@ impl DbQuery for AnyPool {
         &self,
         table: &str,
         columns: &[&str],
-        rows: &[&JsonRow],
+        rows: &[&DbRow],
         returning: &[&str],
     ) -> Result<Vec<JsonRow>, DbError> {
         match self {
@@ -288,6 +273,7 @@ mod tests {
     use super::*;
     use crate::core::{CachingStrategy, JsonValue, StringRow, get_memory_cache_contents};
     use crate::params;
+    use indexmap::indexmap;
     use rust_decimal::dec;
     use serde_json::json;
     use std::str::FromStr;
@@ -807,10 +793,11 @@ mod tests {
             "test_insert",
             &["text_value", "int_value", "bool_value"],
             &[
-                &json!({"text_value": "TEXT"}).as_object().unwrap(),
-                &json!({"int_value": 1, "bool_value": true})
-                    .as_object()
-                    .unwrap(),
+                &indexmap! {"text_value".into() => ParamValue::from("TEXT")},
+                &indexmap! {
+                    "int_value".into() => ParamValue::from(1_i64),
+                    "bool_value".into() => ParamValue::from(true)
+                },
             ],
         )
         .await
@@ -875,10 +862,11 @@ mod tests {
                 "test_insert_returning",
                 &["text_value", "int_value", "bool_value"],
                 &[
-                    &json!({"text_value": "TEXT"}).as_object().unwrap(),
-                    &json!({"int_value": 1, "bool_value": true})
-                        .as_object()
-                        .unwrap(),
+                    &indexmap! {"text_value".into() => ParamValue::from("TEXT")},
+                    &indexmap! {
+                        "int_value".into() => ParamValue::from(1_i64),
+                        "bool_value".into() => ParamValue::from(true)
+                    },
                 ],
                 &[],
             )
@@ -907,10 +895,11 @@ mod tests {
                 "test_insert_returning",
                 &["text_value", "int_value", "bool_value"],
                 &[
-                    &json!({"text_value": "TEXT"}).as_object().unwrap(),
-                    &json!({"int_value": 1, "bool_value": true})
-                        .as_object()
-                        .unwrap(),
+                    &indexmap! {"text_value".into() => ParamValue::from("TEXT")},
+                    &indexmap! {
+                        "int_value".into() => ParamValue::from(1_i64),
+                        "bool_value".into() => ParamValue::from(true)
+                    },
                 ],
                 &["int_value", "float_value"],
             )
@@ -1051,9 +1040,9 @@ mod tests {
             "test_update",
             &["foo"],
             &[
-                &json!({"foo": 1}).as_object().unwrap(),
-                &json!({"foo": 2}).as_object().unwrap(),
-                &json!({"foo": 3}).as_object().unwrap(),
+                &indexmap! {"foo".into() => ParamValue::from(1_i64)},
+                &indexmap! {"foo".into() => ParamValue::from(2_i64)},
+                &indexmap! {"foo".into() => ParamValue::from(3_i64)},
             ],
         )
         .await
@@ -1063,33 +1052,27 @@ mod tests {
             "test_update",
             &["foo", "bar", "car", "dar", "ear"],
             &[
-                &json!({
-                    "foo": 1,
-                    "bar": 10,
-                    "car": 11,
-                    "dar": 12,
-                    "ear": 13,
-                })
-                .as_object()
-                .unwrap(),
-                &json!({
-                    "foo": 2,
-                    "bar": 14,
-                    "car": 15,
-                    "dar": 16,
-                    "ear": 17,
-                })
-                .as_object()
-                .unwrap(),
-                &json!({
-                    "foo": 3,
-                    "bar": 18,
-                    "car": 19,
-                    "dar": 20,
-                    "ear": 21,
-                })
-                .as_object()
-                .unwrap(),
+                &indexmap! {
+                    "foo".into() => ParamValue::from(1_i64),
+                    "bar".into() => ParamValue::from(10_i64),
+                    "car".into() => ParamValue::from(11_i64),
+                    "dar".into() => ParamValue::from(12_i64),
+                    "ear".into() => ParamValue::from(13_i64),
+                },
+                &indexmap! {
+                    "foo".into() => ParamValue::from(2_i64),
+                    "bar".into() => ParamValue::from(14_i64),
+                    "car".into() => ParamValue::from(15_i64),
+                    "dar".into() => ParamValue::from(16_i64),
+                    "ear".into() => ParamValue::from(17_i64),
+                },
+                &indexmap! {
+                    "foo".into() => ParamValue::from(3_i64),
+                    "bar".into() => ParamValue::from(18_i64),
+                    "car".into() => ParamValue::from(19_i64),
+                    "dar".into() => ParamValue::from(20_i64),
+                    "ear".into() => ParamValue::from(21_i64),
+                },
             ],
         )
         .await
@@ -1159,9 +1142,18 @@ mod tests {
             "test_update_returning",
             &["foo", "bar", "car", "dar", "ear"],
             &[
-                &json!({"foo": 1, "bar": 1}).as_object().unwrap(),
-                &json!({"foo": 2, "bar": 2}).as_object().unwrap(),
-                &json!({"foo": 3, "bar": 3}).as_object().unwrap(),
+                &indexmap! {
+                    "foo".into() => ParamValue::from(1_i64),
+                    "bar".into() => ParamValue::from(1_i64)
+                },
+                &indexmap! {
+                    "foo".into() => ParamValue::from(2_i64),
+                    "bar".into() => ParamValue::from(2_i64),
+                },
+                &indexmap! {
+                    "foo".into() => ParamValue::from(3_i64),
+                    "bar".into() => ParamValue::from(3_i64),
+                },
             ],
         )
         .await
@@ -1196,33 +1188,27 @@ mod tests {
                     "test_update_returning",
                     &["foo", "bar", "car", "dar", "ear"],
                     &[
-                        &json!({
-                            "foo": 1,
-                            "bar": 1,
-                            "car": 10,
-                            "dar": 11,
-                            "ear": 12,
-                        })
-                        .as_object()
-                        .unwrap(),
-                        &json!({
-                            "foo": 2,
-                            "bar": 2,
-                            "car": 13,
-                            "dar": 14,
-                            "ear": 15,
-                        })
-                        .as_object()
-                        .unwrap(),
-                        &json!({
-                            "foo": 3,
-                            "bar": 3,
-                            "car": 16,
-                            "dar": 17,
-                            "ear": 18,
-                        })
-                        .as_object()
-                        .unwrap(),
+                        &indexmap! {
+                            "foo".into() => ParamValue::from(1_i64),
+                            "bar".into() => ParamValue::from(1_i64),
+                            "car".into() => ParamValue::from(10_i64),
+                            "dar".into() => ParamValue::from(11_i64),
+                            "ear".into() => ParamValue::from(12_i64),
+                        },
+                        &indexmap! {
+                            "foo".into() => ParamValue::from(2_i64),
+                            "bar".into() => ParamValue::from(2_i64),
+                            "car".into() => ParamValue::from(13_i64),
+                            "dar".into() => ParamValue::from(14_i64),
+                            "ear".into() => ParamValue::from(15_i64),
+                        },
+                        &indexmap! {
+                            "foo".into() => ParamValue::from(3_i64),
+                            "bar".into() => ParamValue::from(3_i64),
+                            "car".into() => ParamValue::from(16_i64),
+                            "dar".into() => ParamValue::from(17_i64),
+                            "ear".into() => ParamValue::from(18_i64),
+                        },
                     ],
                     &["car", "dar", "ear"],
                 )
@@ -1240,9 +1226,18 @@ mod tests {
             "test_update_returning",
             &["foo", "bar"],
             &[
-                &json!({"foo": 1, "bar": 1}).as_object().unwrap(),
-                &json!({"foo": 2, "bar": 2}).as_object().unwrap(),
-                &json!({"foo": 3, "bar": 3}).as_object().unwrap(),
+                &indexmap! {
+                    "foo".into() => ParamValue::from(1_i64),
+                    "bar".into() => ParamValue::from(1_i64),
+                },
+                &indexmap! {
+                    "foo".into() => ParamValue::from(2_i64),
+                    "bar".into() => ParamValue::from(2_i64),
+                },
+                &indexmap! {
+                    "foo".into() => ParamValue::from(3_i64),
+                    "bar".into() => ParamValue::from(3_i64),
+                },
             ],
         )
         .await
@@ -1254,33 +1249,27 @@ mod tests {
                     "test_update_returning",
                     &["foo", "bar", "car", "dar", "ear"],
                     &[
-                        &json!({
-                            "ear": 15,
-                            "bar": 2,
-                            "car": 13,
-                            "dar": 14,
-                            "foo": 2,
-                        })
-                        .as_object()
-                        .unwrap(),
-                        &json!({
-                            "foo": 1,
-                            "car": 10,
-                            "bar": 1,
-                            "ear": 12,
-                            "dar": 11,
-                        })
-                        .as_object()
-                        .unwrap(),
-                        &json!({
-                            "car": 16,
-                            "dar": 17,
-                            "ear": 18,
-                            "bar": 3,
-                            "foo": 3,
-                        })
-                        .as_object()
-                        .unwrap(),
+                        &indexmap! {
+                            "ear".into() => ParamValue::from(15_i64),
+                            "bar".into() => ParamValue::from(2_i64),
+                            "car".into() => ParamValue::from(13_i64),
+                            "dar".into() => ParamValue::from(14_i64),
+                            "foo".into() => ParamValue::from(2_i64),
+                        },
+                        &indexmap! {
+                            "foo".into() => ParamValue::from(1_i64),
+                            "car".into() => ParamValue::from(10_i64),
+                            "bar".into() => ParamValue::from(1_i64),
+                            "ear".into() => ParamValue::from(12_i64),
+                            "dar".into() => ParamValue::from(11_i64),
+                        },
+                        &indexmap! {
+                            "car".into() => ParamValue::from(16_i64),
+                            "dar".into() => ParamValue::from(17_i64),
+                            "ear".into() => ParamValue::from(18_i64),
+                            "bar".into() => ParamValue::from(3_i64),
+                            "foo".into() => ParamValue::from(3_i64),
+                        },
                     ],
                     &["car", "dar", "ear"],
                 )
@@ -1355,9 +1344,9 @@ mod tests {
             "test_upsert",
             &["foo"],
             &[
-                &json!({"foo": 1}).as_object().unwrap(),
-                &json!({"foo": 2}).as_object().unwrap(),
-                &json!({"foo": 3}).as_object().unwrap(),
+                &indexmap! {"foo".into() => ParamValue::from(1_i64)},
+                &indexmap! {"foo".into() => ParamValue::from(2_i64)},
+                &indexmap! {"foo".into() => ParamValue::from(3_i64)},
             ],
         )
         .await
@@ -1367,33 +1356,27 @@ mod tests {
             "test_upsert",
             &["foo", "bar", "car", "dar", "ear"],
             &[
-                &json!({
-                    "foo": 1,
-                    "bar": 10,
-                    "car": 11,
-                    "dar": 12,
-                    "ear": 13,
-                })
-                .as_object()
-                .unwrap(),
-                &json!({
-                    "foo": 2,
-                    "bar": 14,
-                    "car": 15,
-                    "dar": 16,
-                    "ear": 17,
-                })
-                .as_object()
-                .unwrap(),
-                &json!({
-                    "foo": 3,
-                    "bar": 18,
-                    "car": 19,
-                    "dar": 20,
-                    "ear": 21,
-                })
-                .as_object()
-                .unwrap(),
+                &indexmap! {
+                    "foo".into() => ParamValue::from(1_i64),
+                    "bar".into() => ParamValue::from(10_i64),
+                    "car".into() => ParamValue::from(11_i64),
+                    "dar".into() => ParamValue::from(12_i64),
+                    "ear".into() => ParamValue::from(13_i64),
+                },
+                &indexmap! {
+                    "foo".into() => ParamValue::from(2_i64),
+                    "bar".into() => ParamValue::from(14_i64),
+                    "car".into() => ParamValue::from(15_i64),
+                    "dar".into() => ParamValue::from(16_i64),
+                    "ear".into() => ParamValue::from(17_i64),
+                },
+                &indexmap! {
+                    "foo".into() => ParamValue::from(3_i64),
+                    "bar".into() => ParamValue::from(18_i64),
+                    "car".into() => ParamValue::from(19_i64),
+                    "dar".into() => ParamValue::from(20_i64),
+                    "ear".into() => ParamValue::from(21_i64),
+                },
             ],
         )
         .await
@@ -1463,9 +1446,18 @@ mod tests {
             "test_upsert_returning",
             &["foo", "bar", "car", "dar", "ear"],
             &[
-                &json!({"foo": 1, "bar": 1}).as_object().unwrap(),
-                &json!({"foo": 2, "bar": 2}).as_object().unwrap(),
-                &json!({"foo": 3, "bar": 3}).as_object().unwrap(),
+                &indexmap! {
+                    "foo".into() => ParamValue::from(1_i64),
+                    "bar".into() => ParamValue::from(1_i64),
+                },
+                &indexmap! {
+                    "foo".into() => ParamValue::from(2_i64),
+                    "bar".into() => ParamValue::from(2_i64),
+                },
+                &indexmap! {
+                    "foo".into() => ParamValue::from(3_i64),
+                    "bar".into() => ParamValue::from(3_i64),
+                },
             ],
         )
         .await
@@ -1476,33 +1468,27 @@ mod tests {
                 "test_upsert_returning",
                 &["foo", "bar", "car", "dar", "ear"],
                 &[
-                    &json!({
-                        "foo": 1,
-                        "bar": 1,
-                        "car": 10,
-                        "dar": 11,
-                        "ear": 12,
-                    })
-                    .as_object()
-                    .unwrap(),
-                    &json!({
-                        "foo": 2,
-                        "bar": 2,
-                        "car": 13,
-                        "dar": 14,
-                        "ear": 15,
-                    })
-                    .as_object()
-                    .unwrap(),
-                    &json!({
-                        "foo": 3,
-                        "bar": 3,
-                        "car": 16,
-                        "dar": 17,
-                        "ear": 18,
-                    })
-                    .as_object()
-                    .unwrap(),
+                    &indexmap! {
+                        "foo".into() => ParamValue::from(1_i64),
+                        "bar".into() => ParamValue::from(1_i64),
+                        "car".into() => ParamValue::from(10_i64),
+                        "dar".into() => ParamValue::from(11_i64),
+                        "ear".into() => ParamValue::from(12_i64),
+                    },
+                    &indexmap! {
+                        "foo".into() => ParamValue::from(2_i64),
+                        "bar".into() => ParamValue::from(2_i64),
+                        "car".into() => ParamValue::from(13_i64),
+                        "dar".into() => ParamValue::from(14_i64),
+                        "ear".into() => ParamValue::from(15_i64),
+                    },
+                    &indexmap! {
+                        "foo".into() => ParamValue::from(3_i64),
+                        "bar".into() => ParamValue::from(3_i64),
+                        "car".into() => ParamValue::from(16_i64),
+                        "dar".into() => ParamValue::from(17_i64),
+                        "ear".into() => ParamValue::from(18_i64),
+                    },
                 ],
                 &["car", "dar", "ear"],
             )
@@ -1585,8 +1571,12 @@ mod tests {
             "test_table_caching_1",
             &["value"],
             &[
-                &json!({"value": "alpha"}).as_object().unwrap(),
-                &json!({"value": "beta"}).as_object().unwrap(),
+                &indexmap! {
+                    "value".into() => ParamValue::from("alpha"),
+                },
+                &indexmap! {
+                    "value".into() => ParamValue::from("beta"),
+                },
             ],
         )
         .await
@@ -1640,8 +1630,8 @@ mod tests {
             "test_table_caching_1",
             &["value"],
             &[
-                &json!({"value": "gamma"}).as_object().unwrap(),
-                &json!({"value": "delta"}).as_object().unwrap(),
+                &indexmap! {"value".into() => ParamValue::from("gamma")},
+                &indexmap! {"value".into() => ParamValue::from("delta")},
             ],
         )
         .await

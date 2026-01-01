@@ -1,5 +1,5 @@
 use crate::core::{
-    CachingStrategy, DbError, DbKind, DbQuery, JsonRow, ParamValue, clear_mem_cache,
+    CachingStrategy, DbError, DbKind, DbQuery, DbRow, JsonRow, ParamValue, clear_mem_cache,
     validate_table_name,
 };
 use std::fmt::Display;
@@ -133,7 +133,7 @@ pub(crate) async fn edit(
     max_params: &usize,
     table: &str,
     columns: &[&str],
-    rows: &[&JsonRow],
+    rows: &[&DbRow],
     with_returning: bool,
     returning: &[&str],
 ) -> Result<Vec<JsonRow>, DbError> {
@@ -277,7 +277,7 @@ pub(crate) async fn edit(
                 cells.push(format!("{param_prefix}{param_idx}"));
             }
             let param = match row.get(*column) {
-                Some(value) => pool.convert_json(sql_type, value)?,
+                Some(value) => value.clone(),
                 None => ParamValue::Null,
             };
             params_to_be_bound.push(param);

@@ -20,6 +20,7 @@ use tree_sitter_sequel::LANGUAGE as SQL_LANGUAGE;
 
 pub type JsonValue = serde_json::Value;
 pub type JsonRow = JsonMap<String, JsonValue>;
+pub type DbRow = IndexMap<String, ParamValue>;
 pub type StringRow = IndexMap<String, String>;
 pub type ColumnMap = IndexMap<String, String>;
 
@@ -1013,7 +1014,7 @@ pub trait DbQuery {
         &self,
         table: &str,
         columns: &[&str],
-        rows: &[&JsonRow],
+        rows: &[&DbRow],
     ) -> impl Future<Output = Result<(), DbError>>;
 
     /// Like [DbQuery::insert()], but in addition this function also returns the columns from the
@@ -1023,7 +1024,7 @@ pub trait DbQuery {
         &self,
         table: &str,
         columns: &[&str],
-        rows: &[&JsonRow],
+        rows: &[&DbRow],
         returning: &[&str],
     ) -> impl Future<Output = Result<Vec<JsonRow>, DbError>>;
 
@@ -1035,7 +1036,7 @@ pub trait DbQuery {
         &self,
         table: &str,
         columns: &[&str],
-        rows: &[&JsonRow],
+        rows: &[&DbRow],
     ) -> impl Future<Output = Result<(), DbError>>;
 
     /// Like [DbQuery::update()], but in addition this function also returns the columns from the
@@ -1045,7 +1046,7 @@ pub trait DbQuery {
         &self,
         table: &str,
         columns: &[&str],
-        rows: &[&JsonRow],
+        rows: &[&DbRow],
         returning: &[&str],
     ) -> impl Future<Output = Result<Vec<JsonRow>, DbError>>;
 
@@ -1055,7 +1056,7 @@ pub trait DbQuery {
         &self,
         table: &str,
         columns: &[&str],
-        rows: &[&JsonRow],
+        rows: &[&DbRow],
     ) -> impl Future<Output = Result<(), DbError>>;
 
     /// Like [DbQuery::upsert()], but in addition this function also returns the columns from the
@@ -1065,7 +1066,7 @@ pub trait DbQuery {
         &self,
         table: &str,
         columns: &[&str],
-        rows: &[&JsonRow],
+        rows: &[&DbRow],
         returning: &[&str],
     ) -> impl Future<Output = Result<Vec<JsonRow>, DbError>>;
 

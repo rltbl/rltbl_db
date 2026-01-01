@@ -4,8 +4,11 @@ use axum::{
     response::{Html, IntoResponse},
     routing::get,
 };
-use rltbl_db::{any::AnyPool, core::DbQuery};
-use serde_json::json;
+use indexmap::indexmap;
+use rltbl_db::{
+    any::AnyPool,
+    core::{DbQuery, ParamValue},
+};
 use std::{marker::Sync, sync::Arc};
 use tower_service::Service;
 
@@ -32,7 +35,7 @@ async fn run_axum(url: &str) {
     pool.insert(
         "test",
         &["value"],
-        &[&json!({"value": "foo"}).as_object().unwrap()],
+        &[&indexmap! {"value".into() => ParamValue::from("foo")}],
     )
     .await
     .unwrap();
