@@ -180,6 +180,19 @@ impl DbQuery for AnyPool {
         }
     }
 
+    async fn query_new(
+        &self,
+        sql: &str,
+        params: impl IntoParams + Send,
+    ) -> Result<Vec<DbRow>, DbError> {
+        match self {
+            #[cfg(feature = "rusqlite")]
+            AnyPool::Rusqlite(pool) => pool.query_new(sql, params).await,
+            #[cfg(feature = "tokio-postgres")]
+            AnyPool::TokioPostgres(pool) => pool.query_new(sql, params).await,
+        }
+    }
+
     async fn insert(&self, table: &str, columns: &[&str], rows: &[&DbRow]) -> Result<(), DbError> {
         match self {
             #[cfg(feature = "rusqlite")]

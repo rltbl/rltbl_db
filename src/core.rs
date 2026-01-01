@@ -898,6 +898,12 @@ pub trait DbQuery {
         params: impl IntoParams + Send,
     ) -> impl Future<Output = Result<Vec<JsonRow>, DbError>> + Send;
 
+    fn query_new(
+        &self,
+        sql: &str,
+        params: impl IntoParams + Send,
+    ) -> impl Future<Output = Result<Vec<DbRow>, DbError>> + Send;
+
     /// Execute a SQL command, returning a single JSON row.
     async fn query_row(
         &self,

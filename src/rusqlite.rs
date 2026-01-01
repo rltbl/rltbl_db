@@ -437,6 +437,14 @@ impl DbQuery for RusqlitePool {
         Ok(rows)
     }
 
+    async fn query_new(
+        &self,
+        sql: &str,
+        params: impl IntoParams + Send,
+    ) -> Result<Vec<DbRow>, DbError> {
+        todo!()
+    }
+
     /// Implements [DbQuery::insert()] for SQLite.
     async fn insert(&self, table: &str, columns: &[&str], rows: &[&DbRow]) -> Result<(), DbError> {
         edit(

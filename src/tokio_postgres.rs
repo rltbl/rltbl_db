@@ -499,6 +499,14 @@ impl DbQuery for TokioPostgresPool {
         Ok(json_rows)
     }
 
+    async fn query_new(
+        &self,
+        sql: &str,
+        params: impl IntoParams + Send,
+    ) -> Result<Vec<DbRow>, DbError> {
+        todo!()
+    }
+
     /// Implements [DbQuery::insert()] for PostgreSQL
     async fn insert(&self, table: &str, columns: &[&str], rows: &[&DbRow]) -> Result<(), DbError> {
         edit(
