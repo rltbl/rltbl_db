@@ -1,5 +1,5 @@
 use crate::core::{
-    CachingStrategy, DbError, DbKind, DbQuery, DbRow, ParamValue, clear_mem_cache,
+    CachingStrategy, DbError, DbKind, DbQuery, DbRow, IntoDbRows, ParamValue, clear_mem_cache,
     validate_table_name,
 };
 use std::fmt::Display;
@@ -133,7 +133,7 @@ pub(crate) async fn edit(
     max_params: &usize,
     table: &str,
     columns: &[&str],
-    rows: &[&DbRow],
+    rows: impl IntoDbRows,
     with_returning: bool,
     returning: &[&str],
 ) -> Result<Vec<DbRow>, DbError> {
@@ -240,6 +240,7 @@ pub(crate) async fn edit(
         Ok(rows)
     };
 
+    let rows: Vec<DbRow> = rows.into_db_rows();
     for row in rows {
         // If we have reached the limit on the number of bound parameters, edit the rows that
         // we have processed so far and then reset all of the counters and collections:

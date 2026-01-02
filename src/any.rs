@@ -15,7 +15,7 @@
 /// }
 /// ```
 use crate::core::{
-    CachingStrategy, ColumnMap, DbError, DbKind, DbQuery, DbRow, IntoParams, ParamValue,
+    CachingStrategy, ColumnMap, DbError, DbKind, DbQuery, DbRow, IntoDbRows, IntoParams, ParamValue,
 };
 
 #[cfg(feature = "rusqlite")]
@@ -180,7 +180,12 @@ impl DbQuery for AnyPool {
         }
     }
 
-    async fn insert(&self, table: &str, columns: &[&str], rows: &[&DbRow]) -> Result<(), DbError> {
+    async fn insert(
+        &self,
+        table: &str,
+        columns: &[&str],
+        rows: impl IntoDbRows,
+    ) -> Result<(), DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.insert(table, columns, rows).await,
@@ -193,7 +198,7 @@ impl DbQuery for AnyPool {
         &self,
         table: &str,
         columns: &[&str],
-        rows: &[&DbRow],
+        rows: impl IntoDbRows,
         returning: &[&str],
     ) -> Result<Vec<DbRow>, DbError> {
         match self {
@@ -206,7 +211,12 @@ impl DbQuery for AnyPool {
         }
     }
 
-    async fn update(&self, table: &str, columns: &[&str], rows: &[&DbRow]) -> Result<(), DbError> {
+    async fn update(
+        &self,
+        table: &str,
+        columns: &[&str],
+        rows: impl IntoDbRows,
+    ) -> Result<(), DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.update(table, columns, rows).await,
@@ -219,7 +229,7 @@ impl DbQuery for AnyPool {
         &self,
         table: &str,
         columns: &[&str],
-        rows: &[&DbRow],
+        rows: impl IntoDbRows,
         returning: &[&str],
     ) -> Result<Vec<DbRow>, DbError> {
         match self {
@@ -232,7 +242,12 @@ impl DbQuery for AnyPool {
         }
     }
 
-    async fn upsert(&self, table: &str, columns: &[&str], rows: &[&DbRow]) -> Result<(), DbError> {
+    async fn upsert(
+        &self,
+        table: &str,
+        columns: &[&str],
+        rows: impl IntoDbRows,
+    ) -> Result<(), DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.upsert(table, columns, rows).await,
@@ -245,7 +260,7 @@ impl DbQuery for AnyPool {
         &self,
         table: &str,
         columns: &[&str],
-        rows: &[&DbRow],
+        rows: impl IntoDbRows,
         returning: &[&str],
     ) -> Result<Vec<DbRow>, DbError> {
         match self {

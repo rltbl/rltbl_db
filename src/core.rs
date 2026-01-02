@@ -413,6 +413,89 @@ macro_rules! params {
     }};
 }
 
+// Traits for converting to and from vectors of DbRows:
+
+pub trait IntoDbRows {
+    fn into_db_rows(self) -> Vec<DbRow>;
+}
+
+impl IntoDbRows for Vec<DbRow> {
+    fn into_db_rows(self) -> Vec<DbRow> {
+        self
+    }
+}
+
+impl IntoDbRows for &Vec<DbRow> {
+    fn into_db_rows(self) -> Vec<DbRow> {
+        self.clone()
+    }
+}
+
+impl IntoDbRows for &[DbRow] {
+    fn into_db_rows(self) -> Vec<DbRow> {
+        self.to_vec()
+    }
+}
+
+impl IntoDbRows for &[&DbRow] {
+    fn into_db_rows(self) -> Vec<DbRow> {
+        self.into_iter()
+            .cloned()
+            .map(|row| row.clone())
+            .collect::<Vec<_>>()
+    }
+}
+
+impl<const N: usize> IntoDbRows for &[&DbRow; N] {
+    fn into_db_rows(self) -> Vec<DbRow> {
+        self.into_iter()
+            .cloned()
+            .map(|row| row.clone())
+            .collect::<Vec<_>>()
+    }
+}
+
+impl IntoDbRows for Vec<JsonRow> {
+    fn into_db_rows(self) -> Vec<DbRow> {
+        self.into_iter()
+            .map(|row| {
+                row.into_iter()
+                    .map(|(key, val)| (key, ParamValue::from(val)))
+                    .collect()
+            })
+            .collect::<Vec<_>>()
+    }
+}
+
+impl IntoDbRows for &Vec<JsonRow> {
+    fn into_db_rows(self) -> Vec<DbRow> {
+        self.into_iter()
+            .map(|row| {
+                row.clone()
+                    .into_iter()
+                    .map(|(key, val)| (key, ParamValue::from(val)))
+                    .collect()
+            })
+            .collect::<Vec<_>>()
+    }
+}
+
+pub trait FromDbRows {
+    fn from_db_rows(rows: Vec<DbRow>) -> Self;
+}
+
+impl FromDbRows for Vec<JsonRow> {
+    fn from_db_rows(rows: Vec<DbRow>) -> Self {
+        rows.into_iter()
+            .map(|row| {
+                row.into_iter()
+                    .map(|(key, val)| (key, val.into()))
+                    .collect()
+            })
+            .collect::<Vec<_>>()
+    }
+}
+
 /// Strategy to use when caching query results
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CachingStrategy {
@@ -1087,7 +1170,7 @@ pub trait DbQuery {
         &self,
         table: &str,
         columns: &[&str],
-        rows: &[&DbRow],
+        rows: impl IntoDbRows,
     ) -> impl Future<Output = Result<(), DbError>>;
 
     /// Like [DbQuery::insert()], but in addition this function also returns the columns from the
@@ -1097,7 +1180,7 @@ pub trait DbQuery {
         &self,
         table: &str,
         columns: &[&str],
-        rows: &[&DbRow],
+        rows: impl IntoDbRows,
         returning: &[&str],
     ) -> impl Future<Output = Result<Vec<DbRow>, DbError>>;
 
@@ -1109,7 +1192,7 @@ pub trait DbQuery {
         &self,
         table: &str,
         columns: &[&str],
-        rows: &[&DbRow],
+        rows: impl IntoDbRows,
     ) -> impl Future<Output = Result<(), DbError>>;
 
     /// Like [DbQuery::update()], but in addition this function also returns the columns from the
@@ -1119,7 +1202,7 @@ pub trait DbQuery {
         &self,
         table: &str,
         columns: &[&str],
-        rows: &[&DbRow],
+        rows: impl IntoDbRows,
         returning: &[&str],
     ) -> impl Future<Output = Result<Vec<DbRow>, DbError>>;
 
@@ -1129,7 +1212,7 @@ pub trait DbQuery {
         &self,
         table: &str,
         columns: &[&str],
-        rows: &[&DbRow],
+        rows: impl IntoDbRows,
     ) -> impl Future<Output = Result<(), DbError>>;
 
     /// Like [DbQuery::upsert()], but in addition this function also returns the columns from the
@@ -1139,7 +1222,7 @@ pub trait DbQuery {
         &self,
         table: &str,
         columns: &[&str],
-        rows: &[&DbRow],
+        rows: impl IntoDbRows,
         returning: &[&str],
     ) -> impl Future<Output = Result<Vec<DbRow>, DbError>>;
 

@@ -2,8 +2,8 @@
 
 use crate::{
     core::{
-        CachingStrategy, ColumnMap, DbError, DbKind, DbQuery, DbRow, IntoParams, JsonValue,
-        ParamValue, Params, validate_table_name,
+        CachingStrategy, ColumnMap, DbError, DbKind, DbQuery, DbRow, IntoDbRows, IntoParams,
+        JsonValue, ParamValue, Params, validate_table_name,
     },
     params,
     shared::{EditType, edit},
@@ -505,7 +505,12 @@ impl DbQuery for TokioPostgresPool {
     }
 
     /// Implements [DbQuery::insert()] for PostgreSQL
-    async fn insert(&self, table: &str, columns: &[&str], rows: &[&DbRow]) -> Result<(), DbError> {
+    async fn insert(
+        &self,
+        table: &str,
+        columns: &[&str],
+        rows: impl IntoDbRows,
+    ) -> Result<(), DbError> {
         edit(
             self,
             &EditType::Insert,
@@ -525,7 +530,7 @@ impl DbQuery for TokioPostgresPool {
         &self,
         table: &str,
         columns: &[&str],
-        rows: &[&DbRow],
+        rows: impl IntoDbRows,
         returning: &[&str],
     ) -> Result<Vec<DbRow>, DbError> {
         edit(
@@ -542,7 +547,12 @@ impl DbQuery for TokioPostgresPool {
     }
 
     /// Implements [DbQuery::update()] for PostgreSQL.
-    async fn update(&self, table: &str, columns: &[&str], rows: &[&DbRow]) -> Result<(), DbError> {
+    async fn update(
+        &self,
+        table: &str,
+        columns: &[&str],
+        rows: impl IntoDbRows,
+    ) -> Result<(), DbError> {
         edit(
             self,
             &EditType::Update,
@@ -562,7 +572,7 @@ impl DbQuery for TokioPostgresPool {
         &self,
         table: &str,
         columns: &[&str],
-        rows: &[&DbRow],
+        rows: impl IntoDbRows,
         returning: &[&str],
     ) -> Result<Vec<DbRow>, DbError> {
         edit(
@@ -579,7 +589,12 @@ impl DbQuery for TokioPostgresPool {
     }
 
     /// Implements [DbQuery::upsert()] for PostgreSQL.
-    async fn upsert(&self, table: &str, columns: &[&str], rows: &[&DbRow]) -> Result<(), DbError> {
+    async fn upsert(
+        &self,
+        table: &str,
+        columns: &[&str],
+        rows: impl IntoDbRows,
+    ) -> Result<(), DbError> {
         edit(
             self,
             &EditType::Upsert,
@@ -599,7 +614,7 @@ impl DbQuery for TokioPostgresPool {
         &self,
         table: &str,
         columns: &[&str],
-        rows: &[&DbRow],
+        rows: impl IntoDbRows,
         returning: &[&str],
     ) -> Result<Vec<DbRow>, DbError> {
         edit(

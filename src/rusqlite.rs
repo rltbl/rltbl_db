@@ -2,8 +2,8 @@
 
 use crate::{
     core::{
-        CachingStrategy, ColumnMap, DbError, DbKind, DbQuery, DbRow, IntoParams, JsonRow,
-        JsonValue, ParamValue, Params, validate_table_name,
+        CachingStrategy, ColumnMap, DbError, DbKind, DbQuery, DbRow, IntoDbRows, IntoParams,
+        JsonRow, JsonValue, ParamValue, Params, validate_table_name,
     },
     params,
     shared::{EditType, edit},
@@ -440,7 +440,12 @@ impl DbQuery for RusqlitePool {
     }
 
     /// Implements [DbQuery::insert()] for SQLite.
-    async fn insert(&self, table: &str, columns: &[&str], rows: &[&DbRow]) -> Result<(), DbError> {
+    async fn insert(
+        &self,
+        table: &str,
+        columns: &[&str],
+        rows: impl IntoDbRows,
+    ) -> Result<(), DbError> {
         edit(
             self,
             &EditType::Insert,
@@ -460,7 +465,7 @@ impl DbQuery for RusqlitePool {
         &self,
         table: &str,
         columns: &[&str],
-        rows: &[&DbRow],
+        rows: impl IntoDbRows,
         returning: &[&str],
     ) -> Result<Vec<DbRow>, DbError> {
         edit(
@@ -477,7 +482,12 @@ impl DbQuery for RusqlitePool {
     }
 
     /// Implements [DbQuery::update()] for SQLite.
-    async fn update(&self, table: &str, columns: &[&str], rows: &[&DbRow]) -> Result<(), DbError> {
+    async fn update(
+        &self,
+        table: &str,
+        columns: &[&str],
+        rows: impl IntoDbRows,
+    ) -> Result<(), DbError> {
         edit(
             self,
             &EditType::Update,
@@ -497,7 +507,7 @@ impl DbQuery for RusqlitePool {
         &self,
         table: &str,
         columns: &[&str],
-        rows: &[&DbRow],
+        rows: impl IntoDbRows,
         returning: &[&str],
     ) -> Result<Vec<DbRow>, DbError> {
         edit(
@@ -514,7 +524,12 @@ impl DbQuery for RusqlitePool {
     }
 
     /// Implements [DbQuery::upsert()] for SQLite.
-    async fn upsert(&self, table: &str, columns: &[&str], rows: &[&DbRow]) -> Result<(), DbError> {
+    async fn upsert(
+        &self,
+        table: &str,
+        columns: &[&str],
+        rows: impl IntoDbRows,
+    ) -> Result<(), DbError> {
         edit(
             self,
             &EditType::Upsert,
@@ -534,7 +549,7 @@ impl DbQuery for RusqlitePool {
         &self,
         table: &str,
         columns: &[&str],
-        rows: &[&DbRow],
+        rows: impl IntoDbRows,
         returning: &[&str],
     ) -> Result<Vec<DbRow>, DbError> {
         edit(
