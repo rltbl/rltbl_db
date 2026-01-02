@@ -426,7 +426,7 @@ impl DbQuery for RusqlitePool {
                     .into_iter()
                     .map(|row| {
                         row.into_iter()
-                            .map(|(key, val)| (key, ParamValue::from_json(val)))
+                            .map(|(key, val)| (key, ParamValue::from(val)))
                             .collect()
                     })
                     .collect();
@@ -572,7 +572,7 @@ mod tests {
     use super::*;
 
     use crate::params;
-    use indexmap::indexmap;
+    use indexmap::indexmap as db_row;
 
     #[tokio::test]
     async fn test_aliases_and_builtin_functions() {
@@ -605,7 +605,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             rows,
-            [indexmap! {"MAX(int_value)".into() => ParamValue::from(1_i64)}]
+            [db_row! {"MAX(int_value)".into() => ParamValue::from(1_i64)}]
         );
 
         // Test alias:
@@ -618,7 +618,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             rows,
-            [indexmap! {"bool_value_alias".into() => ParamValue::from(true)}]
+            [db_row! {"bool_value_alias".into() => ParamValue::from(true)}]
         );
 
         // Test aggregate with alias:
@@ -632,7 +632,7 @@ mod tests {
         // Note that the alias is not shown in the results:
         assert_eq!(
             rows,
-            [indexmap! {"max_int_value".into() => ParamValue::from(1_i64)}]
+            [db_row! {"max_int_value".into() => ParamValue::from(1_i64)}]
         );
 
         // Test non-aggregate function:
@@ -645,7 +645,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             rows,
-            [indexmap! {"CAST(int_value AS TEXT)".into() => ParamValue::from("1")}]
+            [db_row! {"CAST(int_value AS TEXT)".into() => ParamValue::from("1")}]
         );
 
         // Test non-aggregate function with alias:
@@ -658,7 +658,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             rows,
-            [indexmap! {"int_value_cast".into() => ParamValue::from("1")}]
+            [db_row! {"int_value_cast".into() => ParamValue::from("1")}]
         );
 
         // Test functions over booleans:
@@ -677,7 +677,7 @@ mod tests {
         // sqlite.
         assert_eq!(
             rows,
-            [indexmap! {"MAX(bool_value)".into() => ParamValue::from(1_i64)}]
+            [db_row! {"MAX(bool_value)".into() => ParamValue::from(1_i64)}]
         );
     }
 

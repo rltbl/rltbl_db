@@ -493,7 +493,7 @@ impl DbQuery for TokioPostgresPool {
                     .map(|(i, column)| {
                         (
                             column.name().to_string(),
-                            ParamValue::from_json(extract_value(&row, i).unwrap()),
+                            ParamValue::from(extract_value(&row, i).unwrap()),
                         )
                     })
                     .collect()
@@ -643,7 +643,7 @@ impl DbQuery for TokioPostgresPool {
 mod tests {
     use super::*;
     use crate::params;
-    use indexmap::indexmap;
+    use indexmap::indexmap as db_row;
     use pretty_assertions::assert_eq;
 
     #[tokio::test]
@@ -677,7 +677,7 @@ mod tests {
             .query("SELECT MAX(int_value) FROM test_table_indirect", ())
             .await
             .unwrap();
-        assert_eq!(rows, [indexmap! {"max".into() => ParamValue::from(1_i64)}]);
+        assert_eq!(rows, [db_row! {"max".into() => ParamValue::from(1_i64)}]);
 
         // Test alias:
         let rows = pool
@@ -689,7 +689,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             rows,
-            [indexmap! {"bool_value_alias".into() => ParamValue::from(true)}]
+            [db_row! {"bool_value_alias".into() => ParamValue::from(true)}]
         );
 
         // Test aggregate with alias:
@@ -702,7 +702,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             rows,
-            [indexmap! {"max_int_value".into() => ParamValue::from(1_i64)}]
+            [db_row! {"max_int_value".into() => ParamValue::from(1_i64)}]
         );
 
         // Test non-aggregate function:
@@ -715,7 +715,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             rows,
-            [indexmap! {"int_value".into() => ParamValue::from("1")}]
+            [db_row! {"int_value".into() => ParamValue::from("1")}]
         );
 
         // Test non-aggregate function with alias:
@@ -728,7 +728,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             rows,
-            [indexmap! {"int_value_cast".into() => ParamValue::from("1")}]
+            [db_row! {"int_value_cast".into() => ParamValue::from("1")}]
         );
 
         // Clean up.

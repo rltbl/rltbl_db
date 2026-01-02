@@ -110,6 +110,30 @@ pub enum ParamValue {
     Text(String),
 }
 
+// Implementations of attempted conversion of ParamValues into various types:
+
+impl Into<JsonValue> for ParamValue {
+    fn into(self) -> JsonValue {
+        match self {
+            ParamValue::Null => JsonValue::Null,
+            ParamValue::Boolean(value) => JsonValue::Bool(value),
+            ParamValue::SmallInteger(value) => JsonValue::Number(value.into()),
+            ParamValue::Integer(value) => JsonValue::Number(value.into()),
+            ParamValue::BigInteger(value) => JsonValue::Number(value.into()),
+            ParamValue::Real(value) => json!(value),
+            ParamValue::BigReal(value) => json!(value),
+            ParamValue::Numeric(value) => json!(value),
+            ParamValue::Text(value) => JsonValue::String(value),
+        }
+    }
+}
+
+impl Into<JsonValue> for &ParamValue {
+    fn into(self) -> JsonValue {
+        self.clone().into()
+    }
+}
+
 impl Into<String> for ParamValue {
     fn into(self) -> String {
         match self {
@@ -244,6 +268,29 @@ impl From<bool> for ParamValue {
     }
 }
 
+impl From<JsonValue> for ParamValue {
+    fn from(item: JsonValue) -> Self {
+        match &item {
+            JsonValue::Null => Self::Null,
+            JsonValue::Bool(val) => Self::Boolean(*val),
+            JsonValue::Number(number) => {
+                if number.is_u64() {
+                    Self::from(number.as_u64().unwrap())
+                } else if number.is_i64() {
+                    Self::from(number.as_i64().unwrap())
+                } else if number.is_f64() {
+                    Self::BigReal(number.as_f64().unwrap())
+                } else {
+                    Self::Text(item.to_string())
+                }
+            }
+            JsonValue::String(string) => Self::Text(string.to_string()),
+            JsonValue::Array(_) => Self::Text(item.to_string()),
+            JsonValue::Object(_) => Self::Text(item.to_string()),
+        }
+    }
+}
+
 impl From<()> for ParamValue {
     fn from(_: ()) -> Self {
         ParamValue::Null
@@ -282,30 +329,7 @@ impl PartialEq for ParamValue {
 
 impl Eq for ParamValue {}
 
-impl ParamValue {
-    /// Convert a serde_json Value to a ParamValue.
-    pub fn from_json(value: JsonValue) -> Self {
-        match &value {
-            JsonValue::Null => Self::Null,
-            JsonValue::Bool(val) => Self::Boolean(*val),
-            JsonValue::Number(number) => {
-                if number.is_u64() {
-                    Self::from(number.as_u64().unwrap())
-                } else if number.is_i64() {
-                    Self::from(number.as_i64().unwrap())
-                } else if number.is_f64() {
-                    Self::BigReal(number.as_f64().unwrap())
-                } else {
-                    Self::Text(value.to_string())
-                }
-            }
-            JsonValue::String(string) => Self::Text(string.to_string()),
-            JsonValue::Array(_) => Self::Text(value.to_string()),
-            JsonValue::Object(_) => Self::Text(value.to_string()),
-        }
-    }
-}
-
+/// Types that implement this trait can be converted into a [ParamValue].
 pub trait IntoParamValue {
     fn into_param_value(self) -> ParamValue;
 }
@@ -764,12 +788,12 @@ pub trait DbQuery {
                                 )));
                             }
                         };
-                        // TODO: Refactor (see point 2 of issue description)
+                        // TODO: Implement IntoDbRows / FromJsonRows and then use into() here.
                         let db_rows: Vec<DbRow> = json_rows
                             .into_iter()
                             .map(|row| {
                                 row.into_iter()
-                                    .map(|(key, val)| (key, ParamValue::from_json(val)))
+                                    .map(|(key, val)| (key, ParamValue::from(val)))
                                     .collect()
                             })
                             .collect::<Vec<_>>();
@@ -778,24 +802,12 @@ pub trait DbQuery {
                     }
                     None => {
                         let db_rows = self.query(sql, params).await?;
-                        // TODO: Refactor (see point 2 of issue description)
                         let json_rows = {
                             let mut json_rows = vec![];
                             for row in &db_rows {
                                 let mut json_row = JsonRow::new();
                                 for (key, val) in row.iter() {
-                                    let val = match val {
-                                        ParamValue::Null => JsonValue::Null,
-                                        ParamValue::Boolean(flag) => json!(*flag),
-                                        ParamValue::SmallInteger(number) => json!(number),
-                                        ParamValue::Integer(number) => json!(number),
-                                        ParamValue::BigInteger(number) => json!(number),
-                                        ParamValue::Real(number) => json!(number),
-                                        ParamValue::BigReal(number) => json!(number),
-                                        ParamValue::Numeric(number) => json!(number),
-                                        ParamValue::Text(string) => json!(string),
-                                    };
-                                    json_row.insert(key.clone(), val);
+                                    json_row.insert(key.clone(), val.into());
                                 }
                                 json_rows.push(json_row);
                             }
@@ -839,12 +851,12 @@ pub trait DbQuery {
             };
             match cached_rows {
                 Some(json_rows) => {
-                    // TODO: Refactor (see point 2 of issue description)
+                    // TODO: Implement IntoDbRows / FromJsonRows and then use into() here.
                     let db_rows: Vec<DbRow> = json_rows
                         .into_iter()
                         .map(|row| {
                             row.into_iter()
-                                .map(|(key, val)| (key, ParamValue::from_json(val)))
+                                .map(|(key, val)| (key, ParamValue::from(val)))
                                 .collect()
                         })
                         .collect::<Vec<_>>();
@@ -852,24 +864,12 @@ pub trait DbQuery {
                 }
                 None => {
                     let db_rows = self.query(sql, params).await?;
-                    // TODO: Refactor (see point 2 of issue description)
                     let json_rows = {
                         let mut json_rows = vec![];
                         for row in &db_rows {
                             let mut json_row = JsonRow::new();
                             for (key, val) in row.iter() {
-                                let val = match val {
-                                    ParamValue::Null => JsonValue::Null,
-                                    ParamValue::Boolean(flag) => json!(*flag),
-                                    ParamValue::SmallInteger(number) => json!(number),
-                                    ParamValue::Integer(number) => json!(number),
-                                    ParamValue::BigInteger(number) => json!(number),
-                                    ParamValue::Real(number) => json!(number),
-                                    ParamValue::BigReal(number) => json!(number),
-                                    ParamValue::Numeric(number) => json!(number),
-                                    ParamValue::Text(string) => json!(string),
-                                };
-                                json_row.insert(key.clone(), val);
+                                json_row.insert(key.clone(), val.into());
                             }
                             json_rows.push(json_row);
                         }
@@ -1056,58 +1056,28 @@ pub trait DbQuery {
 
     /// Execute a SQL command, returning a single unsigned integer.
     async fn query_u64(&self, sql: &str, params: impl IntoParams + Send) -> Result<u64, DbError> {
-        let value = self.query_value(sql, params).await?;
-        // TODO: Refactor
-        let value = match value {
-            ParamValue::Null => JsonValue::Null,
-            ParamValue::Boolean(flag) => json!(flag),
-            ParamValue::SmallInteger(number) => json!(number),
-            ParamValue::Integer(number) => json!(number),
-            ParamValue::BigInteger(number) => json!(number),
-            ParamValue::Real(number) => json!(number),
-            ParamValue::BigReal(number) => json!(number),
-            ParamValue::Numeric(number) => json!(number),
-            ParamValue::Text(string) => json!(string),
-        };
-        let value = value.as_u64().unwrap();
+        let value: JsonValue = self.query_value(sql, params).await?.into();
+        let value = value
+            .as_u64()
+            .ok_or(DbError::DatatypeError(format!("Not a u64: {value}")))?;
         Ok(value)
     }
 
     /// Execute a SQL command, returning a single signed integer.
     async fn query_i64(&self, sql: &str, params: impl IntoParams + Send) -> Result<i64, DbError> {
-        let value = self.query_value(sql, params).await?;
-        // TODO: Refactor
-        let value = match value {
-            ParamValue::Null => JsonValue::Null,
-            ParamValue::Boolean(flag) => json!(flag),
-            ParamValue::SmallInteger(number) => json!(number),
-            ParamValue::Integer(number) => json!(number),
-            ParamValue::BigInteger(number) => json!(number),
-            ParamValue::Real(number) => json!(number),
-            ParamValue::BigReal(number) => json!(number),
-            ParamValue::Numeric(number) => json!(number),
-            ParamValue::Text(string) => json!(string),
-        };
-        let value = value.as_i64().unwrap();
+        let value: JsonValue = self.query_value(sql, params).await?.into();
+        let value = value
+            .as_i64()
+            .ok_or(DbError::DatatypeError(format!("Not an i64: {value}")))?;
         Ok(value)
     }
 
     /// Execute a SQL command, returning a single float.
     async fn query_f64(&self, sql: &str, params: impl IntoParams + Send) -> Result<f64, DbError> {
-        let value = self.query_value(sql, params).await?;
-        // TODO: Refactor
-        let value = match value {
-            ParamValue::Null => JsonValue::Null,
-            ParamValue::Boolean(flag) => json!(flag),
-            ParamValue::SmallInteger(number) => json!(number),
-            ParamValue::Integer(number) => json!(number),
-            ParamValue::BigInteger(number) => json!(number),
-            ParamValue::Real(number) => json!(number),
-            ParamValue::BigReal(number) => json!(number),
-            ParamValue::Numeric(number) => json!(number),
-            ParamValue::Text(string) => json!(string),
-        };
-        let value = value.as_f64().unwrap();
+        let value: JsonValue = self.query_value(sql, params).await?.into();
+        let value = value
+            .as_f64()
+            .ok_or(DbError::DatatypeError(format!("Not an f64: {value}")))?;
         Ok(value)
     }
 
