@@ -15,8 +15,8 @@
 /// }
 /// ```
 use crate::core::{
-    CachingStrategy, ColumnMap, DbError, DbKind, DbQuery, DbRow, FromDbRows, IntoDbRows,
-    IntoParams, ParamValue,
+    CachingStrategy, ColumnMap, DbError, DbKind, DbQuery, FromDbRows, IntoDbRows, IntoParams,
+    ParamValue,
 };
 
 #[cfg(feature = "rusqlite")]
@@ -195,13 +195,13 @@ impl DbQuery for AnyPool {
         }
     }
 
-    async fn insert_returning(
+    async fn insert_returning<T: FromDbRows>(
         &self,
         table: &str,
         columns: &[&str],
         rows: impl IntoDbRows,
         returning: &[&str],
-    ) -> Result<Vec<DbRow>, DbError> {
+    ) -> Result<T, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.insert_returning(table, columns, rows, returning).await,
@@ -226,13 +226,13 @@ impl DbQuery for AnyPool {
         }
     }
 
-    async fn update_returning(
+    async fn update_returning<T: FromDbRows>(
         &self,
         table: &str,
         columns: &[&str],
         rows: impl IntoDbRows,
         returning: &[&str],
-    ) -> Result<Vec<DbRow>, DbError> {
+    ) -> Result<T, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.update_returning(table, columns, rows, returning).await,
@@ -257,13 +257,13 @@ impl DbQuery for AnyPool {
         }
     }
 
-    async fn upsert_returning(
+    async fn upsert_returning<T: FromDbRows>(
         &self,
         table: &str,
         columns: &[&str],
         rows: impl IntoDbRows,
         returning: &[&str],
-    ) -> Result<Vec<DbRow>, DbError> {
+    ) -> Result<T, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.upsert_returning(table, columns, rows, returning).await,

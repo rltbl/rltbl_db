@@ -829,12 +829,12 @@ pub trait DbQuery {
     /// Execute a SQL command, returning a vector of JSON rows. If the result of the command exists
     /// in the cache, get the value from it instead of from the table(s) actually mentioned in the
     /// command, using the given [CachingStrategy].
-    async fn cache(
+    async fn cache<T: FromDbRows>(
         &self,
         tables: &[&str],
         sql: &str,
         params: impl IntoParams + Send + Copy + Sync,
-    ) -> Result<Vec<DbRow>, DbError> {
+    ) -> Result<T, DbError> {
         let db_cache =
             async |tables: &[&str], sql: &str, params: &Params| -> Result<Vec<DbRow>, DbError> {
                 // Look in the cache to see if there is an entry corresponding to the given SQL
@@ -977,19 +977,21 @@ pub trait DbQuery {
         match self.get_caching_strategy() {
             CachingStrategy::None => {
                 let rows: Vec<DbRow> = self.query(sql, params).await?;
-                Ok(rows)
+                Ok(FromDbRows::from_db_rows(rows))
             }
             CachingStrategy::TruncateAll | CachingStrategy::Truncate => {
                 self.ensure_cache_table_exists().await?;
-                db_cache(tables, sql, &params.into_params()).await
+                let rows: Vec<DbRow> = db_cache(tables, sql, &params.into_params()).await?;
+                Ok(FromDbRows::from_db_rows(rows))
             }
             CachingStrategy::Trigger => {
                 self.ensure_caching_triggers_exist(tables).await?;
-                db_cache(tables, sql, &params.into_params()).await
+                let rows: Vec<DbRow> = db_cache(tables, sql, &params.into_params()).await?;
+                Ok(FromDbRows::from_db_rows(rows))
             }
             CachingStrategy::Memory(cache_size) => {
                 let rows = mem_cache(tables, sql, &params.into_params(), cache_size).await?;
-                Ok(rows)
+                Ok(FromDbRows::from_db_rows(rows))
             }
         }
     }
@@ -1167,13 +1169,13 @@ pub trait DbQuery {
     /// Like [DbQuery::insert()], but in addition this function also returns the columns from the
     /// inserted data that are included in `returning`, or all of the inserted data if `returning`
     /// is an empty list.
-    fn insert_returning(
+    fn insert_returning<T: FromDbRows>(
         &self,
         table: &str,
         columns: &[&str],
         rows: impl IntoDbRows,
         returning: &[&str],
-    ) -> impl Future<Output = Result<Vec<DbRow>, DbError>>;
+    ) -> impl Future<Output = Result<T, DbError>>;
 
     /// Update the given table using the given JSON rows. The table should have a primary key
     /// and any columns included in the primary key should be present within each input row.
@@ -1189,13 +1191,13 @@ pub trait DbQuery {
     /// Like [DbQuery::update()], but in addition this function also returns the columns from the
     /// updated data that are included in `returning`, or all of the updated data if `returning`
     /// is an empty list.
-    fn update_returning(
+    fn update_returning<T: FromDbRows>(
         &self,
         table: &str,
         columns: &[&str],
         rows: impl IntoDbRows,
         returning: &[&str],
-    ) -> impl Future<Output = Result<Vec<DbRow>, DbError>>;
+    ) -> impl Future<Output = Result<T, DbError>>;
 
     /// Attempt to insert the given rows to the given table, similarly to [DbQuery::insert()].
     /// In case there is a conflict, update the table instead, similarly to [DbQuery::update()].
@@ -1209,13 +1211,13 @@ pub trait DbQuery {
     /// Like [DbQuery::upsert()], but in addition this function also returns the columns from the
     /// upserted data that are included in `returning`, or all of the upserted data if `returning`
     /// is an empty list.
-    fn upsert_returning(
+    fn upsert_returning<T: FromDbRows>(
         &self,
         table: &str,
         columns: &[&str],
         rows: impl IntoDbRows,
         returning: &[&str],
-    ) -> impl Future<Output = Result<Vec<DbRow>, DbError>>;
+    ) -> impl Future<Output = Result<T, DbError>>;
 
     /// Check whether the given table exists in the database.
     fn table_exists(&self, table: &str) -> impl Future<Output = Result<bool, DbError>> + Send;

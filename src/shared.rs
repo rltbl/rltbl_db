@@ -1,6 +1,6 @@
 use crate::core::{
-    CachingStrategy, DbError, DbKind, DbQuery, DbRow, IntoDbRows, ParamValue, clear_mem_cache,
-    validate_table_name,
+    CachingStrategy, DbError, DbKind, DbQuery, DbRow, FromDbRows, IntoDbRows, ParamValue,
+    clear_mem_cache, validate_table_name,
 };
 use std::fmt::Display;
 
@@ -127,7 +127,7 @@ ON CONFLICT ({constraint_clause}) DO UPDATE SET {set_clause}{returning_clause}"#
 /// clause (set with_returning = false to turn this off). When generating the SQL statements
 /// used to edit the table, do not use more than max_params bound parameters at a time. If more
 /// than max_params are required, multiple SQL statements will be generated.
-pub(crate) async fn edit(
+pub(crate) async fn edit<T: FromDbRows>(
     pool: &(impl DbQuery + Sync),
     edit_type: &EditType,
     max_params: &usize,
@@ -136,7 +136,7 @@ pub(crate) async fn edit(
     rows: impl IntoDbRows,
     with_returning: bool,
     returning: &[&str],
-) -> Result<Vec<DbRow>, DbError> {
+) -> Result<T, DbError> {
     // Begin by verifying that the given table name is valid, which has the side-effect of
     // removing any enclosing double-quotes:
     let table = validate_table_name(table)?;
@@ -309,5 +309,5 @@ pub(crate) async fn edit(
         CachingStrategy::Memory(_) => clear_mem_cache(&[&table])?,
     }
 
-    Ok(rows_to_return)
+    Ok(FromDbRows::from_db_rows(rows_to_return))
 }

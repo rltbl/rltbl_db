@@ -448,7 +448,7 @@ impl DbQuery for RusqlitePool {
         columns: &[&str],
         rows: impl IntoDbRows,
     ) -> Result<(), DbError> {
-        edit(
+        let _: Vec<DbRow> = edit(
             self,
             &EditType::Insert,
             &MAX_PARAMS_SQLITE,
@@ -463,13 +463,13 @@ impl DbQuery for RusqlitePool {
     }
 
     /// Implements [DbQuery::insert_returning()] for SQLite.
-    async fn insert_returning(
+    async fn insert_returning<T: FromDbRows>(
         &self,
         table: &str,
         columns: &[&str],
         rows: impl IntoDbRows,
         returning: &[&str],
-    ) -> Result<Vec<DbRow>, DbError> {
+    ) -> Result<T, DbError> {
         edit(
             self,
             &EditType::Insert,
@@ -490,7 +490,7 @@ impl DbQuery for RusqlitePool {
         columns: &[&str],
         rows: impl IntoDbRows,
     ) -> Result<(), DbError> {
-        edit(
+        let _: Vec<DbRow> = edit(
             self,
             &EditType::Update,
             &MAX_PARAMS_SQLITE,
@@ -505,13 +505,13 @@ impl DbQuery for RusqlitePool {
     }
 
     /// Implements [DbQuery::update_returning()] for SQLite.
-    async fn update_returning(
+    async fn update_returning<T: FromDbRows>(
         &self,
         table: &str,
         columns: &[&str],
         rows: impl IntoDbRows,
         returning: &[&str],
-    ) -> Result<Vec<DbRow>, DbError> {
+    ) -> Result<T, DbError> {
         edit(
             self,
             &EditType::Update,
@@ -532,7 +532,7 @@ impl DbQuery for RusqlitePool {
         columns: &[&str],
         rows: impl IntoDbRows,
     ) -> Result<(), DbError> {
-        edit(
+        let _: Vec<DbRow> = edit(
             self,
             &EditType::Upsert,
             &MAX_PARAMS_SQLITE,
@@ -547,13 +547,13 @@ impl DbQuery for RusqlitePool {
     }
 
     /// Implements [DbQuery::upsert_returning()] for SQLite.
-    async fn upsert_returning(
+    async fn upsert_returning<T: FromDbRows>(
         &self,
         table: &str,
         columns: &[&str],
         rows: impl IntoDbRows,
         returning: &[&str],
-    ) -> Result<Vec<DbRow>, DbError> {
+    ) -> Result<T, DbError> {
         edit(
             self,
             &EditType::Upsert,
