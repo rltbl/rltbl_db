@@ -2,8 +2,8 @@
 
 use crate::{
     core::{
-        CachingStrategy, ColumnMap, DbError, DbKind, DbQuery, DbRow, IntoDbRows, IntoParams,
-        JsonValue, ParamValue, Params, validate_table_name,
+        CachingStrategy, ColumnMap, DbError, DbKind, DbQuery, DbRow, FromDbRows, IntoDbRows,
+        IntoParams, JsonValue, ParamValue, Params, validate_table_name,
     },
     params,
     shared::{EditType, edit},
@@ -309,7 +309,8 @@ impl DbQuery for TokioPostgresPool {
                ORDER BY "columns"."ordinal_position""#
         );
 
-        for row in self.query(&sql, params![&table]).await? {
+        let rows: Vec<DbRow> = self.query(&sql, params![&table]).await?;
+        for row in &rows {
             match (
                 row.get("column_name")
                     .and_then(|name| Some::<String>(name.into())),
@@ -337,8 +338,9 @@ impl DbQuery for TokioPostgresPool {
 
     /// Implements [DbQuery::primary_keys()] for PostgreSQL.
     async fn primary_keys(&self, table: &str) -> Result<Vec<String>, DbError> {
-        self.query(
-            r#"SELECT "kcu"."column_name"
+        let rows: Vec<DbRow> = self
+            .query(
+                r#"SELECT "kcu"."column_name"
                FROM "information_schema"."table_constraints" "tco"
                JOIN "information_schema"."key_column_usage" "kcu"
                  ON "kcu"."constraint_name" = "tco"."constraint_name"
@@ -351,20 +353,21 @@ impl DbQuery for TokioPostgresPool {
                 WHERE "name" = 'search_path'
               )
               ORDER by "kcu"."ordinal_position""#,
-            params![&table],
-        )
-        .await?
-        .iter()
-        .map(|row| {
-            match row
-                .get("column_name")
-                .and_then(|name| Some::<String>(name.into()))
-            {
-                Some(pk_col) => Ok(pk_col.to_string()),
-                None => Err(DbError::DataError("Empty row".to_owned())),
-            }
-        })
-        .collect()
+                params![&table],
+            )
+            .await?;
+
+        rows.iter()
+            .map(|row| {
+                match row
+                    .get("column_name")
+                    .and_then(|name| Some::<String>(name.into()))
+                {
+                    Some(pk_col) => Ok(pk_col.to_string()),
+                    None => Err(DbError::DataError("Empty row".to_owned())),
+                }
+            })
+            .collect()
     }
 
     /// Implements [DbQuery::execute_batch()] for PostgreSQL
@@ -384,11 +387,11 @@ impl DbQuery for TokioPostgresPool {
     }
 
     /// Implements [DbQuery::query()] for PostgreSQL
-    async fn query(
+    async fn query<T: FromDbRows>(
         &self,
         sql: &str,
         into_params: impl IntoParams + Send,
-    ) -> Result<Vec<DbRow>, DbError> {
+    ) -> Result<T, DbError> {
         let into_params = into_params.into_params();
         let client = self
             .pool
@@ -501,7 +504,7 @@ impl DbQuery for TokioPostgresPool {
             .collect();
 
         self.clear_cache_for_modified_tables(sql).await?;
-        Ok(rows)
+        Ok(FromDbRows::from_db_rows(rows))
     }
 
     /// Implements [DbQuery::insert()] for PostgreSQL
@@ -632,7 +635,7 @@ impl DbQuery for TokioPostgresPool {
 
     /// Implements [DbQuery::table_exists()] for PostgreSQL.
     async fn table_exists(&self, table: &str) -> Result<bool, DbError> {
-        match self
+        let rows: Vec<DbRow> = self
             .query(
                 r#"SELECT 1
                    FROM "information_schema"."tables"
@@ -645,9 +648,9 @@ impl DbQuery for TokioPostgresPool {
                      )"#,
                 &[table],
             )
-            .await?
-            .first()
-        {
+            .await?;
+
+        match rows.first() {
             None => Ok(false),
             Some(_) => Ok(true),
         }
@@ -688,14 +691,14 @@ mod tests {
         .unwrap();
 
         // Test aggregate:
-        let rows = pool
+        let rows: Vec<DbRow> = pool
             .query("SELECT MAX(int_value) FROM test_table_indirect", ())
             .await
             .unwrap();
         assert_eq!(rows, [db_row! {"max".into() => ParamValue::from(1_i64)}]);
 
         // Test alias:
-        let rows = pool
+        let rows: Vec<DbRow> = pool
             .query(
                 "SELECT bool_value AS bool_value_alias FROM test_table_indirect",
                 (),
@@ -708,7 +711,7 @@ mod tests {
         );
 
         // Test aggregate with alias:
-        let rows = pool
+        let rows: Vec<DbRow> = pool
             .query(
                 "SELECT MAX(int_value) AS max_int_value FROM test_table_indirect",
                 (),
@@ -721,7 +724,7 @@ mod tests {
         );
 
         // Test non-aggregate function:
-        let rows = pool
+        let rows: Vec<DbRow> = pool
             .query(
                 "SELECT CAST(int_value AS TEXT) FROM test_table_indirect",
                 (),
@@ -734,7 +737,7 @@ mod tests {
         );
 
         // Test non-aggregate function with alias:
-        let rows = pool
+        let rows: Vec<DbRow> = pool
             .query(
                 "SELECT CAST(int_value AS TEXT) AS int_value_cast FROM test_table_indirect",
                 (),

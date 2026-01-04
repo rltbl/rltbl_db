@@ -15,7 +15,8 @@
 /// }
 /// ```
 use crate::core::{
-    CachingStrategy, ColumnMap, DbError, DbKind, DbQuery, DbRow, IntoDbRows, IntoParams, ParamValue,
+    CachingStrategy, ColumnMap, DbError, DbKind, DbQuery, DbRow, FromDbRows, IntoDbRows,
+    IntoParams, ParamValue,
 };
 
 #[cfg(feature = "rusqlite")]
@@ -167,11 +168,11 @@ impl DbQuery for AnyPool {
         }
     }
 
-    async fn query(
+    async fn query<T: FromDbRows>(
         &self,
         sql: &str,
         params: impl IntoParams + Send,
-    ) -> Result<Vec<DbRow>, DbError> {
+    ) -> Result<T, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.query(sql, params).await,
@@ -351,7 +352,7 @@ mod tests {
         let row = pool.query_row(&select_sql, &["foo"]).await.unwrap();
         assert_eq!(row, db_row! {"value".into() => ParamValue::from("foo")});
 
-        let rows = pool.query(&select_sql, &["foo"]).await.unwrap();
+        let rows: Vec<DbRow> = pool.query(&select_sql, &["foo"]).await.unwrap();
         assert_eq!(rows, [db_row! {"value".into() => ParamValue::from("foo")}]);
 
         // Clean up:
@@ -424,7 +425,7 @@ mod tests {
             let row = pool.query_row(&select_sql, params.clone()).await.unwrap();
             assert_eq!(row, db_row! {column.into() => ParamValue::from(1_i64)});
 
-            let rows = pool.query(&select_sql, params.clone()).await.unwrap();
+            let rows: Vec<DbRow> = pool.query(&select_sql, params.clone()).await.unwrap();
             assert_eq!(rows, [db_row! {column.into() => ParamValue::from(1_i64)}]);
         }
 
@@ -482,7 +483,7 @@ mod tests {
         let row = pool.query_row(&select_sql, &[1.0_f64]).await.unwrap();
         assert_eq!(row, db_row! {"value".into() => ParamValue::from(1.05)});
 
-        let rows = pool.query(&select_sql, &[1.0_f64]).await.unwrap();
+        let rows: Vec<DbRow> = pool.query(&select_sql, &[1.0_f64]).await.unwrap();
         assert_eq!(rows, [db_row! {"value".into() => ParamValue::from(1.05)}]);
 
         // FLOAT4
@@ -612,7 +613,7 @@ mod tests {
             }
         );
 
-        let rows = pool.query(&select_sql, params.clone()).await.unwrap();
+        let rows: Vec<DbRow> = pool.query(&select_sql, params.clone()).await.unwrap();
         assert_eq!(
             rows,
             [db_row! {
@@ -801,7 +802,7 @@ mod tests {
         .unwrap();
 
         // Validate the inserted data:
-        let rows = pool
+        let rows: Vec<DbRow> = pool
             .query(r#"SELECT * FROM test_insert"#, ())
             .await
             .unwrap();
@@ -1084,7 +1085,7 @@ mod tests {
         .await
         .unwrap();
 
-        let rows = pool.query("SELECT * from test_update", ()).await.unwrap();
+        let rows: Vec<DbRow> = pool.query("SELECT * from test_update", ()).await.unwrap();
         assert_eq!(
             rows,
             [
@@ -1284,7 +1285,7 @@ mod tests {
         );
 
         // Final sanity check on the values of all columns:
-        let rows = pool
+        let rows: Vec<DbRow> = pool
             .query("SELECT * from test_update_returning", ())
             .await
             .unwrap();
@@ -1388,7 +1389,7 @@ mod tests {
         .await
         .unwrap();
 
-        let rows = pool.query("SELECT * from test_upsert", ()).await.unwrap();
+        let rows: Vec<DbRow> = pool.query("SELECT * from test_upsert", ()).await.unwrap();
         assert_eq!(
             rows,
             [

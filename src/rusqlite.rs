@@ -2,8 +2,8 @@
 
 use crate::{
     core::{
-        CachingStrategy, ColumnMap, DbError, DbKind, DbQuery, DbRow, IntoDbRows, IntoParams,
-        JsonRow, JsonValue, ParamValue, Params, validate_table_name,
+        CachingStrategy, ColumnMap, DbError, DbKind, DbQuery, DbRow, FromDbRows, IntoDbRows,
+        IntoParams, JsonRow, JsonValue, ParamValue, Params, validate_table_name,
     },
     params,
     shared::{EditType, edit},
@@ -327,7 +327,8 @@ impl DbQuery for RusqlitePool {
                      ORDER BY "name""#
             .to_string();
 
-        for row in self.query(&sql, params![&table]).await? {
+        let rows: Vec<DbRow> = self.query(&sql, params![&table]).await?;
+        for row in &rows {
             match (
                 row.get("name").and_then(|name| Some::<String>(name.into())),
                 row.get("type").and_then(|name| Some::<String>(name.into())),
@@ -353,22 +354,23 @@ impl DbQuery for RusqlitePool {
 
     /// Implements [DbQuery::primary_keys()] for SQLite.
     async fn primary_keys(&self, table: &str) -> Result<Vec<String>, DbError> {
-        self.query(
-            r#"SELECT "name"
+        let rows: Vec<DbRow> = self
+            .query(
+                r#"SELECT "name"
                FROM pragma_table_info(?1)
                WHERE "pk" > 0
                ORDER BY "pk""#,
-            params![&table],
-        )
-        .await?
-        .iter()
-        .map(
-            |row| match row.get("name").and_then(|name| Some::<String>(name.into())) {
-                Some(pk_col) => Ok(pk_col.to_string()),
-                None => Err(DbError::DataError("Empty row".to_owned())),
-            },
-        )
-        .collect()
+                params![&table],
+            )
+            .await?;
+        rows.iter()
+            .map(
+                |row| match row.get("name").and_then(|name| Some::<String>(name.into())) {
+                    Some(pk_col) => Ok(pk_col.to_string()),
+                    None => Err(DbError::DataError("Empty row".to_owned())),
+                },
+            )
+            .collect()
     }
 
     /// Implements [DbQuery::execute_batch()] for PostgreSQL
@@ -399,11 +401,11 @@ impl DbQuery for RusqlitePool {
     }
 
     /// Implements [DbQuery::query()] for SQLite.
-    async fn query(
+    async fn query<T: FromDbRows>(
         &self,
         sql: &str,
         params: impl IntoParams + Send,
-    ) -> Result<Vec<DbRow>, DbError> {
+    ) -> Result<T, DbError> {
         let rows = {
             // Note that we must allow `conn` to go out of scope (alternately we could explicitly
             // call drop(conn)) to ensure that the query is persisted to the db before clearing
@@ -436,7 +438,7 @@ impl DbQuery for RusqlitePool {
             .map_err(|err| DbError::DatabaseError(err.to_string()))??
         };
         self.clear_cache_for_modified_tables(sql).await?;
-        Ok(rows)
+        Ok(FromDbRows::from_db_rows(rows))
     }
 
     /// Implements [DbQuery::insert()] for SQLite.
@@ -567,15 +569,14 @@ impl DbQuery for RusqlitePool {
 
     /// Implements [DbQuery::table_exists()] for SQLite.
     async fn table_exists(&self, table: &str) -> Result<bool, DbError> {
-        match self
+        let rows: Vec<DbRow> = self
             .query(
                 r#"SELECT 1 FROM "sqlite_master"
                    WHERE "type" = 'table' AND "name" = ?1"#,
                 &[table],
             )
-            .await?
-            .first()
-        {
+            .await?;
+        match rows.first() {
             None => Ok(false),
             Some(_) => Ok(true),
         }
@@ -614,7 +615,7 @@ mod tests {
         .unwrap();
 
         // Test aggregate:
-        let rows = pool
+        let rows: Vec<DbRow> = pool
             .query("SELECT MAX(int_value) FROM test_table_indirect", ())
             .await
             .unwrap();
@@ -624,7 +625,7 @@ mod tests {
         );
 
         // Test alias:
-        let rows = pool
+        let rows: Vec<DbRow> = pool
             .query(
                 "SELECT bool_value AS bool_value_alias FROM test_table_indirect",
                 (),
@@ -637,7 +638,7 @@ mod tests {
         );
 
         // Test aggregate with alias:
-        let rows = pool
+        let rows: Vec<DbRow> = pool
             .query(
                 "SELECT MAX(int_value) AS max_int_value FROM test_table_indirect",
                 (),
@@ -651,7 +652,7 @@ mod tests {
         );
 
         // Test non-aggregate function:
-        let rows = pool
+        let rows: Vec<DbRow> = pool
             .query(
                 "SELECT CAST(int_value AS TEXT) FROM test_table_indirect",
                 (),
@@ -664,7 +665,7 @@ mod tests {
         );
 
         // Test non-aggregate function with alias:
-        let rows = pool
+        let rows: Vec<DbRow> = pool
             .query(
                 "SELECT CAST(int_value AS TEXT) AS int_value_cast FROM test_table_indirect",
                 (),
@@ -677,7 +678,7 @@ mod tests {
         );
 
         // Test functions over booleans:
-        let rows = pool
+        let rows: Vec<DbRow> = pool
             .query("SELECT MAX(bool_value) FROM test_table_indirect", ())
             .await
             .unwrap();

@@ -496,6 +496,12 @@ impl FromDbRows for Vec<JsonRow> {
     }
 }
 
+impl FromDbRows for Vec<DbRow> {
+    fn from_db_rows(rows: Vec<DbRow>) -> Self {
+        rows
+    }
+}
+
 /// Strategy to use when caching query results
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CachingStrategy {
@@ -871,20 +877,11 @@ pub trait DbQuery {
                                 )));
                             }
                         };
-                        // TODO: Implement IntoDbRows / FromJsonRows and then use into() here.
-                        let db_rows: Vec<DbRow> = json_rows
-                            .into_iter()
-                            .map(|row| {
-                                row.into_iter()
-                                    .map(|(key, val)| (key, ParamValue::from(val)))
-                                    .collect()
-                            })
-                            .collect::<Vec<_>>();
-
+                        let db_rows = json_rows.into_db_rows();
                         Ok(db_rows)
                     }
                     None => {
-                        let db_rows = self.query(sql, params).await?;
+                        let db_rows: Vec<DbRow> = self.query(sql, params).await?;
                         let json_rows = {
                             let mut json_rows = vec![];
                             for row in &db_rows {
@@ -903,7 +900,7 @@ pub trait DbQuery {
                                VALUES ({prefix}1, {prefix}2, {prefix}3, {prefix}4)"#
                         );
                         let insert_params = [&tables_param, sql, &params_param, &json_rows_content];
-                        self.query(&insert_sql, &insert_params).await?;
+                        let _: Vec<DbRow> = self.query(&insert_sql, &insert_params).await?;
                         Ok(db_rows)
                     }
                 }
@@ -934,19 +931,11 @@ pub trait DbQuery {
             };
             match cached_rows {
                 Some(json_rows) => {
-                    // TODO: Implement IntoDbRows / FromJsonRows and then use into() here.
-                    let db_rows: Vec<DbRow> = json_rows
-                        .into_iter()
-                        .map(|row| {
-                            row.into_iter()
-                                .map(|(key, val)| (key, ParamValue::from(val)))
-                                .collect()
-                        })
-                        .collect::<Vec<_>>();
+                    let db_rows = json_rows.into_db_rows();
                     Ok(db_rows)
                 }
                 None => {
-                    let db_rows = self.query(sql, params).await?;
+                    let db_rows: Vec<DbRow> = self.query(sql, params).await?;
                     let json_rows = {
                         let mut json_rows = vec![];
                         for row in &db_rows {
@@ -986,7 +975,10 @@ pub trait DbQuery {
         };
 
         match self.get_caching_strategy() {
-            CachingStrategy::None => self.query(sql, params).await,
+            CachingStrategy::None => {
+                let rows: Vec<DbRow> = self.query(sql, params).await?;
+                Ok(rows)
+            }
             CachingStrategy::TruncateAll | CachingStrategy::Truncate => {
                 self.ensure_cache_table_exists().await?;
                 db_cache(tables, sql, &params.into_params()).await
@@ -1031,7 +1023,7 @@ pub trait DbQuery {
     /// Execute a SQL command, without a return value.
     async fn execute(&self, sql: &str, params: impl IntoParams + Send) -> Result<(), DbError> {
         let params = params.into_params();
-        match params {
+        let _: Vec<DbRow> = match params {
             Params::None => self.query(sql, ()).await?,
             _ => self.query(sql, params).await?,
         };
@@ -1042,15 +1034,15 @@ pub trait DbQuery {
     fn execute_batch(&self, sql: &str) -> impl Future<Output = Result<(), DbError>> + Send;
 
     /// Execute a SQL command, returning a vector of JSON rows.
-    fn query(
+    fn query<T: FromDbRows>(
         &self,
         sql: &str,
         params: impl IntoParams + Send,
-    ) -> impl Future<Output = Result<Vec<DbRow>, DbError>> + Send;
+    ) -> impl Future<Output = Result<T, DbError>> + Send;
 
     /// Execute a SQL command, returning a single JSON row.
     async fn query_row(&self, sql: &str, params: impl IntoParams + Send) -> Result<DbRow, DbError> {
-        let rows = self.query(&sql, params).await?;
+        let rows: Vec<DbRow> = self.query(&sql, params).await?;
         if rows.len() > 1 {
             return Err(DbError::DataError(
                 "More than one row returned for query_row()".to_string(),
@@ -1096,7 +1088,7 @@ pub trait DbQuery {
         sql: &str,
         params: impl IntoParams + Send,
     ) -> Result<Vec<String>, DbError> {
-        let rows = self.query(sql, params).await?;
+        let rows: Vec<DbRow> = self.query(sql, params).await?;
         rows.iter()
             .map(|row| match row.values().nth(0) {
                 Some(value) => Ok(value.into()),
@@ -1124,9 +1116,8 @@ pub trait DbQuery {
         sql: &str,
         params: impl IntoParams + Send,
     ) -> Result<Vec<StringRow>, DbError> {
-        let rows = self
-            .query(sql, params)
-            .await?
+        let rows: Vec<DbRow> = self.query(sql, params).await?;
+        let rows = rows
             .iter()
             .map(|row| {
                 row.iter()

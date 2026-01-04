@@ -233,7 +233,7 @@ pub(crate) async fn edit(
                 &lines_to_bind,
             ),
         };
-        let rows = pool.query(&sql, params_to_be_bound.clone()).await?;
+        let rows: Vec<DbRow> = pool.query(&sql, params_to_be_bound.clone()).await?;
         lines_to_bind.clear();
         params_to_be_bound.clear();
         *param_idx = 0;
