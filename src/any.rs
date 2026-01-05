@@ -287,7 +287,7 @@ impl DbQuery for AnyPool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{CachingStrategy, JsonValue, StringRow, get_memory_cache_contents};
+    use crate::core::{CachingStrategy, DbRow, JsonValue, StringRow, get_memory_cache_contents};
     use crate::params;
     use indexmap::indexmap as db_row;
     use rust_decimal::dec;
@@ -858,7 +858,7 @@ mod tests {
         .unwrap();
 
         // Without specific returning columns:
-        let rows = pool
+        let rows: Vec<DbRow> = pool
             .insert_returning(
                 "test_insert_returning",
                 &["text_value", "int_value", "bool_value"],
@@ -894,7 +894,7 @@ mod tests {
         );
 
         // With specific returning columns:
-        let rows = pool
+        let rows: Vec<DbRow> = pool
             .insert_returning(
                 "test_insert_returning",
                 &["text_value", "int_value", "bool_value"],
@@ -1470,7 +1470,7 @@ mod tests {
         .await
         .unwrap();
 
-        let rows = pool
+        let rows: Vec<DbRow> = pool
             .upsert_returning(
                 "test_upsert_returning",
                 &["foo", "bar", "car", "dar", "ear"],
@@ -1589,7 +1589,7 @@ mod tests {
         .await
         .unwrap();
 
-        let rows = pool
+        let rows: Vec<DbRow> = pool
             .cache(
                 &["test_table_caching_1"],
                 "SELECT * from test_table_caching_1",
@@ -1611,7 +1611,7 @@ mod tests {
             ]
         );
 
-        let rows = pool
+        let rows: Vec<DbRow> = pool
             .cache(
                 &["test_table_caching_1"],
                 "SELECT * from test_table_caching_1",
@@ -1650,7 +1650,7 @@ mod tests {
             _ => assert_eq!(count_cache_table_rows(pool).await, 0),
         };
 
-        let rows = pool
+        let rows: Vec<DbRow> = pool
             .cache(
                 &["test_table_caching_1"],
                 "SELECT * from test_table_caching_1",
@@ -1674,7 +1674,7 @@ mod tests {
             ]
         );
 
-        let rows = pool
+        let rows: Vec<DbRow> = pool
             .cache(
                 &["test_table_caching_1"],
                 "SELECT * from test_table_caching_1",
@@ -1693,20 +1693,23 @@ mod tests {
             ]
         );
 
-        pool.cache(
-            &["test_table_caching_1"],
-            "SELECT COUNT(1) FROM test_table_caching_1",
-            (),
-        )
-        .await
-        .unwrap();
-        pool.cache(
-            &["test_table_caching_2"],
-            "SELECT COUNT(1) FROM test_table_caching_2",
-            (),
-        )
-        .await
-        .unwrap();
+        let _: Vec<DbRow> = pool
+            .cache(
+                &["test_table_caching_1"],
+                "SELECT COUNT(1) FROM test_table_caching_1",
+                (),
+            )
+            .await
+            .unwrap();
+
+        let _: Vec<DbRow> = pool
+            .cache(
+                &["test_table_caching_2"],
+                "SELECT COUNT(1) FROM test_table_caching_2",
+                (),
+            )
+            .await
+            .unwrap();
 
         match strategy {
             CachingStrategy::None => (),
@@ -1730,7 +1733,7 @@ mod tests {
             CachingStrategy::TruncateAll => assert_eq!(count_cache_table_rows(pool).await, 0),
         };
 
-        let rows = pool
+        let rows: Vec<DbRow> = pool
             .cache(
                 &["test_table_caching_1"],
                 "SELECT * from test_table_caching_1",

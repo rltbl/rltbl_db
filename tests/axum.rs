@@ -7,7 +7,7 @@ use axum::{
 use indexmap::indexmap;
 use rltbl_db::{
     any::AnyPool,
-    core::{DbQuery, ParamValue},
+    core::{DbQuery, DbRow, ParamValue},
 };
 use std::{marker::Sync, sync::Arc};
 use tower_service::Service;
@@ -38,10 +38,12 @@ async fn run_axum(url: &str) {
     .await
     .unwrap();
 
-    pool.cache(&["test"], "SELECT 1 FROM test", ())
+    let _: Vec<DbRow> = pool
+        .cache(&["test"], "SELECT 1 FROM test", ())
         .await
         .unwrap();
-    pool.cache(&["test"], "SELECT 1 FROM test", ())
+    let _: Vec<DbRow> = pool
+        .cache(&["test"], "SELECT 1 FROM test", ())
         .await
         .unwrap();
 

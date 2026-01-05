@@ -469,14 +469,7 @@ impl IntoDbRows for Vec<JsonRow> {
 
 impl IntoDbRows for &Vec<JsonRow> {
     fn into_db_rows(self) -> Vec<DbRow> {
-        self.into_iter()
-            .map(|row| {
-                row.clone()
-                    .into_iter()
-                    .map(|(key, val)| (key, ParamValue::from(val)))
-                    .collect()
-            })
-            .collect::<Vec<_>>()
+        self.clone().into_db_rows()
     }
 }
 
@@ -882,17 +875,7 @@ pub trait DbQuery {
                     }
                     None => {
                         let db_rows: Vec<DbRow> = self.query(sql, params).await?;
-                        let json_rows = {
-                            let mut json_rows = vec![];
-                            for row in &db_rows {
-                                let mut json_row = JsonRow::new();
-                                for (key, val) in row.iter() {
-                                    json_row.insert(key.clone(), val.into());
-                                }
-                                json_rows.push(json_row);
-                            }
-                            json_rows
-                        };
+                        let json_rows: Vec<JsonRow> = FromDbRows::from_db_rows(db_rows.clone());
                         let json_rows_content = json!(json_rows).to_string();
                         let insert_sql = format!(
                             r#"INSERT INTO "cache"
@@ -936,17 +919,7 @@ pub trait DbQuery {
                 }
                 None => {
                     let db_rows: Vec<DbRow> = self.query(sql, params).await?;
-                    let json_rows = {
-                        let mut json_rows = vec![];
-                        for row in &db_rows {
-                            let mut json_row = JsonRow::new();
-                            for (key, val) in row.iter() {
-                                json_row.insert(key.clone(), val.into());
-                            }
-                            json_rows.push(json_row);
-                        }
-                        json_rows
-                    };
+                    let json_rows: Vec<JsonRow> = FromDbRows::from_db_rows(db_rows.clone());
                     let mut cache = match MEMORY_CACHE.try_lock() {
                         Ok(cache) => cache,
                         Err(err) => {
