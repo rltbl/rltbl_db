@@ -2,8 +2,8 @@
 
 use crate::{
     core::{
-        ColumnMap, DbError, DbKind, DbQuery, IntoParams, JsonRow, JsonValue, ParamValue, Params,
-        validate_table_name,
+        CachingStrategy, ColumnMap, DbError, DbKind, DbQuery, IntoParams, JsonRow, JsonValue,
+        ParamValue, Params, validate_table_name,
     },
     params,
     shared::{EditType, edit},
@@ -177,6 +177,7 @@ fn query_prepared(
 #[derive(Debug)]
 pub struct RusqlitePool {
     pool: Pool,
+    caching_strategy: CachingStrategy,
 }
 
 impl RusqlitePool {
@@ -186,7 +187,10 @@ impl RusqlitePool {
         let pool = cfg
             .create_pool(Runtime::Tokio1)
             .map_err(|err| DbError::ConnectError(format!("Error creating pool: {err}")))?;
-        Ok(Self { pool })
+        Ok(Self {
+            pool: pool,
+            caching_strategy: CachingStrategy::None,
+        })
     }
 }
 
@@ -194,6 +198,96 @@ impl DbQuery for RusqlitePool {
     /// Implements [DbQuery::kind()] for SQLite.
     fn kind(&self) -> DbKind {
         DbKind::SQLite
+    }
+
+    /// Implements [DbQuery::set_caching_strategy()] for SQLite.
+    fn set_caching_strategy(&mut self, strategy: &CachingStrategy) {
+        self.caching_strategy = *strategy;
+    }
+
+    /// Implements [DbQuery::get_caching_strategy()] for SQLite.
+    fn get_caching_strategy(&self) -> CachingStrategy {
+        self.caching_strategy
+    }
+
+    /// Implements [DbQuery::ensure_cache_table_exists()] for SQLite.
+    async fn ensure_cache_table_exists(&self) -> Result<(), DbError> {
+        match self
+            .execute(
+                r#"CREATE TABLE IF NOT EXISTS "cache" (
+                     "tables" TEXT,
+                     "statement" TEXT,
+                     "parameters" TEXT,
+                     "value" TEXT,
+                     PRIMARY KEY ("tables", "statement", "parameters")
+                   )"#,
+                (),
+            )
+            .await
+        {
+            Ok(_) => Ok(()),
+            Err(_) => {
+                // Since we are not using transactions, a race condition could occur in
+                // which two or more threads are trying to create the cache at the same
+                // time, triggering a primary key violation in the metadata table. So if
+                // there is an error creating the cache table we just check that it exists
+                // and if it does we assume that all is ok.
+                match self.table_exists("cache").await? {
+                    false => Err(DbError::DatabaseError(
+                        "The cache table could not be created".to_string(),
+                    )),
+                    true => Ok(()),
+                }
+            }
+        }
+    }
+
+    /// Implements [DbQuery::ensure_caching_triggers_exist()] for SQLite.
+    async fn ensure_caching_triggers_exist(&self, tables: &[&str]) -> Result<(), DbError> {
+        self.ensure_cache_table_exists().await?;
+        for table in tables {
+            let num_triggers = self
+                .query_u64(
+                    r#"SELECT COUNT(1)
+                       FROM sqlite_master
+                       WHERE type = 'trigger'
+                         AND name IN (?1, ?2, ?3)"#,
+                    &[
+                        &format!("{table}_cache_after_insert"),
+                        &format!("{table}_cache_after_update"),
+                        &format!("{table}_cache_after_delete"),
+                    ],
+                )
+                .await?;
+
+            // Only recreate the triggers if they don't all already exist:
+            if num_triggers != 3 {
+                // Note that parameters are not allowed in trigger creation statements in SQLite.
+                self.execute_batch(&format!(
+                    r#"DROP TRIGGER IF EXISTS "{table}_cache_after_insert";
+                       CREATE TRIGGER "{table}_cache_after_insert"
+                       AFTER INSERT ON "{table}"
+                       BEGIN
+                         DELETE FROM "cache" WHERE "tables" LIKE '%{table}%';
+                       END;
+                       DROP TRIGGER IF EXISTS "{table}_cache_after_update";
+                       CREATE TRIGGER "{table}_cache_after_update"
+                       AFTER UPDATE ON "{table}"
+                       BEGIN
+                         DELETE FROM "cache" WHERE "tables" LIKE '%{table}%';
+                       END;
+                       DROP TRIGGER IF EXISTS "{table}_cache_after_delete";
+                       CREATE TRIGGER "{table}_cache_after_delete"
+                       AFTER DELETE ON "{table}"
+                       BEGIN
+                         DELETE FROM "cache" WHERE "tables" LIKE '%{table}%';
+                       END"#,
+                    table = validate_table_name(table)?,
+                ))
+                .await?;
+            }
+        }
+        Ok(())
     }
 
     /// Implements [DbQuery::parse()] for SQLite.
@@ -454,11 +548,20 @@ impl DbQuery for RusqlitePool {
         .await
     }
 
-    /// Implements [DbQuery::drop_table()] for SQLite.
-    async fn drop_table(&self, table: &str) -> Result<(), DbError> {
-        let table = validate_table_name(table)?;
-        self.execute(&format!(r#"DROP TABLE IF EXISTS "{table}""#), ())
-            .await
+    /// Implements [DbQuery::table_exists()] for SQLite.
+    async fn table_exists(&self, table: &str) -> Result<bool, DbError> {
+        match self
+            .query(
+                r#"SELECT 1 FROM "sqlite_master"
+                   WHERE "type" = 'table' AND "name" = ?1"#,
+                &[table],
+            )
+            .await?
+            .first()
+        {
+            None => Ok(false),
+            Some(_) => Ok(true),
+        }
     }
 }
 

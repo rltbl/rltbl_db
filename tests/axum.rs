@@ -5,6 +5,7 @@ use axum::{
     routing::get,
 };
 use rltbl_db::{any::AnyPool, core::DbQuery};
+use serde_json::json;
 use std::{marker::Sync, sync::Arc};
 use tower_service::Service;
 
@@ -23,11 +24,25 @@ async fn run_axum(url: &str) {
     let pool = AnyPool::connect(url).await.unwrap();
     pool.execute_batch(
         "DROP TABLE IF EXISTS test;\
-         CREATE TABLE test ( value TEXT );\
-         INSERT INTO test VALUES ('foo');",
+         CREATE TABLE test ( value TEXT )",
     )
     .await
     .unwrap();
+
+    pool.insert(
+        "test",
+        &["value"],
+        &[&json!({"value": "foo"}).as_object().unwrap()],
+    )
+    .await
+    .unwrap();
+
+    pool.cache(&["test"], "SELECT 1 FROM test", ())
+        .await
+        .unwrap();
+    pool.cache(&["test"], "SELECT 1 FROM test", ())
+        .await
+        .unwrap();
 
     let state = Arc::new(pool);
     let mut router: Router = Router::new().route("/", get(get_root)).with_state(state);

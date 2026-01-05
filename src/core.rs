@@ -3,12 +3,18 @@
 use async_trait::async_trait;
 use indexmap::IndexMap;
 use lazy_static::lazy_static;
+use rand::seq::SliceRandom;
 use regex::Regex;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
-use serde_json::Map as JsonMap;
-use std::fmt::Display;
-use std::future::Future;
+use serde_json::{Map as JsonMap, json};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt::Display,
+    future::Future,
+    str::FromStr,
+    sync::Mutex,
+};
 
 pub type JsonValue = serde_json::Value;
 pub type JsonRow = JsonMap<String, JsonValue>;
@@ -18,32 +24,15 @@ pub type ColumnMap = IndexMap<String, String>;
 /// Represents a valid database table name.
 static VALID_TABLE_NAME_MATCH_STR: &str = r"^[A-Za-z_][0-9A-Za-z_]*$";
 
+/// Default size for the in-memory cache
+pub static DEFAULT_MEMORY_CACHE_SIZE: usize = 1000;
+
 lazy_static! {
     /// The regex used to match [valid database table names](VALID_TABLE_NAME_MATCH_STR).
     static ref VALID_TABLE_NAME_REGEX: Regex = Regex::new(VALID_TABLE_NAME_MATCH_STR).unwrap();
-}
 
-/// Convert a JSON Value to a String,
-/// without quoting for JSON Value::String,
-/// and treating JSON Value::Null as "NULL".
-pub fn json_value_to_string(value: &JsonValue) -> String {
-    match value {
-        JsonValue::String(string) => string.to_string(),
-        JsonValue::Null => "NULL".to_string(),
-        _ => value.to_string(),
-    }
-}
-
-/// Convert a row of JSON Values to a row of Strings.
-pub fn json_row_to_string_row(row: &JsonRow) -> StringRow {
-    row.iter()
-        .map(|(key, value)| (key.clone(), json_value_to_string(value)))
-        .collect()
-}
-
-/// Convert a vector of JSON rows to a vector of String rows.
-pub fn json_rows_to_string_rows(rows: &[JsonRow]) -> Vec<StringRow> {
-    rows.iter().map(|row| json_row_to_string_row(row)).collect()
+    /// The in-memory cache.
+    static ref MEMORY_CACHE: Mutex<HashMap<MemoryCacheKey, Vec<JsonRow>>> = Mutex::new(HashMap::new());
 }
 
 /// Defines the supported database kinds.
@@ -394,10 +383,262 @@ macro_rules! params {
     }};
 }
 
+/// Strategy to use when caching query results
+#[derive(Clone, Copy, Debug)]
+pub enum CachingStrategy {
+    None,
+    TruncateAll,
+    Truncate,
+    Trigger,
+    Memory(usize),
+}
+
+/// The structure used to look up query results in the in-memory cache:
+#[derive(Clone, Eq, PartialEq, Hash)]
+pub struct MemoryCacheKey {
+    pub tables: String,
+    pub statement: String,
+    pub parameters: String,
+}
+
+impl FromStr for CachingStrategy {
+    type Err = DbError;
+
+    fn from_str(strategy: &str) -> Result<Self, DbError> {
+        match strategy.to_lowercase().as_str() {
+            "none" => Ok(CachingStrategy::None),
+            "truncate_all" => Ok(CachingStrategy::TruncateAll),
+            "truncate" => Ok(CachingStrategy::Truncate),
+            "trigger" => Ok(CachingStrategy::Trigger),
+            strategy if strategy.starts_with("memory") => {
+                let elems = strategy.split(":").collect::<Vec<_>>();
+                let cache_size = {
+                    if elems.len() < 2 {
+                        DEFAULT_MEMORY_CACHE_SIZE
+                    } else {
+                        let cache_size = elems[1];
+                        match cache_size.parse::<usize>() {
+                            Ok(0) => DEFAULT_MEMORY_CACHE_SIZE,
+                            Ok(size) => size,
+                            Err(err) => return Err(DbError::InputError(format!(
+                                "Error parsing memory cache size specification: '{cache_size}': \
+                                 {err}"
+                            ))
+                            .into()),
+                        }
+                    }
+                };
+                Ok(CachingStrategy::Memory(cache_size))
+            }
+            _ => {
+                return Err(
+                    DbError::InputError(format!("Unrecognized strategy: {strategy}")).into(),
+                );
+            }
+        }
+    }
+}
+
+impl Display for CachingStrategy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CachingStrategy::None => write!(f, "none"),
+            CachingStrategy::TruncateAll => write!(f, "truncate_all"),
+            CachingStrategy::Truncate => write!(f, "truncate"),
+            CachingStrategy::Trigger => write!(f, "trigger"),
+            CachingStrategy::Memory(size) => write!(f, "memory:{size}"),
+        }
+    }
+}
+
 #[async_trait]
 pub trait DbQuery {
     /// Get the kind of SQL database: SQLite or PostgreSQL.
     fn kind(&self) -> DbKind;
+
+    /// Set the caching strategy.
+    fn set_caching_strategy(&mut self, strategy: &CachingStrategy);
+
+    /// Get the current caching strategy.
+    fn get_caching_strategy(&self) -> CachingStrategy;
+
+    /// Ensure that the cache table exists
+    fn ensure_cache_table_exists(&self) -> impl Future<Output = Result<(), DbError>> + Send;
+
+    /// Ensure that caching triggers exist for the given tables. Note that this function calls
+    /// [DbQuery::ensure_cache_table_exists()] implicitly.
+    fn ensure_caching_triggers_exist(
+        &self,
+        tables: &[&str],
+    ) -> impl Future<Output = Result<(), DbError>> + Send;
+
+    /// Clear the cache entries for the given tables (if the cache table exists), or clear the whole
+    /// cache if `tables` is an empty list.
+    async fn clear_cache(&self, tables: &[&str]) -> Result<(), DbError> {
+        match self.table_exists("cache").await? {
+            false => Ok(()),
+            true => match tables.is_empty() {
+                true => {
+                    self.execute(r#"DELETE FROM "cache""#, ()).await?;
+                    Ok(())
+                }
+                false => {
+                    let prefix = match self.kind() {
+                        DbKind::SQLite => "?",
+                        DbKind::PostgreSQL => "$",
+                    };
+                    for table in tables {
+                        let table = format!(r#"%{table}%"#);
+                        self.execute(
+                            &format!(r#"DELETE FROM "cache" WHERE "tables" LIKE {prefix}1"#),
+                            &[table],
+                        )
+                        .await?;
+                    }
+                    Ok(())
+                }
+            },
+        }
+    }
+
+    /// Execute a SQL command, returning a vector of JSON rows. If the result of the command exists
+    /// in the cache, get the value from it instead of from the table(s) actually mentioned in the
+    /// command, using the given [CachingStrategy].
+    async fn cache(
+        &self,
+        tables: &[&str],
+        sql: &str,
+        params: impl IntoParams + Send + Copy + Sync,
+    ) -> Result<Vec<JsonRow>, DbError> {
+        let db_cache =
+            async |tables: &[&str], sql: &str, params: &Params| -> Result<Vec<JsonRow>, DbError> {
+                // Look in the cache to see if there is an entry corresponding to the given SQL
+                // string for the given tables and parameters. If so, return the data from the
+                // cache, otherwise execute the given SQL statement on the actualy specified
+                // tables.
+                let tables_cast = match self.kind() {
+                    DbKind::SQLite => r#"CAST("tables" AS TEXT)"#,
+                    DbKind::PostgreSQL => r#""tables"::TEXT"#,
+                };
+                let prefix = match self.kind() {
+                    DbKind::SQLite => "?",
+                    DbKind::PostgreSQL => "$",
+                };
+                let cache_sql = format!(
+                    r#"SELECT {prefix}1||rtrim(ltrim("value", '['), ']')||{prefix}2 AS "value"
+                       FROM "cache"
+                       WHERE {tables_cast} = {prefix}3
+                       AND "statement" = {prefix}4
+                       AND "parameters" = {prefix}5
+                       LIMIT 1"#
+                );
+                let tables_param = format!("[{}]", tables.join(", "));
+                let params_param = match params {
+                    Params::None => "[]".to_string(),
+                    Params::Positional(params) => {
+                        let params = params.iter().map(|p| p.into()).collect::<Vec<String>>();
+                        format!("[{}]", params.join(", "))
+                    }
+                };
+                let cache_params = &["[", "]", &tables_param, sql, &params_param];
+
+                match self.query_strings(&cache_sql, cache_params).await?.first() {
+                    Some(values) => {
+                        let json_rows: Vec<JsonRow> = match serde_json::from_str(&values) {
+                            Ok(json_rows) => json_rows,
+                            _ => {
+                                return Err(DbError::DataError(format!(
+                                    "Invalid cache values: {values}"
+                                )));
+                            }
+                        };
+                        Ok(json_rows)
+                    }
+                    None => {
+                        let json_rows = self.query(sql, params).await?;
+                        let json_rows_content = json!(json_rows).to_string();
+                        let insert_sql = format!(
+                            r#"INSERT INTO "cache"
+                               ("tables", "statement", "parameters", "value")
+                               VALUES ({prefix}1, {prefix}2, {prefix}3, {prefix}4)"#
+                        );
+                        let insert_params = [&tables_param, sql, &params_param, &json_rows_content];
+                        self.query(&insert_sql, &insert_params).await?;
+                        Ok(json_rows)
+                    }
+                }
+            };
+
+        let mem_cache = async |tables: &[&str],
+                               sql: &str,
+                               params: &Params,
+                               cache_size: usize|
+               -> Result<Vec<JsonRow>, DbError> {
+            let params = &params.into_params();
+            let mem_key = MemoryCacheKey {
+                tables: tables.join(", ").to_string(),
+                statement: sql.to_string(),
+                parameters: format!("{params:?}"),
+            };
+            let cached_rows = {
+                let cache = match MEMORY_CACHE.try_lock() {
+                    Ok(cache) => cache,
+                    Err(err) => {
+                        return Err(DbError::ConnectError(format!("Error locking cache: {err}")));
+                    }
+                };
+                match cache.get(&mem_key) {
+                    Some(json_rows) => Some(json_rows.to_vec()),
+                    None => None,
+                }
+            };
+            match cached_rows {
+                Some(json_rows) => Ok(json_rows),
+                None => {
+                    let json_rows = self.query(sql, params).await?;
+                    let mut cache = match MEMORY_CACHE.try_lock() {
+                        Ok(cache) => cache,
+                        Err(err) => {
+                            return Err(DbError::ConnectError(format!(
+                                "Error locking cache: {err}"
+                            )));
+                        }
+                    };
+                    let mut keys = cache.keys().map(|key| key.clone()).collect::<Vec<_>>();
+                    // If the number of keys exceeds the allowed cache size, remove any extra keys
+                    // at random.
+                    if keys.len() >= cache_size {
+                        keys.shuffle(&mut rand::rng());
+                        for (i, key) in keys.iter().enumerate().rev() {
+                            if i >= (cache_size - 1) {
+                                cache.remove(&key);
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                    cache.insert(mem_key, json_rows.to_vec());
+                    Ok(json_rows)
+                }
+            }
+        };
+
+        match self.get_caching_strategy() {
+            CachingStrategy::None => self.query(sql, params).await,
+            CachingStrategy::TruncateAll | CachingStrategy::Truncate => {
+                self.ensure_cache_table_exists().await?;
+                db_cache(tables, sql, &params.into_params()).await
+            }
+            CachingStrategy::Trigger => {
+                self.ensure_caching_triggers_exist(tables).await?;
+                db_cache(tables, sql, &params.into_params()).await
+            }
+            CachingStrategy::Memory(cache_size) => {
+                let rows = mem_cache(tables, sql, &params.into_params(), cache_size).await?;
+                Ok(rows)
+            }
+        }
+    }
 
     /// Given a SQL type for this database and a string,
     /// parse the string into the right ParamValue.
@@ -617,8 +858,66 @@ pub trait DbQuery {
         returning: &[&str],
     ) -> impl Future<Output = Result<Vec<JsonRow>, DbError>>;
 
-    /// Drop the given table from the database.
-    fn drop_table(&self, table: &str) -> impl Future<Output = Result<(), DbError>>;
+    /// Check whether the given table exists in the database.
+    fn table_exists(&self, table: &str) -> impl Future<Output = Result<bool, DbError>> + Send;
+
+    /// Drop the given table from the database. Note that for PostgreSQL (see
+    /// <https://www.postgresql.org/docs/current/sql-droptable.html>), in the case of a
+    /// dependent foreign key constraint, only the constraint will be removed, not the dependent
+    /// table itself.
+    async fn drop_table(&self, table: &str) -> Result<(), DbError> {
+        let table = validate_table_name(table)?;
+        // Drop the table:
+        match self.kind() {
+            DbKind::PostgreSQL => {
+                self.execute(&format!(r#"DROP TABLE IF EXISTS "{table}" CASCADE"#), ())
+                    .await?
+            }
+            DbKind::SQLite => {
+                self.execute(&format!(r#"DROP TABLE IF EXISTS "{table}""#), ())
+                    .await?
+            }
+        };
+
+        // Delete dirty entries from the cache in accordance with our caching strategy:
+        match self.get_caching_strategy() {
+            CachingStrategy::None => (),
+            CachingStrategy::TruncateAll => {
+                self.clear_cache(&[]).await?;
+            }
+            // We clear the cache also in the case of a trigger, since the trigger will not
+            // be triggered when we drop the table (it will, rather, be dropped along with the
+            // table)
+            CachingStrategy::Truncate | CachingStrategy::Trigger => {
+                self.clear_cache(&[&table]).await?;
+            }
+            CachingStrategy::Memory(_) => clear_mem_cache(&[&table])?,
+        };
+        Ok(())
+    }
+}
+
+/// Convert a JSON Value to a String,
+/// without quoting for JSON Value::String,
+/// and treating JSON Value::Null as "NULL".
+pub fn json_value_to_string(value: &JsonValue) -> String {
+    match value {
+        JsonValue::String(string) => string.to_string(),
+        JsonValue::Null => "NULL".to_string(),
+        _ => value.to_string(),
+    }
+}
+
+/// Convert a row of JSON Values to a row of Strings.
+pub fn json_row_to_string_row(row: &JsonRow) -> StringRow {
+    row.iter()
+        .map(|(key, value)| (key.clone(), json_value_to_string(value)))
+        .collect()
+}
+
+/// Convert a vector of JSON rows to a vector of String rows.
+pub fn json_rows_to_string_rows(rows: &[JsonRow]) -> Vec<StringRow> {
+    rows.iter().map(|row| json_row_to_string_row(row)).collect()
 }
 
 /// Determines whether the given table name is a valid database table name. Valid database table
@@ -646,6 +945,31 @@ pub fn validate_table_name(table_name: &str) -> Result<String, DbError> {
         true => Ok(table_name.to_string()),
         false => Err(DbError::InputError(error_msg)),
     }
+}
+
+/// Clear the memory cache.
+pub fn clear_mem_cache(tables: &[&str]) -> Result<(), DbError> {
+    let mut cache = match MEMORY_CACHE.try_lock() {
+        Ok(cache) => cache,
+        Err(err) => {
+            return Err(DbError::ConnectError(format!("Error locking cache: {err}")));
+        }
+    };
+    let keys = cache
+        .keys()
+        .map(|k| k)
+        .cloned()
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>();
+    for table in tables {
+        for key in keys.iter() {
+            if key.tables.contains(table) {
+                cache.remove(key);
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

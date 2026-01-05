@@ -1,4 +1,7 @@
-use crate::core::{DbError, DbKind, DbQuery, JsonRow, ParamValue, validate_table_name};
+use crate::core::{
+    CachingStrategy, DbError, DbKind, DbQuery, JsonRow, ParamValue, clear_mem_cache,
+    validate_table_name,
+};
 use std::fmt::Display;
 
 #[derive(PartialEq, Eq)]
@@ -125,7 +128,7 @@ ON CONFLICT ({constraint_clause}) DO UPDATE SET {set_clause}{returning_clause}"#
 /// used to edit the table, do not use more than max_params bound parameters at a time. If more
 /// than max_params are required, multiple SQL statements will be generated.
 pub(crate) async fn edit(
-    pool: &impl DbQuery,
+    pool: &(impl DbQuery + Sync),
     edit_type: &EditType,
     max_params: &usize,
     table: &str,
@@ -294,5 +297,16 @@ pub(crate) async fn edit(
             .await?,
         );
     }
+
+    // Delete dirty entries from the cache in accordance with our caching strategy:
+    match pool.get_caching_strategy() {
+        // For a trigger strategy the cache entries for the table will be cleared automatically
+        // whenever the table is modified so we do not need to do anything here.
+        CachingStrategy::None | CachingStrategy::Trigger => (),
+        CachingStrategy::TruncateAll => pool.clear_cache(&[]).await?,
+        CachingStrategy::Truncate => pool.clear_cache(&[&table]).await?,
+        CachingStrategy::Memory(_) => clear_mem_cache(&[&table])?,
+    }
+
     Ok(rows_to_return)
 }

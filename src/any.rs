@@ -14,7 +14,9 @@
 ///     Ok(value)
 /// }
 /// ```
-use crate::core::{ColumnMap, DbError, DbKind, DbQuery, IntoParams, JsonRow, ParamValue};
+use crate::core::{
+    CachingStrategy, ColumnMap, DbError, DbKind, DbQuery, IntoParams, JsonRow, ParamValue,
+};
 
 #[cfg(feature = "rusqlite")]
 use crate::rusqlite::RusqlitePool;
@@ -90,6 +92,42 @@ impl DbQuery for AnyPool {
             AnyPool::Rusqlite(pool) => pool.kind(),
             #[cfg(feature = "tokio-postgres")]
             AnyPool::TokioPostgres(pool) => pool.kind(),
+        }
+    }
+
+    fn set_caching_strategy(&mut self, strategy: &CachingStrategy) {
+        match self {
+            #[cfg(feature = "rusqlite")]
+            AnyPool::Rusqlite(pool) => pool.set_caching_strategy(strategy),
+            #[cfg(feature = "tokio-postgres")]
+            AnyPool::TokioPostgres(pool) => pool.set_caching_strategy(strategy),
+        }
+    }
+
+    fn get_caching_strategy(&self) -> CachingStrategy {
+        match self {
+            #[cfg(feature = "rusqlite")]
+            AnyPool::Rusqlite(pool) => pool.get_caching_strategy(),
+            #[cfg(feature = "tokio-postgres")]
+            AnyPool::TokioPostgres(pool) => pool.get_caching_strategy(),
+        }
+    }
+
+    async fn ensure_cache_table_exists(&self) -> Result<(), DbError> {
+        match self {
+            #[cfg(feature = "rusqlite")]
+            AnyPool::Rusqlite(pool) => pool.ensure_cache_table_exists().await,
+            #[cfg(feature = "tokio-postgres")]
+            AnyPool::TokioPostgres(pool) => pool.ensure_cache_table_exists().await,
+        }
+    }
+
+    async fn ensure_caching_triggers_exist(&self, tables: &[&str]) -> Result<(), DbError> {
+        match self {
+            #[cfg(feature = "rusqlite")]
+            AnyPool::Rusqlite(pool) => pool.ensure_caching_triggers_exist(tables).await,
+            #[cfg(feature = "tokio-postgres")]
+            AnyPool::TokioPostgres(pool) => pool.ensure_caching_triggers_exist(tables).await,
         }
     }
 
@@ -235,12 +273,12 @@ impl DbQuery for AnyPool {
         }
     }
 
-    async fn drop_table(&self, table: &str) -> Result<(), DbError> {
+    async fn table_exists(&self, table: &str) -> Result<bool, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
-            AnyPool::Rusqlite(pool) => pool.drop_table(table).await,
+            AnyPool::Rusqlite(pool) => pool.table_exists(table).await,
             #[cfg(feature = "tokio-postgres")]
-            AnyPool::TokioPostgres(pool) => pool.drop_table(table).await,
+            AnyPool::TokioPostgres(pool) => pool.table_exists(table).await,
         }
     }
 }
@@ -253,6 +291,7 @@ mod tests {
     use crate::params;
     use rust_decimal::dec;
     use serde_json::json;
+    use std::str::FromStr;
 
     #[tokio::test]
     async fn test_text_column_query() {
@@ -1491,5 +1530,134 @@ mod tests {
 
         // Clean up:
         pool.drop_table("test_upsert_returning").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_caching() {
+        let all_strategies = ["truncate_all", "truncate", "trigger", "memory:5"]
+            .iter()
+            .map(|strategy| CachingStrategy::from_str(strategy).unwrap())
+            .collect::<Vec<_>>();
+        #[cfg(feature = "rusqlite")]
+        {
+            let mut pool = AnyPool::connect(":memory:").await.unwrap();
+            for caching_strategy in &all_strategies {
+                cache_with_strategy(&mut pool, &caching_strategy).await;
+            }
+        }
+        #[cfg(feature = "tokio-postgres")]
+        {
+            let mut pool = AnyPool::connect("postgresql:///rltbl_db").await.unwrap();
+            for caching_strategy in &all_strategies {
+                cache_with_strategy(&mut pool, &caching_strategy).await;
+            }
+        }
+    }
+
+    async fn cache_with_strategy(pool: &mut AnyPool, strategy: &CachingStrategy) {
+        pool.set_caching_strategy(strategy);
+        pool.drop_table("test_table_caching").await.unwrap();
+        pool.execute(
+            "CREATE TABLE test_table_caching (\
+               value TEXT
+             )",
+            (),
+        )
+        .await
+        .unwrap();
+
+        pool.insert(
+            "test_table_caching",
+            &["value"],
+            &[
+                &json!({"value": "alpha"}).as_object().unwrap(),
+                &json!({"value": "beta"}).as_object().unwrap(),
+            ],
+        )
+        .await
+        .unwrap();
+
+        let rows = pool
+            .cache(
+                &["test_table_caching"],
+                "SELECT * from test_table_caching",
+                (),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            rows,
+            vec![
+                json!({"value": "alpha"}).as_object().unwrap().clone(),
+                json!({"value": "beta"}).as_object().unwrap().clone(),
+            ]
+        );
+
+        let rows = pool
+            .cache(
+                &["test_table_caching"],
+                "SELECT * from test_table_caching",
+                (),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            rows,
+            vec![
+                json!({"value": "alpha"}).as_object().unwrap().clone(),
+                json!({"value": "beta"}).as_object().unwrap().clone(),
+            ]
+        );
+
+        pool.insert(
+            "test_table_caching",
+            &["value"],
+            &[
+                &json!({"value": "gamma"}).as_object().unwrap(),
+                &json!({"value": "delta"}).as_object().unwrap(),
+            ],
+        )
+        .await
+        .unwrap();
+
+        let rows = pool
+            .cache(
+                &["test_table_caching"],
+                "SELECT * from test_table_caching",
+                (),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            rows,
+            vec![
+                json!({"value": "alpha"}).as_object().unwrap().clone(),
+                json!({"value": "beta"}).as_object().unwrap().clone(),
+                json!({"value": "gamma"}).as_object().unwrap().clone(),
+                json!({"value": "delta"}).as_object().unwrap().clone(),
+            ]
+        );
+
+        let rows = pool
+            .cache(
+                &["test_table_caching"],
+                "SELECT * from test_table_caching",
+                (),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            rows,
+            vec![
+                json!({"value": "alpha"}).as_object().unwrap().clone(),
+                json!({"value": "beta"}).as_object().unwrap().clone(),
+                json!({"value": "gamma"}).as_object().unwrap().clone(),
+                json!({"value": "delta"}).as_object().unwrap().clone(),
+            ]
+        );
     }
 }
