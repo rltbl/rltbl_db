@@ -496,6 +496,7 @@ impl DbQuery for TokioPostgresPool {
                     .map(|(i, column)| {
                         (
                             column.name().to_string(),
+                            // TODO: Remove unwrap.
                             ParamValue::from(extract_value(&row, i).unwrap()),
                         )
                     })

@@ -1092,15 +1092,7 @@ pub trait DbQuery {
         params: impl IntoParams + Send,
     ) -> Result<Vec<StringRow>, DbError> {
         let rows: Vec<DbRow> = self.query(sql, params).await?;
-        let rows = rows
-            .iter()
-            .map(|row| {
-                row.iter()
-                    .map(|(key, value)| (key.clone(), value.into()))
-                    .collect()
-            })
-            .collect();
-        Ok(rows)
+        Ok(db_rows_to_string_rows(&rows))
     }
 
     /// Execute a SQL command, returning a single unsigned integer.
@@ -1252,6 +1244,18 @@ pub fn json_row_to_string_row(row: &JsonRow) -> StringRow {
 /// Convert a vector of JSON rows to a vector of String rows.
 pub fn json_rows_to_string_rows(rows: &[JsonRow]) -> Vec<StringRow> {
     rows.iter().map(|row| json_row_to_string_row(row)).collect()
+}
+
+/// Convert a [DbRow] into a [StringRow]
+pub fn db_row_to_string_row(row: &DbRow) -> StringRow {
+    row.iter()
+        .map(|(key, value)| (key.clone(), value.into()))
+        .collect()
+}
+
+/// Convert a vector of [DbRow]s into a vector of [StringRow]s.
+pub fn db_rows_to_string_rows(rows: &[DbRow]) -> Vec<StringRow> {
+    rows.iter().map(|row| db_row_to_string_row(row)).collect()
 }
 
 /// Determines whether the given table name is a valid database table name. Valid database table
