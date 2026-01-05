@@ -397,7 +397,7 @@ impl DbQuery for RusqlitePool {
             Ok(_) => {
                 // We need to drop conn here to ensure that any changes to the db are persisted.
                 drop(conn);
-                self.clear_cache_for_modified_tables(sql).await?;
+                self.clear_cache_for_affected_tables(sql).await?;
                 Ok(())
             }
         }
@@ -433,7 +433,7 @@ impl DbQuery for RusqlitePool {
         // Note that we must allow `conn` to go out of scope (alternately we could explicitly
         // call drop(conn)) to ensure that the query is persisted to the db before clearing the
         // cache:
-        self.clear_cache_for_modified_tables(sql).await?;
+        self.clear_cache_for_affected_tables(sql).await?;
         Ok(rows)
     }
 

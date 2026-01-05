@@ -477,197 +477,17 @@ pub trait DbQuery {
         tables: &[&str],
     ) -> impl Future<Output = Result<(), DbError>> + Send;
 
-    /// Parse the given string, representing a series of (semi-colon-separated) SQL commands,
-    /// into their constituents and determine the tables that will be affected when the commands
-    /// are executed, if any. Commands that may potentially affect tables are: INSERT, UPDATE,
-    /// DELETE, and DROP TABLE. All other kinds of statements will be silently ignored. In
-    /// particular, table modifications that occur within a CTE are not recognized by this
-    /// function. Such table-modifying CTEs are supported by PostgreSQL (see
-    /// <https://www.postgresql.org/docs/current/queries-with.html#QUERIES-WITH-MODIFYING>) but
-    /// seemingly not by SQLite (see <https://sqlite.org/lang_with.html>).
-    fn get_modified_tables(&self, sql: &str) -> Result<HashSet<String>, DbError> {
-        // Validates that a given node is not an error node:
-        let check_for_error = |node: &Node<'_>| -> Result<(), DbError> {
-            if node.is_error() {
-                return Err(DbError::ParseError(format!(
-                    "Error parsing '{sql}': {node}"
-                )));
-            }
-            Ok(())
-        };
-
-        // Checks that the given node list is of the expected length:
-        fn verify_list_len(node_list: &Vec<Node<'_>>, len: usize) -> Result<(), DbError> {
-            if node_list.len() != len {
-                return Err(DbError::ParseError(format!(
-                    "Wrong number of values: {}. Expected: {}",
-                    node_list.len(),
-                    len
-                )));
-            }
-            Ok(())
-        }
-
-        // Instantiate the parser and read in the given sql string:
-        let mut parser = Parser::new();
-        parser
-            .set_language(&SQL_LANGUAGE.into())
-            .map_err(|err| DbError::ParseError(format!("Error setting language to SQL: {err}")))?;
-        let tree = match parser.parse(sql, None) {
-            Some(tree) => tree,
-            None => return Err(DbError::ParseError(format!("Could not parse '{sql}'"))),
-        };
-
-        // Collect the top-level statements:
-        let statements = {
-            let root_node = tree.root_node();
-            check_for_error(&root_node)?;
-            if root_node.kind().to_lowercase() != "program" {
-                return Err(DbError::ParseError(format!(
-                    "Unexpected root node kind: {}",
-                    root_node.kind()
-                )));
-            }
-            root_node
-                .children(&mut root_node.walk())
-                .filter(|child| child.kind().to_lowercase() == "statement")
-                .collect::<Vec<_>>()
-        };
-
-        // Determine the tables that will be modified:
-        let mut modified_tables = HashSet::new();
-        for statement in &statements {
-            check_for_error(&statement)?;
-            for instruction in statement.children(&mut tree.walk()) {
-                check_for_error(&instruction)?;
-                match instruction.kind().to_lowercase().as_str() {
-                    "insert" => {
-                        let table_name = {
-                            let object_ref = instruction
-                                .children(&mut instruction.walk())
-                                .filter(|child| child.kind().to_lowercase() == "object_reference")
-                                .collect::<Vec<_>>();
-                            verify_list_len(&object_ref, 1)?;
-                            let object_ref = object_ref[0];
-
-                            let identifier = object_ref
-                                .children(&mut object_ref.walk())
-                                .filter(|child| child.kind().to_lowercase() == "identifier")
-                                .collect::<Vec<_>>();
-                            verify_list_len(&identifier, 1)?;
-                            let identifier = identifier[0];
-
-                            validate_table_name(
-                                &sql.to_string()[identifier.start_byte()..identifier.end_byte()],
-                            )?
-                        };
-                        modified_tables.insert(table_name);
-                    }
-                    "update" => {
-                        let table_name = {
-                            let relation = instruction
-                                .children(&mut instruction.walk())
-                                .filter(|child| child.kind().to_lowercase() == "relation")
-                                .collect::<Vec<_>>();
-                            verify_list_len(&relation, 1)?;
-                            let relation = relation[0];
-
-                            let object_ref = relation
-                                .children(&mut relation.walk())
-                                .filter(|child| child.kind().to_lowercase() == "object_reference")
-                                .collect::<Vec<_>>();
-                            verify_list_len(&object_ref, 1)?;
-                            let object_ref = object_ref[0];
-
-                            let identifier = object_ref
-                                .children(&mut object_ref.walk())
-                                .filter(|child| child.kind().to_lowercase() == "identifier")
-                                .collect::<Vec<_>>();
-                            verify_list_len(&identifier, 1)?;
-                            let identifier = identifier[0];
-
-                            validate_table_name(
-                                &sql.to_string()[identifier.start_byte()..identifier.end_byte()],
-                            )?
-                        };
-                        modified_tables.insert(table_name);
-                    }
-                    "delete" => {
-                        let table_name = {
-                            let details =
-                                instruction
-                                    .next_sibling()
-                                    .ok_or(DbError::ParseError(format!(
-                                        "No details found for '{}'",
-                                        instruction.kind()
-                                    )))?;
-                            let object_ref = details
-                                .children(&mut details.walk())
-                                .filter(|child| child.kind().to_lowercase() == "object_reference")
-                                .collect::<Vec<_>>();
-                            verify_list_len(&object_ref, 1)?;
-                            let object_ref = object_ref[0];
-
-                            let identifier = object_ref
-                                .children(&mut object_ref.walk())
-                                .filter(|child| child.kind().to_lowercase() == "identifier")
-                                .collect::<Vec<_>>();
-                            verify_list_len(&identifier, 1)?;
-                            let identifier = identifier[0];
-
-                            validate_table_name(
-                                &sql.to_string()[identifier.start_byte()..identifier.end_byte()],
-                            )?
-                        };
-                        modified_tables.insert(table_name);
-                    }
-                    "drop_table" => {
-                        let table_name = {
-                            let object_ref = instruction
-                                .children(&mut instruction.walk())
-                                .filter(|child| child.kind().to_lowercase() == "object_reference")
-                                .collect::<Vec<_>>();
-                            verify_list_len(&object_ref, 1)?;
-                            let object_ref = object_ref[0];
-
-                            let identifier = object_ref
-                                .children(&mut object_ref.walk())
-                                .filter(|child| child.kind().to_lowercase() == "identifier")
-                                .collect::<Vec<_>>();
-                            verify_list_len(&identifier, 1)?;
-                            let identifier = identifier[0];
-
-                            validate_table_name(
-                                &sql.to_string()[identifier.start_byte()..identifier.end_byte()],
-                            )?
-                        };
-                        modified_tables.insert(table_name);
-                    }
-                    // Silently ignore all other kinds of instructions
-                    _ => (),
-                };
-            }
-        }
-
-        // Queries to the cache table itself are never cached:
-        let modified_tables = modified_tables
-            .into_iter()
-            .filter(|table| *table != "cache")
-            .collect::<HashSet<_>>();
-
-        Ok(modified_tables)
-    }
-
-    /// Parse the given SQL string and determine which tables will be modified upon execution,
-    /// then clear the entries for those tables in the cache in accordance with the current
-    /// caching strategy.
-    async fn clear_cache_for_modified_tables(&self, sql: &str) -> Result<(), DbError> {
+    /// Parse the given SQL string and determine which tables will be affected by the given
+    /// command, then clear the entries for those tables in the cache in accordance with the
+    /// current caching strategy.
+    async fn clear_cache_for_affected_tables(&self, sql: &str) -> Result<(), DbError> {
+        // TODO: Look into whether we can create a trigger for DROP tables.
         // Note that we check for modified tables even when we are using the trigger strategy,
         // since the table could have been the target of a DROP TABLE command. If the table
         // was the target of some other command, the result will be a redundant call to
         // clear_cache(), but this will be very quick.
         if self.get_caching_strategy() != CachingStrategy::None {
-            let tables: Vec<_> = self.get_modified_tables(sql)?.into_iter().collect();
+            let tables: Vec<_> = get_modified_tables(sql)?.into_iter().collect();
             if !tables.is_empty() {
                 let tables: Vec<_> = tables.iter().map(|t| t.as_str()).collect();
                 match self.get_caching_strategy() {
@@ -1158,6 +978,188 @@ pub fn validate_table_name(table_name: &str) -> Result<String, DbError> {
     }
 }
 
+/// TODO: Also TRUNCATE.
+/// Parse the given string, representing a series of (semi-colon-separated) SQL commands,
+/// into their constituents and determine the tables that will be affected when the commands
+/// are executed, if any. Commands that may potentially affect tables are: INSERT, UPDATE,
+/// DELETE, and DROP TABLE. All other kinds of statements will be silently ignored. In
+/// particular, table modifications that occur within a CTE are not recognized by this
+/// function. Such table-modifying CTEs are supported by PostgreSQL (see
+/// <https://www.postgresql.org/docs/current/queries-with.html#QUERIES-WITH-MODIFYING>) but
+/// seemingly not by SQLite (see <https://sqlite.org/lang_with.html>).
+fn get_modified_tables(sql: &str) -> Result<HashSet<String>, DbError> {
+    // Validates that a given node is not an error node:
+    let check_for_error = |node: &Node<'_>| -> Result<(), DbError> {
+        if node.is_error() {
+            return Err(DbError::ParseError(format!(
+                "Error parsing '{sql}': {node}"
+            )));
+        }
+        Ok(())
+    };
+
+    // Checks that the given node list is of the expected length:
+    fn verify_list_len(node_list: &Vec<Node<'_>>, len: usize) -> Result<(), DbError> {
+        if node_list.len() != len {
+            return Err(DbError::ParseError(format!(
+                "Wrong number of values: {}. Expected: {}",
+                node_list.len(),
+                len
+            )));
+        }
+        Ok(())
+    }
+
+    // Instantiate the parser and read in the given sql string:
+    let mut parser = Parser::new();
+    parser
+        .set_language(&SQL_LANGUAGE.into())
+        .map_err(|err| DbError::ParseError(format!("Error setting language to SQL: {err}")))?;
+    let tree = match parser.parse(sql, None) {
+        Some(tree) => tree,
+        None => return Err(DbError::ParseError(format!("Could not parse '{sql}'"))),
+    };
+
+    // Collect the top-level statements:
+    let statements = {
+        let root_node = tree.root_node();
+        check_for_error(&root_node)?;
+        if root_node.kind().to_lowercase() != "program" {
+            return Err(DbError::ParseError(format!(
+                "Unexpected root node kind: {}",
+                root_node.kind()
+            )));
+        }
+        root_node
+            .children(&mut root_node.walk())
+            .filter(|child| child.kind().to_lowercase() == "statement")
+            .collect::<Vec<_>>()
+    };
+
+    // Determine the tables that will be modified:
+    let mut modified_tables = HashSet::new();
+    for statement in &statements {
+        check_for_error(&statement)?;
+        for instruction in statement.children(&mut tree.walk()) {
+            check_for_error(&instruction)?;
+            match instruction.kind().to_lowercase().as_str() {
+                "insert" => {
+                    let table_name = {
+                        let object_ref = instruction
+                            .children(&mut instruction.walk())
+                            .filter(|child| child.kind().to_lowercase() == "object_reference")
+                            .collect::<Vec<_>>();
+                        verify_list_len(&object_ref, 1)?;
+                        let object_ref = object_ref[0];
+
+                        let identifier = object_ref
+                            .children(&mut object_ref.walk())
+                            .filter(|child| child.kind().to_lowercase() == "identifier")
+                            .collect::<Vec<_>>();
+                        verify_list_len(&identifier, 1)?;
+                        let identifier = identifier[0];
+
+                        validate_table_name(
+                            &sql.to_string()[identifier.start_byte()..identifier.end_byte()],
+                        )?
+                    };
+                    modified_tables.insert(table_name);
+                }
+                "update" => {
+                    let table_name = {
+                        let relation = instruction
+                            .children(&mut instruction.walk())
+                            .filter(|child| child.kind().to_lowercase() == "relation")
+                            .collect::<Vec<_>>();
+                        verify_list_len(&relation, 1)?;
+                        let relation = relation[0];
+
+                        let object_ref = relation
+                            .children(&mut relation.walk())
+                            .filter(|child| child.kind().to_lowercase() == "object_reference")
+                            .collect::<Vec<_>>();
+                        verify_list_len(&object_ref, 1)?;
+                        let object_ref = object_ref[0];
+
+                        let identifier = object_ref
+                            .children(&mut object_ref.walk())
+                            .filter(|child| child.kind().to_lowercase() == "identifier")
+                            .collect::<Vec<_>>();
+                        verify_list_len(&identifier, 1)?;
+                        let identifier = identifier[0];
+
+                        validate_table_name(
+                            &sql.to_string()[identifier.start_byte()..identifier.end_byte()],
+                        )?
+                    };
+                    modified_tables.insert(table_name);
+                }
+                "delete" => {
+                    let table_name = {
+                        let details =
+                            instruction
+                                .next_sibling()
+                                .ok_or(DbError::ParseError(format!(
+                                    "No details found for '{}'",
+                                    instruction.kind()
+                                )))?;
+                        let object_ref = details
+                            .children(&mut details.walk())
+                            .filter(|child| child.kind().to_lowercase() == "object_reference")
+                            .collect::<Vec<_>>();
+                        verify_list_len(&object_ref, 1)?;
+                        let object_ref = object_ref[0];
+
+                        let identifier = object_ref
+                            .children(&mut object_ref.walk())
+                            .filter(|child| child.kind().to_lowercase() == "identifier")
+                            .collect::<Vec<_>>();
+                        verify_list_len(&identifier, 1)?;
+                        let identifier = identifier[0];
+
+                        validate_table_name(
+                            &sql.to_string()[identifier.start_byte()..identifier.end_byte()],
+                        )?
+                    };
+                    modified_tables.insert(table_name);
+                }
+                "drop_table" => {
+                    let table_name = {
+                        let object_ref = instruction
+                            .children(&mut instruction.walk())
+                            .filter(|child| child.kind().to_lowercase() == "object_reference")
+                            .collect::<Vec<_>>();
+                        verify_list_len(&object_ref, 1)?;
+                        let object_ref = object_ref[0];
+
+                        let identifier = object_ref
+                            .children(&mut object_ref.walk())
+                            .filter(|child| child.kind().to_lowercase() == "identifier")
+                            .collect::<Vec<_>>();
+                        verify_list_len(&identifier, 1)?;
+                        let identifier = identifier[0];
+
+                        validate_table_name(
+                            &sql.to_string()[identifier.start_byte()..identifier.end_byte()],
+                        )?
+                    };
+                    modified_tables.insert(table_name);
+                }
+                // Silently ignore all other kinds of instructions
+                _ => (),
+            };
+        }
+    }
+
+    // Queries to the cache table itself are never cached:
+    let modified_tables = modified_tables
+        .into_iter()
+        .filter(|table| *table != "cache")
+        .collect::<HashSet<_>>();
+
+    Ok(modified_tables)
+}
+
 /// Retrieve the contents of the memory cache.
 pub fn get_memory_cache_contents() -> Result<HashMap<MemoryCacheKey, Vec<JsonRow>>, DbError> {
     match MEMORY_CACHE.try_lock() {
@@ -1251,5 +1253,128 @@ mod tests {
         if let Ok(_) = validate_table_name(r#"my table"#) {
             panic!("Expected an error");
         }
+    }
+
+    #[tokio::test]
+    async fn test_sql_parsing() {
+        // Single statements, possibly with parameters:
+
+        let tables: Vec<_> =
+            get_modified_tables(&format!(r#"INSERT INTO "alpha" VALUES ($1, $2, $3)"#))
+                .unwrap()
+                .into_iter()
+                .collect();
+        assert_eq!(tables, ["alpha"]);
+
+        let tables: Vec<_> = get_modified_tables(
+            r#"WITH bar AS (SELECT * FROM alpha),
+                        mar AS (SELECT * FROM beta)
+                   INSERT INTO gamma
+                   SELECT alpha.*
+                   FROM alpha, beta
+                   WHERE alpha.value = beta.value"#,
+        )
+        .unwrap()
+        .into_iter()
+        .collect();
+        assert_eq!(tables, ["gamma"]);
+
+        let tables: Vec<_> =
+            get_modified_tables(&format!(r#"UPDATE "delta" set bar = $1 WHERE bar = $2"#))
+                .unwrap()
+                .into_iter()
+                .collect();
+        assert_eq!(tables, ["delta"]);
+
+        let tables: Vec<_> = get_modified_tables(&format!(
+            r#"WITH bar AS (SELECT * FROM test),
+                        mar AS (SELECT * FROM test)
+                   UPDATE delta
+                   SET value = bar.value
+                   FROM bar, mar
+                   WHERE bar.value = $1 AND bar.value = mar.value"#,
+        ))
+        .unwrap()
+        .into_iter()
+        .collect();
+        assert_eq!(tables, ["delta"]);
+
+        let tables: Vec<_> =
+            get_modified_tables(&format!(r#"DELETE FROM "epsilon" WHERE bar >= $1"#))
+                .unwrap()
+                .into_iter()
+                .collect();
+        assert_eq!(tables, ["epsilon"]);
+
+        let tables: Vec<_> = get_modified_tables(
+            r#"WITH bar AS (SELECT * FROM test),
+                        mar AS (SELECT * FROM test)
+                   DELETE FROM lambda WHERE value IN (SELECT value FROM bar)"#,
+        )
+        .unwrap()
+        .into_iter()
+        .collect();
+        assert_eq!(tables, ["lambda"]);
+
+        let tables: Vec<_> = get_modified_tables(r#"DROP TABLE "rho""#)
+            .unwrap()
+            .into_iter()
+            .collect();
+        assert_eq!(tables, ["rho"]);
+
+        let tables: Vec<_> = get_modified_tables(r#"DROP TABLE IF EXISTS "phi" CASCADE"#)
+            .unwrap()
+            .into_iter()
+            .collect();
+        assert_eq!(tables, ["phi"]);
+
+        // Multiple statements, no parameters:
+
+        let sql = r#"
+            INSERT INTO "alpha" VALUES (1, 2, 3), (4, 5, 6);
+
+            INSERT INTO gamma
+            SELECT alpha.*
+            FROM alpha, beta
+            WHERE alpha.value = beta.value;
+
+            WITH t AS (
+              SELECT * from delta_base ORDER BY quality LIMIT 1
+            )
+            UPDATE delta SET price = t.price * 1.05;
+
+            WITH t AS (
+              SELECT * FROM phi_base
+              WHERE
+                "date" >= '2010-10-01' AND
+                "date" < '2010-11-01'
+            )
+            INSERT INTO phi
+            SELECT * FROM t;
+
+            DELETE FROM "psi" WHERE bar >= 10;
+
+            WITH RECURSIVE included_lambda(sub_lambda, lambda) AS (
+                SELECT sub_lambda, lambda FROM lambda WHERE lambda = 'our_product'
+              UNION ALL
+                SELECT p.sub_lambda, p.lambda
+                FROM included_lambda pr, lambda p
+                WHERE p.lambda = pr.sub_lambda
+            )
+            DELETE FROM lambda
+              WHERE lambda IN (SELECT lambda FROM included_lambda);
+
+            DROP TABLE "rho";
+
+            DROP TABLE "sigma" CASCADE"#;
+
+        let mut tables: Vec<_> = get_modified_tables(&sql).unwrap().into_iter().collect();
+        tables.sort();
+        assert_eq!(
+            tables,
+            [
+                "alpha", "delta", "gamma", "lambda", "phi", "psi", "rho", "sigma",
+            ]
+        );
     }
 }

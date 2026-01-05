@@ -377,7 +377,7 @@ impl DbQuery for TokioPostgresPool {
             .await
             .map_err(|err| DbError::DatabaseError(format!("Error in query(): {err:?}")))?;
 
-        self.clear_cache_for_modified_tables(sql).await?;
+        self.clear_cache_for_affected_tables(sql).await?;
         Ok(())
     }
 
@@ -493,7 +493,7 @@ impl DbQuery for TokioPostgresPool {
             json_rows.push(json_row);
         }
 
-        self.clear_cache_for_modified_tables(sql).await?;
+        self.clear_cache_for_affected_tables(sql).await?;
         Ok(json_rows)
     }
 
