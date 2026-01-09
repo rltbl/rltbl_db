@@ -978,7 +978,6 @@ pub fn validate_table_name(table_name: &str) -> Result<String, DbError> {
     }
 }
 
-/// TODO: Also TRUNCATE.
 /// Parse the given string, representing a series of (semi-colon-separated) SQL commands,
 /// into their constituents and determine the tables that will be affected when the commands
 /// are executed, if any. Commands that may potentially affect tables are: INSERT, UPDATE,
@@ -1122,6 +1121,25 @@ fn get_modified_tables(sql: &str) -> Result<HashSet<String>, DbError> {
                         )?
                     };
                     modified_tables.insert(table_name);
+                }
+                "keyword_truncate" => {
+                    let mut possible_next_word = instruction.next_sibling();
+                    while let Some(next_word) = possible_next_word {
+                        if next_word.kind().to_lowercase() == "object_reference" {
+                            let identifier = next_word
+                                .children(&mut next_word.walk())
+                                .filter(|child| child.kind().to_lowercase() == "identifier")
+                                .collect::<Vec<_>>();
+                            verify_list_len(&identifier, 1)?;
+                            let identifier = identifier[0];
+
+                            let table = validate_table_name(
+                                &sql.to_string()[identifier.start_byte()..identifier.end_byte()],
+                            )?;
+                            modified_tables.insert(table);
+                        }
+                        possible_next_word = next_word.next_sibling();
+                    }
                 }
                 "drop_table" => {
                     let table_name = {
@@ -1327,6 +1345,13 @@ mod tests {
             .into_iter()
             .collect();
         assert_eq!(tables, ["phi"]);
+
+        let mut tables: Vec<_> = get_modified_tables("TRUNCATE TABLE mu, nu CASCADE")
+            .unwrap()
+            .into_iter()
+            .collect();
+        tables.sort();
+        assert_eq!(tables, ["mu", "nu"]);
 
         // Multiple statements, no parameters:
 
