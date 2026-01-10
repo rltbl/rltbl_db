@@ -1,7 +1,4 @@
-use crate::core::{
-    CachingStrategy, DbError, DbKind, DbQuery, JsonRow, ParamValue, clear_mem_cache,
-    validate_table_name,
-};
+use crate::core::{DbError, DbKind, DbQuery, JsonRow, ParamValue, validate_table_name};
 use std::fmt::Display;
 
 #[derive(PartialEq, Eq)]
@@ -299,14 +296,7 @@ pub(crate) async fn edit(
     }
 
     // Delete dirty entries from the cache in accordance with our caching strategy:
-    match pool.get_caching_strategy() {
-        // For a trigger strategy the cache entries for the table will be cleared automatically
-        // whenever the table is modified so we do not need to do anything here.
-        CachingStrategy::None | CachingStrategy::Trigger => (),
-        CachingStrategy::TruncateAll => pool.clear_cache_table(&[]).await?,
-        CachingStrategy::Truncate => pool.clear_cache_table(&[&table]).await?,
-        CachingStrategy::Memory(_) => clear_mem_cache(&[&table])?,
-    }
+    pool.clear_cache_for_edited_tables(&[&table]).await?;
 
     Ok(rows_to_return)
 }

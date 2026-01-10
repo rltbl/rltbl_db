@@ -391,10 +391,15 @@ macro_rules! params {
 /// Strategy to use when caching query results
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CachingStrategy {
+    /// No Caching.
     None,
+    /// Truncate the entire cache when it is dirty.
     TruncateAll,
+    /// Truncate entries only for edited tables when the cache is dirty.
     Truncate,
+    /// Truncate cache entries, for edited tables only, automatically whenever tables are edited.
     Trigger,
+    /// Similar to Truncate, but use an in-memory cache.
     Memory(usize),
 }
 
@@ -477,59 +482,96 @@ pub trait DbQuery {
         tables: &[&str],
     ) -> impl Future<Output = Result<(), DbError>> + Send;
 
-    /// Parse the given SQL string and determine which tables will be affected by the given
-    /// command, then clear the entries for those tables in the cache in accordance with the
-    /// current caching strategy.
+    /// Parse the given semi-colon-separated SQL commands and determine which tables will be
+    /// affected (either edited or dropped) by the commands, then ensure that there are no
+    /// entries for those tables in the cache in accordance with the current [CachingStrategy].
     async fn clear_cache_for_affected_tables(&self, sql: &str) -> Result<(), DbError> {
-        // TODO: Look into whether we can create a trigger for DROP tables.
-        // Note that we check for modified tables even when we are using the trigger strategy,
-        // since the table could have been the target of a DROP TABLE command. If the table
-        // was the target of some other command, the result will be a redundant call to
-        // clear_cache(), but this will be very quick.
         if self.get_caching_strategy() != CachingStrategy::None {
-            let tables: Vec<_> = get_modified_tables(sql)?.into_iter().collect();
-            if !tables.is_empty() {
-                let tables: Vec<_> = tables.iter().map(|t| t.as_str()).collect();
-                match self.get_caching_strategy() {
-                    CachingStrategy::None => (),
-                    CachingStrategy::TruncateAll => self.clear_cache_table(&[]).await?,
-                    CachingStrategy::Truncate | CachingStrategy::Trigger => {
-                        self.clear_cache_table(&tables).await?
-                    }
-                    CachingStrategy::Memory(_) => clear_mem_cache(&tables)?,
-                };
+            let (edited_tables, dropped_tables): (Vec<_>, Vec<_>) = {
+                let (edited_tables, dropped_tables) = get_affected_tables(sql)?;
+                (
+                    edited_tables.into_iter().collect(),
+                    dropped_tables.into_iter().collect(),
+                )
+            };
+            if !edited_tables.is_empty() {
+                let edited_tables: Vec<_> = edited_tables.iter().map(|t| t.as_str()).collect();
+                self.clear_cache_for_dropped_tables(&edited_tables).await?;
+            }
+            if !dropped_tables.is_empty() {
+                let dropped_tables: Vec<_> = dropped_tables.iter().map(|t| t.as_str()).collect();
+                self.clear_cache_for_dropped_tables(&dropped_tables).await?;
             }
         }
         Ok(())
     }
 
-    /// If the cache table exists: Clear the cache entries for the given tables, or clear the
-    /// whole cache if `tables` is an empty list.
-    async fn clear_cache_table(&self, tables: &[&str]) -> Result<(), DbError> {
-        match self.table_exists("cache").await? {
-            false => Ok(()),
-            true => match tables.is_empty() {
-                true => {
-                    self.execute(r#"DELETE FROM "cache""#, ()).await?;
-                    Ok(())
+    // Triggers cannot apply to DROP commands, only to INSERT, UPDATE, DELETE, or TRUNCATE.
+    // See https://www.postgresql.org/docs/current/sql-createtrigger.html and
+    // https://sqlite.org/lang_createtrigger.html. Note that PostgreSQL has the concept
+    // of an "event trigger":
+    // https://www.pgtutorial.com/postgresql-tutorial/postgresql-event-triggers/ which could
+    // be used, but SQLite has no such capability. To workaround the limitation in SQLite, we
+    // define two clear_cache_() functions, one for edited tables, and one for dropped tables.
+    // In the case of a dropped table, unlike an edit, we cannot rely on the caching trigger,
+    // when we are using the [CachingStategy::Trigger] strategy, to automatically delete the
+    // entries from the cache for those tables, since those triggers will have beeen dropped
+    // along with the table.
+    // Although strictly speaking, PostgreSQL (which has event triggers) is not subject to this
+    // limitation, for simplicity we will not be creating a PostgreSQL event trigger and we will
+    // use both functions below for both database types.
+
+    /// Clear the entries from the cache table for the given list of tables, using the
+    /// current [CachingStrategy], under the assumption that the tables in the given list have
+    /// all just been edited (i.e., truncated, deleted from, inserted to, or updated).
+    async fn clear_cache_for_edited_tables(&self, tables: &[&str]) -> Result<(), DbError> {
+        match self.get_caching_strategy() {
+            CachingStrategy::None | CachingStrategy::Trigger => (),
+            CachingStrategy::TruncateAll => self.delete_cache_entries_for_tables(&[]).await?,
+            CachingStrategy::Truncate => self.delete_cache_entries_for_tables(tables).await?,
+            CachingStrategy::Memory(_) => clear_mem_cache(&tables)?,
+        };
+        Ok(())
+    }
+
+    /// Clear the entries from the cache table for the given list of tables, using the
+    /// current [CachingStrategy], under the assumption that the tables in the given list have
+    /// all just been dropped.
+    async fn clear_cache_for_dropped_tables(&self, tables: &[&str]) -> Result<(), DbError> {
+        match self.get_caching_strategy() {
+            CachingStrategy::None => (),
+            CachingStrategy::TruncateAll => self.delete_cache_entries_for_tables(&[]).await?,
+            CachingStrategy::Trigger | CachingStrategy::Truncate => {
+                self.delete_cache_entries_for_tables(tables).await?
+            }
+            CachingStrategy::Memory(_) => clear_mem_cache(&tables)?,
+        };
+        Ok(())
+    }
+
+    /// Delete the entries for the tables in the given list (independently of the current
+    /// caching strategy) from the cache table, if it exists. If the given table list is empty,
+    /// clear the entire cache.
+    async fn delete_cache_entries_for_tables(&self, tables: &[&str]) -> Result<(), DbError> {
+        if self.table_exists("cache").await? {
+            if tables.is_empty() {
+                self.execute(r#"DELETE FROM "cache""#, ()).await?;
+            } else {
+                let prefix = match self.kind() {
+                    DbKind::SQLite => "?",
+                    DbKind::PostgreSQL => "$",
+                };
+                for table in tables {
+                    let table = format!(r#"%{table}%"#);
+                    self.execute(
+                        &format!(r#"DELETE FROM "cache" WHERE "tables" LIKE {prefix}1"#),
+                        &[table],
+                    )
+                    .await?;
                 }
-                false => {
-                    let prefix = match self.kind() {
-                        DbKind::SQLite => "?",
-                        DbKind::PostgreSQL => "$",
-                    };
-                    for table in tables {
-                        let table = format!(r#"%{table}%"#);
-                        self.execute(
-                            &format!(r#"DELETE FROM "cache" WHERE "tables" LIKE {prefix}1"#),
-                            &[table],
-                        )
-                        .await?;
-                    }
-                    Ok(())
-                }
-            },
+            }
         }
+        Ok(())
     }
 
     /// Execute a SQL command, returning a vector of JSON rows. If the result of the command exists
@@ -911,19 +953,7 @@ pub trait DbQuery {
         };
 
         // Delete dirty entries from the cache in accordance with our caching strategy:
-        match self.get_caching_strategy() {
-            CachingStrategy::None => (),
-            CachingStrategy::TruncateAll => {
-                self.clear_cache_table(&[]).await?;
-            }
-            // We clear the cache also in the case of a trigger, since the trigger will not
-            // be triggered when we drop the table (it will, rather, be dropped along with the
-            // table)
-            CachingStrategy::Truncate | CachingStrategy::Trigger => {
-                self.clear_cache_table(&[&table]).await?;
-            }
-            CachingStrategy::Memory(_) => clear_mem_cache(&[&table])?,
-        };
+        self.clear_cache_for_dropped_tables(&[&table]).await?;
         Ok(())
     }
 }
@@ -980,13 +1010,15 @@ pub fn validate_table_name(table_name: &str) -> Result<String, DbError> {
 
 /// Parse the given string, representing a series of (semi-colon-separated) SQL commands,
 /// into their constituents and determine the tables that will be affected when the commands
-/// are executed, if any. Commands that may potentially affect tables are: INSERT, UPDATE,
-/// DELETE, and DROP TABLE. All other kinds of statements will be silently ignored. In
-/// particular, table modifications that occur within a CTE are not recognized by this
-/// function. Such table-modifying CTEs are supported by PostgreSQL (see
+/// are executed, if any. Two sets of tables are returned. The first contains the tables that
+/// are going to be edited (targets of commands like INSERT, UPDATE, DELETE, and TRUNCATE), the
+/// second contains tables that are going to be dropped (targets of a DROP TABLE command).
+/// All other kinds of statements will be silently ignored. In particular, table modifications
+/// that occur _within_ a CTE are not recognized by this function. Such table-modifying CTEs are
+/// supported by PostgreSQL (see
 /// <https://www.postgresql.org/docs/current/queries-with.html#QUERIES-WITH-MODIFYING>) but
 /// seemingly not by SQLite (see <https://sqlite.org/lang_with.html>).
-fn get_modified_tables(sql: &str) -> Result<HashSet<String>, DbError> {
+fn get_affected_tables(sql: &str) -> Result<(HashSet<String>, HashSet<String>), DbError> {
     // Validates that a given node is not an error node:
     let check_for_error = |node: &Node<'_>| -> Result<(), DbError> {
         if node.is_error() {
@@ -1036,7 +1068,8 @@ fn get_modified_tables(sql: &str) -> Result<HashSet<String>, DbError> {
     };
 
     // Determine the tables that will be modified:
-    let mut modified_tables = HashSet::new();
+    let mut edited_tables = HashSet::new();
+    let mut dropped_tables = HashSet::new();
     for statement in &statements {
         check_for_error(&statement)?;
         for instruction in statement.children(&mut tree.walk()) {
@@ -1062,7 +1095,7 @@ fn get_modified_tables(sql: &str) -> Result<HashSet<String>, DbError> {
                             &sql.to_string()[identifier.start_byte()..identifier.end_byte()],
                         )?
                     };
-                    modified_tables.insert(table_name);
+                    edited_tables.insert(table_name);
                 }
                 "update" => {
                     let table_name = {
@@ -1091,7 +1124,7 @@ fn get_modified_tables(sql: &str) -> Result<HashSet<String>, DbError> {
                             &sql.to_string()[identifier.start_byte()..identifier.end_byte()],
                         )?
                     };
-                    modified_tables.insert(table_name);
+                    edited_tables.insert(table_name);
                 }
                 "delete" => {
                     let table_name = {
@@ -1120,7 +1153,7 @@ fn get_modified_tables(sql: &str) -> Result<HashSet<String>, DbError> {
                             &sql.to_string()[identifier.start_byte()..identifier.end_byte()],
                         )?
                     };
-                    modified_tables.insert(table_name);
+                    edited_tables.insert(table_name);
                 }
                 "keyword_truncate" => {
                     let mut possible_next_word = instruction.next_sibling();
@@ -1136,7 +1169,7 @@ fn get_modified_tables(sql: &str) -> Result<HashSet<String>, DbError> {
                             let table = validate_table_name(
                                 &sql.to_string()[identifier.start_byte()..identifier.end_byte()],
                             )?;
-                            modified_tables.insert(table);
+                            edited_tables.insert(table);
                         }
                         possible_next_word = next_word.next_sibling();
                     }
@@ -1161,7 +1194,7 @@ fn get_modified_tables(sql: &str) -> Result<HashSet<String>, DbError> {
                             &sql.to_string()[identifier.start_byte()..identifier.end_byte()],
                         )?
                     };
-                    modified_tables.insert(table_name);
+                    dropped_tables.insert(table_name);
                 }
                 // Silently ignore all other kinds of instructions
                 _ => (),
@@ -1170,12 +1203,16 @@ fn get_modified_tables(sql: &str) -> Result<HashSet<String>, DbError> {
     }
 
     // Queries to the cache table itself are never cached:
-    let modified_tables = modified_tables
+    let edited_tables = edited_tables
+        .into_iter()
+        .filter(|table| *table != "cache")
+        .collect::<HashSet<_>>();
+    let dropped_tables = dropped_tables
         .into_iter()
         .filter(|table| *table != "cache")
         .collect::<HashSet<_>>();
 
-    Ok(modified_tables)
+    Ok((edited_tables, dropped_tables))
 }
 
 /// Retrieve the contents of the memory cache.
@@ -1277,14 +1314,13 @@ mod tests {
     async fn test_sql_parsing() {
         // Single statements, possibly with parameters:
 
-        let tables: Vec<_> =
-            get_modified_tables(&format!(r#"INSERT INTO "alpha" VALUES ($1, $2, $3)"#))
-                .unwrap()
-                .into_iter()
-                .collect();
-        assert_eq!(tables, ["alpha"]);
+        let (edited_tables, dropped_tables) =
+            get_affected_tables(&format!(r#"INSERT INTO "alpha" VALUES ($1, $2, $3)"#)).unwrap();
+        let edited_tables: Vec<_> = edited_tables.into_iter().collect();
+        assert_eq!(edited_tables, ["alpha"]);
+        assert_eq!(dropped_tables, [].into());
 
-        let tables: Vec<_> = get_modified_tables(
+        let (edited_tables, dropped_tables) = get_affected_tables(
             r#"WITH bar AS (SELECT * FROM alpha),
                         mar AS (SELECT * FROM beta)
                    INSERT INTO gamma
@@ -1292,19 +1328,18 @@ mod tests {
                    FROM alpha, beta
                    WHERE alpha.value = beta.value"#,
         )
-        .unwrap()
-        .into_iter()
-        .collect();
-        assert_eq!(tables, ["gamma"]);
+        .unwrap();
+        let edited_tables: Vec<_> = edited_tables.into_iter().collect();
+        assert_eq!(edited_tables, ["gamma"]);
+        assert_eq!(dropped_tables, [].into());
 
-        let tables: Vec<_> =
-            get_modified_tables(&format!(r#"UPDATE "delta" set bar = $1 WHERE bar = $2"#))
-                .unwrap()
-                .into_iter()
-                .collect();
-        assert_eq!(tables, ["delta"]);
+        let (edited_tables, dropped_tables) =
+            get_affected_tables(&format!(r#"UPDATE "delta" set bar = $1 WHERE bar = $2"#)).unwrap();
+        let edited_tables: Vec<_> = edited_tables.into_iter().collect();
+        assert_eq!(edited_tables, ["delta"]);
+        assert_eq!(dropped_tables, [].into());
 
-        let tables: Vec<_> = get_modified_tables(&format!(
+        let (edited_tables, dropped_tables) = get_affected_tables(&format!(
             r#"WITH bar AS (SELECT * FROM test),
                         mar AS (SELECT * FROM test)
                    UPDATE delta
@@ -1312,46 +1347,44 @@ mod tests {
                    FROM bar, mar
                    WHERE bar.value = $1 AND bar.value = mar.value"#,
         ))
-        .unwrap()
-        .into_iter()
-        .collect();
-        assert_eq!(tables, ["delta"]);
+        .unwrap();
+        let edited_tables: Vec<_> = edited_tables.into_iter().collect();
+        assert_eq!(edited_tables, ["delta"]);
+        assert_eq!(dropped_tables, [].into());
 
-        let tables: Vec<_> =
-            get_modified_tables(&format!(r#"DELETE FROM "epsilon" WHERE bar >= $1"#))
-                .unwrap()
-                .into_iter()
-                .collect();
-        assert_eq!(tables, ["epsilon"]);
+        let (edited_tables, dropped_tables) =
+            get_affected_tables(&format!(r#"DELETE FROM "epsilon" WHERE bar >= $1"#)).unwrap();
+        let edited_tables: Vec<_> = edited_tables.into_iter().collect();
+        assert_eq!(edited_tables, ["epsilon"]);
+        assert_eq!(dropped_tables, [].into());
 
-        let tables: Vec<_> = get_modified_tables(
+        let (edited_tables, dropped_tables) = get_affected_tables(
             r#"WITH bar AS (SELECT * FROM test),
                         mar AS (SELECT * FROM test)
                    DELETE FROM lambda WHERE value IN (SELECT value FROM bar)"#,
         )
-        .unwrap()
-        .into_iter()
-        .collect();
-        assert_eq!(tables, ["lambda"]);
+        .unwrap();
+        let edited_tables: Vec<_> = edited_tables.into_iter().collect();
+        assert_eq!(edited_tables, ["lambda"]);
+        assert_eq!(dropped_tables, [].into());
 
-        let tables: Vec<_> = get_modified_tables(r#"DROP TABLE "rho""#)
-            .unwrap()
-            .into_iter()
-            .collect();
-        assert_eq!(tables, ["rho"]);
+        let (edited_tables, dropped_tables) = get_affected_tables(r#"DROP TABLE "rho""#).unwrap();
+        let dropped_tables: Vec<_> = dropped_tables.into_iter().collect();
+        assert_eq!(dropped_tables, ["rho"]);
+        assert_eq!(edited_tables, [].into());
 
-        let tables: Vec<_> = get_modified_tables(r#"DROP TABLE IF EXISTS "phi" CASCADE"#)
-            .unwrap()
-            .into_iter()
-            .collect();
-        assert_eq!(tables, ["phi"]);
+        let (edited_tables, dropped_tables) =
+            get_affected_tables(r#"DROP TABLE IF EXISTS "phi" CASCADE"#).unwrap();
+        let dropped_tables: Vec<_> = dropped_tables.into_iter().collect();
+        assert_eq!(dropped_tables, ["phi"]);
+        assert_eq!(edited_tables, [].into());
 
-        let mut tables: Vec<_> = get_modified_tables("TRUNCATE TABLE mu, nu CASCADE")
-            .unwrap()
-            .into_iter()
-            .collect();
-        tables.sort();
-        assert_eq!(tables, ["mu", "nu"]);
+        let (edited_tables, dropped_tables) =
+            get_affected_tables("TRUNCATE TABLE mu, nu CASCADE").unwrap();
+        let mut edited_tables: Vec<_> = edited_tables.into_iter().collect();
+        edited_tables.sort();
+        assert_eq!(edited_tables, ["mu", "nu"]);
+        assert_eq!(dropped_tables, [].into());
 
         // Multiple statements, no parameters:
 
@@ -1393,13 +1426,15 @@ mod tests {
 
             DROP TABLE "sigma" CASCADE"#;
 
-        let mut tables: Vec<_> = get_modified_tables(&sql).unwrap().into_iter().collect();
-        tables.sort();
+        let (edited_tables, dropped_tables) = get_affected_tables(&sql).unwrap();
+        let mut edited_tables: Vec<_> = edited_tables.into_iter().collect();
+        let mut dropped_tables: Vec<_> = dropped_tables.into_iter().collect();
+        edited_tables.sort();
+        dropped_tables.sort();
         assert_eq!(
-            tables,
-            [
-                "alpha", "delta", "gamma", "lambda", "phi", "psi", "rho", "sigma",
-            ]
+            edited_tables,
+            ["alpha", "delta", "gamma", "lambda", "phi", "psi",]
         );
+        assert_eq!(dropped_tables, ["rho", "sigma",]);
     }
 }
