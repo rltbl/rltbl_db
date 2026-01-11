@@ -167,16 +167,16 @@ impl DbQuery for AnyPool {
         }
     }
 
-    async fn query(
+    async fn query_do_not_cache(
         &self,
         sql: &str,
         params: impl IntoParams + Send,
     ) -> Result<Vec<JsonRow>, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
-            AnyPool::Rusqlite(pool) => pool.query(sql, params).await,
+            AnyPool::Rusqlite(pool) => pool.query_do_not_cache(sql, params).await,
             #[cfg(feature = "tokio-postgres")]
-            AnyPool::TokioPostgres(pool) => pool.query(sql, params).await,
+            AnyPool::TokioPostgres(pool) => pool.query_do_not_cache(sql, params).await,
         }
     }
 

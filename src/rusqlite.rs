@@ -327,7 +327,7 @@ impl DbQuery for RusqlitePool {
                      ORDER BY "name""#
             .to_string();
 
-        for row in self.query(&sql, params![&table]).await? {
+        for row in self.query_do_not_cache(&sql, params![&table]).await? {
             match (
                 row.get("name")
                     .and_then(|name| name.as_str().and_then(|name| Some(name))),
@@ -355,7 +355,7 @@ impl DbQuery for RusqlitePool {
 
     /// Implements [DbQuery::primary_keys()] for SQLite.
     async fn primary_keys(&self, table: &str) -> Result<Vec<String>, DbError> {
-        self.query(
+        self.query_do_not_cache(
             r#"SELECT "name"
                FROM pragma_table_info(?1)
                WHERE "pk" > 0
@@ -403,8 +403,8 @@ impl DbQuery for RusqlitePool {
         }
     }
 
-    /// Implements [DbQuery::query()] for SQLite.
-    async fn query(
+    /// Implements [DbQuery::query_do_not_cache()] for SQLite.
+    async fn query_do_not_cache(
         &self,
         sql: &str,
         params: impl IntoParams + Send,
@@ -430,10 +430,6 @@ impl DbQuery for RusqlitePool {
             .map_err(|err| DbError::DatabaseError(err.to_string()))?
             .map_err(|err| DbError::DatabaseError(err.to_string()))?
         };
-        // Note that we must allow `conn` to go out of scope (alternately we could explicitly
-        // call drop(conn)) to ensure that the query is persisted to the db before clearing the
-        // cache:
-        self.clear_cache_for_affected_tables(sql).await?;
         Ok(rows)
     }
 
@@ -566,7 +562,7 @@ impl DbQuery for RusqlitePool {
     /// Implements [DbQuery::table_exists()] for SQLite.
     async fn table_exists(&self, table: &str) -> Result<bool, DbError> {
         match self
-            .query(
+            .query_do_not_cache(
                 r#"SELECT 1 FROM "sqlite_master"
                    WHERE "type" = 'table' AND "name" = ?1"#,
                 &[table],

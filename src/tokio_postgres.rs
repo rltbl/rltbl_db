@@ -307,7 +307,7 @@ impl DbQuery for TokioPostgresPool {
                ORDER BY "columns"."ordinal_position""#
         );
 
-        for row in self.query(&sql, params![&table]).await? {
+        for row in self.query_do_not_cache(&sql, params![&table]).await? {
             match (
                 row.get("column_name")
                     .and_then(|name| name.as_str().and_then(|name| Some(name))),
@@ -335,7 +335,7 @@ impl DbQuery for TokioPostgresPool {
 
     /// Implements [DbQuery::primary_keys()] for PostgreSQL.
     async fn primary_keys(&self, table: &str) -> Result<Vec<String>, DbError> {
-        self.query(
+        self.query_do_not_cache(
             r#"SELECT "kcu"."column_name"
                FROM "information_schema"."table_constraints" "tco"
                JOIN "information_schema"."key_column_usage" "kcu"
@@ -381,8 +381,8 @@ impl DbQuery for TokioPostgresPool {
         Ok(())
     }
 
-    /// Implements [DbQuery::query()] for PostgreSQL
-    async fn query(
+    /// Implements [DbQuery::query_do_not_cache()] for PostgreSQL.
+    async fn query_do_not_cache(
         &self,
         sql: &str,
         into_params: impl IntoParams + Send,
@@ -493,7 +493,6 @@ impl DbQuery for TokioPostgresPool {
             json_rows.push(json_row);
         }
 
-        self.clear_cache_for_affected_tables(sql).await?;
         Ok(json_rows)
     }
 
@@ -626,7 +625,7 @@ impl DbQuery for TokioPostgresPool {
     /// Implements [DbQuery::table_exists()] for PostgreSQL.
     async fn table_exists(&self, table: &str) -> Result<bool, DbError> {
         match self
-            .query(
+            .query_do_not_cache(
                 r#"SELECT 1
                    FROM "information_schema"."tables"
                    WHERE "table_type" LIKE '%TABLE'

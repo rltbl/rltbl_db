@@ -739,7 +739,7 @@ pub trait DbQuery {
         table: &str,
     ) -> impl Future<Output = Result<Vec<String>, DbError>> + Send;
 
-    /// Execute a SQL command, without a return value.
+    /// Execute a SQL command, returning nothing.
     async fn execute(&self, sql: &str, params: impl IntoParams + Send) -> Result<(), DbError> {
         let params = params.into_params();
         match params {
@@ -749,11 +749,36 @@ pub trait DbQuery {
         Ok(())
     }
 
+    /// Execute a SQL command, returning nothing, without updating the cache.
+    async fn execute_do_not_cache(
+        &self,
+        sql: &str,
+        params: impl IntoParams + Send,
+    ) -> Result<(), DbError> {
+        let params = params.into_params();
+        match params {
+            Params::None => self.query_do_not_cache(sql, ()).await?,
+            _ => self.query_do_not_cache(sql, params).await?,
+        };
+        Ok(())
+    }
+
     /// Sequentially execute a semicolon-delimited list of statements, without parameters.
     fn execute_batch(&self, sql: &str) -> impl Future<Output = Result<(), DbError>> + Send;
 
     /// Execute a SQL command, returning a vector of JSON rows.
-    fn query(
+    async fn query(
+        &self,
+        sql: &str,
+        params: impl IntoParams + Send,
+    ) -> Result<Vec<JsonRow>, DbError> {
+        let rows = self.query_do_not_cache(sql, params).await?;
+        self.clear_cache_for_affected_tables(sql).await?;
+        Ok(rows)
+    }
+
+    /// Execute a SQL command, returning a vector of JSON rows, without updating the cache.
+    fn query_do_not_cache(
         &self,
         sql: &str,
         params: impl IntoParams + Send,
@@ -943,11 +968,11 @@ pub trait DbQuery {
         // Drop the table:
         match self.kind() {
             DbKind::PostgreSQL => {
-                self.execute(&format!(r#"DROP TABLE IF EXISTS "{table}" CASCADE"#), ())
+                self.execute_do_not_cache(&format!(r#"DROP TABLE IF EXISTS "{table}" CASCADE"#), ())
                     .await?
             }
             DbKind::SQLite => {
-                self.execute(&format!(r#"DROP TABLE IF EXISTS "{table}""#), ())
+                self.execute_do_not_cache(&format!(r#"DROP TABLE IF EXISTS "{table}""#), ())
                     .await?
             }
         };
