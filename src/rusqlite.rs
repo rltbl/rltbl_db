@@ -181,7 +181,7 @@ pub struct RusqlitePool {
     /// When set to true, SQL statements sent to the [DbQuery::query()] and [DbQuery::execute()]
     /// functions will be parsed and if they will result in tables being edited and/or dropped,
     /// the cache will be maintained in accordance with the given [CachingStrategy].
-    implicit_query_caching: bool,
+    cache_aware_query: bool,
 }
 
 impl RusqlitePool {
@@ -194,7 +194,7 @@ impl RusqlitePool {
         Ok(Self {
             pool: pool,
             caching_strategy: CachingStrategy::None,
-            implicit_query_caching: false,
+            cache_aware_query: false,
         })
     }
 }
@@ -215,20 +215,20 @@ impl DbQuery for RusqlitePool {
         self.caching_strategy
     }
 
-    /// Implements [DbQuery::set_implicit_query_caching()] for SQLite.
-    fn set_implicit_query_caching(&mut self, flag: bool) {
-        self.implicit_query_caching = flag;
+    /// Implements [DbQuery::set_cache_aware_query()] for SQLite.
+    fn set_cache_aware_query(&mut self, flag: bool) {
+        self.cache_aware_query = flag;
     }
 
-    /// Implements [DbQuery::get_implicit_query_caching()] for SQLite.
-    fn get_implicit_query_caching(&self) -> bool {
-        self.implicit_query_caching
+    /// Implements [DbQuery::get_cache_aware_query()] for SQLite.
+    fn get_cache_aware_query(&self) -> bool {
+        self.cache_aware_query
     }
 
     /// Implements [DbQuery::ensure_cache_table_exists()] for SQLite.
     async fn ensure_cache_table_exists(&self) -> Result<(), DbError> {
         match self
-            .execute(
+            .execute_no_cache(
                 r#"CREATE TABLE IF NOT EXISTS "cache" (
                      "tables" TEXT,
                      "statement" TEXT,
@@ -261,9 +261,9 @@ impl DbQuery for RusqlitePool {
     async fn ensure_caching_triggers_exist(&self, tables: &[&str]) -> Result<(), DbError> {
         self.ensure_cache_table_exists().await?;
         for table in tables {
-            let num_triggers = self
-                .query_u64(
-                    r#"SELECT COUNT(1)
+            let rows: Vec<JsonRow> = self
+                .query_no_cache(
+                    r#"SELECT 1
                        FROM sqlite_master
                        WHERE type = 'trigger'
                          AND name IN (?1, ?2, ?3)"#,
@@ -276,7 +276,7 @@ impl DbQuery for RusqlitePool {
                 .await?;
 
             // Only recreate the triggers if they don't all already exist:
-            if num_triggers != 3 {
+            if rows.len() != 3 {
                 // Note that parameters are not allowed in trigger creation statements in SQLite.
                 self.execute_batch(&format!(
                     r#"DROP TRIGGER IF EXISTS "{table}_cache_after_insert";
@@ -342,7 +342,7 @@ impl DbQuery for RusqlitePool {
                      ORDER BY "name""#
             .to_string();
 
-        for row in self.query_do_not_cache(&sql, params![&table]).await? {
+        for row in self.query_no_cache(&sql, params![&table]).await? {
             match (
                 row.get("name")
                     .and_then(|name| name.as_str().and_then(|name| Some(name))),
@@ -370,7 +370,7 @@ impl DbQuery for RusqlitePool {
 
     /// Implements [DbQuery::primary_keys()] for SQLite.
     async fn primary_keys(&self, table: &str) -> Result<Vec<String>, DbError> {
-        self.query_do_not_cache(
+        self.query_no_cache(
             r#"SELECT "name"
                FROM pragma_table_info(?1)
                WHERE "pk" > 0
@@ -418,8 +418,8 @@ impl DbQuery for RusqlitePool {
         }
     }
 
-    /// Implements [DbQuery::query_do_not_cache()] for SQLite.
-    async fn query_do_not_cache(
+    /// Implements [DbQuery::query_no_cache()] for SQLite.
+    async fn query_no_cache(
         &self,
         sql: &str,
         params: impl IntoParams + Send,
@@ -577,7 +577,7 @@ impl DbQuery for RusqlitePool {
     /// Implements [DbQuery::table_exists()] for SQLite.
     async fn table_exists(&self, table: &str) -> Result<bool, DbError> {
         match self
-            .query_do_not_cache(
+            .query_no_cache(
                 r#"SELECT 1 FROM "sqlite_master"
                    WHERE "type" = 'table' AND "name" = ?1"#,
                 &[table],

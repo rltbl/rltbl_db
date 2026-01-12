@@ -113,21 +113,21 @@ impl DbQuery for AnyPool {
         }
     }
 
-    fn set_implicit_query_caching(&mut self, value: bool) {
+    fn set_cache_aware_query(&mut self, value: bool) {
         match self {
             #[cfg(feature = "rusqlite")]
-            AnyPool::Rusqlite(pool) => pool.set_implicit_query_caching(value),
+            AnyPool::Rusqlite(pool) => pool.set_cache_aware_query(value),
             #[cfg(feature = "tokio-postgres")]
-            AnyPool::TokioPostgres(pool) => pool.set_implicit_query_caching(value),
+            AnyPool::TokioPostgres(pool) => pool.set_cache_aware_query(value),
         }
     }
 
-    fn get_implicit_query_caching(&self) -> bool {
+    fn get_cache_aware_query(&self) -> bool {
         match self {
             #[cfg(feature = "rusqlite")]
-            AnyPool::Rusqlite(pool) => pool.get_implicit_query_caching(),
+            AnyPool::Rusqlite(pool) => pool.get_cache_aware_query(),
             #[cfg(feature = "tokio-postgres")]
-            AnyPool::TokioPostgres(pool) => pool.get_implicit_query_caching(),
+            AnyPool::TokioPostgres(pool) => pool.get_cache_aware_query(),
         }
     }
 
@@ -185,16 +185,16 @@ impl DbQuery for AnyPool {
         }
     }
 
-    async fn query_do_not_cache(
+    async fn query_no_cache(
         &self,
         sql: &str,
         params: impl IntoParams + Send,
     ) -> Result<Vec<JsonRow>, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
-            AnyPool::Rusqlite(pool) => pool.query_do_not_cache(sql, params).await,
+            AnyPool::Rusqlite(pool) => pool.query_no_cache(sql, params).await,
             #[cfg(feature = "tokio-postgres")]
-            AnyPool::TokioPostgres(pool) => pool.query_do_not_cache(sql, params).await,
+            AnyPool::TokioPostgres(pool) => pool.query_no_cache(sql, params).await,
         }
     }
 
@@ -1596,7 +1596,7 @@ mod tests {
         }
 
         pool.set_caching_strategy(strategy);
-        pool.set_implicit_query_caching(true);
+        pool.set_cache_aware_query(true);
         pool.drop_table("test_table_caching_1").await.unwrap();
         pool.drop_table("test_table_caching_2").await.unwrap();
         pool.execute_batch(
@@ -1792,49 +1792,48 @@ mod tests {
         );
     }
 
-    // This test is ignored by default. use `cargo test -- --ignored` or
-    // `cargo test -- --include-ignored` to run it.
+    // This test takes a few minutes to run and is ignored by default.
+    // Use `cargo test -- --ignored` or `cargo test -- --include-ignored` to run it.
     #[tokio::test]
     #[ignore]
     async fn test_caching_performance() {
         let runs = 10000;
+        let fail_after = 150;
+        let edit_rate = 100;
         #[cfg(feature = "rusqlite")]
-        perform_caching(":memory:", runs).await;
+        perform_caching(":memory:", runs, fail_after, edit_rate).await;
         #[cfg(feature = "tokio-postgres")]
-        perform_caching("postgresql:///rltbl_db", runs).await;
+        perform_caching("postgresql:///rltbl_db", runs, fail_after, edit_rate).await;
     }
 
-    async fn perform_caching(url: &str, runs: usize) {
+    async fn perform_caching(url: &str, runs: usize, fail_after: usize, edit_rate: usize) {
         let mut pool = AnyPool::connect(url).await.unwrap();
         let all_strategies = ["none", "truncate_all", "truncate", "trigger", "memory:1000"]
             .iter()
             .map(|strategy| CachingStrategy::from_str(strategy).unwrap())
             .collect::<Vec<_>>();
 
-        println!("Setting implicit query caching to false");
-        pool.set_implicit_query_caching(false);
+        pool.set_cache_aware_query(true);
+        println!(
+            "\nTesting caching performance for {} with cache_aware_query {}.",
+            pool.kind(),
+            match pool.get_cache_aware_query() {
+                true => "on",
+                false => "off",
+            }
+        );
         let mut times = BTreeMap::new();
         for strategy in &all_strategies {
-            println!("Setting caching strategy to {strategy}");
+            println!("Setting caching strategy to {strategy}.");
             pool.set_caching_strategy(&strategy);
-            let elapsed = perform_caching_detail(&pool, runs, 300, 100).await;
-            times.insert(format!("{strategy}_explicit"), elapsed);
-        }
-
-        println!("Setting implicit query caching to true");
-        pool.set_implicit_query_caching(true);
-        for strategy in &all_strategies {
-            println!("Setting caching strategy to {strategy}");
-            pool.set_caching_strategy(&strategy);
-            let elapsed = perform_caching_detail(&pool, runs, 300, 100).await;
-            times.insert(format!("{strategy}_implicit"), elapsed);
+            let elapsed = perform_caching_detail(&pool, runs, fail_after, edit_rate).await;
+            times.insert(format!("{strategy}"), elapsed);
         }
 
         println!("\nCaching times for {} (summary).", pool.kind());
         for (strategy, elapsed) in times.iter() {
-            println!("Strategy: {strategy}, elapsed time: {elapsed}");
+            println!("Strategy: {strategy}, elapsed time: {elapsed}s");
         }
-        println!("\n");
     }
 
     async fn perform_caching_detail(
@@ -1876,7 +1875,7 @@ mod tests {
             .await
             .unwrap();
 
-            // Add some values to the table:
+            // Add a few thousand values to the table:
             let mut values = vec![];
             for i in 0..5 {
                 for j in 0..random_between(2000, 4000, &mut -1) {
@@ -1901,7 +1900,7 @@ mod tests {
             let _ = pool
                 .cache(
                     &[select_table],
-                    &format!("SELECT foo, SUM(bar) FROM {select_table} GROUP BY foo"),
+                    &format!("SELECT foo, SUM(bar) FROM {select_table} GROUP BY foo ORDER BY foo"),
                     (),
                 )
                 .await
@@ -1922,7 +1921,7 @@ mod tests {
             }
 
             // A small sleep to prevent over-taxing the CPU:
-            thread::sleep(Duration::from_millis(2));
+            thread::sleep(Duration::from_millis(5));
             i += 1;
         }
         elapsed = now.elapsed().as_secs();

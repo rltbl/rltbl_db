@@ -107,7 +107,7 @@ fn extract_value(row: &Row, idx: usize) -> Result<JsonValue, DbError> {
 pub struct TokioPostgresPool {
     pool: Pool,
     caching_strategy: CachingStrategy,
-    implicit_query_caching: bool,
+    cache_aware_query: bool,
 }
 
 impl TokioPostgresPool {
@@ -129,7 +129,7 @@ impl TokioPostgresPool {
                 Ok(Self {
                     pool: pool,
                     caching_strategy: CachingStrategy::None,
-                    implicit_query_caching: false,
+                    cache_aware_query: false,
                 })
             }
             false => Err(DbError::ConnectError(format!(
@@ -155,20 +155,20 @@ impl DbQuery for TokioPostgresPool {
         self.caching_strategy
     }
 
-    /// Implements [DbQuery::set_implicit_query_caching()] for PostgreSQL.
-    fn set_implicit_query_caching(&mut self, flag: bool) {
-        self.implicit_query_caching = flag;
+    /// Implements [DbQuery::set_cache_aware_query()] for PostgreSQL.
+    fn set_cache_aware_query(&mut self, flag: bool) {
+        self.cache_aware_query = flag;
     }
 
-    /// Implements [DbQuery::get_implicit_query_caching()] for PostgreSQL.
-    fn get_implicit_query_caching(&self) -> bool {
-        self.implicit_query_caching
+    /// Implements [DbQuery::get_cache_aware_query()] for PostgreSQL.
+    fn get_cache_aware_query(&self) -> bool {
+        self.cache_aware_query
     }
 
     /// Implements [DbQuery::ensure_cache_table_exists()] for PostgreSQL.
     async fn ensure_cache_table_exists(&self) -> Result<(), DbError> {
         match self
-            .execute(
+            .execute_no_cache(
                 r#"CREATE TABLE IF NOT EXISTS "cache" (
                      "tables" TEXT,
                      "statement" TEXT,
@@ -201,9 +201,9 @@ impl DbQuery for TokioPostgresPool {
     async fn ensure_caching_triggers_exist(&self, tables: &[&str]) -> Result<(), DbError> {
         self.ensure_cache_table_exists().await?;
         for table in tables {
-            let num_triggers = self
-                .query_u64(
-                    r#"SELECT COUNT(1)
+            let rows: Vec<JsonRow> = self
+                .query_no_cache(
+                    r#"SELECT 1
                        FROM information_schema.triggers
                        WHERE trigger_name IN ($1, $2, $3)
                          AND "trigger_schema" IN (
@@ -220,7 +220,7 @@ impl DbQuery for TokioPostgresPool {
                 .await?;
 
             // Only recreate the triggers if they don't all already exist:
-            if num_triggers != 3 {
+            if rows.len() != 3 {
                 // Note that parameters are not allowed in trigger creation statements in PostgreSQL.
                 self.execute_batch(&format!(
                     r#"CREATE OR REPLACE FUNCTION "clean_cache_for_{table}"()
@@ -319,7 +319,7 @@ impl DbQuery for TokioPostgresPool {
                ORDER BY "columns"."ordinal_position""#
         );
 
-        for row in self.query_do_not_cache(&sql, params![&table]).await? {
+        for row in self.query_no_cache(&sql, params![&table]).await? {
             match (
                 row.get("column_name")
                     .and_then(|name| name.as_str().and_then(|name| Some(name))),
@@ -347,7 +347,7 @@ impl DbQuery for TokioPostgresPool {
 
     /// Implements [DbQuery::primary_keys()] for PostgreSQL.
     async fn primary_keys(&self, table: &str) -> Result<Vec<String>, DbError> {
-        self.query_do_not_cache(
+        self.query_no_cache(
             r#"SELECT "kcu"."column_name"
                FROM "information_schema"."table_constraints" "tco"
                JOIN "information_schema"."key_column_usage" "kcu"
@@ -393,8 +393,8 @@ impl DbQuery for TokioPostgresPool {
         Ok(())
     }
 
-    /// Implements [DbQuery::query_do_not_cache()] for PostgreSQL.
-    async fn query_do_not_cache(
+    /// Implements [DbQuery::query_no_cache()] for PostgreSQL.
+    async fn query_no_cache(
         &self,
         sql: &str,
         into_params: impl IntoParams + Send,
@@ -637,7 +637,7 @@ impl DbQuery for TokioPostgresPool {
     /// Implements [DbQuery::table_exists()] for PostgreSQL.
     async fn table_exists(&self, table: &str) -> Result<bool, DbError> {
         match self
-            .query_do_not_cache(
+            .query_no_cache(
                 r#"SELECT 1
                    FROM "information_schema"."tables"
                    WHERE "table_type" LIKE '%TABLE'

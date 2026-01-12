@@ -13,7 +13,9 @@ use std::{
     fmt::Display,
     future::Future,
     str::FromStr,
-    sync::Mutex,
+    sync::{Mutex, MutexGuard},
+    thread,
+    time::Duration,
 };
 use tree_sitter::{Node, Parser};
 use tree_sitter_sequel::LANGUAGE as SQL_LANGUAGE;
@@ -33,8 +35,13 @@ lazy_static! {
     /// The regex used to match [valid database table names](VALID_TABLE_NAME_MATCH_STR).
     static ref VALID_TABLE_NAME_REGEX: Regex = Regex::new(VALID_TABLE_NAME_MATCH_STR).unwrap();
 
-    /// The in-memory cache.
-    static ref MEMORY_CACHE: Mutex<HashMap<MemoryCacheKey, Vec<JsonRow>>> = Mutex::new(HashMap::new());
+    /// The in-memory query cache, used by [CachingStrategy::Memory].
+    static ref MEMORY_CACHE: Mutex<HashMap<MemoryCacheKey, Vec<JsonRow>>>
+        = Mutex::new(HashMap::new());
+
+    /// The in-memory meta cache. It holds a set of things known to exist.
+    static ref MEMORY_META_CACHE: Mutex<HashSet<String>>
+        = Mutex::new(HashSet::new());
 }
 
 /// Defines the supported database kinds.
@@ -472,11 +479,14 @@ pub trait DbQuery {
     /// Get the current caching strategy.
     fn get_caching_strategy(&self) -> CachingStrategy;
 
-    /// Turn implicit query caching on.
-    fn set_implicit_query_caching(&mut self, value: bool);
+    /// When turned on, and the current [CachingStrategy] is not [None](CachingStrategy::None),
+    /// SQL commands executed through the API will be automatically checked to see if they
+    /// involve edits and/or drops of database tables. If they do then the cache will be
+    /// automatically updated in accordance with the current [CachingStrategy].
+    fn set_cache_aware_query(&mut self, value: bool);
 
-    /// Returns true if implicit query caching is currently on.
-    fn get_implicit_query_caching(&self) -> bool;
+    /// Returns true if the cache_aware_query option is currently on.
+    fn get_cache_aware_query(&self) -> bool;
 
     /// Ensure that the cache table exists
     fn ensure_cache_table_exists(&self) -> impl Future<Output = Result<(), DbError>> + Send;
@@ -552,6 +562,16 @@ pub trait DbQuery {
             }
             CachingStrategy::Memory(_) => clear_mem_cache(&tables)?,
         };
+
+        // Indicate that any triggers for these tables no longer exist.
+        let mut meta_cache = get_meta_cache()?;
+        for table in tables {
+            if *table == "cache" {
+                meta_cache.remove("cache_table");
+            } else {
+                meta_cache.remove(&format!("{table}_triggers"));
+            }
+        }
         Ok(())
     }
 
@@ -622,7 +642,7 @@ pub trait DbQuery {
                 let cache_params = &["[", "]", &tables_param, sql, &params_param];
 
                 let strings = {
-                    let rows = self.query_do_not_cache(&cache_sql, cache_params).await?;
+                    let rows = self.query_no_cache(&cache_sql, cache_params).await?;
                     let strings = rows
                         .iter()
                         .map(|row| match row.values().nth(0) {
@@ -646,7 +666,7 @@ pub trait DbQuery {
                         Ok(json_rows)
                     }
                     None => {
-                        let json_rows = self.query_do_not_cache(sql, params).await?;
+                        let json_rows = self.query_no_cache(sql, params).await?;
                         let json_rows_content = json!(json_rows).to_string();
                         let insert_sql = format!(
                             r#"INSERT INTO "cache"
@@ -654,8 +674,7 @@ pub trait DbQuery {
                                VALUES ({prefix}1, {prefix}2, {prefix}3, {prefix}4)"#
                         );
                         let insert_params = [&tables_param, sql, &params_param, &json_rows_content];
-                        self.execute_do_not_cache(&insert_sql, &insert_params)
-                            .await?;
+                        self.execute_no_cache(&insert_sql, &insert_params).await?;
                         Ok(json_rows)
                     }
                 }
@@ -673,12 +692,7 @@ pub trait DbQuery {
                 parameters: format!("{params:?}"),
             };
             let cached_rows = {
-                let cache = match MEMORY_CACHE.try_lock() {
-                    Ok(cache) => cache,
-                    Err(err) => {
-                        return Err(DbError::ConnectError(format!("Error locking cache: {err}")));
-                    }
-                };
+                let cache = get_memory_cache()?;
                 match cache.get(&mem_key) {
                     Some(json_rows) => Some(json_rows.to_vec()),
                     None => None,
@@ -688,14 +702,7 @@ pub trait DbQuery {
                 Some(json_rows) => Ok(json_rows),
                 None => {
                     let json_rows = self.query(sql, params).await?;
-                    let mut cache = match MEMORY_CACHE.try_lock() {
-                        Ok(cache) => cache,
-                        Err(err) => {
-                            return Err(DbError::ConnectError(format!(
-                                "Error locking cache: {err}"
-                            )));
-                        }
-                    };
+                    let mut cache = get_memory_cache()?;
                     let mut keys = cache.keys().map(|key| key.clone()).collect::<Vec<_>>();
                     // If the number of keys exceeds the allowed cache size, remove any extra keys
                     // at random.
@@ -718,11 +725,30 @@ pub trait DbQuery {
         match self.get_caching_strategy() {
             CachingStrategy::None => self.query(sql, params).await,
             CachingStrategy::TruncateAll | CachingStrategy::Truncate => {
-                self.ensure_cache_table_exists().await?;
+                let cache_table_exists = match get_meta_cache()?.get("cache_table") {
+                    Some(_) => true,
+                    None => false,
+                };
+                if !cache_table_exists {
+                    self.ensure_cache_table_exists().await?;
+                    let mut cache = get_meta_cache()?;
+                    cache.insert("cache_table".to_string());
+                }
                 db_cache(tables, sql, &params.into_params()).await
             }
             CachingStrategy::Trigger => {
-                self.ensure_caching_triggers_exist(tables).await?;
+                for table in tables {
+                    let table_triggers = format!("{table}_triggers");
+                    let table_triggers_exist = match get_meta_cache()?.get(&table_triggers) {
+                        Some(_) => true,
+                        None => false,
+                    };
+                    if !table_triggers_exist {
+                        self.ensure_caching_triggers_exist(&[table]).await?;
+                        let mut cache = get_meta_cache()?;
+                        cache.insert(table_triggers);
+                    }
+                }
                 db_cache(tables, sql, &params.into_params()).await
             }
             CachingStrategy::Memory(cache_size) => {
@@ -768,16 +794,17 @@ pub trait DbQuery {
         Ok(())
     }
 
-    /// Execute a SQL command, returning nothing, without updating the cache.
-    async fn execute_do_not_cache(
+    /// Execute a SQL command, returning nothing, without updating the cache, regardless of
+    /// whether cache_aware_query option (see [DbQuery::set_cache_aware_query()]) has been set.
+    async fn execute_no_cache(
         &self,
         sql: &str,
         params: impl IntoParams + Send,
     ) -> Result<(), DbError> {
         let params = params.into_params();
         match params {
-            Params::None => self.query_do_not_cache(sql, ()).await?,
-            _ => self.query_do_not_cache(sql, params).await?,
+            Params::None => self.query_no_cache(sql, ()).await?,
+            _ => self.query_no_cache(sql, params).await?,
         };
         Ok(())
     }
@@ -791,15 +818,17 @@ pub trait DbQuery {
         sql: &str,
         params: impl IntoParams + Send,
     ) -> Result<Vec<JsonRow>, DbError> {
-        let rows = self.query_do_not_cache(sql, params).await?;
-        if self.get_implicit_query_caching() {
+        let rows = self.query_no_cache(sql, params).await?;
+        if self.get_cache_aware_query() {
             self.clear_cache_for_affected_tables(sql).await?;
         }
         Ok(rows)
     }
 
-    /// Execute a SQL command, returning a vector of JSON rows, without updating the cache.
-    fn query_do_not_cache(
+    /// Execute a SQL command, returning a vector of JSON rows, without updating the cache,
+    /// regardless of whether the cache_aware_query option (see [DbQuery::set_cache_aware_query()])
+    /// has been set.
+    fn query_no_cache(
         &self,
         sql: &str,
         params: impl IntoParams + Send,
@@ -989,11 +1018,11 @@ pub trait DbQuery {
         // Drop the table:
         match self.kind() {
             DbKind::PostgreSQL => {
-                self.execute_do_not_cache(&format!(r#"DROP TABLE IF EXISTS "{table}" CASCADE"#), ())
+                self.execute_no_cache(&format!(r#"DROP TABLE IF EXISTS "{table}" CASCADE"#), ())
                     .await?
             }
             DbKind::SQLite => {
-                self.execute_do_not_cache(&format!(r#"DROP TABLE IF EXISTS "{table}""#), ())
+                self.execute_no_cache(&format!(r#"DROP TABLE IF EXISTS "{table}""#), ())
                     .await?
             }
         };
@@ -1248,12 +1277,9 @@ fn get_affected_tables(sql: &str) -> Result<(HashSet<String>, HashSet<String>), 
         }
     }
 
-    // Queries to the cache table itself are never cached:
+    // Edits of the cache table itself are never cached so we do not need to report them.
+    // However we do report a drop of the cache.
     let edited_tables = edited_tables
-        .into_iter()
-        .filter(|table| *table != "cache")
-        .collect::<HashSet<_>>();
-    let dropped_tables = dropped_tables
         .into_iter()
         .filter(|table| *table != "cache")
         .collect::<HashSet<_>>();
@@ -1261,24 +1287,62 @@ fn get_affected_tables(sql: &str) -> Result<(HashSet<String>, HashSet<String>), 
     Ok((edited_tables, dropped_tables))
 }
 
-/// Retrieve the contents of the memory cache.
-pub fn get_memory_cache_contents() -> Result<HashMap<MemoryCacheKey, Vec<JsonRow>>, DbError> {
-    match MEMORY_CACHE.try_lock() {
-        Ok(cache) => Ok(cache.clone()),
-        Err(err) => {
-            return Err(DbError::ConnectError(format!("Error locking cache: {err}")));
+/// Retrieve the in-memory [MEMORY_META_CACHE].
+fn get_meta_cache<'a>() -> Result<MutexGuard<'a, HashSet<String>>, DbError> {
+    let max_attempts = 20;
+    let mut remaining_attempts = max_attempts;
+    let mut meta_cache = MEMORY_META_CACHE.try_lock();
+    while let Err(err) = meta_cache {
+        meta_cache = MEMORY_META_CACHE.try_lock();
+        if let Ok(_) = meta_cache {
+            break;
+        }
+        remaining_attempts -= 1;
+        if remaining_attempts == 0 {
+            return Err(DbError::ConnectError(format!(
+                "Error locking cache: {err} (retried {max_attempts} times)"
+            )));
+        } else {
+            thread::sleep(Duration::from_millis(5));
         }
     }
+    let meta_cache = meta_cache.unwrap();
+    Ok(meta_cache)
+}
+
+/// Retrieve the in-memory [MEMORY_CACHE].
+fn get_memory_cache<'a>() -> Result<MutexGuard<'a, HashMap<MemoryCacheKey, Vec<JsonRow>>>, DbError>
+{
+    let max_attempts = 20;
+    let mut remaining_attempts = max_attempts;
+    let mut memory_cache = MEMORY_CACHE.try_lock();
+    while let Err(err) = memory_cache {
+        memory_cache = MEMORY_CACHE.try_lock();
+        if let Ok(_) = memory_cache {
+            break;
+        }
+        remaining_attempts -= 1;
+        if remaining_attempts == 0 {
+            return Err(DbError::ConnectError(format!(
+                "Error locking cache: {err} (retried {max_attempts} times)"
+            )));
+        } else {
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
+    let memory_cache = memory_cache.unwrap();
+    Ok(memory_cache)
+}
+
+/// Retrieve a copy of the contents of the memory cache.
+pub fn get_memory_cache_contents() -> Result<HashMap<MemoryCacheKey, Vec<JsonRow>>, DbError> {
+    let cache = get_memory_cache()?;
+    Ok(cache.clone())
 }
 
 /// Clear the memory cache.
 pub fn clear_mem_cache(tables: &[&str]) -> Result<(), DbError> {
-    let mut cache = match MEMORY_CACHE.try_lock() {
-        Ok(cache) => cache,
-        Err(err) => {
-            return Err(DbError::ConnectError(format!("Error locking cache: {err}")));
-        }
-    };
+    let mut cache = get_memory_cache()?;
     let keys = cache
         .keys()
         .map(|k| k)
