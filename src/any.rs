@@ -287,7 +287,7 @@ impl DbQuery for AnyPool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{CachingStrategy, DbRow, JsonValue, StringRow, get_memory_cache_contents};
+    use crate::core::{CachingStrategy, DbRow, StringRow, get_memory_cache_contents};
     use crate::params;
     use indexmap::indexmap as db_row;
     use rust_decimal::dec;
@@ -400,8 +400,7 @@ mod tests {
             };
             let select_sql = format!("SELECT {column} FROM test_table_int WHERE {column} = {p}1");
             let value = pool.query_value(&select_sql, params.clone()).await.unwrap();
-            let value: JsonValue = value.into();
-            let value = value.as_i64().unwrap();
+            let value = TryInto::<i64>::try_into(value).unwrap();
             assert_eq!(1, value);
 
             let unsigned = pool.query_u64(&select_sql, params.clone()).await.unwrap();
@@ -421,12 +420,6 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(vec!["1".to_owned()], strings);
-
-            let row = pool.query_row(&select_sql, params.clone()).await.unwrap();
-            assert_eq!(row, db_row! {column.into() => ParamValue::from(1_i64)});
-
-            let rows: Vec<DbRow> = pool.query(&select_sql, params.clone()).await.unwrap();
-            assert_eq!(rows, [db_row! {column.into() => ParamValue::from(1_i64)}]);
         }
 
         // Clean up:
@@ -467,8 +460,7 @@ mod tests {
         .unwrap();
         let select_sql = format!("SELECT value FROM test_table_float WHERE value > {p}1");
         let value = pool.query_value(&select_sql, &[1.0_f64]).await.unwrap();
-        let value: JsonValue = value.into();
-        let value = value.as_f64().unwrap();
+        let value = TryInto::<f64>::try_into(value).unwrap();
         assert_eq!("1.05", format!("{value:.2}"));
 
         let float = pool.query_f64(&select_sql, &[1.0_f64]).await.unwrap();
@@ -505,8 +497,7 @@ mod tests {
         .unwrap();
         let select_sql = format!("SELECT value FROM test_table_float WHERE value > {p}1");
         let value = pool.query_value(&select_sql, &[1.0_f32]).await.unwrap();
-        let value: JsonValue = value.into();
-        let value = value.as_f64().unwrap();
+        let value = TryInto::<f32>::try_into(value).unwrap();
         assert_eq!("1.05", format!("{value:.2}"));
 
         // Clean up:

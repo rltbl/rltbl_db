@@ -3,7 +3,7 @@
 use crate::{
     core::{
         CachingStrategy, ColumnMap, DbError, DbKind, DbQuery, DbRow, FromDbRows, IntoDbRows,
-        IntoParams, JsonRow, JsonValue, ParamValue, Params, validate_table_name,
+        IntoParams, ParamValue, Params, validate_table_name,
     },
     params,
     shared::{EditType, edit},
@@ -17,7 +17,8 @@ use deadpool_sqlite::{
         types::{Null, ValueRef},
     },
 };
-use serde_json::json;
+use rust_decimal::Decimal;
+use std::str::from_utf8;
 
 /// The [maximum number of parameters](https://www.sqlite.org/limits.html#max_variable_number)
 /// that can be bound to a SQLite query
@@ -27,7 +28,7 @@ static MAX_PARAMS_SQLITE: usize = 32766;
 fn query_prepared(
     stmt: &mut Statement<'_>,
     params: impl IntoParams + Send,
-) -> Result<Vec<JsonRow>, DbError> {
+) -> Result<Vec<DbRow>, DbError> {
     match params.into_params() {
         Params::None => (),
         Params::Positional(params) => {
@@ -135,39 +136,41 @@ fn query_prepared(
     let results = stmt
         .raw_query()
         .map(|row| {
-            let mut json_row = JsonRow::new();
+            let mut db_row = DbRow::new();
             for column in &columns {
                 let column_name = &column.name;
                 let column_type = &column.datatype;
                 let value = row.get_ref(column_name.as_str())?;
                 let value = match value {
-                    ValueRef::Null => JsonValue::Null,
+                    ValueRef::Null => ParamValue::Null,
                     ValueRef::Integer(value) => match column_type {
                         Some(ctype) if ctype.to_lowercase() == "bool" => {
-                            JsonValue::Bool(value != 0)
+                            ParamValue::Boolean(value != 0)
                         }
                         // The remaining cases are (a) the column's datatype is integer, and
                         // (b) the column is an expression. In the latter case it doesn't seem
                         // possible to get the datatype of the expression from the metadata.
                         // So the only thing to do here is just to convert the value
-                        // to JSON using the default method, and since we already know that it
-                        // is an integer, the result of the conversion will be a JSON number.
-                        _ => JsonValue::from(value),
+                        // to using the default method, and since we already know that it
+                        // is an integer, the result of the conversion will be a number.
+                        _ => ParamValue::from(value),
                     },
-                    ValueRef::Real(value) => JsonValue::from(value),
+                    ValueRef::Real(value) => ParamValue::from(value),
                     ValueRef::Text(value) | ValueRef::Blob(value) => match column_type {
                         Some(ctype) if ctype.to_lowercase() == "numeric" => {
-                            json!(value)
+                            let value = from_utf8(value).unwrap_or_default();
+                            let value = value.parse::<Decimal>().unwrap();
+                            ParamValue::Numeric(value)
                         }
                         _ => {
-                            let value = std::str::from_utf8(value).unwrap_or_default();
-                            JsonValue::String(value.to_string())
+                            let value = from_utf8(value).unwrap_or_default();
+                            ParamValue::Text(value.to_string())
                         }
                     },
                 };
-                json_row.insert(column_name.to_string(), value);
+                db_row.insert(column_name.to_string(), value);
             }
-            Ok(json_row)
+            Ok(db_row)
         })
         .collect::<Vec<_>>();
     results.map_err(|err| DbError::DatabaseError(err.to_string()))

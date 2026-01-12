@@ -150,6 +150,82 @@ impl Into<String> for ParamValue {
     }
 }
 
+impl TryInto<u64> for ParamValue {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<u64, DbError> {
+        match self {
+            ParamValue::SmallInteger(number) => {
+                Ok(u64::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
+            }
+            ParamValue::Integer(number) => {
+                Ok(u64::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
+            }
+            ParamValue::BigInteger(number) => {
+                Ok(u64::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
+            }
+            _ => Err(DbError::InputError(format!(
+                "Not an unsigned integer: {self:?}"
+            ))),
+        }
+    }
+}
+
+impl TryInto<i64> for ParamValue {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<i64, DbError> {
+        match self {
+            ParamValue::SmallInteger(number) => {
+                Ok(i64::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
+            }
+            ParamValue::Integer(number) => {
+                Ok(i64::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
+            }
+            ParamValue::BigInteger(number) => {
+                Ok(i64::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
+            }
+            _ => Err(DbError::InputError(format!("Not an integer: {self:?}"))),
+        }
+    }
+}
+
+impl TryInto<f64> for ParamValue {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<f64, DbError> {
+        match self {
+            ParamValue::Real(number) => {
+                Ok(f64::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
+            }
+            ParamValue::BigReal(number) => {
+                Ok(f64::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
+            }
+            ParamValue::Numeric(number) => {
+                Ok(f64::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
+            }
+            _ => Err(DbError::InputError(format!("Not an integer: {self:?}"))),
+        }
+    }
+}
+
+impl TryInto<f32> for ParamValue {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<f32, DbError> {
+        match self {
+            ParamValue::Real(number) => {
+                Ok(f32::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
+            }
+            ParamValue::BigReal(number) => Ok(number as f32),
+            ParamValue::Numeric(number) => {
+                Ok(f32::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
+            }
+            _ => Err(DbError::InputError(format!("Not an integer: {self:?}"))),
+        }
+    }
+}
+
 impl Into<String> for &ParamValue {
     fn into(self) -> String {
         self.clone().into()
@@ -819,7 +895,7 @@ pub trait DbQuery {
         }
     }
 
-    /// Execute a SQL command, returning a vector of JSON rows. If the result of the command exists
+    /// Execute a SQL command, returning a vector of rows. If the result of the command exists
     /// in the cache, get the value from it instead of from the table(s) actually mentioned in the
     /// command, using the given [CachingStrategy].
     async fn cache<T: FromDbRows>(
@@ -883,7 +959,7 @@ pub trait DbQuery {
                                VALUES ({prefix}1, {prefix}2, {prefix}3, {prefix}4)"#
                         );
                         let insert_params = [&tables_param, sql, &params_param, &json_rows_content];
-                        let _: Vec<DbRow> = self.query(&insert_sql, &insert_params).await?;
+                        self.execute(&insert_sql, &insert_params).await?;
                         Ok(db_rows)
                     }
                 }
@@ -973,18 +1049,6 @@ pub trait DbQuery {
     /// parse the string into the right ParamValue.
     fn parse(&self, sql_type: &str, value: &str) -> Result<ParamValue, DbError>;
 
-    /// Given a SQL type for this database and a JSON Value,
-    /// convert the Value into the right ParamValue.
-    fn convert_json(&self, sql_type: &str, value: &JsonValue) -> Result<ParamValue, DbError> {
-        match value {
-            serde_json::Value::Null => Ok(ParamValue::Null),
-            _ => {
-                let string = json_value_to_string(value);
-                self.parse(sql_type, &string)
-            }
-        }
-    }
-
     /// Given a table, return a map from column names to column SQL types.
     fn columns(&self, table: &str) -> impl Future<Output = Result<ColumnMap, DbError>> + Send;
 
@@ -1008,14 +1072,14 @@ pub trait DbQuery {
     /// Sequentially execute a semicolon-delimited list of statements, without parameters.
     fn execute_batch(&self, sql: &str) -> impl Future<Output = Result<(), DbError>> + Send;
 
-    /// Execute a SQL command, returning a vector of JSON rows.
+    /// Execute a SQL command, returning a vector of rows.
     fn query<T: FromDbRows>(
         &self,
         sql: &str,
         params: impl IntoParams + Send,
     ) -> impl Future<Output = Result<T, DbError>> + Send;
 
-    /// Execute a SQL command, returning a single JSON row.
+    /// Execute a SQL command, returning a single row.
     async fn query_row(&self, sql: &str, params: impl IntoParams + Send) -> Result<DbRow, DbError> {
         let rows: Vec<DbRow> = self.query(&sql, params).await?;
         if rows.len() > 1 {
@@ -1029,7 +1093,7 @@ pub trait DbQuery {
         }
     }
 
-    /// Execute a SQL command, returning a single JSON value.
+    /// Execute a SQL command, returning a single value.
     async fn query_value(
         &self,
         sql: &str,
@@ -1097,32 +1161,23 @@ pub trait DbQuery {
 
     /// Execute a SQL command, returning a single unsigned integer.
     async fn query_u64(&self, sql: &str, params: impl IntoParams + Send) -> Result<u64, DbError> {
-        let value: JsonValue = self.query_value(sql, params).await?.into();
-        let value = value
-            .as_u64()
-            .ok_or(DbError::DatatypeError(format!("Not a u64: {value}")))?;
-        Ok(value)
+        let value = self.query_value(sql, params).await?;
+        Ok(value.try_into()?)
     }
 
     /// Execute a SQL command, returning a single signed integer.
     async fn query_i64(&self, sql: &str, params: impl IntoParams + Send) -> Result<i64, DbError> {
-        let value: JsonValue = self.query_value(sql, params).await?.into();
-        let value = value
-            .as_i64()
-            .ok_or(DbError::DatatypeError(format!("Not an i64: {value}")))?;
-        Ok(value)
+        let value = self.query_value(sql, params).await?;
+        Ok(value.try_into()?)
     }
 
     /// Execute a SQL command, returning a single float.
     async fn query_f64(&self, sql: &str, params: impl IntoParams + Send) -> Result<f64, DbError> {
-        let value: JsonValue = self.query_value(sql, params).await?.into();
-        let value = value
-            .as_f64()
-            .ok_or(DbError::DatatypeError(format!("Not an f64: {value}")))?;
-        Ok(value)
+        let value = self.query_value(sql, params).await?;
+        Ok(value.try_into()?)
     }
 
-    /// Insert JSON rows into the given table. If an input row does not have a key for a column,
+    /// Insert rows into the given table. If an input row does not have a key for a column,
     /// use NULL as the value of that column when inserting the row to the table.
     fn insert(
         &self,
@@ -1142,7 +1197,7 @@ pub trait DbQuery {
         returning: &[&str],
     ) -> impl Future<Output = Result<T, DbError>>;
 
-    /// Update the given table using the given JSON rows. The table should have a primary key
+    /// Update the given table using the given rows. The table should have a primary key
     /// and any columns included in the primary key should be present within each input row.
     /// The primary key column values will be used as a way of identifying the rows to update,
     /// while the other columns in the row will be updated to the given new values.
@@ -1221,29 +1276,6 @@ pub trait DbQuery {
         };
         Ok(())
     }
-}
-
-/// Convert a JSON Value to a String,
-/// without quoting for JSON Value::String,
-/// and treating JSON Value::Null as "NULL".
-pub fn json_value_to_string(value: &JsonValue) -> String {
-    match value {
-        JsonValue::String(string) => string.to_string(),
-        JsonValue::Null => "NULL".to_string(),
-        _ => value.to_string(),
-    }
-}
-
-/// Convert a row of JSON Values to a row of Strings.
-pub fn json_row_to_string_row(row: &JsonRow) -> StringRow {
-    row.iter()
-        .map(|(key, value)| (key.clone(), json_value_to_string(value)))
-        .collect()
-}
-
-/// Convert a vector of JSON rows to a vector of String rows.
-pub fn json_rows_to_string_rows(rows: &[JsonRow]) -> Vec<StringRow> {
-    rows.iter().map(|row| json_row_to_string_row(row)).collect()
 }
 
 /// Convert a [DbRow] into a [StringRow]

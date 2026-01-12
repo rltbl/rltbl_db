@@ -3,7 +3,7 @@
 use crate::{
     core::{
         CachingStrategy, ColumnMap, DbError, DbKind, DbQuery, DbRow, FromDbRows, IntoDbRows,
-        IntoParams, JsonValue, ParamValue, Params, validate_table_name,
+        IntoParams, ParamValue, Params, validate_table_name,
     },
     params,
     shared::{EditType, edit},
@@ -24,7 +24,7 @@ use tokio_postgres::{
 pub static MAX_PARAMS_POSTGRES: usize = 32765;
 
 /// Extracts the value at the given index from the given [Row].
-fn extract_value(row: &Row, idx: usize) -> Result<JsonValue, DbError> {
+fn extract_value(row: &Row, idx: usize) -> Result<ParamValue, DbError> {
     let column = &row.columns()[idx];
     match *column.type_() {
         Type::TEXT | Type::VARCHAR | Type::NAME => match row
@@ -32,51 +32,51 @@ fn extract_value(row: &Row, idx: usize) -> Result<JsonValue, DbError> {
             .map_err(|err| DbError::DataError(err.to_string()))?
         {
             Some(value) => Ok(value.into()),
-            None => Ok(JsonValue::Null),
+            None => Ok(ParamValue::Null),
         },
         Type::INT2 => match row
             .try_get::<usize, Option<i16>>(idx)
             .map_err(|err| DbError::DataError(err.to_string()))?
         {
             Some(value) => Ok(value.into()),
-            None => Ok(JsonValue::Null),
+            None => Ok(ParamValue::Null),
         },
         Type::INT4 => match row
             .try_get::<usize, Option<i32>>(idx)
             .map_err(|err| DbError::DataError(err.to_string()))?
         {
             Some(value) => Ok(value.into()),
-            None => Ok(JsonValue::Null),
+            None => Ok(ParamValue::Null),
         },
         Type::INT8 => match row
             .try_get::<usize, Option<i64>>(idx)
             .map_err(|err| DbError::DataError(err.to_string()))?
         {
             Some(value) => Ok(value.into()),
-            None => Ok(JsonValue::Null),
+            None => Ok(ParamValue::Null),
         },
         Type::BOOL => match row
             .try_get::<usize, Option<bool>>(idx)
             .map_err(|err| DbError::DataError(err.to_string()))?
         {
             Some(value) => Ok(value.into()),
-            None => Ok(JsonValue::Null),
+            None => Ok(ParamValue::Null),
         },
         Type::FLOAT4 => match row
             .try_get::<usize, Option<f32>>(idx)
             .map_err(|err| DbError::DataError(err.to_string()))?
         {
             Some(value) => Ok(value.into()),
-            None => Ok(JsonValue::Null),
+            None => Ok(ParamValue::Null),
         },
         Type::FLOAT8 => match row
             .try_get::<usize, Option<f64>>(idx)
             .map_err(|err| DbError::DataError(err.to_string()))?
         {
             Some(value) => Ok(value.into()),
-            None => Ok(JsonValue::Null),
+            None => Ok(ParamValue::Null),
         },
-        // WARN: This downcasts a Postgres NUMERIC to a 64 bit JSON Number.
+        // WARN: This downcasts a Postgres NUMERIC to a 64 bit Number.
         Type::NUMERIC => match row
             .try_get::<usize, Option<Decimal>>(idx)
             .map_err(|err| DbError::DataError(err.to_string()))?
@@ -95,7 +95,7 @@ fn extract_value(row: &Row, idx: usize) -> Result<JsonValue, DbError> {
                     )))
                 }
             }
-            None => Ok(JsonValue::Null),
+            None => Ok(ParamValue::Null),
         },
         _ => {
             eprint!("Unimplemented column type: {column:?}");
@@ -497,7 +497,7 @@ impl DbQuery for TokioPostgresPool {
                         (
                             column.name().to_string(),
                             // TODO: Remove unwrap.
-                            ParamValue::from(extract_value(&row, i).unwrap()),
+                            extract_value(&row, i).unwrap(),
                         )
                     })
                     .collect()
