@@ -113,6 +113,24 @@ impl DbQuery for AnyPool {
         }
     }
 
+    fn set_implicit_query_caching(&mut self, value: bool) {
+        match self {
+            #[cfg(feature = "rusqlite")]
+            AnyPool::Rusqlite(pool) => pool.set_implicit_query_caching(value),
+            #[cfg(feature = "tokio-postgres")]
+            AnyPool::TokioPostgres(pool) => pool.set_implicit_query_caching(value),
+        }
+    }
+
+    fn get_implicit_query_caching(&self) -> bool {
+        match self {
+            #[cfg(feature = "rusqlite")]
+            AnyPool::Rusqlite(pool) => pool.get_implicit_query_caching(),
+            #[cfg(feature = "tokio-postgres")]
+            AnyPool::TokioPostgres(pool) => pool.get_implicit_query_caching(),
+        }
+    }
+
     async fn ensure_cache_table_exists(&self) -> Result<(), DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
@@ -288,9 +306,19 @@ mod tests {
     use super::*;
     use crate::core::{CachingStrategy, JsonValue, StringRow, get_memory_cache_contents};
     use crate::params;
+    use rand::{
+        SeedableRng as _,
+        distr::{Distribution as _, Uniform},
+        rngs::StdRng,
+    };
     use rust_decimal::dec;
     use serde_json::json;
-    use std::str::FromStr;
+    use std::{
+        collections::BTreeMap,
+        str::FromStr,
+        thread,
+        time::{Duration, Instant},
+    };
 
     #[tokio::test]
     async fn test_text_column_query() {
@@ -1568,6 +1596,7 @@ mod tests {
         }
 
         pool.set_caching_strategy(strategy);
+        pool.set_implicit_query_caching(true);
         pool.drop_table("test_table_caching_1").await.unwrap();
         pool.drop_table("test_table_caching_2").await.unwrap();
         pool.execute_batch(
@@ -1761,5 +1790,148 @@ mod tests {
                 json!({"value": "sigma"}).as_object().unwrap().clone(),
             ]
         );
+    }
+
+    // This test is ignored by default. use `cargo test -- --ignored` or
+    // `cargo test -- --include-ignored` to run it.
+    #[tokio::test]
+    #[ignore]
+    async fn test_caching_performance() {
+        let runs = 10000;
+        #[cfg(feature = "rusqlite")]
+        perform_caching(":memory:", runs).await;
+        #[cfg(feature = "tokio-postgres")]
+        perform_caching("postgresql:///rltbl_db", runs).await;
+    }
+
+    async fn perform_caching(url: &str, runs: usize) {
+        let mut pool = AnyPool::connect(url).await.unwrap();
+        let all_strategies = ["none", "truncate_all", "truncate", "trigger", "memory:1000"]
+            .iter()
+            .map(|strategy| CachingStrategy::from_str(strategy).unwrap())
+            .collect::<Vec<_>>();
+
+        println!("Setting implicit query caching to false");
+        pool.set_implicit_query_caching(false);
+        let mut times = BTreeMap::new();
+        for strategy in &all_strategies {
+            println!("Setting caching strategy to {strategy}");
+            pool.set_caching_strategy(&strategy);
+            let elapsed = perform_caching_detail(&pool, runs, 300, 100).await;
+            times.insert(format!("{strategy}_explicit"), elapsed);
+        }
+
+        println!("Setting implicit query caching to true");
+        pool.set_implicit_query_caching(true);
+        for strategy in &all_strategies {
+            println!("Setting caching strategy to {strategy}");
+            pool.set_caching_strategy(&strategy);
+            let elapsed = perform_caching_detail(&pool, runs, 300, 100).await;
+            times.insert(format!("{strategy}_implicit"), elapsed);
+        }
+
+        println!("\nCaching times for {} (summary).", pool.kind());
+        for (strategy, elapsed) in times.iter() {
+            println!("Strategy: {strategy}, elapsed time: {elapsed}");
+        }
+        println!("\n");
+    }
+
+    async fn perform_caching_detail(
+        pool: &AnyPool,
+        runs: usize,
+        fail_after: usize,
+        edit_rate: usize,
+    ) -> u64 {
+        fn random_between(min: usize, max: usize, seed: &mut i64) -> usize {
+            let between = Uniform::try_from(min..max).unwrap();
+            let mut rng = if *seed < 0 {
+                StdRng::from_rng(&mut rand::rng())
+            } else {
+                *seed += 10;
+                StdRng::seed_from_u64(*seed as u64)
+            };
+            between.sample(&mut rng)
+        }
+
+        fn random_table<'a>(tables_to_choose_from: &'a Vec<&str>) -> &'a str {
+            match random_between(0, 4, &mut -1) {
+                0 => tables_to_choose_from[0],
+                1 => tables_to_choose_from[1],
+                2 => tables_to_choose_from[2],
+                3 => tables_to_choose_from[3],
+                _ => unreachable!(),
+            }
+        }
+
+        let tables_to_choose_from = vec!["alpha", "beta", "gamma", "delta"];
+        for table in tables_to_choose_from.iter() {
+            pool.execute(&format!("DROP TABLE IF EXISTS {table}"), ())
+                .await
+                .unwrap();
+            pool.execute(
+                &format!("CREATE TABLE IF NOT EXISTS {table} ( foo INT, bar INT )"),
+                (),
+            )
+            .await
+            .unwrap();
+
+            // Add some values to the table:
+            let mut values = vec![];
+            for i in 0..5 {
+                for j in 0..random_between(2000, 4000, &mut -1) {
+                    values.push(format!("({i}, {j})"));
+                }
+            }
+            let values = values.join(", ");
+            pool.execute(
+                &format!("INSERT INTO {table} (foo, bar) VALUES {}", values),
+                (),
+            )
+            .await
+            .unwrap();
+        }
+
+        let now = Instant::now();
+        let mut i = 0;
+        let mut elapsed;
+        let mut actual_edits = 0;
+        while i < runs {
+            let select_table = random_table(&tables_to_choose_from);
+            let _ = pool
+                .cache(
+                    &[select_table],
+                    &format!("SELECT foo, SUM(bar) FROM {select_table} GROUP BY foo"),
+                    (),
+                )
+                .await
+                .unwrap();
+            elapsed = now.elapsed().as_secs();
+            if elapsed > fail_after as u64 {
+                panic!("Taking longer than {fail_after}s. Timing out.");
+            }
+            if edit_rate != 0 && random_between(0, edit_rate, &mut -1) == 0 {
+                actual_edits += 1;
+                let table_to_edit = random_table(&tables_to_choose_from);
+                pool.execute(
+                    &format!("INSERT INTO {table_to_edit} (foo) VALUES (1), (1)"),
+                    (),
+                )
+                .await
+                .unwrap();
+            }
+
+            // A small sleep to prevent over-taxing the CPU:
+            thread::sleep(Duration::from_millis(2));
+            i += 1;
+        }
+        elapsed = now.elapsed().as_secs();
+        println!("Elapsed time: {elapsed}s ({actual_edits} edits out of {runs})");
+        for table in tables_to_choose_from.iter() {
+            pool.execute(&format!("DROP TABLE IF EXISTS {table}"), ())
+                .await
+                .unwrap();
+        }
+        elapsed
     }
 }

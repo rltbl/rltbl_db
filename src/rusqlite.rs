@@ -178,6 +178,10 @@ fn query_prepared(
 pub struct RusqlitePool {
     pool: Pool,
     caching_strategy: CachingStrategy,
+    /// When set to true, SQL statements sent to the [DbQuery::query()] and [DbQuery::execute()]
+    /// functions will be parsed and if they will result in tables being edited and/or dropped,
+    /// the cache will be maintained in accordance with the given [CachingStrategy].
+    implicit_query_caching: bool,
 }
 
 impl RusqlitePool {
@@ -190,6 +194,7 @@ impl RusqlitePool {
         Ok(Self {
             pool: pool,
             caching_strategy: CachingStrategy::None,
+            implicit_query_caching: false,
         })
     }
 }
@@ -208,6 +213,16 @@ impl DbQuery for RusqlitePool {
     /// Implements [DbQuery::get_caching_strategy()] for SQLite.
     fn get_caching_strategy(&self) -> CachingStrategy {
         self.caching_strategy
+    }
+
+    /// Implements [DbQuery::set_implicit_query_caching()] for SQLite.
+    fn set_implicit_query_caching(&mut self, flag: bool) {
+        self.implicit_query_caching = flag;
+    }
+
+    /// Implements [DbQuery::get_implicit_query_caching()] for SQLite.
+    fn get_implicit_query_caching(&self) -> bool {
+        self.implicit_query_caching
     }
 
     /// Implements [DbQuery::ensure_cache_table_exists()] for SQLite.

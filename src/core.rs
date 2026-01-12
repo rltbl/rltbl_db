@@ -472,6 +472,12 @@ pub trait DbQuery {
     /// Get the current caching strategy.
     fn get_caching_strategy(&self) -> CachingStrategy;
 
+    /// Turn implicit query caching on.
+    fn set_implicit_query_caching(&mut self, value: bool);
+
+    /// Returns true if implicit query caching is currently on.
+    fn get_implicit_query_caching(&self) -> bool;
+
     /// Ensure that the cache table exists
     fn ensure_cache_table_exists(&self) -> impl Future<Output = Result<(), DbError>> + Send;
 
@@ -496,7 +502,7 @@ pub trait DbQuery {
             };
             if !edited_tables.is_empty() {
                 let edited_tables: Vec<_> = edited_tables.iter().map(|t| t.as_str()).collect();
-                self.clear_cache_for_dropped_tables(&edited_tables).await?;
+                self.clear_cache_for_edited_tables(&edited_tables).await?;
             }
             if !dropped_tables.is_empty() {
                 let dropped_tables: Vec<_> = dropped_tables.iter().map(|t| t.as_str()).collect();
@@ -615,7 +621,19 @@ pub trait DbQuery {
                 };
                 let cache_params = &["[", "]", &tables_param, sql, &params_param];
 
-                match self.query_strings(&cache_sql, cache_params).await?.first() {
+                let strings = {
+                    let rows = self.query_do_not_cache(&cache_sql, cache_params).await?;
+                    let strings = rows
+                        .iter()
+                        .map(|row| match row.values().nth(0) {
+                            Some(value) => Ok(json_value_to_string(value)),
+                            None => Err(DbError::DataError("Empty row".to_owned())),
+                        })
+                        .collect::<Vec<_>>();
+                    let strings: Result<Vec<String>, DbError> = strings.into_iter().collect();
+                    strings?
+                };
+                match strings.first() {
                     Some(values) => {
                         let json_rows: Vec<JsonRow> = match serde_json::from_str(&values) {
                             Ok(json_rows) => json_rows,
@@ -628,7 +646,7 @@ pub trait DbQuery {
                         Ok(json_rows)
                     }
                     None => {
-                        let json_rows = self.query(sql, params).await?;
+                        let json_rows = self.query_do_not_cache(sql, params).await?;
                         let json_rows_content = json!(json_rows).to_string();
                         let insert_sql = format!(
                             r#"INSERT INTO "cache"
@@ -636,7 +654,8 @@ pub trait DbQuery {
                                VALUES ({prefix}1, {prefix}2, {prefix}3, {prefix}4)"#
                         );
                         let insert_params = [&tables_param, sql, &params_param, &json_rows_content];
-                        self.query(&insert_sql, &insert_params).await?;
+                        self.execute_do_not_cache(&insert_sql, &insert_params)
+                            .await?;
                         Ok(json_rows)
                     }
                 }
@@ -773,7 +792,9 @@ pub trait DbQuery {
         params: impl IntoParams + Send,
     ) -> Result<Vec<JsonRow>, DbError> {
         let rows = self.query_do_not_cache(sql, params).await?;
-        self.clear_cache_for_affected_tables(sql).await?;
+        if self.get_implicit_query_caching() {
+            self.clear_cache_for_affected_tables(sql).await?;
+        }
         Ok(rows)
     }
 

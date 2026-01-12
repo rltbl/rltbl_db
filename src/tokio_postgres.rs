@@ -107,6 +107,7 @@ fn extract_value(row: &Row, idx: usize) -> Result<JsonValue, DbError> {
 pub struct TokioPostgresPool {
     pool: Pool,
     caching_strategy: CachingStrategy,
+    implicit_query_caching: bool,
 }
 
 impl TokioPostgresPool {
@@ -128,6 +129,7 @@ impl TokioPostgresPool {
                 Ok(Self {
                     pool: pool,
                     caching_strategy: CachingStrategy::None,
+                    implicit_query_caching: false,
                 })
             }
             false => Err(DbError::ConnectError(format!(
@@ -151,6 +153,16 @@ impl DbQuery for TokioPostgresPool {
     /// Implements [DbQuery::get_caching_strategy()] for PostgreSQL.
     fn get_caching_strategy(&self) -> CachingStrategy {
         self.caching_strategy
+    }
+
+    /// Implements [DbQuery::set_implicit_query_caching()] for PostgreSQL.
+    fn set_implicit_query_caching(&mut self, flag: bool) {
+        self.implicit_query_caching = flag;
+    }
+
+    /// Implements [DbQuery::get_implicit_query_caching()] for PostgreSQL.
+    fn get_implicit_query_caching(&self) -> bool {
+        self.implicit_query_caching
     }
 
     /// Implements [DbQuery::ensure_cache_table_exists()] for PostgreSQL.
@@ -209,7 +221,7 @@ impl DbQuery for TokioPostgresPool {
 
             // Only recreate the triggers if they don't all already exist:
             if num_triggers != 3 {
-                // Note that parameters are not allowed in trigger creation statements in SQLite.
+                // Note that parameters are not allowed in trigger creation statements in PostgreSQL.
                 self.execute_batch(&format!(
                     r#"CREATE OR REPLACE FUNCTION "clean_cache_for_{table}"()
                          RETURNS TRIGGER
