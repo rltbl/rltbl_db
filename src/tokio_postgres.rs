@@ -109,6 +109,7 @@ fn extract_value(row: &Row, idx: usize) -> Result<ParamValue, DbError> {
 pub struct TokioPostgresPool {
     pool: Pool,
     caching_strategy: CachingStrategy,
+    cache_aware_query: bool,
 }
 
 impl TokioPostgresPool {
@@ -130,6 +131,7 @@ impl TokioPostgresPool {
                 Ok(Self {
                     pool: pool,
                     caching_strategy: CachingStrategy::None,
+                    cache_aware_query: false,
                 })
             }
             false => Err(DbError::ConnectError(format!(
@@ -155,10 +157,20 @@ impl DbQuery for TokioPostgresPool {
         self.caching_strategy
     }
 
+    /// Implements [DbQuery::set_cache_aware_query()] for PostgreSQL.
+    fn set_cache_aware_query(&mut self, flag: bool) {
+        self.cache_aware_query = flag;
+    }
+
+    /// Implements [DbQuery::get_cache_aware_query()] for PostgreSQL.
+    fn get_cache_aware_query(&self) -> bool {
+        self.cache_aware_query
+    }
+
     /// Implements [DbQuery::ensure_cache_table_exists()] for PostgreSQL.
     async fn ensure_cache_table_exists(&self) -> Result<(), DbError> {
         match self
-            .execute(
+            .execute_no_cache(
                 r#"CREATE TABLE IF NOT EXISTS "cache" (
                      "tables" TEXT,
                      "statement" TEXT,
@@ -191,9 +203,9 @@ impl DbQuery for TokioPostgresPool {
     async fn ensure_caching_triggers_exist(&self, tables: &[&str]) -> Result<(), DbError> {
         self.ensure_cache_table_exists().await?;
         for table in tables {
-            let num_triggers = self
-                .query_u64(
-                    r#"SELECT COUNT(1)
+            let rows: Vec<DbRow> = self
+                .query_no_cache(
+                    r#"SELECT 1
                        FROM information_schema.triggers
                        WHERE trigger_name IN ($1, $2, $3)
                          AND "trigger_schema" IN (
@@ -210,8 +222,8 @@ impl DbQuery for TokioPostgresPool {
                 .await?;
 
             // Only recreate the triggers if they don't all already exist:
-            if num_triggers != 3 {
-                // Note that parameters are not allowed in trigger creation statements in SQLite.
+            if rows.len() != 3 {
+                // Note that parameters are not allowed in trigger creation statements in PostgreSQL.
                 self.execute_batch(&format!(
                     r#"CREATE OR REPLACE FUNCTION "clean_cache_for_{table}"()
                          RETURNS TRIGGER
@@ -309,7 +321,7 @@ impl DbQuery for TokioPostgresPool {
                ORDER BY "columns"."ordinal_position""#
         );
 
-        let rows: Vec<DbRow> = self.query(&sql, params![&table]).await?;
+        let rows: Vec<DbRow> = self.query_no_cache(&sql, params![&table]).await?;
         for row in &rows {
             match (
                 row.get("column_name")
@@ -339,7 +351,7 @@ impl DbQuery for TokioPostgresPool {
     /// Implements [DbQuery::primary_keys()] for PostgreSQL.
     async fn primary_keys(&self, table: &str) -> Result<Vec<String>, DbError> {
         let rows: Vec<DbRow> = self
-            .query(
+            .query_no_cache(
                 r#"SELECT "kcu"."column_name"
                FROM "information_schema"."table_constraints" "tco"
                JOIN "information_schema"."key_column_usage" "kcu"
@@ -382,12 +394,12 @@ impl DbQuery for TokioPostgresPool {
             .await
             .map_err(|err| DbError::DatabaseError(format!("Error in query(): {err:?}")))?;
 
-        self.clear_cache_for_modified_tables(sql).await?;
+        self.clear_cache_for_affected_tables(sql).await?;
         Ok(())
     }
 
-    /// Implements [DbQuery::query()] for PostgreSQL
-    async fn query<T: FromDbRows>(
+    /// Implements [DbQuery::query_no_cache()] for PostgreSQL.
+    async fn query_no_cache<T: FromDbRows>(
         &self,
         sql: &str,
         into_params: impl IntoParams + Send,
@@ -487,25 +499,18 @@ impl DbQuery for TokioPostgresPool {
         let rows = client
             .query(sql, &query_params)
             .await
-            .map_err(|err| DbError::DatabaseError(format!("Error in query(): {err:?}")))?
-            .iter()
-            .map(|row| {
-                row.columns()
-                    .iter()
-                    .enumerate()
-                    .map(|(i, column)| {
-                        (
-                            column.name().to_string(),
-                            // TODO: Remove unwrap.
-                            extract_value(&row, i).unwrap(),
-                        )
-                    })
-                    .collect()
-            })
-            .collect();
+            .map_err(|err| DbError::DatabaseError(format!("Error in query(): {err:?}")))?;
+        let mut db_rows = vec![];
+        for row in &rows {
+            let mut db_row = DbRow::new();
+            let columns = row.columns();
+            for (i, column) in columns.iter().enumerate() {
+                db_row.insert(column.name().to_string(), extract_value(row, i)?);
+            }
+            db_rows.push(db_row);
+        }
 
-        self.clear_cache_for_modified_tables(sql).await?;
-        Ok(FromDbRows::from_db_rows(rows))
+        Ok(FromDbRows::from_db_rows(db_rows))
     }
 
     /// Implements [DbQuery::insert()] for PostgreSQL
@@ -637,7 +642,7 @@ impl DbQuery for TokioPostgresPool {
     /// Implements [DbQuery::table_exists()] for PostgreSQL.
     async fn table_exists(&self, table: &str) -> Result<bool, DbError> {
         let rows: Vec<DbRow> = self
-            .query(
+            .query_no_cache(
                 r#"SELECT 1
                    FROM "information_schema"."tables"
                    WHERE "table_type" LIKE '%TABLE'

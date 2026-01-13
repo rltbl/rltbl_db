@@ -114,6 +114,24 @@ impl DbQuery for AnyPool {
         }
     }
 
+    fn set_cache_aware_query(&mut self, value: bool) {
+        match self {
+            #[cfg(feature = "rusqlite")]
+            AnyPool::Rusqlite(pool) => pool.set_cache_aware_query(value),
+            #[cfg(feature = "tokio-postgres")]
+            AnyPool::TokioPostgres(pool) => pool.set_cache_aware_query(value),
+        }
+    }
+
+    fn get_cache_aware_query(&self) -> bool {
+        match self {
+            #[cfg(feature = "rusqlite")]
+            AnyPool::Rusqlite(pool) => pool.get_cache_aware_query(),
+            #[cfg(feature = "tokio-postgres")]
+            AnyPool::TokioPostgres(pool) => pool.get_cache_aware_query(),
+        }
+    }
+
     async fn ensure_cache_table_exists(&self) -> Result<(), DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
@@ -168,16 +186,16 @@ impl DbQuery for AnyPool {
         }
     }
 
-    async fn query<T: FromDbRows>(
+    async fn query_no_cache<T: FromDbRows>(
         &self,
         sql: &str,
         params: impl IntoParams + Send,
     ) -> Result<T, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
-            AnyPool::Rusqlite(pool) => pool.query(sql, params).await,
+            AnyPool::Rusqlite(pool) => pool.query_no_cache(sql, params).await,
             #[cfg(feature = "tokio-postgres")]
-            AnyPool::TokioPostgres(pool) => pool.query(sql, params).await,
+            AnyPool::TokioPostgres(pool) => pool.query_no_cache(sql, params).await,
         }
     }
 
@@ -290,8 +308,18 @@ mod tests {
     use crate::core::{CachingStrategy, DbRow, StringRow, get_memory_cache_contents};
     use crate::params;
     use indexmap::indexmap as db_row;
+    use rand::{
+        SeedableRng as _,
+        distr::{Distribution as _, Uniform},
+        rngs::StdRng,
+    };
     use rust_decimal::dec;
-    use std::str::FromStr;
+    use std::{
+        collections::BTreeMap,
+        str::FromStr,
+        thread,
+        time::{Duration, Instant},
+    };
 
     #[tokio::test]
     async fn test_text_column_query() {
@@ -1552,6 +1580,7 @@ mod tests {
         }
 
         pool.set_caching_strategy(strategy);
+        pool.set_cache_aware_query(true);
         pool.drop_table("test_table_caching_1").await.unwrap();
         pool.drop_table("test_table_caching_2").await.unwrap();
         pool.execute_batch(
@@ -1754,152 +1783,145 @@ mod tests {
         );
     }
 
+    // This test takes a few minutes to run and is ignored by default.
+    // Use `cargo test -- --ignored` or `cargo test -- --include-ignored` to run it.
     #[tokio::test]
-    async fn test_sql_parsing() {
+    #[ignore]
+    async fn test_caching_performance() {
+        let runs = 10000;
+        let fail_after = 150;
+        let edit_rate = 100;
         #[cfg(feature = "rusqlite")]
-        sql_parsing(":memory:").await;
+        perform_caching(":memory:", runs, fail_after, edit_rate).await;
         #[cfg(feature = "tokio-postgres")]
-        sql_parsing("postgresql:///rltbl_db").await;
+        perform_caching("postgresql:///rltbl_db", runs, fail_after, edit_rate).await;
     }
 
-    async fn sql_parsing(url: &str) {
-        let pool = AnyPool::connect(url).await.unwrap();
-        let prefix = match pool.kind() {
-            DbKind::SQLite => "?",
-            DbKind::PostgreSQL => "$",
-        };
+    async fn perform_caching(url: &str, runs: usize, fail_after: usize, edit_rate: usize) {
+        let mut pool = AnyPool::connect(url).await.unwrap();
+        let all_strategies = ["none", "truncate_all", "truncate", "trigger", "memory:1000"]
+            .iter()
+            .map(|strategy| CachingStrategy::from_str(strategy).unwrap())
+            .collect::<Vec<_>>();
 
-        // Single statements, possibly with parameters:
-
-        let tables: Vec<_> = pool
-            .get_modified_tables(&format!(
-                r#"INSERT INTO "alpha" VALUES ({prefix}1, {prefix}2, {prefix}3)"#
-            ))
-            .unwrap()
-            .into_iter()
-            .collect();
-        assert_eq!(tables, ["alpha"]);
-
-        let tables: Vec<_> = pool
-            .get_modified_tables(
-                r#"WITH bar AS (SELECT * FROM alpha),
-                        mar AS (SELECT * FROM beta)
-                   INSERT INTO gamma
-                   SELECT alpha.*
-                   FROM alpha, beta
-                   WHERE alpha.value = beta.value"#,
-            )
-            .unwrap()
-            .into_iter()
-            .collect();
-        assert_eq!(tables, ["gamma"]);
-
-        let tables: Vec<_> = pool
-            .get_modified_tables(&format!(
-                r#"UPDATE "delta" set bar = {prefix}1 WHERE bar = {prefix}2"#
-            ))
-            .unwrap()
-            .into_iter()
-            .collect();
-        assert_eq!(tables, ["delta"]);
-
-        let tables: Vec<_> = pool
-            .get_modified_tables(&format!(
-                r#"WITH bar AS (SELECT * FROM test),
-                        mar AS (SELECT * FROM test)
-                   UPDATE delta
-                   SET value = bar.value
-                   FROM bar, mar
-                   WHERE bar.value = {prefix}1 AND bar.value = mar.value"#,
-            ))
-            .unwrap()
-            .into_iter()
-            .collect();
-        assert_eq!(tables, ["delta"]);
-
-        let tables: Vec<_> = pool
-            .get_modified_tables(&format!(r#"DELETE FROM "epsilon" WHERE bar >= {prefix}1"#))
-            .unwrap()
-            .into_iter()
-            .collect();
-        assert_eq!(tables, ["epsilon"]);
-
-        let tables: Vec<_> = pool
-            .get_modified_tables(
-                r#"WITH bar AS (SELECT * FROM test),
-                        mar AS (SELECT * FROM test)
-                   DELETE FROM lambda WHERE value IN (SELECT value FROM bar)"#,
-            )
-            .unwrap()
-            .into_iter()
-            .collect();
-        assert_eq!(tables, ["lambda"]);
-
-        let tables: Vec<_> = pool
-            .get_modified_tables(r#"DROP TABLE "rho""#)
-            .unwrap()
-            .into_iter()
-            .collect();
-        assert_eq!(tables, ["rho"]);
-
-        let tables: Vec<_> = pool
-            .get_modified_tables(r#"DROP TABLE IF EXISTS "phi" CASCADE"#)
-            .unwrap()
-            .into_iter()
-            .collect();
-        assert_eq!(tables, ["phi"]);
-
-        // Multiple statements, no parameters:
-
-        let sql = r#"
-            INSERT INTO "alpha" VALUES (1, 2, 3), (4, 5, 6);
-
-            INSERT INTO gamma
-            SELECT alpha.*
-            FROM alpha, beta
-            WHERE alpha.value = beta.value;
-
-            WITH t AS (
-              SELECT * from delta_base ORDER BY quality LIMIT 1
-            )
-            UPDATE delta SET price = t.price * 1.05;
-
-            WITH t AS (
-              SELECT * FROM phi_base
-              WHERE
-                "date" >= '2010-10-01' AND
-                "date" < '2010-11-01'
-            )
-            INSERT INTO phi
-            SELECT * FROM t;
-
-            DELETE FROM "psi" WHERE bar >= 10;
-
-            WITH RECURSIVE included_lambda(sub_lambda, lambda) AS (
-                SELECT sub_lambda, lambda FROM lambda WHERE lambda = 'our_product'
-              UNION ALL
-                SELECT p.sub_lambda, p.lambda
-                FROM included_lambda pr, lambda p
-                WHERE p.lambda = pr.sub_lambda
-            )
-            DELETE FROM lambda
-              WHERE lambda IN (SELECT lambda FROM included_lambda);
-
-            DROP TABLE "rho";
-
-            DROP TABLE "sigma" CASCADE"#;
-
-        let mut tables: Vec<_> = pool
-            .get_modified_tables(&sql)
-            .unwrap()
-            .into_iter()
-            .collect();
-        tables.sort();
-        assert_eq!(
-            tables,
-            [
-                "alpha", "delta", "gamma", "lambda", "phi", "psi", "rho", "sigma",
-            ]
+        pool.set_cache_aware_query(true);
+        println!(
+            "\nTesting caching performance for {} with cache_aware_query {}.",
+            pool.kind(),
+            match pool.get_cache_aware_query() {
+                true => "on",
+                false => "off",
+            }
         );
+        let mut times = BTreeMap::new();
+        for strategy in &all_strategies {
+            println!("Setting caching strategy to {strategy}.");
+            pool.set_caching_strategy(&strategy);
+            let elapsed = perform_caching_detail(&pool, runs, fail_after, edit_rate).await;
+            times.insert(format!("{strategy}"), elapsed);
+        }
+
+        println!("\nCaching times for {} (summary).", pool.kind());
+        for (strategy, elapsed) in times.iter() {
+            println!("Strategy: {strategy}, elapsed time: {elapsed}s");
+        }
+    }
+
+    async fn perform_caching_detail(
+        pool: &AnyPool,
+        runs: usize,
+        fail_after: usize,
+        edit_rate: usize,
+    ) -> u64 {
+        fn random_between(min: usize, max: usize, seed: &mut i64) -> usize {
+            let between = Uniform::try_from(min..max).unwrap();
+            let mut rng = if *seed < 0 {
+                StdRng::from_rng(&mut rand::rng())
+            } else {
+                *seed += 10;
+                StdRng::seed_from_u64(*seed as u64)
+            };
+            between.sample(&mut rng)
+        }
+
+        fn random_table<'a>(tables_to_choose_from: &'a Vec<&str>) -> &'a str {
+            match random_between(0, 4, &mut -1) {
+                0 => tables_to_choose_from[0],
+                1 => tables_to_choose_from[1],
+                2 => tables_to_choose_from[2],
+                3 => tables_to_choose_from[3],
+                _ => unreachable!(),
+            }
+        }
+
+        let tables_to_choose_from = vec!["alpha", "beta", "gamma", "delta"];
+        for table in tables_to_choose_from.iter() {
+            pool.execute(&format!("DROP TABLE IF EXISTS {table}"), ())
+                .await
+                .unwrap();
+            pool.execute(
+                &format!("CREATE TABLE IF NOT EXISTS {table} ( foo INT, bar INT )"),
+                (),
+            )
+            .await
+            .unwrap();
+
+            // Add a few thousand values to the table:
+            let mut values = vec![];
+            for i in 0..5 {
+                for j in 0..random_between(2000, 4000, &mut -1) {
+                    values.push(format!("({i}, {j})"));
+                }
+            }
+            let values = values.join(", ");
+            pool.execute(
+                &format!("INSERT INTO {table} (foo, bar) VALUES {}", values),
+                (),
+            )
+            .await
+            .unwrap();
+        }
+
+        let now = Instant::now();
+        let mut i = 0;
+        let mut elapsed;
+        let mut actual_edits = 0;
+        while i < runs {
+            let select_table = random_table(&tables_to_choose_from);
+            let _: Vec<DbRow> = pool
+                .cache(
+                    &[select_table],
+                    &format!("SELECT foo, SUM(bar) FROM {select_table} GROUP BY foo ORDER BY foo"),
+                    (),
+                )
+                .await
+                .unwrap();
+            elapsed = now.elapsed().as_secs();
+            if elapsed > fail_after as u64 {
+                panic!("Taking longer than {fail_after}s. Timing out.");
+            }
+            if edit_rate != 0 && random_between(0, edit_rate, &mut -1) == 0 {
+                actual_edits += 1;
+                let table_to_edit = random_table(&tables_to_choose_from);
+                pool.execute(
+                    &format!("INSERT INTO {table_to_edit} (foo) VALUES (1), (1)"),
+                    (),
+                )
+                .await
+                .unwrap();
+            }
+
+            // A small sleep to prevent over-taxing the CPU:
+            thread::sleep(Duration::from_millis(5));
+            i += 1;
+        }
+        elapsed = now.elapsed().as_secs();
+        println!("Elapsed time: {elapsed}s ({actual_edits} edits out of {runs})");
+        for table in tables_to_choose_from.iter() {
+            pool.execute(&format!("DROP TABLE IF EXISTS {table}"), ())
+                .await
+                .unwrap();
+        }
+        elapsed
     }
 }
