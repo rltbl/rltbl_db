@@ -113,6 +113,24 @@ impl DbQuery for AnyPool {
         }
     }
 
+    fn set_cache_aware_query(&mut self, value: bool) {
+        match self {
+            #[cfg(feature = "rusqlite")]
+            AnyPool::Rusqlite(pool) => pool.set_cache_aware_query(value),
+            #[cfg(feature = "tokio-postgres")]
+            AnyPool::TokioPostgres(pool) => pool.set_cache_aware_query(value),
+        }
+    }
+
+    fn get_cache_aware_query(&self) -> bool {
+        match self {
+            #[cfg(feature = "rusqlite")]
+            AnyPool::Rusqlite(pool) => pool.get_cache_aware_query(),
+            #[cfg(feature = "tokio-postgres")]
+            AnyPool::TokioPostgres(pool) => pool.get_cache_aware_query(),
+        }
+    }
+
     async fn ensure_cache_table_exists(&self) -> Result<(), DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
@@ -167,16 +185,16 @@ impl DbQuery for AnyPool {
         }
     }
 
-    async fn query(
+    async fn query_no_cache(
         &self,
         sql: &str,
         params: impl IntoParams + Send,
     ) -> Result<Vec<JsonRow>, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
-            AnyPool::Rusqlite(pool) => pool.query(sql, params).await,
+            AnyPool::Rusqlite(pool) => pool.query_no_cache(sql, params).await,
             #[cfg(feature = "tokio-postgres")]
-            AnyPool::TokioPostgres(pool) => pool.query(sql, params).await,
+            AnyPool::TokioPostgres(pool) => pool.query_no_cache(sql, params).await,
         }
     }
 
@@ -286,12 +304,21 @@ impl DbQuery for AnyPool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::JsonValue;
-    use crate::core::StringRow;
+    use crate::core::{CachingStrategy, JsonValue, StringRow, get_memory_cache_contents};
     use crate::params;
+    use rand::{
+        SeedableRng as _,
+        distr::{Distribution as _, Uniform},
+        rngs::StdRng,
+    };
     use rust_decimal::dec;
     use serde_json::json;
-    use std::str::FromStr;
+    use std::{
+        collections::BTreeMap,
+        str::FromStr,
+        thread,
+        time::{Duration, Instant},
+    };
 
     #[tokio::test]
     async fn test_text_column_query() {
@@ -968,8 +995,10 @@ mod tests {
         );
         pool.drop_table(table1).await.unwrap();
 
-        let columns = pool.columns(table1).await.unwrap();
-        assert_eq!(columns.is_empty(), true);
+        match pool.columns(table1).await {
+            Ok(columns) => panic!("No columns expected for '{table1}' but got {columns:?}"),
+            Err(_) => (),
+        };
 
         // Clean up.
         pool.drop_table(table2).await.unwrap();
@@ -1534,7 +1563,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_caching() {
-        let all_strategies = ["truncate_all", "truncate", "trigger", "memory:5"]
+        let all_strategies = ["none", "truncate_all", "truncate", "trigger", "memory:5"]
             .iter()
             .map(|strategy| CachingStrategy::from_str(strategy).unwrap())
             .collect::<Vec<_>>();
@@ -1555,19 +1584,34 @@ mod tests {
     }
 
     async fn cache_with_strategy(pool: &mut AnyPool, strategy: &CachingStrategy) {
+        async fn count_cache_table_rows(pool: &mut AnyPool) -> u64 {
+            pool.query_u64("SELECT COUNT(1) from cache", ())
+                .await
+                .unwrap()
+        }
+
+        fn count_memory_cache_rows() -> u64 {
+            let cache = get_memory_cache_contents().unwrap();
+            cache.keys().len().try_into().unwrap()
+        }
+
         pool.set_caching_strategy(strategy);
-        pool.drop_table("test_table_caching").await.unwrap();
-        pool.execute(
-            "CREATE TABLE test_table_caching (\
-               value TEXT
+        pool.set_cache_aware_query(true);
+        pool.drop_table("test_table_caching_1").await.unwrap();
+        pool.drop_table("test_table_caching_2").await.unwrap();
+        pool.execute_batch(
+            "CREATE TABLE test_table_caching_1 (\
+               value TEXT \
+             );\
+             CREATE TABLE test_table_caching_2 (\
+               value TEXT \
              )",
-            (),
         )
         .await
         .unwrap();
 
         pool.insert(
-            "test_table_caching",
+            "test_table_caching_1",
             &["value"],
             &[
                 &json!({"value": "alpha"}).as_object().unwrap(),
@@ -1579,13 +1623,18 @@ mod tests {
 
         let rows = pool
             .cache(
-                &["test_table_caching"],
-                "SELECT * from test_table_caching",
+                &["test_table_caching_1"],
+                "SELECT * from test_table_caching_1",
                 (),
             )
             .await
             .unwrap();
 
+        match strategy {
+            CachingStrategy::None => (),
+            CachingStrategy::Memory(_) => assert_eq!(count_memory_cache_rows(), 1),
+            _ => assert_eq!(count_cache_table_rows(pool).await, 1),
+        };
         assert_eq!(
             rows,
             vec![
@@ -1596,13 +1645,18 @@ mod tests {
 
         let rows = pool
             .cache(
-                &["test_table_caching"],
-                "SELECT * from test_table_caching",
+                &["test_table_caching_1"],
+                "SELECT * from test_table_caching_1",
                 (),
             )
             .await
             .unwrap();
 
+        match strategy {
+            CachingStrategy::None => (),
+            CachingStrategy::Memory(_) => assert_eq!(count_memory_cache_rows(), 1),
+            _ => assert_eq!(count_cache_table_rows(pool).await, 1),
+        };
         assert_eq!(
             rows,
             vec![
@@ -1612,7 +1666,7 @@ mod tests {
         );
 
         pool.insert(
-            "test_table_caching",
+            "test_table_caching_1",
             &["value"],
             &[
                 &json!({"value": "gamma"}).as_object().unwrap(),
@@ -1622,10 +1676,40 @@ mod tests {
         .await
         .unwrap();
 
+        match strategy {
+            CachingStrategy::None => (),
+            CachingStrategy::Memory(_) => assert_eq!(count_memory_cache_rows(), 0),
+            _ => assert_eq!(count_cache_table_rows(pool).await, 0),
+        };
+
         let rows = pool
             .cache(
-                &["test_table_caching"],
-                "SELECT * from test_table_caching",
+                &["test_table_caching_1"],
+                "SELECT * from test_table_caching_1",
+                (),
+            )
+            .await
+            .unwrap();
+
+        match strategy {
+            CachingStrategy::None => (),
+            CachingStrategy::Memory(_) => assert_eq!(count_memory_cache_rows(), 1),
+            _ => assert_eq!(count_cache_table_rows(pool).await, 1),
+        };
+        assert_eq!(
+            rows,
+            vec![
+                json!({"value": "alpha"}).as_object().unwrap().clone(),
+                json!({"value": "beta"}).as_object().unwrap().clone(),
+                json!({"value": "gamma"}).as_object().unwrap().clone(),
+                json!({"value": "delta"}).as_object().unwrap().clone(),
+            ]
+        );
+
+        let rows = pool
+            .cache(
+                &["test_table_caching_1"],
+                "SELECT * from test_table_caching_1",
                 (),
             )
             .await
@@ -1641,15 +1725,60 @@ mod tests {
             ]
         );
 
+        pool.cache(
+            &["test_table_caching_1"],
+            "SELECT COUNT(1) FROM test_table_caching_1",
+            (),
+        )
+        .await
+        .unwrap();
+        pool.cache(
+            &["test_table_caching_2"],
+            "SELECT COUNT(1) FROM test_table_caching_2",
+            (),
+        )
+        .await
+        .unwrap();
+
+        match strategy {
+            CachingStrategy::None => (),
+            CachingStrategy::Memory(_) => assert_eq!(count_memory_cache_rows(), 3),
+            _ => assert_eq!(count_cache_table_rows(pool).await, 3),
+        };
+
+        pool.execute(
+            r#"INSERT INTO test_table_caching_1 VALUES ('rho'), ('sigma')"#,
+            (),
+        )
+        .await
+        .unwrap();
+
+        match strategy {
+            CachingStrategy::None => (),
+            CachingStrategy::Memory(_) => assert_eq!(count_memory_cache_rows(), 1),
+            CachingStrategy::Truncate | CachingStrategy::Trigger => {
+                assert_eq!(count_cache_table_rows(pool).await, 1)
+            }
+            CachingStrategy::TruncateAll => assert_eq!(count_cache_table_rows(pool).await, 0),
+        };
+
         let rows = pool
             .cache(
-                &["test_table_caching"],
-                "SELECT * from test_table_caching",
+                &["test_table_caching_1"],
+                "SELECT * from test_table_caching_1",
                 (),
             )
             .await
             .unwrap();
 
+        match strategy {
+            CachingStrategy::None => (),
+            CachingStrategy::Memory(_) => assert_eq!(count_memory_cache_rows(), 2),
+            CachingStrategy::Truncate | CachingStrategy::Trigger => {
+                assert_eq!(count_cache_table_rows(pool).await, 2)
+            }
+            CachingStrategy::TruncateAll => assert_eq!(count_cache_table_rows(pool).await, 1),
+        };
         assert_eq!(
             rows,
             vec![
@@ -1657,7 +1786,151 @@ mod tests {
                 json!({"value": "beta"}).as_object().unwrap().clone(),
                 json!({"value": "gamma"}).as_object().unwrap().clone(),
                 json!({"value": "delta"}).as_object().unwrap().clone(),
+                json!({"value": "rho"}).as_object().unwrap().clone(),
+                json!({"value": "sigma"}).as_object().unwrap().clone(),
             ]
         );
+    }
+
+    // This test takes a few minutes to run and is ignored by default.
+    // Use `cargo test -- --ignored` or `cargo test -- --include-ignored` to run it.
+    #[tokio::test]
+    #[ignore]
+    async fn test_caching_performance() {
+        let runs = 10000;
+        let fail_after = 150;
+        let edit_rate = 100;
+        #[cfg(feature = "rusqlite")]
+        perform_caching(":memory:", runs, fail_after, edit_rate).await;
+        #[cfg(feature = "tokio-postgres")]
+        perform_caching("postgresql:///rltbl_db", runs, fail_after, edit_rate).await;
+    }
+
+    async fn perform_caching(url: &str, runs: usize, fail_after: usize, edit_rate: usize) {
+        let mut pool = AnyPool::connect(url).await.unwrap();
+        let all_strategies = ["none", "truncate_all", "truncate", "trigger", "memory:1000"]
+            .iter()
+            .map(|strategy| CachingStrategy::from_str(strategy).unwrap())
+            .collect::<Vec<_>>();
+
+        pool.set_cache_aware_query(true);
+        println!(
+            "\nTesting caching performance for {} with cache_aware_query {}.",
+            pool.kind(),
+            match pool.get_cache_aware_query() {
+                true => "on",
+                false => "off",
+            }
+        );
+        let mut times = BTreeMap::new();
+        for strategy in &all_strategies {
+            println!("Setting caching strategy to {strategy}.");
+            pool.set_caching_strategy(&strategy);
+            let elapsed = perform_caching_detail(&pool, runs, fail_after, edit_rate).await;
+            times.insert(format!("{strategy}"), elapsed);
+        }
+
+        println!("\nCaching times for {} (summary).", pool.kind());
+        for (strategy, elapsed) in times.iter() {
+            println!("Strategy: {strategy}, elapsed time: {elapsed}s");
+        }
+    }
+
+    async fn perform_caching_detail(
+        pool: &AnyPool,
+        runs: usize,
+        fail_after: usize,
+        edit_rate: usize,
+    ) -> u64 {
+        fn random_between(min: usize, max: usize, seed: &mut i64) -> usize {
+            let between = Uniform::try_from(min..max).unwrap();
+            let mut rng = if *seed < 0 {
+                StdRng::from_rng(&mut rand::rng())
+            } else {
+                *seed += 10;
+                StdRng::seed_from_u64(*seed as u64)
+            };
+            between.sample(&mut rng)
+        }
+
+        fn random_table<'a>(tables_to_choose_from: &'a Vec<&str>) -> &'a str {
+            match random_between(0, 4, &mut -1) {
+                0 => tables_to_choose_from[0],
+                1 => tables_to_choose_from[1],
+                2 => tables_to_choose_from[2],
+                3 => tables_to_choose_from[3],
+                _ => unreachable!(),
+            }
+        }
+
+        let tables_to_choose_from = vec!["alpha", "beta", "gamma", "delta"];
+        for table in tables_to_choose_from.iter() {
+            pool.execute(&format!("DROP TABLE IF EXISTS {table}"), ())
+                .await
+                .unwrap();
+            pool.execute(
+                &format!("CREATE TABLE IF NOT EXISTS {table} ( foo INT, bar INT )"),
+                (),
+            )
+            .await
+            .unwrap();
+
+            // Add a few thousand values to the table:
+            let mut values = vec![];
+            for i in 0..5 {
+                for j in 0..random_between(2000, 4000, &mut -1) {
+                    values.push(format!("({i}, {j})"));
+                }
+            }
+            let values = values.join(", ");
+            pool.execute(
+                &format!("INSERT INTO {table} (foo, bar) VALUES {}", values),
+                (),
+            )
+            .await
+            .unwrap();
+        }
+
+        let now = Instant::now();
+        let mut i = 0;
+        let mut elapsed;
+        let mut actual_edits = 0;
+        while i < runs {
+            let select_table = random_table(&tables_to_choose_from);
+            let _ = pool
+                .cache(
+                    &[select_table],
+                    &format!("SELECT foo, SUM(bar) FROM {select_table} GROUP BY foo ORDER BY foo"),
+                    (),
+                )
+                .await
+                .unwrap();
+            elapsed = now.elapsed().as_secs();
+            if elapsed > fail_after as u64 {
+                panic!("Taking longer than {fail_after}s. Timing out.");
+            }
+            if edit_rate != 0 && random_between(0, edit_rate, &mut -1) == 0 {
+                actual_edits += 1;
+                let table_to_edit = random_table(&tables_to_choose_from);
+                pool.execute(
+                    &format!("INSERT INTO {table_to_edit} (foo) VALUES (1), (1)"),
+                    (),
+                )
+                .await
+                .unwrap();
+            }
+
+            // A small sleep to prevent over-taxing the CPU:
+            thread::sleep(Duration::from_millis(5));
+            i += 1;
+        }
+        elapsed = now.elapsed().as_secs();
+        println!("Elapsed time: {elapsed}s ({actual_edits} edits out of {runs})");
+        for table in tables_to_choose_from.iter() {
+            pool.execute(&format!("DROP TABLE IF EXISTS {table}"), ())
+                .await
+                .unwrap();
+        }
+        elapsed
     }
 }

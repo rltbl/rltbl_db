@@ -13,8 +13,12 @@ use std::{
     fmt::Display,
     future::Future,
     str::FromStr,
-    sync::Mutex,
+    sync::{Mutex, MutexGuard},
+    thread,
+    time::Duration,
 };
+use tree_sitter::{Node, Parser};
+use tree_sitter_sequel::LANGUAGE as SQL_LANGUAGE;
 
 pub type JsonValue = serde_json::Value;
 pub type JsonRow = JsonMap<String, JsonValue>;
@@ -31,8 +35,13 @@ lazy_static! {
     /// The regex used to match [valid database table names](VALID_TABLE_NAME_MATCH_STR).
     static ref VALID_TABLE_NAME_REGEX: Regex = Regex::new(VALID_TABLE_NAME_MATCH_STR).unwrap();
 
-    /// The in-memory cache.
-    static ref MEMORY_CACHE: Mutex<HashMap<MemoryCacheKey, Vec<JsonRow>>> = Mutex::new(HashMap::new());
+    /// The in-memory query cache, used by [CachingStrategy::Memory].
+    static ref MEMORY_CACHE: Mutex<HashMap<MemoryCacheKey, Vec<JsonRow>>>
+        = Mutex::new(HashMap::new());
+
+    /// The in-memory meta cache. It holds a set of things known to exist.
+    static ref MEMORY_META_CACHE: Mutex<HashSet<String>>
+        = Mutex::new(HashSet::new());
 }
 
 /// Defines the supported database kinds.
@@ -65,6 +74,8 @@ pub enum DbError {
     DatabaseError(String),
     /// An error with the data type of a value.
     DatatypeError(String),
+    /// An error that occurred while attempting to parse a SQL string or value.
+    ParseError(String),
 }
 
 impl std::error::Error for DbError {}
@@ -76,7 +87,8 @@ impl std::fmt::Display for DbError {
             | DbError::DataError(err)
             | DbError::InputError(err)
             | DbError::DatabaseError(err)
-            | DbError::DatatypeError(err) => write!(f, "{err}"),
+            | DbError::DatatypeError(err)
+            | DbError::ParseError(err) => write!(f, "{err}"),
         }
     }
 }
@@ -384,12 +396,17 @@ macro_rules! params {
 }
 
 /// Strategy to use when caching query results
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CachingStrategy {
+    /// No Caching.
     None,
+    /// Truncate the entire cache when it is dirty.
     TruncateAll,
+    /// Truncate entries only for edited tables when the cache is dirty.
     Truncate,
+    /// Truncate cache entries, for edited tables only, automatically whenever tables are edited.
     Trigger,
+    /// Similar to Truncate, but use an in-memory cache.
     Memory(usize),
 }
 
@@ -462,6 +479,15 @@ pub trait DbQuery {
     /// Get the current caching strategy.
     fn get_caching_strategy(&self) -> CachingStrategy;
 
+    /// When turned on, and the current [CachingStrategy] is not [None](CachingStrategy::None),
+    /// SQL commands executed through the API will be automatically checked to see if they
+    /// involve edits and/or drops of database tables. If they do then the cache will be
+    /// automatically updated in accordance with the current [CachingStrategy].
+    fn set_cache_aware_query(&mut self, value: bool);
+
+    /// Returns true if the cache_aware_query option is currently on.
+    fn get_cache_aware_query(&self) -> bool;
+
     /// Ensure that the cache table exists
     fn ensure_cache_table_exists(&self) -> impl Future<Output = Result<(), DbError>> + Send;
 
@@ -472,33 +498,106 @@ pub trait DbQuery {
         tables: &[&str],
     ) -> impl Future<Output = Result<(), DbError>> + Send;
 
-    /// Clear the cache entries for the given tables (if the cache table exists), or clear the whole
-    /// cache if `tables` is an empty list.
-    async fn clear_cache(&self, tables: &[&str]) -> Result<(), DbError> {
-        match self.table_exists("cache").await? {
-            false => Ok(()),
-            true => match tables.is_empty() {
-                true => {
-                    self.execute(r#"DELETE FROM "cache""#, ()).await?;
-                    Ok(())
-                }
-                false => {
-                    let prefix = match self.kind() {
-                        DbKind::SQLite => "?",
-                        DbKind::PostgreSQL => "$",
-                    };
-                    for table in tables {
-                        let table = format!(r#"%{table}%"#);
-                        self.execute(
-                            &format!(r#"DELETE FROM "cache" WHERE "tables" LIKE {prefix}1"#),
-                            &[table],
-                        )
-                        .await?;
-                    }
-                    Ok(())
-                }
-            },
+    /// Parse the given semi-colon-separated SQL commands and determine which tables will be
+    /// affected (either edited or dropped) by the commands, then ensure that there are no
+    /// entries for those tables in the cache in accordance with the current [CachingStrategy].
+    async fn clear_cache_for_affected_tables(&self, sql: &str) -> Result<(), DbError> {
+        if self.get_caching_strategy() != CachingStrategy::None {
+            let (edited_tables, dropped_tables): (Vec<_>, Vec<_>) = {
+                let (edited_tables, dropped_tables) = get_affected_tables(sql)?;
+                (
+                    edited_tables.into_iter().collect(),
+                    dropped_tables.into_iter().collect(),
+                )
+            };
+            if !edited_tables.is_empty() {
+                let edited_tables: Vec<_> = edited_tables.iter().map(|t| t.as_str()).collect();
+                self.clear_cache_for_edited_tables(&edited_tables).await?;
+            }
+            if !dropped_tables.is_empty() {
+                let dropped_tables: Vec<_> = dropped_tables.iter().map(|t| t.as_str()).collect();
+                self.clear_cache_for_dropped_tables(&dropped_tables).await?;
+            }
         }
+        Ok(())
+    }
+
+    // Triggers cannot apply to DROP commands, only to INSERT, UPDATE, DELETE, or TRUNCATE.
+    // See https://www.postgresql.org/docs/current/sql-createtrigger.html and
+    // https://sqlite.org/lang_createtrigger.html. Note that PostgreSQL has the concept
+    // of an "event trigger":
+    // https://www.pgtutorial.com/postgresql-tutorial/postgresql-event-triggers/ which could
+    // be used, but SQLite has no such capability. To workaround the limitation in SQLite, we
+    // define two clear_cache_() functions, one for edited tables, and one for dropped tables.
+    // In the case of a dropped table, unlike an edit, we cannot rely on the caching trigger,
+    // when we are using the [CachingStategy::Trigger] strategy, to automatically delete the
+    // entries from the cache for those tables, since those triggers will have beeen dropped
+    // along with the table.
+    // Although strictly speaking, PostgreSQL (which has event triggers) is not subject to this
+    // limitation, for simplicity we will not be creating a PostgreSQL event trigger and we will
+    // use both functions below for both database types.
+
+    /// Clear the entries from the cache table for the given list of tables, using the
+    /// current [CachingStrategy], under the assumption that the tables in the given list have
+    /// all just been edited (i.e., truncated, deleted from, inserted to, or updated).
+    async fn clear_cache_for_edited_tables(&self, tables: &[&str]) -> Result<(), DbError> {
+        match self.get_caching_strategy() {
+            CachingStrategy::None | CachingStrategy::Trigger => (),
+            CachingStrategy::TruncateAll => self.delete_cache_entries_for_tables(&[]).await?,
+            CachingStrategy::Truncate => self.delete_cache_entries_for_tables(tables).await?,
+            CachingStrategy::Memory(_) => clear_mem_cache(&tables)?,
+        };
+        Ok(())
+    }
+
+    /// Clear the entries from the cache table for the given list of tables, using the
+    /// current [CachingStrategy], under the assumption that the tables in the given list have
+    /// all just been dropped.
+    async fn clear_cache_for_dropped_tables(&self, tables: &[&str]) -> Result<(), DbError> {
+        match self.get_caching_strategy() {
+            CachingStrategy::None => (),
+            CachingStrategy::TruncateAll => self.delete_cache_entries_for_tables(&[]).await?,
+            CachingStrategy::Trigger | CachingStrategy::Truncate => {
+                self.delete_cache_entries_for_tables(tables).await?
+            }
+            CachingStrategy::Memory(_) => clear_mem_cache(&tables)?,
+        };
+
+        // Indicate that any triggers for these tables no longer exist.
+        let mut meta_cache = get_meta_cache()?;
+        for table in tables {
+            if *table == "cache" {
+                meta_cache.remove("cache_table");
+            } else {
+                meta_cache.remove(&format!("{table}_triggers"));
+            }
+        }
+        Ok(())
+    }
+
+    /// Delete the entries for the tables in the given list (independently of the current
+    /// caching strategy) from the cache table, if it exists. If the given table list is empty,
+    /// clear the entire cache.
+    async fn delete_cache_entries_for_tables(&self, tables: &[&str]) -> Result<(), DbError> {
+        if self.table_exists("cache").await? {
+            if tables.is_empty() {
+                self.execute(r#"DELETE FROM "cache""#, ()).await?;
+            } else {
+                let prefix = match self.kind() {
+                    DbKind::SQLite => "?",
+                    DbKind::PostgreSQL => "$",
+                };
+                for table in tables {
+                    let table = format!(r#"%{table}%"#);
+                    self.execute(
+                        &format!(r#"DELETE FROM "cache" WHERE "tables" LIKE {prefix}1"#),
+                        &[table],
+                    )
+                    .await?;
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Execute a SQL command, returning a vector of JSON rows. If the result of the command exists
@@ -542,7 +641,19 @@ pub trait DbQuery {
                 };
                 let cache_params = &["[", "]", &tables_param, sql, &params_param];
 
-                match self.query_strings(&cache_sql, cache_params).await?.first() {
+                let strings = {
+                    let rows = self.query_no_cache(&cache_sql, cache_params).await?;
+                    let strings = rows
+                        .iter()
+                        .map(|row| match row.values().nth(0) {
+                            Some(value) => Ok(json_value_to_string(value)),
+                            None => Err(DbError::DataError("Empty row".to_owned())),
+                        })
+                        .collect::<Vec<_>>();
+                    let strings: Result<Vec<String>, DbError> = strings.into_iter().collect();
+                    strings?
+                };
+                match strings.first() {
                     Some(values) => {
                         let json_rows: Vec<JsonRow> = match serde_json::from_str(&values) {
                             Ok(json_rows) => json_rows,
@@ -555,7 +666,7 @@ pub trait DbQuery {
                         Ok(json_rows)
                     }
                     None => {
-                        let json_rows = self.query(sql, params).await?;
+                        let json_rows = self.query_no_cache(sql, params).await?;
                         let json_rows_content = json!(json_rows).to_string();
                         let insert_sql = format!(
                             r#"INSERT INTO "cache"
@@ -563,7 +674,7 @@ pub trait DbQuery {
                                VALUES ({prefix}1, {prefix}2, {prefix}3, {prefix}4)"#
                         );
                         let insert_params = [&tables_param, sql, &params_param, &json_rows_content];
-                        self.query(&insert_sql, &insert_params).await?;
+                        self.execute_no_cache(&insert_sql, &insert_params).await?;
                         Ok(json_rows)
                     }
                 }
@@ -581,12 +692,7 @@ pub trait DbQuery {
                 parameters: format!("{params:?}"),
             };
             let cached_rows = {
-                let cache = match MEMORY_CACHE.try_lock() {
-                    Ok(cache) => cache,
-                    Err(err) => {
-                        return Err(DbError::ConnectError(format!("Error locking cache: {err}")));
-                    }
-                };
+                let cache = get_memory_cache()?;
                 match cache.get(&mem_key) {
                     Some(json_rows) => Some(json_rows.to_vec()),
                     None => None,
@@ -596,14 +702,7 @@ pub trait DbQuery {
                 Some(json_rows) => Ok(json_rows),
                 None => {
                     let json_rows = self.query(sql, params).await?;
-                    let mut cache = match MEMORY_CACHE.try_lock() {
-                        Ok(cache) => cache,
-                        Err(err) => {
-                            return Err(DbError::ConnectError(format!(
-                                "Error locking cache: {err}"
-                            )));
-                        }
-                    };
+                    let mut cache = get_memory_cache()?;
                     let mut keys = cache.keys().map(|key| key.clone()).collect::<Vec<_>>();
                     // If the number of keys exceeds the allowed cache size, remove any extra keys
                     // at random.
@@ -626,11 +725,30 @@ pub trait DbQuery {
         match self.get_caching_strategy() {
             CachingStrategy::None => self.query(sql, params).await,
             CachingStrategy::TruncateAll | CachingStrategy::Truncate => {
-                self.ensure_cache_table_exists().await?;
+                let cache_table_exists = match get_meta_cache()?.get("cache_table") {
+                    Some(_) => true,
+                    None => false,
+                };
+                if !cache_table_exists {
+                    self.ensure_cache_table_exists().await?;
+                    let mut cache = get_meta_cache()?;
+                    cache.insert("cache_table".to_string());
+                }
                 db_cache(tables, sql, &params.into_params()).await
             }
             CachingStrategy::Trigger => {
-                self.ensure_caching_triggers_exist(tables).await?;
+                for table in tables {
+                    let table_triggers = format!("{table}_triggers");
+                    let table_triggers_exist = match get_meta_cache()?.get(&table_triggers) {
+                        Some(_) => true,
+                        None => false,
+                    };
+                    if !table_triggers_exist {
+                        self.ensure_caching_triggers_exist(&[table]).await?;
+                        let mut cache = get_meta_cache()?;
+                        cache.insert(table_triggers);
+                    }
+                }
                 db_cache(tables, sql, &params.into_params()).await
             }
             CachingStrategy::Memory(cache_size) => {
@@ -666,7 +784,7 @@ pub trait DbQuery {
         table: &str,
     ) -> impl Future<Output = Result<Vec<String>, DbError>> + Send;
 
-    /// Execute a SQL command, without a return value.
+    /// Execute a SQL command, returning nothing.
     async fn execute(&self, sql: &str, params: impl IntoParams + Send) -> Result<(), DbError> {
         let params = params.into_params();
         match params {
@@ -676,11 +794,41 @@ pub trait DbQuery {
         Ok(())
     }
 
+    /// Execute a SQL command, returning nothing, without updating the cache, regardless of
+    /// whether cache_aware_query option (see [DbQuery::set_cache_aware_query()]) has been set.
+    async fn execute_no_cache(
+        &self,
+        sql: &str,
+        params: impl IntoParams + Send,
+    ) -> Result<(), DbError> {
+        let params = params.into_params();
+        match params {
+            Params::None => self.query_no_cache(sql, ()).await?,
+            _ => self.query_no_cache(sql, params).await?,
+        };
+        Ok(())
+    }
+
     /// Sequentially execute a semicolon-delimited list of statements, without parameters.
     fn execute_batch(&self, sql: &str) -> impl Future<Output = Result<(), DbError>> + Send;
 
     /// Execute a SQL command, returning a vector of JSON rows.
-    fn query(
+    async fn query(
+        &self,
+        sql: &str,
+        params: impl IntoParams + Send,
+    ) -> Result<Vec<JsonRow>, DbError> {
+        let rows = self.query_no_cache(sql, params).await?;
+        if self.get_cache_aware_query() {
+            self.clear_cache_for_affected_tables(sql).await?;
+        }
+        Ok(rows)
+    }
+
+    /// Execute a SQL command, returning a vector of JSON rows, without updating the cache,
+    /// regardless of whether the cache_aware_query option (see [DbQuery::set_cache_aware_query()])
+    /// has been set.
+    fn query_no_cache(
         &self,
         sql: &str,
         params: impl IntoParams + Send,
@@ -870,29 +1018,17 @@ pub trait DbQuery {
         // Drop the table:
         match self.kind() {
             DbKind::PostgreSQL => {
-                self.execute(&format!(r#"DROP TABLE IF EXISTS "{table}" CASCADE"#), ())
+                self.execute_no_cache(&format!(r#"DROP TABLE IF EXISTS "{table}" CASCADE"#), ())
                     .await?
             }
             DbKind::SQLite => {
-                self.execute(&format!(r#"DROP TABLE IF EXISTS "{table}""#), ())
+                self.execute_no_cache(&format!(r#"DROP TABLE IF EXISTS "{table}""#), ())
                     .await?
             }
         };
 
         // Delete dirty entries from the cache in accordance with our caching strategy:
-        match self.get_caching_strategy() {
-            CachingStrategy::None => (),
-            CachingStrategy::TruncateAll => {
-                self.clear_cache(&[]).await?;
-            }
-            // We clear the cache also in the case of a trigger, since the trigger will not
-            // be triggered when we drop the table (it will, rather, be dropped along with the
-            // table)
-            CachingStrategy::Truncate | CachingStrategy::Trigger => {
-                self.clear_cache(&[&table]).await?;
-            }
-            CachingStrategy::Memory(_) => clear_mem_cache(&[&table])?,
-        };
+        self.clear_cache_for_dropped_tables(&[&table]).await?;
         Ok(())
     }
 }
@@ -947,14 +1083,266 @@ pub fn validate_table_name(table_name: &str) -> Result<String, DbError> {
     }
 }
 
+/// Parse the given string, representing a series of (semi-colon-separated) SQL commands,
+/// into their constituents and determine the tables that will be affected when the commands
+/// are executed, if any. Two sets of tables are returned. The first contains the tables that
+/// are going to be edited (targets of commands like INSERT, UPDATE, DELETE, and TRUNCATE), the
+/// second contains tables that are going to be dropped (targets of a DROP TABLE command).
+/// All other kinds of statements will be silently ignored. In particular, table modifications
+/// that occur _within_ a CTE are not recognized by this function. Such table-modifying CTEs are
+/// supported by PostgreSQL (see
+/// <https://www.postgresql.org/docs/current/queries-with.html#QUERIES-WITH-MODIFYING>) but
+/// seemingly not by SQLite (see <https://sqlite.org/lang_with.html>).
+fn get_affected_tables(sql: &str) -> Result<(HashSet<String>, HashSet<String>), DbError> {
+    // Validates that a given node is not an error node:
+    let check_for_error = |node: &Node<'_>| -> Result<(), DbError> {
+        if node.is_error() {
+            return Err(DbError::ParseError(format!(
+                "Error parsing '{sql}': {node}"
+            )));
+        }
+        Ok(())
+    };
+
+    // Checks that the given node list is of the expected length:
+    fn verify_list_len(node_list: &Vec<Node<'_>>, len: usize) -> Result<(), DbError> {
+        if node_list.len() != len {
+            return Err(DbError::ParseError(format!(
+                "Wrong number of values: {}. Expected: {}",
+                node_list.len(),
+                len
+            )));
+        }
+        Ok(())
+    }
+
+    // Instantiate the parser and read in the given sql string:
+    let mut parser = Parser::new();
+    parser
+        .set_language(&SQL_LANGUAGE.into())
+        .map_err(|err| DbError::ParseError(format!("Error setting language to SQL: {err}")))?;
+    let tree = match parser.parse(sql, None) {
+        Some(tree) => tree,
+        None => return Err(DbError::ParseError(format!("Could not parse '{sql}'"))),
+    };
+
+    // Collect the top-level statements:
+    let statements = {
+        let root_node = tree.root_node();
+        check_for_error(&root_node)?;
+        if root_node.kind().to_lowercase() != "program" {
+            return Err(DbError::ParseError(format!(
+                "Unexpected root node kind: {}",
+                root_node.kind()
+            )));
+        }
+        root_node
+            .children(&mut root_node.walk())
+            .filter(|child| child.kind().to_lowercase() == "statement")
+            .collect::<Vec<_>>()
+    };
+
+    // Determine the tables that will be modified:
+    let mut edited_tables = HashSet::new();
+    let mut dropped_tables = HashSet::new();
+    for statement in &statements {
+        check_for_error(&statement)?;
+        for instruction in statement.children(&mut tree.walk()) {
+            check_for_error(&instruction)?;
+            match instruction.kind().to_lowercase().as_str() {
+                "insert" => {
+                    let table_name = {
+                        let object_ref = instruction
+                            .children(&mut instruction.walk())
+                            .filter(|child| child.kind().to_lowercase() == "object_reference")
+                            .collect::<Vec<_>>();
+                        verify_list_len(&object_ref, 1)?;
+                        let object_ref = object_ref[0];
+
+                        let identifier = object_ref
+                            .children(&mut object_ref.walk())
+                            .filter(|child| child.kind().to_lowercase() == "identifier")
+                            .collect::<Vec<_>>();
+                        verify_list_len(&identifier, 1)?;
+                        let identifier = identifier[0];
+
+                        validate_table_name(
+                            &sql.to_string()[identifier.start_byte()..identifier.end_byte()],
+                        )?
+                    };
+                    edited_tables.insert(table_name);
+                }
+                "update" => {
+                    let table_name = {
+                        let relation = instruction
+                            .children(&mut instruction.walk())
+                            .filter(|child| child.kind().to_lowercase() == "relation")
+                            .collect::<Vec<_>>();
+                        verify_list_len(&relation, 1)?;
+                        let relation = relation[0];
+
+                        let object_ref = relation
+                            .children(&mut relation.walk())
+                            .filter(|child| child.kind().to_lowercase() == "object_reference")
+                            .collect::<Vec<_>>();
+                        verify_list_len(&object_ref, 1)?;
+                        let object_ref = object_ref[0];
+
+                        let identifier = object_ref
+                            .children(&mut object_ref.walk())
+                            .filter(|child| child.kind().to_lowercase() == "identifier")
+                            .collect::<Vec<_>>();
+                        verify_list_len(&identifier, 1)?;
+                        let identifier = identifier[0];
+
+                        validate_table_name(
+                            &sql.to_string()[identifier.start_byte()..identifier.end_byte()],
+                        )?
+                    };
+                    edited_tables.insert(table_name);
+                }
+                "delete" => {
+                    let table_name = {
+                        let details =
+                            instruction
+                                .next_sibling()
+                                .ok_or(DbError::ParseError(format!(
+                                    "No details found for '{}'",
+                                    instruction.kind()
+                                )))?;
+                        let object_ref = details
+                            .children(&mut details.walk())
+                            .filter(|child| child.kind().to_lowercase() == "object_reference")
+                            .collect::<Vec<_>>();
+                        verify_list_len(&object_ref, 1)?;
+                        let object_ref = object_ref[0];
+
+                        let identifier = object_ref
+                            .children(&mut object_ref.walk())
+                            .filter(|child| child.kind().to_lowercase() == "identifier")
+                            .collect::<Vec<_>>();
+                        verify_list_len(&identifier, 1)?;
+                        let identifier = identifier[0];
+
+                        validate_table_name(
+                            &sql.to_string()[identifier.start_byte()..identifier.end_byte()],
+                        )?
+                    };
+                    edited_tables.insert(table_name);
+                }
+                "keyword_truncate" => {
+                    let mut possible_next_word = instruction.next_sibling();
+                    while let Some(next_word) = possible_next_word {
+                        if next_word.kind().to_lowercase() == "object_reference" {
+                            let identifier = next_word
+                                .children(&mut next_word.walk())
+                                .filter(|child| child.kind().to_lowercase() == "identifier")
+                                .collect::<Vec<_>>();
+                            verify_list_len(&identifier, 1)?;
+                            let identifier = identifier[0];
+
+                            let table = validate_table_name(
+                                &sql.to_string()[identifier.start_byte()..identifier.end_byte()],
+                            )?;
+                            edited_tables.insert(table);
+                        }
+                        possible_next_word = next_word.next_sibling();
+                    }
+                }
+                "drop_table" => {
+                    let table_name = {
+                        let object_ref = instruction
+                            .children(&mut instruction.walk())
+                            .filter(|child| child.kind().to_lowercase() == "object_reference")
+                            .collect::<Vec<_>>();
+                        verify_list_len(&object_ref, 1)?;
+                        let object_ref = object_ref[0];
+
+                        let identifier = object_ref
+                            .children(&mut object_ref.walk())
+                            .filter(|child| child.kind().to_lowercase() == "identifier")
+                            .collect::<Vec<_>>();
+                        verify_list_len(&identifier, 1)?;
+                        let identifier = identifier[0];
+
+                        validate_table_name(
+                            &sql.to_string()[identifier.start_byte()..identifier.end_byte()],
+                        )?
+                    };
+                    dropped_tables.insert(table_name);
+                }
+                // Silently ignore all other kinds of instructions
+                _ => (),
+            };
+        }
+    }
+
+    // Edits of the cache table itself are never cached so we do not need to report them.
+    // However we do report a drop of the cache.
+    let edited_tables = edited_tables
+        .into_iter()
+        .filter(|table| *table != "cache")
+        .collect::<HashSet<_>>();
+
+    Ok((edited_tables, dropped_tables))
+}
+
+/// Retrieve the in-memory [MEMORY_META_CACHE].
+fn get_meta_cache<'a>() -> Result<MutexGuard<'a, HashSet<String>>, DbError> {
+    let max_attempts = 20;
+    let mut remaining_attempts = max_attempts;
+    let mut meta_cache = MEMORY_META_CACHE.try_lock();
+    while let Err(err) = meta_cache {
+        meta_cache = MEMORY_META_CACHE.try_lock();
+        if let Ok(_) = meta_cache {
+            break;
+        }
+        remaining_attempts -= 1;
+        if remaining_attempts == 0 {
+            return Err(DbError::ConnectError(format!(
+                "Error locking cache: {err} (retried {max_attempts} times)"
+            )));
+        } else {
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
+    let meta_cache = meta_cache.unwrap();
+    Ok(meta_cache)
+}
+
+/// Retrieve the in-memory [MEMORY_CACHE].
+fn get_memory_cache<'a>() -> Result<MutexGuard<'a, HashMap<MemoryCacheKey, Vec<JsonRow>>>, DbError>
+{
+    let max_attempts = 20;
+    let mut remaining_attempts = max_attempts;
+    let mut memory_cache = MEMORY_CACHE.try_lock();
+    while let Err(err) = memory_cache {
+        memory_cache = MEMORY_CACHE.try_lock();
+        if let Ok(_) = memory_cache {
+            break;
+        }
+        remaining_attempts -= 1;
+        if remaining_attempts == 0 {
+            return Err(DbError::ConnectError(format!(
+                "Error locking cache: {err} (retried {max_attempts} times)"
+            )));
+        } else {
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
+    let memory_cache = memory_cache.unwrap();
+    Ok(memory_cache)
+}
+
+/// Retrieve a copy of the contents of the memory cache.
+pub fn get_memory_cache_contents() -> Result<HashMap<MemoryCacheKey, Vec<JsonRow>>, DbError> {
+    let cache = get_memory_cache()?;
+    Ok(cache.clone())
+}
+
 /// Clear the memory cache.
 pub fn clear_mem_cache(tables: &[&str]) -> Result<(), DbError> {
-    let mut cache = match MEMORY_CACHE.try_lock() {
-        Ok(cache) => cache,
-        Err(err) => {
-            return Err(DbError::ConnectError(format!("Error locking cache: {err}")));
-        }
-    };
+    let mut cache = get_memory_cache()?;
     let keys = cache
         .keys()
         .map(|k| k)
@@ -1030,5 +1418,133 @@ mod tests {
         if let Ok(_) = validate_table_name(r#"my table"#) {
             panic!("Expected an error");
         }
+    }
+
+    #[tokio::test]
+    async fn test_sql_parsing() {
+        // Single statements, possibly with parameters:
+
+        let (edited_tables, dropped_tables) =
+            get_affected_tables(&format!(r#"INSERT INTO "alpha" VALUES ($1, $2, $3)"#)).unwrap();
+        let edited_tables: Vec<_> = edited_tables.into_iter().collect();
+        assert_eq!(edited_tables, ["alpha"]);
+        assert_eq!(dropped_tables, [].into());
+
+        let (edited_tables, dropped_tables) = get_affected_tables(
+            r#"WITH bar AS (SELECT * FROM alpha),
+                        mar AS (SELECT * FROM beta)
+                   INSERT INTO gamma
+                   SELECT alpha.*
+                   FROM alpha, beta
+                   WHERE alpha.value = beta.value"#,
+        )
+        .unwrap();
+        let edited_tables: Vec<_> = edited_tables.into_iter().collect();
+        assert_eq!(edited_tables, ["gamma"]);
+        assert_eq!(dropped_tables, [].into());
+
+        let (edited_tables, dropped_tables) =
+            get_affected_tables(&format!(r#"UPDATE "delta" set bar = $1 WHERE bar = $2"#)).unwrap();
+        let edited_tables: Vec<_> = edited_tables.into_iter().collect();
+        assert_eq!(edited_tables, ["delta"]);
+        assert_eq!(dropped_tables, [].into());
+
+        let (edited_tables, dropped_tables) = get_affected_tables(&format!(
+            r#"WITH bar AS (SELECT * FROM test),
+                        mar AS (SELECT * FROM test)
+                   UPDATE delta
+                   SET value = bar.value
+                   FROM bar, mar
+                   WHERE bar.value = $1 AND bar.value = mar.value"#,
+        ))
+        .unwrap();
+        let edited_tables: Vec<_> = edited_tables.into_iter().collect();
+        assert_eq!(edited_tables, ["delta"]);
+        assert_eq!(dropped_tables, [].into());
+
+        let (edited_tables, dropped_tables) =
+            get_affected_tables(&format!(r#"DELETE FROM "epsilon" WHERE bar >= $1"#)).unwrap();
+        let edited_tables: Vec<_> = edited_tables.into_iter().collect();
+        assert_eq!(edited_tables, ["epsilon"]);
+        assert_eq!(dropped_tables, [].into());
+
+        let (edited_tables, dropped_tables) = get_affected_tables(
+            r#"WITH bar AS (SELECT * FROM test),
+                        mar AS (SELECT * FROM test)
+                   DELETE FROM lambda WHERE value IN (SELECT value FROM bar)"#,
+        )
+        .unwrap();
+        let edited_tables: Vec<_> = edited_tables.into_iter().collect();
+        assert_eq!(edited_tables, ["lambda"]);
+        assert_eq!(dropped_tables, [].into());
+
+        let (edited_tables, dropped_tables) = get_affected_tables(r#"DROP TABLE "rho""#).unwrap();
+        let dropped_tables: Vec<_> = dropped_tables.into_iter().collect();
+        assert_eq!(dropped_tables, ["rho"]);
+        assert_eq!(edited_tables, [].into());
+
+        let (edited_tables, dropped_tables) =
+            get_affected_tables(r#"DROP TABLE IF EXISTS "phi" CASCADE"#).unwrap();
+        let dropped_tables: Vec<_> = dropped_tables.into_iter().collect();
+        assert_eq!(dropped_tables, ["phi"]);
+        assert_eq!(edited_tables, [].into());
+
+        let (edited_tables, dropped_tables) =
+            get_affected_tables("TRUNCATE TABLE mu, nu CASCADE").unwrap();
+        let mut edited_tables: Vec<_> = edited_tables.into_iter().collect();
+        edited_tables.sort();
+        assert_eq!(edited_tables, ["mu", "nu"]);
+        assert_eq!(dropped_tables, [].into());
+
+        // Multiple statements, no parameters:
+
+        let sql = r#"
+            INSERT INTO "alpha" VALUES (1, 2, 3), (4, 5, 6);
+
+            INSERT INTO gamma
+            SELECT alpha.*
+            FROM alpha, beta
+            WHERE alpha.value = beta.value;
+
+            WITH t AS (
+              SELECT * from delta_base ORDER BY quality LIMIT 1
+            )
+            UPDATE delta SET price = t.price * 1.05;
+
+            WITH t AS (
+              SELECT * FROM phi_base
+              WHERE
+                "date" >= '2010-10-01' AND
+                "date" < '2010-11-01'
+            )
+            INSERT INTO phi
+            SELECT * FROM t;
+
+            DELETE FROM "psi" WHERE bar >= 10;
+
+            WITH RECURSIVE included_lambda(sub_lambda, lambda) AS (
+                SELECT sub_lambda, lambda FROM lambda WHERE lambda = 'our_product'
+              UNION ALL
+                SELECT p.sub_lambda, p.lambda
+                FROM included_lambda pr, lambda p
+                WHERE p.lambda = pr.sub_lambda
+            )
+            DELETE FROM lambda
+              WHERE lambda IN (SELECT lambda FROM included_lambda);
+
+            DROP TABLE "rho";
+
+            DROP TABLE "sigma" CASCADE"#;
+
+        let (edited_tables, dropped_tables) = get_affected_tables(&sql).unwrap();
+        let mut edited_tables: Vec<_> = edited_tables.into_iter().collect();
+        let mut dropped_tables: Vec<_> = dropped_tables.into_iter().collect();
+        edited_tables.sort();
+        dropped_tables.sort();
+        assert_eq!(
+            edited_tables,
+            ["alpha", "delta", "gamma", "lambda", "phi", "psi",]
+        );
+        assert_eq!(dropped_tables, ["rho", "sigma",]);
     }
 }

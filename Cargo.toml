@@ -20,6 +20,8 @@ rust_decimal = { version = "1.39.0", features = ["db-tokio-postgres", "macros"],
 serde = { version = "1.0.226", features = ["derive"] }
 serde_json = { version = "1.0.145", features = ["preserve_order"] }
 tokio-postgres = { version = "0.7.14", optional = true }
+tree-sitter = "0.26.3"
+tree-sitter-sequel = "0.3.11"
 
 [dev-dependencies]
 anyhow = "1.0.100"
