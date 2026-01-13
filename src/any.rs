@@ -1788,16 +1788,22 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_caching_performance() {
-        let runs = 10000;
-        let fail_after = 150;
-        let edit_rate = 100;
+        let runs = 5000;
+        let edit_rate = 25;
         #[cfg(feature = "rusqlite")]
-        perform_caching(":memory:", runs, fail_after, edit_rate).await;
+        perform_caching(":memory:", runs, edit_rate, 75).await;
         #[cfg(feature = "tokio-postgres")]
-        perform_caching("postgresql:///rltbl_db", runs, fail_after, edit_rate).await;
+        perform_caching("postgresql:///rltbl_db", runs, edit_rate, 75).await;
     }
 
-    async fn perform_caching(url: &str, runs: usize, fail_after: usize, edit_rate: usize) {
+    // Performs the caching performance test on the database located at the given url, using
+    // the given number of runs and edit rate. The latter represents the rate at which the
+    // tables in the simulation are edited (e.g., a value of 25 means that a table will be edited
+    // in one out every 25th run, on average), which causes the cache to become out of date and
+    // require maintenance in accordance with the current caching strategy. The test is run
+    // for the given number of runs for each of the supported caching strategies. The running
+    // time for each strategy is then summarized and reported via STDOUT.
+    async fn perform_caching(url: &str, runs: usize, edit_rate: usize, fail_after: usize) {
         let mut pool = AnyPool::connect(url).await.unwrap();
         let all_strategies = ["none", "truncate_all", "truncate", "trigger", "memory:1000"]
             .iter()
@@ -1805,9 +1811,11 @@ mod tests {
             .collect::<Vec<_>>();
 
         pool.set_cache_aware_query(true);
+        let this_test = "Caching Performance Test -";
         println!(
-            "\nTesting caching performance for {} with cache_aware_query {}.",
+            "{this_test} Starting test for {} connection '{}' with cache_aware_query {}.",
             pool.kind(),
+            url,
             match pool.get_cache_aware_query() {
                 true => "on",
                 false => "off",
@@ -1815,15 +1823,15 @@ mod tests {
         );
         let mut times = BTreeMap::new();
         for strategy in &all_strategies {
-            println!("Setting caching strategy to {strategy}.");
+            println!("{this_test} Using strategy: {strategy}.");
             pool.set_caching_strategy(&strategy);
             let elapsed = perform_caching_detail(&pool, runs, fail_after, edit_rate).await;
             times.insert(format!("{strategy}"), elapsed);
         }
 
-        println!("\nCaching times for {} (summary).", pool.kind());
+        println!("{this_test} Elapsed times for {} (summary):", pool.kind());
         for (strategy, elapsed) in times.iter() {
-            println!("Strategy: {strategy}, elapsed time: {elapsed}s");
+            println!("  Strategy: {strategy}, elapsed time: {elapsed}s");
         }
     }
 
@@ -1916,7 +1924,11 @@ mod tests {
             i += 1;
         }
         elapsed = now.elapsed().as_secs();
-        println!("Elapsed time: {elapsed}s ({actual_edits} edits out of {runs})");
+        println!(
+            "Caching Performance Test - Elapsed time for strategy {}: {elapsed}s \
+             ({actual_edits} edits in {runs} runs)",
+            pool.get_caching_strategy()
+        );
         for table in tables_to_choose_from.iter() {
             pool.execute(&format!("DROP TABLE IF EXISTS {table}"), ())
                 .await
