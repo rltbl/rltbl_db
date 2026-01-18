@@ -752,14 +752,13 @@ pub trait DbQuery {
             if tables.is_empty() {
                 self.execute(r#"DELETE FROM "cache""#, ()).await?;
             } else {
-                let prefix = match self.kind() {
-                    DbKind::SQLite => "?",
-                    DbKind::PostgreSQL => "$",
-                };
                 for table in tables {
                     let table = format!(r#"%{table}%"#);
                     self.execute(
-                        &format!(r#"DELETE FROM "cache" WHERE "tables" LIKE {prefix}1"#),
+                        &format!(
+                            r#"DELETE FROM "cache" WHERE "tables" LIKE {}1"#,
+                            self.kind().param_prefix()
+                        ),
                         &[table],
                     )
                     .await?;
@@ -788,17 +787,14 @@ pub trait DbQuery {
                     DbKind::SQLite => r#"CAST("tables" AS TEXT)"#,
                     DbKind::PostgreSQL => r#""tables"::TEXT"#,
                 };
-                let prefix = match self.kind() {
-                    DbKind::SQLite => "?",
-                    DbKind::PostgreSQL => "$",
-                };
                 let cache_sql = format!(
                     r#"SELECT {prefix}1||rtrim(ltrim("value", '['), ']')||{prefix}2 AS "value"
                        FROM "cache"
                        WHERE {tables_cast} = {prefix}3
                        AND "statement" = {prefix}4
                        AND "parameters" = {prefix}5
-                       LIMIT 1"#
+                       LIMIT 1"#,
+                    prefix = self.kind().param_prefix(),
                 );
                 let tables_param = format!("[{}]", tables.join(", "));
                 let params_param = match params {
@@ -842,7 +838,8 @@ pub trait DbQuery {
                         let insert_sql = format!(
                             r#"INSERT INTO "cache"
                                ("tables", "statement", "parameters", "value")
-                               VALUES ({prefix}1, {prefix}2, {prefix}3, {prefix}4)"#
+                               VALUES ({prefix}1, {prefix}2, {prefix}3, {prefix}4)"#,
+                            prefix = self.kind().param_prefix(),
                         );
                         let insert_params = [&tables_param, sql, &params_param, &json_rows_content];
                         self.execute_no_cache(&insert_sql, &insert_params).await?;

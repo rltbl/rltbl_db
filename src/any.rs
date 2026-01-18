@@ -309,7 +309,7 @@ impl DbQuery for AnyPool {
 mod tests {
     use super::*;
     use crate::core::{CachingStrategy, DbRow, StringRow, get_memory_cache_contents};
-    use crate::params;
+    use crate::{core::ColumnMap, params};
     use indexmap::indexmap as db_row;
     use rand::{
         SeedableRng as _,
@@ -334,10 +334,7 @@ mod tests {
 
     async fn text_column_query(url: &str) {
         let pool = AnyPool::connect(url).await.unwrap();
-        let p = match pool.kind() {
-            DbKind::PostgreSQL => "$",
-            DbKind::SQLite => "?",
-        };
+        let p = pool.kind().param_prefix().to_string();
         pool.execute_batch(&format!(
             "DROP TABLE IF EXISTS test_table_text{cascade};\
              CREATE TABLE test_table_text ( value TEXT )",
@@ -400,10 +397,7 @@ mod tests {
 
     async fn integer_column_query(url: &str) {
         let pool = AnyPool::connect(url).await.unwrap();
-        let p = match pool.kind() {
-            DbKind::PostgreSQL => "$",
-            DbKind::SQLite => "?",
-        };
+        let p = pool.kind().param_prefix().to_string();
         pool.execute_batch(&format!(
             "DROP TABLE IF EXISTS test_table_int{cascade};\
              CREATE TABLE test_table_int ( value_2 INT2, value_4 INT4, value_8 INT8 )",
@@ -467,10 +461,7 @@ mod tests {
 
     async fn float_column_query(url: &str) {
         let pool = AnyPool::connect(url).await.unwrap();
-        let p = match pool.kind() {
-            DbKind::PostgreSQL => "$",
-            DbKind::SQLite => "?",
-        };
+        let p = pool.kind().param_prefix().to_string();
 
         // FLOAT8
         pool.execute_batch(&format!(
@@ -545,10 +536,7 @@ mod tests {
 
     async fn mixed_column_query(url: &str) {
         let pool = AnyPool::connect(url).await.unwrap();
-        let p = match pool.kind() {
-            DbKind::PostgreSQL => "$",
-            DbKind::SQLite => "?",
-        };
+        let p = pool.kind().param_prefix().to_string();
         pool.execute_batch(&format!(
             "DROP TABLE IF EXISTS test_table_mixed{cascade};\
              CREATE TABLE test_table_mixed (\
@@ -666,10 +654,7 @@ mod tests {
 
     async fn input_params(url: &str) {
         let pool = AnyPool::connect(url).await.unwrap();
-        let p = match pool.kind() {
-            DbKind::PostgreSQL => "$",
-            DbKind::SQLite => "?",
-        };
+        let p = pool.kind().param_prefix().to_string();
         let cascade = match pool.kind() {
             DbKind::PostgreSQL => " CASCADE",
             DbKind::SQLite => "",
@@ -978,14 +963,14 @@ mod tests {
         .await
         .unwrap();
 
-        let columns = pool.columns(table1).await.unwrap();
+        let columns = pool.kind().columns(&pool, table1).await.unwrap();
         assert_eq!(
             columns,
             ColumnMap::from([("foo".to_owned(), "text".to_owned())])
         );
         pool.drop_table(table1).await.unwrap();
 
-        match pool.columns(table1).await {
+        match pool.kind().columns(&pool, table1).await {
             Ok(columns) => panic!("No columns expected for '{table1}' but got {columns:?}"),
             Err(_) => (),
         };
@@ -1025,11 +1010,17 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            pool.primary_keys("test_primary_keys1").await.unwrap(),
+            pool.kind()
+                .primary_keys(&pool, "test_primary_keys1")
+                .await
+                .unwrap(),
             ["foo"]
         );
         assert_eq!(
-            pool.primary_keys("test_primary_keys2").await.unwrap(),
+            pool.kind()
+                .primary_keys(&pool, "test_primary_keys2")
+                .await
+                .unwrap(),
             ["foo", "bar"]
         );
 

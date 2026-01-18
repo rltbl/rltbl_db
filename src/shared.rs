@@ -172,36 +172,33 @@ pub(crate) async fn edit<T: FromDbRows>(
     };
 
     let primary_keys = match edit_type {
-        EditType::Update | EditType::Upsert => match pool.primary_keys(&table).await? {
-            primary_keys if primary_keys.is_empty() => {
-                return Err(DbError::InputError(
-                    "Primary keys must not be empty.".to_string(),
-                ));
+        EditType::Update | EditType::Upsert => {
+            match pool.kind().primary_keys(pool, &table).await? {
+                primary_keys if primary_keys.is_empty() => {
+                    return Err(DbError::InputError(
+                        "Primary keys must not be empty.".to_string(),
+                    ));
+                }
+                primary_keys
+                    if !primary_keys
+                        .iter()
+                        .all(|pkey| columns.contains(&pkey.as_str())) =>
+                {
+                    return Err(DbError::InputError(format!(
+                        "Not all of the table's primary keys: {primary_keys:?} are in {columns:?}"
+                    )));
+                }
+                primary_keys => primary_keys,
             }
-            primary_keys
-                if !primary_keys
-                    .iter()
-                    .all(|pkey| columns.contains(&pkey.as_str())) =>
-            {
-                return Err(DbError::InputError(format!(
-                    "Not all of the table's primary keys: {primary_keys:?} are in {columns:?}"
-                )));
-            }
-            primary_keys => primary_keys,
-        },
+        }
         // Since we don't need a list of the table's primary keys to do an insert, we save
         // the database access and just return an empty list here:
         EditType::Insert => vec![],
     };
 
     // We use the column_map to determine the SQL type of each parameter.
-    let column_map = pool.columns(&table).await?;
-    // Although SQLite allows '$' as a prefix, it is required to use '?' to represent integer
-    // literals (see https://sqlite.org/c3ref/bind_blob.html) which is what we are using here.
-    let param_prefix = match pool.kind() {
-        DbKind::SQLite => "?",
-        DbKind::PostgreSQL => "$",
-    };
+    let column_map = pool.kind().columns(pool, &table).await?;
+    let param_prefix = pool.kind().param_prefix().to_string();
     let mut rows_to_return = vec![];
     let mut lines_to_bind = Vec::new();
     let mut params_to_be_bound = Vec::new();

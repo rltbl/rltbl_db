@@ -3,10 +3,9 @@
 use crate::{
     core::{
         CachingStrategy, ColumnMap, DbError, DbQuery, DbRow, FromDbRows, IntoDbRows, IntoParams,
-        ParamValue, Params, validate_table_name,
+        ParamValue, Params,
     },
     db_kind::DbKind,
-    params,
     shared::{EditType, edit},
 };
 
@@ -231,82 +230,14 @@ impl DbQuery for RusqlitePool {
 
     /// Implements [DbQuery::ensure_cache_table_exists()] for SQLite.
     async fn ensure_cache_table_exists(&self) -> Result<(), DbError> {
-        match self
-            .execute_no_cache(
-                r#"CREATE TABLE IF NOT EXISTS "cache" (
-                     "tables" TEXT,
-                     "statement" TEXT,
-                     "parameters" TEXT,
-                     "value" TEXT,
-                     PRIMARY KEY ("tables", "statement", "parameters")
-                   )"#,
-                (),
-            )
-            .await
-        {
-            Ok(_) => Ok(()),
-            Err(_) => {
-                // Since we are not using transactions, a race condition could occur in
-                // which two or more threads are trying to create the cache at the same
-                // time, triggering a primary key violation in the metadata table. So if
-                // there is an error creating the cache table we just check that it exists
-                // and if it does we assume that all is ok.
-                match self.table_exists("cache").await? {
-                    false => Err(DbError::DatabaseError(
-                        "The cache table could not be created".to_string(),
-                    )),
-                    true => Ok(()),
-                }
-            }
-        }
+        self.kind().ensure_cache_table_exists(self).await
     }
 
     /// Implements [DbQuery::ensure_caching_triggers_exist()] for SQLite.
     async fn ensure_caching_triggers_exist(&self, tables: &[&str]) -> Result<(), DbError> {
-        self.ensure_cache_table_exists().await?;
-        for table in tables {
-            let rows: Vec<DbRow> = self
-                .query_no_cache(
-                    r#"SELECT 1
-                       FROM sqlite_master
-                       WHERE type = 'trigger'
-                         AND name IN (?1, ?2, ?3)"#,
-                    &[
-                        &format!("{table}_cache_after_insert"),
-                        &format!("{table}_cache_after_update"),
-                        &format!("{table}_cache_after_delete"),
-                    ],
-                )
-                .await?;
-
-            // Only recreate the triggers if they don't all already exist:
-            if rows.len() != 3 {
-                // Note that parameters are not allowed in trigger creation statements in SQLite.
-                self.execute_batch(&format!(
-                    r#"DROP TRIGGER IF EXISTS "{table}_cache_after_insert";
-                       CREATE TRIGGER "{table}_cache_after_insert"
-                       AFTER INSERT ON "{table}"
-                       BEGIN
-                         DELETE FROM "cache" WHERE "tables" LIKE '%{table}%';
-                       END;
-                       DROP TRIGGER IF EXISTS "{table}_cache_after_update";
-                       CREATE TRIGGER "{table}_cache_after_update"
-                       AFTER UPDATE ON "{table}"
-                       BEGIN
-                         DELETE FROM "cache" WHERE "tables" LIKE '%{table}%';
-                       END;
-                       DROP TRIGGER IF EXISTS "{table}_cache_after_delete";
-                       CREATE TRIGGER "{table}_cache_after_delete"
-                       AFTER DELETE ON "{table}"
-                       BEGIN
-                         DELETE FROM "cache" WHERE "tables" LIKE '%{table}%';
-                       END"#,
-                    table = validate_table_name(table)?,
-                ))
-                .await?;
-            }
-        }
-        Ok(())
+        self.kind()
+            .ensure_caching_triggers_exist(self, tables)
+            .await
     }
 
     /// Implements [DbQuery::parse()] for SQLite.
@@ -340,56 +271,12 @@ impl DbQuery for RusqlitePool {
 
     /// Implements [DbQuery::columns()] for SQLite.
     async fn columns(&self, table: &str) -> Result<ColumnMap, DbError> {
-        let mut columns = ColumnMap::new();
-        let sql = r#"SELECT "name", "type"
-                     FROM pragma_table_info(?1)
-                     ORDER BY "name""#
-            .to_string();
-
-        let rows: Vec<DbRow> = self.query_no_cache(&sql, params![&table]).await?;
-        for row in &rows {
-            match (
-                row.get("name").and_then(|name| Some::<String>(name.into())),
-                row.get("type").and_then(|name| Some::<String>(name.into())),
-            ) {
-                (Some(column), Some(sql_type)) => {
-                    columns.insert(column.to_string(), sql_type.to_lowercase().to_string())
-                }
-                _ => {
-                    return Err(DbError::DataError(format!(
-                        "Error getting columns for table '{table}'"
-                    )));
-                }
-            };
-        }
-
-        match columns.is_empty() {
-            true => Err(DbError::DataError(format!(
-                "No information found for table '{table}'"
-            ))),
-            false => Ok(columns),
-        }
+        self.kind().columns(self, table).await
     }
 
     /// Implements [DbQuery::primary_keys()] for SQLite.
     async fn primary_keys(&self, table: &str) -> Result<Vec<String>, DbError> {
-        let rows: Vec<DbRow> = self
-            .query_no_cache(
-                r#"SELECT "name"
-               FROM pragma_table_info(?1)
-               WHERE "pk" > 0
-               ORDER BY "pk""#,
-                params![&table],
-            )
-            .await?;
-        rows.iter()
-            .map(
-                |row| match row.get("name").and_then(|name| Some::<String>(name.into())) {
-                    Some(pk_col) => Ok(pk_col.to_string()),
-                    None => Err(DbError::DataError("Empty row".to_owned())),
-                },
-            )
-            .collect()
+        self.kind().primary_keys(self, table).await
     }
 
     /// Implements [DbQuery::execute_batch()] for PostgreSQL
@@ -584,17 +471,7 @@ impl DbQuery for RusqlitePool {
 
     /// Implements [DbQuery::table_exists()] for SQLite.
     async fn table_exists(&self, table: &str) -> Result<bool, DbError> {
-        let rows: Vec<DbRow> = self
-            .query_no_cache(
-                r#"SELECT 1 FROM "sqlite_master"
-                   WHERE "type" = 'table' AND "name" = ?1"#,
-                &[table],
-            )
-            .await?;
-        match rows.first() {
-            None => Ok(false),
-            Some(_) => Ok(true),
-        }
+        self.kind().table_exists(self, table).await
     }
 }
 
