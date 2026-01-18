@@ -452,7 +452,7 @@ impl DbQuery for RusqlitePool {
             .await
             .map_err(|err| DbError::DatabaseError(err.to_string()))??
         };
-        Ok(FromDbRows::from_db_rows(rows))
+        Ok(FromDbRows::from(rows))
     }
 
     /// Implements [DbQuery::insert()] for SQLite.

@@ -557,11 +557,11 @@ impl IntoDbRows for &Vec<JsonRow> {
 }
 
 pub trait FromDbRows {
-    fn from_db_rows(rows: Vec<DbRow>) -> Self;
+    fn from(rows: Vec<DbRow>) -> Self;
 }
 
 impl FromDbRows for Vec<JsonRow> {
-    fn from_db_rows(rows: Vec<DbRow>) -> Self {
+    fn from(rows: Vec<DbRow>) -> Self {
         rows.into_iter()
             .map(|row| {
                 row.into_iter()
@@ -573,7 +573,7 @@ impl FromDbRows for Vec<JsonRow> {
 }
 
 impl FromDbRows for Vec<DbRow> {
-    fn from_db_rows(rows: Vec<DbRow>) -> Self {
+    fn from(rows: Vec<DbRow>) -> Self {
         rows
     }
 }
@@ -851,7 +851,7 @@ pub trait DbQuery {
                     }
                     None => {
                         let db_rows: Vec<DbRow> = self.query_no_cache(sql, params).await?;
-                        let json_rows: Vec<JsonRow> = FromDbRows::from_db_rows(db_rows.clone());
+                        let json_rows: Vec<JsonRow> = FromDbRows::from(db_rows.clone());
                         let json_rows_content = json!(json_rows).to_string();
                         let insert_sql = format!(
                             r#"INSERT INTO "cache"
@@ -890,7 +890,7 @@ pub trait DbQuery {
                 }
                 None => {
                     let db_rows: Vec<DbRow> = self.query_no_cache(sql, params).await?;
-                    let json_rows: Vec<JsonRow> = FromDbRows::from_db_rows(db_rows.clone());
+                    let json_rows: Vec<JsonRow> = FromDbRows::from(db_rows.clone());
                     let mut cache = get_memory_cache()?;
                     let mut keys = cache.keys().map(|key| key.clone()).collect::<Vec<_>>();
                     // If the number of keys exceeds the allowed cache size, remove any extra keys
@@ -914,7 +914,7 @@ pub trait DbQuery {
         match self.get_caching_strategy() {
             CachingStrategy::None => {
                 let rows: Vec<DbRow> = self.query_no_cache(sql, params).await?;
-                Ok(FromDbRows::from_db_rows(rows))
+                Ok(FromDbRows::from(rows))
             }
             CachingStrategy::TruncateAll | CachingStrategy::Truncate => {
                 let cache_table_exists = match get_meta_cache()?.get("cache_table") {
@@ -927,7 +927,7 @@ pub trait DbQuery {
                     cache.insert("cache_table".to_string());
                 }
                 let rows: Vec<DbRow> = db_cache(tables, sql, &params.into_params()).await?;
-                Ok(FromDbRows::from_db_rows(rows))
+                Ok(FromDbRows::from(rows))
             }
             CachingStrategy::Trigger => {
                 for table in tables {
@@ -943,11 +943,11 @@ pub trait DbQuery {
                     }
                 }
                 let rows: Vec<DbRow> = db_cache(tables, sql, &params.into_params()).await?;
-                Ok(FromDbRows::from_db_rows(rows))
+                Ok(FromDbRows::from(rows))
             }
             CachingStrategy::Memory(cache_size) => {
                 let rows = mem_cache(tables, sql, &params.into_params(), cache_size).await?;
-                Ok(FromDbRows::from_db_rows(rows))
+                Ok(FromDbRows::from(rows))
             }
         }
     }

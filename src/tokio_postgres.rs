@@ -510,7 +510,7 @@ impl DbQuery for TokioPostgresPool {
             db_rows.push(db_row);
         }
 
-        Ok(FromDbRows::from_db_rows(db_rows))
+        Ok(FromDbRows::from(db_rows))
     }
 
     /// Implements [DbQuery::insert()] for PostgreSQL
