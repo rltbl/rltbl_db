@@ -22,6 +22,7 @@ use tree_sitter_sequel::LANGUAGE as SQL_LANGUAGE;
 
 pub type JsonValue = serde_json::Value;
 pub type JsonRow = JsonMap<String, JsonValue>;
+pub type DbRow = IndexMap<String, ParamValue>;
 pub type StringRow = IndexMap<String, String>;
 pub type ColumnMap = IndexMap<String, String>;
 
@@ -116,6 +117,30 @@ pub enum ParamValue {
     Text(String),
 }
 
+// Implementations of attempted conversion of ParamValues into various types:
+
+impl Into<JsonValue> for ParamValue {
+    fn into(self) -> JsonValue {
+        match self {
+            ParamValue::Null => JsonValue::Null,
+            ParamValue::Boolean(value) => JsonValue::Bool(value),
+            ParamValue::SmallInteger(value) => JsonValue::Number(value.into()),
+            ParamValue::Integer(value) => JsonValue::Number(value.into()),
+            ParamValue::BigInteger(value) => JsonValue::Number(value.into()),
+            ParamValue::Real(value) => json!(value),
+            ParamValue::BigReal(value) => json!(value),
+            ParamValue::Numeric(value) => json!(value),
+            ParamValue::Text(value) => JsonValue::String(value),
+        }
+    }
+}
+
+impl Into<JsonValue> for &ParamValue {
+    fn into(self) -> JsonValue {
+        self.clone().into()
+    }
+}
+
 impl Into<String> for ParamValue {
     fn into(self) -> String {
         match self {
@@ -128,6 +153,82 @@ impl Into<String> for ParamValue {
             ParamValue::BigReal(number) => number.to_string(),
             ParamValue::Numeric(decimal) => decimal.to_string(),
             ParamValue::Text(string) => string.to_string(),
+        }
+    }
+}
+
+impl TryInto<u64> for ParamValue {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<u64, DbError> {
+        match self {
+            ParamValue::SmallInteger(number) => {
+                Ok(u64::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
+            }
+            ParamValue::Integer(number) => {
+                Ok(u64::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
+            }
+            ParamValue::BigInteger(number) => {
+                Ok(u64::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
+            }
+            _ => Err(DbError::InputError(format!(
+                "Not an unsigned integer: {self:?}"
+            ))),
+        }
+    }
+}
+
+impl TryInto<i64> for ParamValue {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<i64, DbError> {
+        match self {
+            ParamValue::SmallInteger(number) => {
+                Ok(i64::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
+            }
+            ParamValue::Integer(number) => {
+                Ok(i64::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
+            }
+            ParamValue::BigInteger(number) => {
+                Ok(i64::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
+            }
+            _ => Err(DbError::InputError(format!("Not an integer: {self:?}"))),
+        }
+    }
+}
+
+impl TryInto<f64> for ParamValue {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<f64, DbError> {
+        match self {
+            ParamValue::Real(number) => {
+                Ok(f64::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
+            }
+            ParamValue::BigReal(number) => {
+                Ok(f64::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
+            }
+            ParamValue::Numeric(number) => {
+                Ok(f64::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
+            }
+            _ => Err(DbError::InputError(format!("Not an integer: {self:?}"))),
+        }
+    }
+}
+
+impl TryInto<f32> for ParamValue {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<f32, DbError> {
+        match self {
+            ParamValue::Real(number) => {
+                Ok(f32::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
+            }
+            ParamValue::BigReal(number) => Ok(number as f32),
+            ParamValue::Numeric(number) => {
+                Ok(f32::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
+            }
+            _ => Err(DbError::InputError(format!("Not an integer: {self:?}"))),
         }
     }
 }
@@ -250,6 +351,29 @@ impl From<bool> for ParamValue {
     }
 }
 
+impl From<JsonValue> for ParamValue {
+    fn from(item: JsonValue) -> Self {
+        match &item {
+            JsonValue::Null => Self::Null,
+            JsonValue::Bool(val) => Self::Boolean(*val),
+            JsonValue::Number(number) => {
+                if number.is_u64() {
+                    Self::from(number.as_u64().unwrap())
+                } else if number.is_i64() {
+                    Self::from(number.as_i64().unwrap())
+                } else if number.is_f64() {
+                    Self::BigReal(number.as_f64().unwrap())
+                } else {
+                    Self::Text(item.to_string())
+                }
+            }
+            JsonValue::String(string) => Self::Text(string.to_string()),
+            JsonValue::Array(_) => Self::Text(item.to_string()),
+            JsonValue::Object(_) => Self::Text(item.to_string()),
+        }
+    }
+}
+
 impl From<()> for ParamValue {
     fn from(_: ()) -> Self {
         ParamValue::Null
@@ -288,30 +412,7 @@ impl PartialEq for ParamValue {
 
 impl Eq for ParamValue {}
 
-impl ParamValue {
-    /// Convert a serde_json Value to a ParamValue.
-    pub fn from_json(value: JsonValue) -> Self {
-        match &value {
-            JsonValue::Null => Self::Null,
-            JsonValue::Bool(val) => Self::Boolean(*val),
-            JsonValue::Number(number) => {
-                if number.is_u64() {
-                    Self::from(number.as_u64().unwrap())
-                } else if number.is_i64() {
-                    Self::from(number.as_i64().unwrap())
-                } else if number.is_f64() {
-                    Self::BigReal(number.as_f64().unwrap())
-                } else {
-                    Self::Text(value.to_string())
-                }
-            }
-            JsonValue::String(string) => Self::Text(string.to_string()),
-            JsonValue::Array(_) => Self::Text(value.to_string()),
-            JsonValue::Object(_) => Self::Text(value.to_string()),
-        }
-    }
-}
-
+/// Types that implement this trait can be converted into a [ParamValue].
 pub trait IntoParamValue {
     fn into_param_value(self) -> ParamValue;
 }
@@ -393,6 +494,88 @@ macro_rules! params {
         [$($value.into_param_value()),*]
 
     }};
+}
+
+// Traits for converting to and from vectors of DbRows:
+
+pub trait IntoDbRows {
+    fn into_db_rows(self) -> Vec<DbRow>;
+}
+
+impl IntoDbRows for Vec<DbRow> {
+    fn into_db_rows(self) -> Vec<DbRow> {
+        self
+    }
+}
+
+impl IntoDbRows for &Vec<DbRow> {
+    fn into_db_rows(self) -> Vec<DbRow> {
+        self.clone()
+    }
+}
+
+impl IntoDbRows for &[DbRow] {
+    fn into_db_rows(self) -> Vec<DbRow> {
+        self.to_vec()
+    }
+}
+
+impl IntoDbRows for &[&DbRow] {
+    fn into_db_rows(self) -> Vec<DbRow> {
+        self.into_iter()
+            .cloned()
+            .map(|row| row.clone())
+            .collect::<Vec<_>>()
+    }
+}
+
+impl<const N: usize> IntoDbRows for &[&DbRow; N] {
+    fn into_db_rows(self) -> Vec<DbRow> {
+        self.into_iter()
+            .cloned()
+            .map(|row| row.clone())
+            .collect::<Vec<_>>()
+    }
+}
+
+impl IntoDbRows for Vec<JsonRow> {
+    fn into_db_rows(self) -> Vec<DbRow> {
+        self.into_iter()
+            .map(|row| {
+                row.into_iter()
+                    .map(|(key, val)| (key, ParamValue::from(val)))
+                    .collect()
+            })
+            .collect::<Vec<_>>()
+    }
+}
+
+impl IntoDbRows for &Vec<JsonRow> {
+    fn into_db_rows(self) -> Vec<DbRow> {
+        self.clone().into_db_rows()
+    }
+}
+
+pub trait FromDbRows {
+    fn from(rows: Vec<DbRow>) -> Self;
+}
+
+impl FromDbRows for Vec<JsonRow> {
+    fn from(rows: Vec<DbRow>) -> Self {
+        rows.into_iter()
+            .map(|row| {
+                row.into_iter()
+                    .map(|(key, val)| (key, val.into()))
+                    .collect()
+            })
+            .collect::<Vec<_>>()
+    }
+}
+
+impl FromDbRows for Vec<DbRow> {
+    fn from(rows: Vec<DbRow>) -> Self {
+        rows
+    }
 }
 
 /// Strategy to use when caching query results
@@ -600,17 +783,17 @@ pub trait DbQuery {
         Ok(())
     }
 
-    /// Execute a SQL command, returning a vector of JSON rows. If the result of the command exists
+    /// Execute a SQL command, returning a vector of rows. If the result of the command exists
     /// in the cache, get the value from it instead of from the table(s) actually mentioned in the
     /// command, using the given [CachingStrategy].
-    async fn cache(
+    async fn cache<T: FromDbRows>(
         &self,
         tables: &[&str],
         sql: &str,
         params: impl IntoParams + Send + Copy + Sync,
-    ) -> Result<Vec<JsonRow>, DbError> {
+    ) -> Result<T, DbError> {
         let db_cache =
-            async |tables: &[&str], sql: &str, params: &Params| -> Result<Vec<JsonRow>, DbError> {
+            async |tables: &[&str], sql: &str, params: &Params| -> Result<Vec<DbRow>, DbError> {
                 // Look in the cache to see if there is an entry corresponding to the given SQL
                 // string for the given tables and parameters. If so, return the data from the
                 // cache, otherwise execute the given SQL statement on the actualy specified
@@ -642,11 +825,11 @@ pub trait DbQuery {
                 let cache_params = &["[", "]", &tables_param, sql, &params_param];
 
                 let strings = {
-                    let rows = self.query_no_cache(&cache_sql, cache_params).await?;
+                    let rows: Vec<DbRow> = self.query_no_cache(&cache_sql, cache_params).await?;
                     let strings = rows
                         .iter()
                         .map(|row| match row.values().nth(0) {
-                            Some(value) => Ok(json_value_to_string(value)),
+                            Some(value) => Ok(value.into()),
                             None => Err(DbError::DataError("Empty row".to_owned())),
                         })
                         .collect::<Vec<_>>();
@@ -663,10 +846,12 @@ pub trait DbQuery {
                                 )));
                             }
                         };
-                        Ok(json_rows)
+                        let db_rows = json_rows.into_db_rows();
+                        Ok(db_rows)
                     }
                     None => {
-                        let json_rows = self.query_no_cache(sql, params).await?;
+                        let db_rows: Vec<DbRow> = self.query_no_cache(sql, params).await?;
+                        let json_rows: Vec<JsonRow> = FromDbRows::from(db_rows.clone());
                         let json_rows_content = json!(json_rows).to_string();
                         let insert_sql = format!(
                             r#"INSERT INTO "cache"
@@ -675,7 +860,7 @@ pub trait DbQuery {
                         );
                         let insert_params = [&tables_param, sql, &params_param, &json_rows_content];
                         self.execute_no_cache(&insert_sql, &insert_params).await?;
-                        Ok(json_rows)
+                        Ok(db_rows)
                     }
                 }
             };
@@ -684,7 +869,7 @@ pub trait DbQuery {
                                sql: &str,
                                params: &Params,
                                cache_size: usize|
-               -> Result<Vec<JsonRow>, DbError> {
+               -> Result<Vec<DbRow>, DbError> {
             let params = &params.into_params();
             let mem_key = MemoryCacheKey {
                 tables: tables.join(", ").to_string(),
@@ -699,9 +884,13 @@ pub trait DbQuery {
                 }
             };
             match cached_rows {
-                Some(json_rows) => Ok(json_rows),
+                Some(json_rows) => {
+                    let db_rows = json_rows.into_db_rows();
+                    Ok(db_rows)
+                }
                 None => {
-                    let json_rows = self.query(sql, params).await?;
+                    let db_rows: Vec<DbRow> = self.query_no_cache(sql, params).await?;
+                    let json_rows: Vec<JsonRow> = FromDbRows::from(db_rows.clone());
                     let mut cache = get_memory_cache()?;
                     let mut keys = cache.keys().map(|key| key.clone()).collect::<Vec<_>>();
                     // If the number of keys exceeds the allowed cache size, remove any extra keys
@@ -717,13 +906,16 @@ pub trait DbQuery {
                         }
                     }
                     cache.insert(mem_key, json_rows.to_vec());
-                    Ok(json_rows)
+                    Ok(db_rows)
                 }
             }
         };
 
         match self.get_caching_strategy() {
-            CachingStrategy::None => self.query(sql, params).await,
+            CachingStrategy::None => {
+                let rows: Vec<DbRow> = self.query_no_cache(sql, params).await?;
+                Ok(FromDbRows::from(rows))
+            }
             CachingStrategy::TruncateAll | CachingStrategy::Truncate => {
                 let cache_table_exists = match get_meta_cache()?.get("cache_table") {
                     Some(_) => true,
@@ -734,7 +926,8 @@ pub trait DbQuery {
                     let mut cache = get_meta_cache()?;
                     cache.insert("cache_table".to_string());
                 }
-                db_cache(tables, sql, &params.into_params()).await
+                let rows: Vec<DbRow> = db_cache(tables, sql, &params.into_params()).await?;
+                Ok(FromDbRows::from(rows))
             }
             CachingStrategy::Trigger => {
                 for table in tables {
@@ -749,11 +942,12 @@ pub trait DbQuery {
                         cache.insert(table_triggers);
                     }
                 }
-                db_cache(tables, sql, &params.into_params()).await
+                let rows: Vec<DbRow> = db_cache(tables, sql, &params.into_params()).await?;
+                Ok(FromDbRows::from(rows))
             }
             CachingStrategy::Memory(cache_size) => {
                 let rows = mem_cache(tables, sql, &params.into_params(), cache_size).await?;
-                Ok(rows)
+                Ok(FromDbRows::from(rows))
             }
         }
     }
@@ -761,18 +955,6 @@ pub trait DbQuery {
     /// Given a SQL type for this database and a string,
     /// parse the string into the right ParamValue.
     fn parse(&self, sql_type: &str, value: &str) -> Result<ParamValue, DbError>;
-
-    /// Given a SQL type for this database and a JSON Value,
-    /// convert the Value into the right ParamValue.
-    fn convert_json(&self, sql_type: &str, value: &JsonValue) -> Result<ParamValue, DbError> {
-        match value {
-            serde_json::Value::Null => Ok(ParamValue::Null),
-            _ => {
-                let string = json_value_to_string(value);
-                self.parse(sql_type, &string)
-            }
-        }
-    }
 
     /// Given a table, return a map from column names to column SQL types.
     fn columns(&self, table: &str) -> impl Future<Output = Result<ColumnMap, DbError>> + Send;
@@ -787,7 +969,7 @@ pub trait DbQuery {
     /// Execute a SQL command, returning nothing.
     async fn execute(&self, sql: &str, params: impl IntoParams + Send) -> Result<(), DbError> {
         let params = params.into_params();
-        match params {
+        let _: Vec<DbRow> = match params {
             Params::None => self.query(sql, ()).await?,
             _ => self.query(sql, params).await?,
         };
@@ -802,7 +984,7 @@ pub trait DbQuery {
         params: impl IntoParams + Send,
     ) -> Result<(), DbError> {
         let params = params.into_params();
-        match params {
+        let _: Vec<DbRow> = match params {
             Params::None => self.query_no_cache(sql, ()).await?,
             _ => self.query_no_cache(sql, params).await?,
         };
@@ -812,12 +994,12 @@ pub trait DbQuery {
     /// Sequentially execute a semicolon-delimited list of statements, without parameters.
     fn execute_batch(&self, sql: &str) -> impl Future<Output = Result<(), DbError>> + Send;
 
-    /// Execute a SQL command, returning a vector of JSON rows.
-    async fn query(
+    /// Execute a SQL command, returning a vector of rows.
+    async fn query<T: FromDbRows + Send>(
         &self,
         sql: &str,
         params: impl IntoParams + Send,
-    ) -> Result<Vec<JsonRow>, DbError> {
+    ) -> Result<T, DbError> {
         let rows = self.query_no_cache(sql, params).await?;
         if self.get_cache_aware_query() {
             self.clear_cache_for_affected_tables(sql).await?;
@@ -825,22 +1007,18 @@ pub trait DbQuery {
         Ok(rows)
     }
 
-    /// Execute a SQL command, returning a vector of JSON rows, without updating the cache,
+    /// Execute a SQL command, returning a vector of rows, without updating the cache,
     /// regardless of whether the cache_aware_query option (see [DbQuery::set_cache_aware_query()])
     /// has been set.
-    fn query_no_cache(
+    fn query_no_cache<T: FromDbRows>(
         &self,
         sql: &str,
         params: impl IntoParams + Send,
-    ) -> impl Future<Output = Result<Vec<JsonRow>, DbError>> + Send;
+    ) -> impl Future<Output = Result<T, DbError>> + Send;
 
-    /// Execute a SQL command, returning a single JSON row.
-    async fn query_row(
-        &self,
-        sql: &str,
-        params: impl IntoParams + Send,
-    ) -> Result<JsonRow, DbError> {
-        let rows = self.query(&sql, params).await?;
+    /// Execute a SQL command, returning a single row.
+    async fn query_row(&self, sql: &str, params: impl IntoParams + Send) -> Result<DbRow, DbError> {
+        let rows: Vec<DbRow> = self.query(&sql, params).await?;
         if rows.len() > 1 {
             return Err(DbError::DataError(
                 "More than one row returned for query_row()".to_string(),
@@ -852,12 +1030,12 @@ pub trait DbQuery {
         }
     }
 
-    /// Execute a SQL command, returning a single JSON value.
+    /// Execute a SQL command, returning a single value.
     async fn query_value(
         &self,
         sql: &str,
         params: impl IntoParams + Send,
-    ) -> Result<JsonValue, DbError> {
+    ) -> Result<ParamValue, DbError> {
         let row = self.query_row(sql, params).await?;
         if row.len() > 1 {
             return Err(DbError::DataError(
@@ -877,7 +1055,7 @@ pub trait DbQuery {
         params: impl IntoParams + Send,
     ) -> Result<String, DbError> {
         let value = self.query_value(sql, params).await?;
-        Ok(json_value_to_string(&value))
+        Ok(value.into())
     }
 
     /// Execute a SQL command, returning a vector of strings: the first value for each row.
@@ -886,10 +1064,10 @@ pub trait DbQuery {
         sql: &str,
         params: impl IntoParams + Send,
     ) -> Result<Vec<String>, DbError> {
-        let rows = self.query(sql, params).await?;
+        let rows: Vec<DbRow> = self.query(sql, params).await?;
         rows.iter()
             .map(|row| match row.values().nth(0) {
-                Some(value) => Ok(json_value_to_string(value)),
+                Some(value) => Ok(value.into()),
                 None => Err(DbError::DataError("Empty row".to_owned())),
             })
             .collect()
@@ -902,7 +1080,10 @@ pub trait DbQuery {
         params: impl IntoParams + Send,
     ) -> Result<StringRow, DbError> {
         let row = self.query_row(sql, params).await?;
-        Ok(json_row_to_string_row(&row))
+        Ok(row
+            .iter()
+            .map(|(key, value)| (key.clone(), value.into()))
+            .collect())
     }
 
     /// Execute a SQL command, returning a vector of rows of strings.
@@ -911,60 +1092,49 @@ pub trait DbQuery {
         sql: &str,
         params: impl IntoParams + Send,
     ) -> Result<Vec<StringRow>, DbError> {
-        let rows = self.query(sql, params).await?;
-        Ok(json_rows_to_string_rows(&rows))
+        let rows: Vec<DbRow> = self.query(sql, params).await?;
+        Ok(db_rows_to_string_rows(&rows))
     }
 
     /// Execute a SQL command, returning a single unsigned integer.
     async fn query_u64(&self, sql: &str, params: impl IntoParams + Send) -> Result<u64, DbError> {
         let value = self.query_value(sql, params).await?;
-        match value.as_u64() {
-            Some(val) => Ok(val),
-            None => Err(DbError::DataError(format!(
-                "Not an unsigned integer: {value}"
-            ))),
-        }
+        Ok(value.try_into()?)
     }
 
     /// Execute a SQL command, returning a single signed integer.
     async fn query_i64(&self, sql: &str, params: impl IntoParams + Send) -> Result<i64, DbError> {
         let value = self.query_value(sql, params).await?;
-        match value.as_i64() {
-            Some(val) => Ok(val),
-            None => Err(DbError::DataError(format!("Not an integer: {value}"))),
-        }
+        Ok(value.try_into()?)
     }
 
     /// Execute a SQL command, returning a single float.
     async fn query_f64(&self, sql: &str, params: impl IntoParams + Send) -> Result<f64, DbError> {
         let value = self.query_value(sql, params).await?;
-        match value.as_f64() {
-            Some(val) => Ok(val),
-            None => Err(DbError::DataError(format!("Not an float: {value}"))),
-        }
+        Ok(value.try_into()?)
     }
 
-    /// Insert JSON rows into the given table. If an input row does not have a key for a column,
+    /// Insert rows into the given table. If an input row does not have a key for a column,
     /// use NULL as the value of that column when inserting the row to the table.
     fn insert(
         &self,
         table: &str,
         columns: &[&str],
-        rows: &[&JsonRow],
+        rows: impl IntoDbRows,
     ) -> impl Future<Output = Result<(), DbError>>;
 
     /// Like [DbQuery::insert()], but in addition this function also returns the columns from the
     /// inserted data that are included in `returning`, or all of the inserted data if `returning`
     /// is an empty list.
-    fn insert_returning(
+    fn insert_returning<T: FromDbRows>(
         &self,
         table: &str,
         columns: &[&str],
-        rows: &[&JsonRow],
+        rows: impl IntoDbRows,
         returning: &[&str],
-    ) -> impl Future<Output = Result<Vec<JsonRow>, DbError>>;
+    ) -> impl Future<Output = Result<T, DbError>>;
 
-    /// Update the given table using the given JSON rows. The table should have a primary key
+    /// Update the given table using the given rows. The table should have a primary key
     /// and any columns included in the primary key should be present within each input row.
     /// The primary key column values will be used as a way of identifying the rows to update,
     /// while the other columns in the row will be updated to the given new values.
@@ -972,19 +1142,19 @@ pub trait DbQuery {
         &self,
         table: &str,
         columns: &[&str],
-        rows: &[&JsonRow],
+        rows: impl IntoDbRows,
     ) -> impl Future<Output = Result<(), DbError>>;
 
     /// Like [DbQuery::update()], but in addition this function also returns the columns from the
     /// updated data that are included in `returning`, or all of the updated data if `returning`
     /// is an empty list.
-    fn update_returning(
+    fn update_returning<T: FromDbRows>(
         &self,
         table: &str,
         columns: &[&str],
-        rows: &[&JsonRow],
+        rows: impl IntoDbRows,
         returning: &[&str],
-    ) -> impl Future<Output = Result<Vec<JsonRow>, DbError>>;
+    ) -> impl Future<Output = Result<T, DbError>>;
 
     /// Attempt to insert the given rows to the given table, similarly to [DbQuery::insert()].
     /// In case there is a conflict, update the table instead, similarly to [DbQuery::update()].
@@ -992,19 +1162,19 @@ pub trait DbQuery {
         &self,
         table: &str,
         columns: &[&str],
-        rows: &[&JsonRow],
+        rows: impl IntoDbRows,
     ) -> impl Future<Output = Result<(), DbError>>;
 
     /// Like [DbQuery::upsert()], but in addition this function also returns the columns from the
     /// upserted data that are included in `returning`, or all of the upserted data if `returning`
     /// is an empty list.
-    fn upsert_returning(
+    fn upsert_returning<T: FromDbRows>(
         &self,
         table: &str,
         columns: &[&str],
-        rows: &[&JsonRow],
+        rows: impl IntoDbRows,
         returning: &[&str],
-    ) -> impl Future<Output = Result<Vec<JsonRow>, DbError>>;
+    ) -> impl Future<Output = Result<T, DbError>>;
 
     /// Check whether the given table exists in the database.
     fn table_exists(&self, table: &str) -> impl Future<Output = Result<bool, DbError>> + Send;
@@ -1033,27 +1203,16 @@ pub trait DbQuery {
     }
 }
 
-/// Convert a JSON Value to a String,
-/// without quoting for JSON Value::String,
-/// and treating JSON Value::Null as "NULL".
-pub fn json_value_to_string(value: &JsonValue) -> String {
-    match value {
-        JsonValue::String(string) => string.to_string(),
-        JsonValue::Null => "NULL".to_string(),
-        _ => value.to_string(),
-    }
-}
-
-/// Convert a row of JSON Values to a row of Strings.
-pub fn json_row_to_string_row(row: &JsonRow) -> StringRow {
+/// Convert a [DbRow] into a [StringRow]
+pub fn db_row_to_string_row(row: &DbRow) -> StringRow {
     row.iter()
-        .map(|(key, value)| (key.clone(), json_value_to_string(value)))
+        .map(|(key, value)| (key.clone(), value.into()))
         .collect()
 }
 
-/// Convert a vector of JSON rows to a vector of String rows.
-pub fn json_rows_to_string_rows(rows: &[JsonRow]) -> Vec<StringRow> {
-    rows.iter().map(|row| json_row_to_string_row(row)).collect()
+/// Convert a vector of [DbRow]s into a vector of [StringRow]s.
+pub fn db_rows_to_string_rows(rows: &[DbRow]) -> Vec<StringRow> {
+    rows.iter().map(|row| db_row_to_string_row(row)).collect()
 }
 
 /// Determines whether the given table name is a valid database table name. Valid database table

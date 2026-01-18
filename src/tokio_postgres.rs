@@ -2,8 +2,8 @@
 
 use crate::{
     core::{
-        CachingStrategy, ColumnMap, DbError, DbKind, DbQuery, IntoParams, JsonRow, JsonValue,
-        ParamValue, Params, validate_table_name,
+        CachingStrategy, ColumnMap, DbError, DbKind, DbQuery, DbRow, FromDbRows, IntoDbRows,
+        IntoParams, ParamValue, Params, validate_table_name,
     },
     params,
     shared::{EditType, edit},
@@ -24,7 +24,7 @@ use tokio_postgres::{
 pub static MAX_PARAMS_POSTGRES: usize = 32765;
 
 /// Extracts the value at the given index from the given [Row].
-fn extract_value(row: &Row, idx: usize) -> Result<JsonValue, DbError> {
+fn extract_value(row: &Row, idx: usize) -> Result<ParamValue, DbError> {
     let column = &row.columns()[idx];
     match *column.type_() {
         Type::TEXT | Type::VARCHAR | Type::NAME => match row
@@ -32,51 +32,51 @@ fn extract_value(row: &Row, idx: usize) -> Result<JsonValue, DbError> {
             .map_err(|err| DbError::DataError(err.to_string()))?
         {
             Some(value) => Ok(value.into()),
-            None => Ok(JsonValue::Null),
+            None => Ok(ParamValue::Null),
         },
         Type::INT2 => match row
             .try_get::<usize, Option<i16>>(idx)
             .map_err(|err| DbError::DataError(err.to_string()))?
         {
             Some(value) => Ok(value.into()),
-            None => Ok(JsonValue::Null),
+            None => Ok(ParamValue::Null),
         },
         Type::INT4 => match row
             .try_get::<usize, Option<i32>>(idx)
             .map_err(|err| DbError::DataError(err.to_string()))?
         {
             Some(value) => Ok(value.into()),
-            None => Ok(JsonValue::Null),
+            None => Ok(ParamValue::Null),
         },
         Type::INT8 => match row
             .try_get::<usize, Option<i64>>(idx)
             .map_err(|err| DbError::DataError(err.to_string()))?
         {
             Some(value) => Ok(value.into()),
-            None => Ok(JsonValue::Null),
+            None => Ok(ParamValue::Null),
         },
         Type::BOOL => match row
             .try_get::<usize, Option<bool>>(idx)
             .map_err(|err| DbError::DataError(err.to_string()))?
         {
             Some(value) => Ok(value.into()),
-            None => Ok(JsonValue::Null),
+            None => Ok(ParamValue::Null),
         },
         Type::FLOAT4 => match row
             .try_get::<usize, Option<f32>>(idx)
             .map_err(|err| DbError::DataError(err.to_string()))?
         {
             Some(value) => Ok(value.into()),
-            None => Ok(JsonValue::Null),
+            None => Ok(ParamValue::Null),
         },
         Type::FLOAT8 => match row
             .try_get::<usize, Option<f64>>(idx)
             .map_err(|err| DbError::DataError(err.to_string()))?
         {
             Some(value) => Ok(value.into()),
-            None => Ok(JsonValue::Null),
+            None => Ok(ParamValue::Null),
         },
-        // WARN: This downcasts a Postgres NUMERIC to a 64 bit JSON Number.
+        // WARN: This downcasts a Postgres NUMERIC to a 64 bit Number.
         Type::NUMERIC => match row
             .try_get::<usize, Option<Decimal>>(idx)
             .map_err(|err| DbError::DataError(err.to_string()))?
@@ -95,7 +95,7 @@ fn extract_value(row: &Row, idx: usize) -> Result<JsonValue, DbError> {
                     )))
                 }
             }
-            None => Ok(JsonValue::Null),
+            None => Ok(ParamValue::Null),
         },
         _ => {
             eprint!("Unimplemented column type: {column:?}");
@@ -203,7 +203,7 @@ impl DbQuery for TokioPostgresPool {
     async fn ensure_caching_triggers_exist(&self, tables: &[&str]) -> Result<(), DbError> {
         self.ensure_cache_table_exists().await?;
         for table in tables {
-            let rows: Vec<JsonRow> = self
+            let rows: Vec<DbRow> = self
                 .query_no_cache(
                     r#"SELECT 1
                        FROM information_schema.triggers
@@ -321,12 +321,13 @@ impl DbQuery for TokioPostgresPool {
                ORDER BY "columns"."ordinal_position""#
         );
 
-        for row in self.query_no_cache(&sql, params![&table]).await? {
+        let rows: Vec<DbRow> = self.query_no_cache(&sql, params![&table]).await?;
+        for row in &rows {
             match (
                 row.get("column_name")
-                    .and_then(|name| name.as_str().and_then(|name| Some(name))),
+                    .and_then(|name| Some::<String>(name.into())),
                 row.get("data_type")
-                    .and_then(|name| name.as_str().and_then(|name| Some(name))),
+                    .and_then(|name| Some::<String>(name.into())),
             ) {
                 (Some(column), Some(sql_type)) => {
                     columns.insert(column.to_string(), sql_type.to_lowercase().to_string())
@@ -349,8 +350,9 @@ impl DbQuery for TokioPostgresPool {
 
     /// Implements [DbQuery::primary_keys()] for PostgreSQL.
     async fn primary_keys(&self, table: &str) -> Result<Vec<String>, DbError> {
-        self.query_no_cache(
-            r#"SELECT "kcu"."column_name"
+        let rows: Vec<DbRow> = self
+            .query_no_cache(
+                r#"SELECT "kcu"."column_name"
                FROM "information_schema"."table_constraints" "tco"
                JOIN "information_schema"."key_column_usage" "kcu"
                  ON "kcu"."constraint_name" = "tco"."constraint_name"
@@ -363,20 +365,21 @@ impl DbQuery for TokioPostgresPool {
                 WHERE "name" = 'search_path'
               )
               ORDER by "kcu"."ordinal_position""#,
-            params![&table],
-        )
-        .await?
-        .iter()
-        .map(|row| {
-            match row
-                .get("column_name")
-                .and_then(|name| name.as_str().and_then(|name| Some(name)))
-            {
-                Some(pk_col) => Ok(pk_col.to_string()),
-                None => Err(DbError::DataError("Empty row".to_owned())),
-            }
-        })
-        .collect()
+                params![&table],
+            )
+            .await?;
+
+        rows.iter()
+            .map(|row| {
+                match row
+                    .get("column_name")
+                    .and_then(|name| Some::<String>(name.into()))
+                {
+                    Some(pk_col) => Ok(pk_col.to_string()),
+                    None => Err(DbError::DataError("Empty row".to_owned())),
+                }
+            })
+            .collect()
     }
 
     /// Implements [DbQuery::execute_batch()] for PostgreSQL
@@ -396,11 +399,11 @@ impl DbQuery for TokioPostgresPool {
     }
 
     /// Implements [DbQuery::query_no_cache()] for PostgreSQL.
-    async fn query_no_cache(
+    async fn query_no_cache<T: FromDbRows>(
         &self,
         sql: &str,
         into_params: impl IntoParams + Send,
-    ) -> Result<Vec<JsonRow>, DbError> {
+    ) -> Result<T, DbError> {
         let into_params = into_params.into_params();
         let client = self
             .pool
@@ -497,17 +500,17 @@ impl DbQuery for TokioPostgresPool {
             .query(sql, &query_params)
             .await
             .map_err(|err| DbError::DatabaseError(format!("Error in query(): {err:?}")))?;
-        let mut json_rows = vec![];
+        let mut db_rows = vec![];
         for row in &rows {
-            let mut json_row = JsonRow::new();
+            let mut db_row = DbRow::new();
             let columns = row.columns();
             for (i, column) in columns.iter().enumerate() {
-                json_row.insert(column.name().to_string(), extract_value(row, i)?);
+                db_row.insert(column.name().to_string(), extract_value(row, i)?);
             }
-            json_rows.push(json_row);
+            db_rows.push(db_row);
         }
 
-        Ok(json_rows)
+        Ok(FromDbRows::from(db_rows))
     }
 
     /// Implements [DbQuery::insert()] for PostgreSQL
@@ -515,9 +518,9 @@ impl DbQuery for TokioPostgresPool {
         &self,
         table: &str,
         columns: &[&str],
-        rows: &[&JsonRow],
+        rows: impl IntoDbRows,
     ) -> Result<(), DbError> {
-        edit(
+        let _: Vec<DbRow> = edit(
             self,
             &EditType::Insert,
             &MAX_PARAMS_POSTGRES,
@@ -532,13 +535,13 @@ impl DbQuery for TokioPostgresPool {
     }
 
     /// Implements [DbQuery::insert_returning()] for PostgreSQL
-    async fn insert_returning(
+    async fn insert_returning<T: FromDbRows>(
         &self,
         table: &str,
         columns: &[&str],
-        rows: &[&JsonRow],
+        rows: impl IntoDbRows,
         returning: &[&str],
-    ) -> Result<Vec<JsonRow>, DbError> {
+    ) -> Result<T, DbError> {
         edit(
             self,
             &EditType::Insert,
@@ -557,9 +560,9 @@ impl DbQuery for TokioPostgresPool {
         &self,
         table: &str,
         columns: &[&str],
-        rows: &[&JsonRow],
+        rows: impl IntoDbRows,
     ) -> Result<(), DbError> {
-        edit(
+        let _: Vec<DbRow> = edit(
             self,
             &EditType::Update,
             &MAX_PARAMS_POSTGRES,
@@ -574,13 +577,13 @@ impl DbQuery for TokioPostgresPool {
     }
 
     /// Implements [DbQuery::update_returning()] for PostgreSQL.
-    async fn update_returning(
+    async fn update_returning<T: FromDbRows>(
         &self,
         table: &str,
         columns: &[&str],
-        rows: &[&JsonRow],
+        rows: impl IntoDbRows,
         returning: &[&str],
-    ) -> Result<Vec<JsonRow>, DbError> {
+    ) -> Result<T, DbError> {
         edit(
             self,
             &EditType::Update,
@@ -599,9 +602,9 @@ impl DbQuery for TokioPostgresPool {
         &self,
         table: &str,
         columns: &[&str],
-        rows: &[&JsonRow],
+        rows: impl IntoDbRows,
     ) -> Result<(), DbError> {
-        edit(
+        let _: Vec<DbRow> = edit(
             self,
             &EditType::Upsert,
             &MAX_PARAMS_POSTGRES,
@@ -616,13 +619,13 @@ impl DbQuery for TokioPostgresPool {
     }
 
     /// Implements [DbQuery::upsert_returning()] for PostgreSQL.
-    async fn upsert_returning(
+    async fn upsert_returning<T: FromDbRows>(
         &self,
         table: &str,
         columns: &[&str],
-        rows: &[&JsonRow],
+        rows: impl IntoDbRows,
         returning: &[&str],
-    ) -> Result<Vec<JsonRow>, DbError> {
+    ) -> Result<T, DbError> {
         edit(
             self,
             &EditType::Upsert,
@@ -638,7 +641,7 @@ impl DbQuery for TokioPostgresPool {
 
     /// Implements [DbQuery::table_exists()] for PostgreSQL.
     async fn table_exists(&self, table: &str) -> Result<bool, DbError> {
-        match self
+        let rows: Vec<DbRow> = self
             .query_no_cache(
                 r#"SELECT 1
                    FROM "information_schema"."tables"
@@ -651,9 +654,9 @@ impl DbQuery for TokioPostgresPool {
                      )"#,
                 &[table],
             )
-            .await?
-            .first()
-        {
+            .await?;
+
+        match rows.first() {
             None => Ok(false),
             Some(_) => Ok(true),
         }
@@ -664,8 +667,8 @@ impl DbQuery for TokioPostgresPool {
 mod tests {
     use super::*;
     use crate::params;
+    use indexmap::indexmap as db_row;
     use pretty_assertions::assert_eq;
-    use serde_json::json;
 
     #[tokio::test]
     async fn test_aliases_and_builtin_functions() {
@@ -694,51 +697,63 @@ mod tests {
         .unwrap();
 
         // Test aggregate:
-        let rows = pool
+        let rows: Vec<DbRow> = pool
             .query("SELECT MAX(int_value) FROM test_table_indirect", ())
             .await
             .unwrap();
-        assert_eq!(json!(rows), json!([{"max": 1}]));
+        assert_eq!(rows, [db_row! {"max".into() => ParamValue::from(1_i64)}]);
 
         // Test alias:
-        let rows = pool
+        let rows: Vec<DbRow> = pool
             .query(
                 "SELECT bool_value AS bool_value_alias FROM test_table_indirect",
                 (),
             )
             .await
             .unwrap();
-        assert_eq!(json!(rows), json!([{"bool_value_alias": true}]));
+        assert_eq!(
+            rows,
+            [db_row! {"bool_value_alias".into() => ParamValue::from(true)}]
+        );
 
         // Test aggregate with alias:
-        let rows = pool
+        let rows: Vec<DbRow> = pool
             .query(
                 "SELECT MAX(int_value) AS max_int_value FROM test_table_indirect",
                 (),
             )
             .await
             .unwrap();
-        assert_eq!(json!(rows), json!([{"max_int_value": 1}]));
+        assert_eq!(
+            rows,
+            [db_row! {"max_int_value".into() => ParamValue::from(1_i64)}]
+        );
 
         // Test non-aggregate function:
-        let rows = pool
+        let rows: Vec<DbRow> = pool
             .query(
                 "SELECT CAST(int_value AS TEXT) FROM test_table_indirect",
                 (),
             )
             .await
             .unwrap();
-        assert_eq!(json!(rows), json!([{"int_value": "1"}]));
+        assert_eq!(
+            rows,
+            [db_row! {"int_value".into() => ParamValue::from("1")}]
+        );
 
         // Test non-aggregate function with alias:
-        let rows = pool
+        let rows: Vec<DbRow> = pool
             .query(
                 "SELECT CAST(int_value AS TEXT) AS int_value_cast FROM test_table_indirect",
                 (),
             )
             .await
             .unwrap();
-        assert_eq!(json!(rows), json!([{"int_value_cast": "1"}]));
+        assert_eq!(
+            rows,
+            [db_row! {"int_value_cast".into() => ParamValue::from("1")}]
+        );
 
         // Clean up.
         pool.drop_table("test_table_indirect").await.unwrap();

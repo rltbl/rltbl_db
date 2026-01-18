@@ -4,29 +4,25 @@ SHELL := bash
 .DELETE_ON_ERROR:
 .SUFFIXES:
 
-.PHONY: test test_sqlite test_postgres crate_docs postgres
+.PHONY: test test_ignored test_all crate_docs crate_docs_postgres sqlite_only postgres
 
-test: test_sqlite test_postgres
+test:
+	cargo test -- --no-capture
 
-test_all: test_sqlite_all test_postgres_all
+test_ignored:
+	cargo test -- --no-capture --ignored
 
-test_sqlite:
-	cargo test --features rusqlite -- --no-capture
-
-test_sqlite_all:
-	cargo test --features rusqlite -- --no-capture --include-ignored
-
-test_postgres:
-	cargo test --features tokio-postgres -- --no-capture
-
-test_postgres_all:
-	cargo test --features tokio-postgres -- --no-capture --include-ignored
+test_all:
+	cargo test -- --no-capture --include-ignored
 
 crate_docs:
 	RUSTDOCFLAGS="-D warnings" cargo doc
 
 crate_docs_postgres:
 	RUSTDOCFLAGS="-D warnings" cargo doc --features tokio-postgres
+
+sqlite_only:
+	cargo build
 
 postgres:
 	cargo build --features tokio-postgres

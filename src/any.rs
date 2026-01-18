@@ -15,7 +15,8 @@
 /// }
 /// ```
 use crate::core::{
-    CachingStrategy, ColumnMap, DbError, DbKind, DbQuery, IntoParams, JsonRow, ParamValue,
+    CachingStrategy, ColumnMap, DbError, DbKind, DbQuery, FromDbRows, IntoDbRows, IntoParams,
+    ParamValue,
 };
 
 #[cfg(feature = "rusqlite")]
@@ -185,11 +186,11 @@ impl DbQuery for AnyPool {
         }
     }
 
-    async fn query_no_cache(
+    async fn query_no_cache<T: FromDbRows>(
         &self,
         sql: &str,
         params: impl IntoParams + Send,
-    ) -> Result<Vec<JsonRow>, DbError> {
+    ) -> Result<T, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.query_no_cache(sql, params).await,
@@ -202,7 +203,7 @@ impl DbQuery for AnyPool {
         &self,
         table: &str,
         columns: &[&str],
-        rows: &[&JsonRow],
+        rows: impl IntoDbRows,
     ) -> Result<(), DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
@@ -212,13 +213,13 @@ impl DbQuery for AnyPool {
         }
     }
 
-    async fn insert_returning(
+    async fn insert_returning<T: FromDbRows>(
         &self,
         table: &str,
         columns: &[&str],
-        rows: &[&JsonRow],
+        rows: impl IntoDbRows,
         returning: &[&str],
-    ) -> Result<Vec<JsonRow>, DbError> {
+    ) -> Result<T, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.insert_returning(table, columns, rows, returning).await,
@@ -233,7 +234,7 @@ impl DbQuery for AnyPool {
         &self,
         table: &str,
         columns: &[&str],
-        rows: &[&JsonRow],
+        rows: impl IntoDbRows,
     ) -> Result<(), DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
@@ -243,13 +244,13 @@ impl DbQuery for AnyPool {
         }
     }
 
-    async fn update_returning(
+    async fn update_returning<T: FromDbRows>(
         &self,
         table: &str,
         columns: &[&str],
-        rows: &[&JsonRow],
+        rows: impl IntoDbRows,
         returning: &[&str],
-    ) -> Result<Vec<JsonRow>, DbError> {
+    ) -> Result<T, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.update_returning(table, columns, rows, returning).await,
@@ -264,7 +265,7 @@ impl DbQuery for AnyPool {
         &self,
         table: &str,
         columns: &[&str],
-        rows: &[&JsonRow],
+        rows: impl IntoDbRows,
     ) -> Result<(), DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
@@ -274,13 +275,13 @@ impl DbQuery for AnyPool {
         }
     }
 
-    async fn upsert_returning(
+    async fn upsert_returning<T: FromDbRows>(
         &self,
         table: &str,
         columns: &[&str],
-        rows: &[&JsonRow],
+        rows: impl IntoDbRows,
         returning: &[&str],
-    ) -> Result<Vec<JsonRow>, DbError> {
+    ) -> Result<T, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.upsert_returning(table, columns, rows, returning).await,
@@ -304,15 +305,15 @@ impl DbQuery for AnyPool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{CachingStrategy, JsonValue, StringRow, get_memory_cache_contents};
+    use crate::core::{CachingStrategy, DbRow, StringRow, get_memory_cache_contents};
     use crate::params;
+    use indexmap::indexmap as db_row;
     use rand::{
         SeedableRng as _,
         distr::{Distribution as _, Uniform},
         rngs::StdRng,
     };
     use rust_decimal::dec;
-    use serde_json::json;
     use std::{
         collections::BTreeMap,
         str::FromStr,
@@ -351,13 +352,11 @@ mod tests {
         .await
         .unwrap();
         let select_sql = format!("SELECT value FROM test_table_text WHERE value = {p}1");
-        let value = pool
+        let value: String = pool
             .query_value(&select_sql, &["foo"])
             .await
             .unwrap()
-            .as_str()
-            .unwrap()
-            .to_string();
+            .into();
         assert_eq!("foo", value);
 
         let string = pool.query_string(&select_sql, &["foo"]).await.unwrap();
@@ -379,10 +378,10 @@ mod tests {
         );
 
         let row = pool.query_row(&select_sql, &["foo"]).await.unwrap();
-        assert_eq!(json!(row), json!({"value":"foo"}));
+        assert_eq!(row, db_row! {"value".into() => ParamValue::from("foo")});
 
-        let rows = pool.query(&select_sql, &["foo"]).await.unwrap();
-        assert_eq!(json!(rows), json!([{"value":"foo"}]));
+        let rows: Vec<DbRow> = pool.query(&select_sql, &["foo"]).await.unwrap();
+        assert_eq!(rows, [db_row! {"value".into() => ParamValue::from("foo")}]);
 
         // Clean up:
         pool.drop_table("test_table_text").await.unwrap();
@@ -428,12 +427,8 @@ mod tests {
                 _ => unreachable!(),
             };
             let select_sql = format!("SELECT {column} FROM test_table_int WHERE {column} = {p}1");
-            let value = pool
-                .query_value(&select_sql, params.clone())
-                .await
-                .unwrap()
-                .as_i64()
-                .unwrap();
+            let value = pool.query_value(&select_sql, params.clone()).await.unwrap();
+            let value = TryInto::<i64>::try_into(value).unwrap();
             assert_eq!(1, value);
 
             let unsigned = pool.query_u64(&select_sql, params.clone()).await.unwrap();
@@ -453,12 +448,6 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(vec!["1".to_owned()], strings);
-
-            let row = pool.query_row(&select_sql, params.clone()).await.unwrap();
-            assert_eq!(json!(row), json!({column:1}));
-
-            let rows = pool.query(&select_sql, params.clone()).await.unwrap();
-            assert_eq!(json!(rows), json!([{column:1}]));
         }
 
         // Clean up:
@@ -498,12 +487,8 @@ mod tests {
         .await
         .unwrap();
         let select_sql = format!("SELECT value FROM test_table_float WHERE value > {p}1");
-        let value = pool
-            .query_value(&select_sql, &[1.0_f64])
-            .await
-            .unwrap()
-            .as_f64()
-            .unwrap();
+        let value = pool.query_value(&select_sql, &[1.0_f64]).await.unwrap();
+        let value = TryInto::<f64>::try_into(value).unwrap();
         assert_eq!("1.05", format!("{value:.2}"));
 
         let float = pool.query_f64(&select_sql, &[1.0_f64]).await.unwrap();
@@ -516,10 +501,10 @@ mod tests {
         assert_eq!(vec!["1.05".to_owned()], strings);
 
         let row = pool.query_row(&select_sql, &[1.0_f64]).await.unwrap();
-        assert_eq!(json!(row), json!({"value":1.05}));
+        assert_eq!(row, db_row! {"value".into() => ParamValue::from(1.05)});
 
-        let rows = pool.query(&select_sql, &[1.0_f64]).await.unwrap();
-        assert_eq!(json!(rows), json!([{"value":1.05}]));
+        let rows: Vec<DbRow> = pool.query(&select_sql, &[1.0_f64]).await.unwrap();
+        assert_eq!(rows, [db_row! {"value".into() => ParamValue::from(1.05)}]);
 
         // FLOAT4
         pool.execute_batch(&format!(
@@ -539,12 +524,8 @@ mod tests {
         .await
         .unwrap();
         let select_sql = format!("SELECT value FROM test_table_float WHERE value > {p}1");
-        let value = pool
-            .query_value(&select_sql, &[1.0_f32])
-            .await
-            .unwrap()
-            .as_f64()
-            .unwrap();
+        let value = pool.query_value(&select_sql, &[1.0_f32]).await.unwrap();
+        let value = TryInto::<f32>::try_into(value).unwrap();
         assert_eq!("1.05", format!("{value:.2}"));
 
         // Clean up:
@@ -609,13 +590,7 @@ mod tests {
         .unwrap();
 
         let select_sql = format!("SELECT text_value FROM test_table_mixed WHERE text_value = {p}1");
-        let value = pool
-            .query_value(&select_sql, ["foo"])
-            .await
-            .unwrap()
-            .as_str()
-            .unwrap()
-            .to_string();
+        let value: String = pool.query_value(&select_sql, ["foo"]).await.unwrap().into();
         assert_eq!("foo", value);
 
         let select_sql = format!(
@@ -642,36 +617,36 @@ mod tests {
 
         let row = pool.query_row(&select_sql, params.clone()).await.unwrap();
         assert_eq!(
-            json!(row),
-            json!({
-                "text_value": "foo",
-                "alt_text_value": JsonValue::Null,
-                "float_value": 1.05,
-                "alt_float_value": JsonValue::Null,
-                "int_value": 1,
-                "alt_int_value": JsonValue::Null,
-                "bool_value": true,
-                "alt_bool_value": JsonValue::Null,
-                "numeric_value": 1,
-                "alt_numeric_value": JsonValue::Null,
-            })
+            row,
+            db_row! {
+                "text_value".into() => ParamValue::from("foo"),
+                "alt_text_value".into() => ParamValue::Null,
+                "float_value".into() => ParamValue::from(1.05),
+                "alt_float_value".into() => ParamValue::Null,
+                "int_value".into() => ParamValue::from(1_i64),
+                "alt_int_value".into() => ParamValue::Null,
+                "bool_value".into() => ParamValue::from(true),
+                "alt_bool_value".into() => ParamValue::Null,
+                "numeric_value".into() => ParamValue::from(1_i64),
+                "alt_numeric_value".into() => ParamValue::Null,
+            }
         );
 
-        let rows = pool.query(&select_sql, params.clone()).await.unwrap();
+        let rows: Vec<DbRow> = pool.query(&select_sql, params.clone()).await.unwrap();
         assert_eq!(
-            json!(rows),
-            json!([{
-                "text_value": "foo",
-                "alt_text_value": JsonValue::Null,
-                "float_value": 1.05,
-                "alt_float_value": JsonValue::Null,
-                "int_value": 1,
-                "alt_int_value": JsonValue::Null,
-                "bool_value": true,
-                "alt_bool_value": JsonValue::Null,
-                "numeric_value": 1,
-                "alt_numeric_value": JsonValue::Null,
-            }])
+            rows,
+            [db_row! {
+                "text_value".into() => ParamValue::from("foo"),
+                "alt_text_value".into() => ParamValue::Null,
+                "float_value".into() => ParamValue::from(1.05),
+                "alt_float_value".into() => ParamValue::Null,
+                "int_value".into() => ParamValue::from(1_i64),
+                "alt_int_value".into() => ParamValue::Null,
+                "bool_value".into() => ParamValue::from(true),
+                "alt_bool_value".into() => ParamValue::Null,
+                "numeric_value".into() => ParamValue::from(1_i64),
+                "alt_numeric_value".into() => ParamValue::Null,
+            }]
         );
 
         // Clean up:
@@ -835,35 +810,39 @@ mod tests {
             "test_insert",
             &["text_value", "int_value", "bool_value"],
             &[
-                &json!({"text_value": "TEXT"}).as_object().unwrap(),
-                &json!({"int_value": 1, "bool_value": true})
-                    .as_object()
-                    .unwrap(),
+                &db_row! {"text_value".into() => ParamValue::from("TEXT")},
+                &db_row! {
+                    "int_value".into() => ParamValue::from(1_i64),
+                    "bool_value".into() => ParamValue::from(true)
+                },
             ],
         )
         .await
         .unwrap();
 
         // Validate the inserted data:
-        let rows = pool
+        let rows: Vec<DbRow> = pool
             .query(r#"SELECT * FROM test_insert"#, ())
             .await
             .unwrap();
         assert_eq!(
-            json!(rows),
-            json!([{
-                "text_value": "TEXT",
-                "alt_text_value": JsonValue::Null,
-                "float_value": JsonValue::Null,
-                "int_value": JsonValue::Null,
-                "bool_value": JsonValue::Null,
-            },{
-                "text_value": JsonValue::Null,
-                "alt_text_value": JsonValue::Null,
-                "float_value": JsonValue::Null,
-                "int_value": 1,
-                "bool_value": true,
-            }])
+            rows,
+            [
+                db_row! {
+                    "text_value".into() => ParamValue::from("TEXT"),
+                    "alt_text_value".into() => ParamValue::Null,
+                    "float_value".into() => ParamValue::Null,
+                    "int_value".into() => ParamValue::Null,
+                    "bool_value".into() => ParamValue::Null,
+                },
+                db_row! {
+                    "text_value".into() => ParamValue::Null,
+                    "alt_text_value".into() => ParamValue::Null,
+                    "float_value".into() => ParamValue::Null,
+                    "int_value".into() => ParamValue::from(1_i64),
+                    "bool_value".into() => ParamValue::from(true),
+                }
+            ]
         );
 
         // Clean up.
@@ -898,61 +877,69 @@ mod tests {
         .unwrap();
 
         // Without specific returning columns:
-        let rows = pool
+        let rows: Vec<DbRow> = pool
             .insert_returning(
                 "test_insert_returning",
                 &["text_value", "int_value", "bool_value"],
                 &[
-                    &json!({"text_value": "TEXT"}).as_object().unwrap(),
-                    &json!({"int_value": 1, "bool_value": true})
-                        .as_object()
-                        .unwrap(),
+                    &db_row! {"text_value".into() => ParamValue::from("TEXT")},
+                    &db_row! {
+                        "int_value".into() => ParamValue::from(1_i64),
+                        "bool_value".into() => ParamValue::from(true)
+                    },
                 ],
                 &[],
             )
             .await
             .unwrap();
         assert_eq!(
-            json!(rows),
-            json!([{
-                "text_value": "TEXT",
-                "alt_text_value": JsonValue::Null,
-                "float_value": JsonValue::Null,
-                "int_value": JsonValue::Null,
-                "bool_value": JsonValue::Null,
-            },{
-                "text_value": JsonValue::Null,
-                "alt_text_value": JsonValue::Null,
-                "float_value": JsonValue::Null,
-                "int_value": 1,
-                "bool_value": true,
-            }])
+            rows,
+            [
+                db_row! {
+                    "text_value".into() => ParamValue::from("TEXT"),
+                    "alt_text_value".into() => ParamValue::Null,
+                    "float_value".into() => ParamValue::Null,
+                    "int_value".into() => ParamValue::Null,
+                    "bool_value".into() => ParamValue::Null,
+                },
+                db_row! {
+                    "text_value".into() => ParamValue::Null,
+                    "alt_text_value".into() => ParamValue::Null,
+                    "float_value".into() => ParamValue::Null,
+                    "int_value".into() => ParamValue::from(1_i64),
+                    "bool_value".into() => ParamValue::from(true),
+                }
+            ]
         );
 
         // With specific returning columns:
-        let rows = pool
+        let rows: Vec<DbRow> = pool
             .insert_returning(
                 "test_insert_returning",
                 &["text_value", "int_value", "bool_value"],
                 &[
-                    &json!({"text_value": "TEXT"}).as_object().unwrap(),
-                    &json!({"int_value": 1, "bool_value": true})
-                        .as_object()
-                        .unwrap(),
+                    &db_row! {"text_value".into() => ParamValue::from("TEXT")},
+                    &db_row! {
+                        "int_value".into() => ParamValue::from(1_i64),
+                        "bool_value".into() => ParamValue::from(true)
+                    },
                 ],
                 &["int_value", "float_value"],
             )
             .await
             .unwrap();
         assert_eq!(
-            json!(rows),
-            json!([{
-                "float_value": JsonValue::Null,
-                "int_value": JsonValue::Null,
-            },{
-                "float_value": JsonValue::Null,
-                "int_value": 1,
-            }])
+            rows,
+            [
+                db_row! {
+                    "float_value".into() => ParamValue::Null,
+                    "int_value".into() => ParamValue::Null,
+                },
+                db_row! {
+                    "float_value".into() => ParamValue::Null,
+                    "int_value".into() => ParamValue::from(1_i64),
+                }
+            ]
         );
 
         // Clean up.
@@ -1079,9 +1066,9 @@ mod tests {
             "test_update",
             &["foo"],
             &[
-                &json!({"foo": 1}).as_object().unwrap(),
-                &json!({"foo": 2}).as_object().unwrap(),
-                &json!({"foo": 3}).as_object().unwrap(),
+                &db_row! {"foo".into() => ParamValue::from(1_i64)},
+                &db_row! {"foo".into() => ParamValue::from(2_i64)},
+                &db_row! {"foo".into() => ParamValue::from(3_i64)},
             ],
         )
         .await
@@ -1091,64 +1078,58 @@ mod tests {
             "test_update",
             &["foo", "bar", "car", "dar", "ear"],
             &[
-                &json!({
-                    "foo": 1,
-                    "bar": 10,
-                    "car": 11,
-                    "dar": 12,
-                    "ear": 13,
-                })
-                .as_object()
-                .unwrap(),
-                &json!({
-                    "foo": 2,
-                    "bar": 14,
-                    "car": 15,
-                    "dar": 16,
-                    "ear": 17,
-                })
-                .as_object()
-                .unwrap(),
-                &json!({
-                    "foo": 3,
-                    "bar": 18,
-                    "car": 19,
-                    "dar": 20,
-                    "ear": 21,
-                })
-                .as_object()
-                .unwrap(),
+                &db_row! {
+                    "foo".into() => ParamValue::from(1_i64),
+                    "bar".into() => ParamValue::from(10_i64),
+                    "car".into() => ParamValue::from(11_i64),
+                    "dar".into() => ParamValue::from(12_i64),
+                    "ear".into() => ParamValue::from(13_i64),
+                },
+                &db_row! {
+                    "foo".into() => ParamValue::from(2_i64),
+                    "bar".into() => ParamValue::from(14_i64),
+                    "car".into() => ParamValue::from(15_i64),
+                    "dar".into() => ParamValue::from(16_i64),
+                    "ear".into() => ParamValue::from(17_i64),
+                },
+                &db_row! {
+                    "foo".into() => ParamValue::from(3_i64),
+                    "bar".into() => ParamValue::from(18_i64),
+                    "car".into() => ParamValue::from(19_i64),
+                    "dar".into() => ParamValue::from(20_i64),
+                    "ear".into() => ParamValue::from(21_i64),
+                },
             ],
         )
         .await
         .unwrap();
 
-        let rows = pool.query("SELECT * from test_update", ()).await.unwrap();
+        let rows: Vec<DbRow> = pool.query("SELECT * from test_update", ()).await.unwrap();
         assert_eq!(
-            json!(rows),
-            json!([
-                {
-                    "foo": 1,
-                    "bar": 10,
-                    "car": 11,
-                    "dar": 12,
-                    "ear": 13,
+            rows,
+            [
+                db_row! {
+                    "foo".into() => ParamValue::from(1_i64),
+                    "bar".into() => ParamValue::from(10_i64),
+                    "car".into() => ParamValue::from(11_i64),
+                    "dar".into() => ParamValue::from(12_i64),
+                    "ear".into() => ParamValue::from(13_i64),
                 },
-                {
-                    "foo": 2,
-                    "bar": 14,
-                    "car": 15,
-                    "dar": 16,
-                    "ear": 17,
+                db_row! {
+                    "foo".into() => ParamValue::from(2_i64),
+                    "bar".into() => ParamValue::from(14_i64),
+                    "car".into() => ParamValue::from(15_i64),
+                    "dar".into() => ParamValue::from(16_i64),
+                    "ear".into() => ParamValue::from(17_i64),
                 },
-                {
-                    "foo": 3,
-                    "bar": 18,
-                    "car": 19,
-                    "dar": 20,
-                    "ear": 21,
+                db_row! {
+                    "foo".into() => ParamValue::from(3_i64),
+                    "bar".into() => ParamValue::from(18_i64),
+                    "car".into() => ParamValue::from(19_i64),
+                    "dar".into() => ParamValue::from(20_i64),
+                    "ear".into() => ParamValue::from(21_i64),
                 },
-            ])
+            ]
         );
 
         // Clean up:
@@ -1187,34 +1168,43 @@ mod tests {
             "test_update_returning",
             &["foo", "bar", "car", "dar", "ear"],
             &[
-                &json!({"foo": 1, "bar": 1}).as_object().unwrap(),
-                &json!({"foo": 2, "bar": 2}).as_object().unwrap(),
-                &json!({"foo": 3, "bar": 3}).as_object().unwrap(),
+                &db_row! {
+                    "foo".into() => ParamValue::from(1_i64),
+                    "bar".into() => ParamValue::from(1_i64)
+                },
+                &db_row! {
+                    "foo".into() => ParamValue::from(2_i64),
+                    "bar".into() => ParamValue::from(2_i64),
+                },
+                &db_row! {
+                    "foo".into() => ParamValue::from(3_i64),
+                    "bar".into() => ParamValue::from(3_i64),
+                },
             ],
         )
         .await
         .unwrap();
 
-        let check_returning_rows = |rows: &Vec<JsonRow>| {
+        let check_returning_rows = |rows: &Vec<DbRow>| {
             assert!(rows.iter().all(|row| {
                 [
-                    json!({
-                        "car": 10,
-                        "dar": 11,
-                        "ear": 12,
-                    }),
-                    json!({
-                        "car": 13,
-                        "dar": 14,
-                        "ear": 15,
-                    }),
-                    json!({
-                        "car": 16,
-                        "dar": 17,
-                        "ear": 18,
-                    }),
+                    db_row! {
+                        "car".into() => ParamValue::from(10_i64),
+                        "dar".into() => ParamValue::from(11_i64),
+                        "ear".into() => ParamValue::from(12_i64),
+                    },
+                    db_row! {
+                        "car".into() => ParamValue::from(13_i64),
+                        "dar".into() => ParamValue::from(14_i64),
+                        "ear".into() => ParamValue::from(15_i64),
+                    },
+                    db_row! {
+                        "car".into() => ParamValue::from(16_i64),
+                        "dar".into() => ParamValue::from(17_i64),
+                        "ear".into() => ParamValue::from(18_i64),
+                    },
                 ]
-                .contains(&json!(row))
+                .contains(&row)
             }));
         };
 
@@ -1224,33 +1214,27 @@ mod tests {
                     "test_update_returning",
                     &["foo", "bar", "car", "dar", "ear"],
                     &[
-                        &json!({
-                            "foo": 1,
-                            "bar": 1,
-                            "car": 10,
-                            "dar": 11,
-                            "ear": 12,
-                        })
-                        .as_object()
-                        .unwrap(),
-                        &json!({
-                            "foo": 2,
-                            "bar": 2,
-                            "car": 13,
-                            "dar": 14,
-                            "ear": 15,
-                        })
-                        .as_object()
-                        .unwrap(),
-                        &json!({
-                            "foo": 3,
-                            "bar": 3,
-                            "car": 16,
-                            "dar": 17,
-                            "ear": 18,
-                        })
-                        .as_object()
-                        .unwrap(),
+                        &db_row! {
+                            "foo".into() => ParamValue::from(1_i64),
+                            "bar".into() => ParamValue::from(1_i64),
+                            "car".into() => ParamValue::from(10_i64),
+                            "dar".into() => ParamValue::from(11_i64),
+                            "ear".into() => ParamValue::from(12_i64),
+                        },
+                        &db_row! {
+                            "foo".into() => ParamValue::from(2_i64),
+                            "bar".into() => ParamValue::from(2_i64),
+                            "car".into() => ParamValue::from(13_i64),
+                            "dar".into() => ParamValue::from(14_i64),
+                            "ear".into() => ParamValue::from(15_i64),
+                        },
+                        &db_row! {
+                            "foo".into() => ParamValue::from(3_i64),
+                            "bar".into() => ParamValue::from(3_i64),
+                            "car".into() => ParamValue::from(16_i64),
+                            "dar".into() => ParamValue::from(17_i64),
+                            "ear".into() => ParamValue::from(18_i64),
+                        },
                     ],
                     &["car", "dar", "ear"],
                 )
@@ -1268,9 +1252,18 @@ mod tests {
             "test_update_returning",
             &["foo", "bar"],
             &[
-                &json!({"foo": 1, "bar": 1}).as_object().unwrap(),
-                &json!({"foo": 2, "bar": 2}).as_object().unwrap(),
-                &json!({"foo": 3, "bar": 3}).as_object().unwrap(),
+                &db_row! {
+                    "foo".into() => ParamValue::from(1_i64),
+                    "bar".into() => ParamValue::from(1_i64),
+                },
+                &db_row! {
+                    "foo".into() => ParamValue::from(2_i64),
+                    "bar".into() => ParamValue::from(2_i64),
+                },
+                &db_row! {
+                    "foo".into() => ParamValue::from(3_i64),
+                    "bar".into() => ParamValue::from(3_i64),
+                },
             ],
         )
         .await
@@ -1282,33 +1275,27 @@ mod tests {
                     "test_update_returning",
                     &["foo", "bar", "car", "dar", "ear"],
                     &[
-                        &json!({
-                            "ear": 15,
-                            "bar": 2,
-                            "car": 13,
-                            "dar": 14,
-                            "foo": 2,
-                        })
-                        .as_object()
-                        .unwrap(),
-                        &json!({
-                            "foo": 1,
-                            "car": 10,
-                            "bar": 1,
-                            "ear": 12,
-                            "dar": 11,
-                        })
-                        .as_object()
-                        .unwrap(),
-                        &json!({
-                            "car": 16,
-                            "dar": 17,
-                            "ear": 18,
-                            "bar": 3,
-                            "foo": 3,
-                        })
-                        .as_object()
-                        .unwrap(),
+                        &db_row! {
+                            "ear".into() => ParamValue::from(15_i64),
+                            "bar".into() => ParamValue::from(2_i64),
+                            "car".into() => ParamValue::from(13_i64),
+                            "dar".into() => ParamValue::from(14_i64),
+                            "foo".into() => ParamValue::from(2_i64),
+                        },
+                        &db_row! {
+                            "foo".into() => ParamValue::from(1_i64),
+                            "car".into() => ParamValue::from(10_i64),
+                            "bar".into() => ParamValue::from(1_i64),
+                            "ear".into() => ParamValue::from(12_i64),
+                            "dar".into() => ParamValue::from(11_i64),
+                        },
+                        &db_row! {
+                            "car".into() => ParamValue::from(16_i64),
+                            "dar".into() => ParamValue::from(17_i64),
+                            "ear".into() => ParamValue::from(18_i64),
+                            "bar".into() => ParamValue::from(3_i64),
+                            "foo".into() => ParamValue::from(3_i64),
+                        },
                     ],
                     &["car", "dar", "ear"],
                 )
@@ -1317,35 +1304,35 @@ mod tests {
         );
 
         // Final sanity check on the values of all columns:
-        let rows = pool
+        let rows: Vec<DbRow> = pool
             .query("SELECT * from test_update_returning", ())
             .await
             .unwrap();
         assert!(rows.iter().all(|row| {
             [
-                json!({
-                    "foo": 1,
-                    "bar": 1,
-                    "car": 10,
-                    "dar": 11,
-                    "ear": 12,
-                }),
-                json!({
-                    "foo": 2,
-                    "bar": 2,
-                    "car": 13,
-                    "dar": 14,
-                    "ear": 15,
-                }),
-                json!({
-                    "foo": 3,
-                    "bar": 3,
-                    "car": 16,
-                    "dar": 17,
-                    "ear": 18,
-                }),
+                db_row! {
+                    "foo".into() => ParamValue::from(1_i64),
+                    "bar".into() => ParamValue::from(1_i64),
+                    "car".into() => ParamValue::from(10_i64),
+                    "dar".into() => ParamValue::from(11_i64),
+                    "ear".into() => ParamValue::from(12_i64),
+                },
+                db_row! {
+                    "foo".into() => ParamValue::from(2_i64),
+                    "bar".into() => ParamValue::from(2_i64),
+                    "car".into() => ParamValue::from(13_i64),
+                    "dar".into() => ParamValue::from(14_i64),
+                    "ear".into() => ParamValue::from(15_i64),
+                },
+                db_row! {
+                    "foo".into() => ParamValue::from(3_i64),
+                    "bar".into() => ParamValue::from(3_i64),
+                    "car".into() => ParamValue::from(16_i64),
+                    "dar".into() => ParamValue::from(17_i64),
+                    "ear".into() => ParamValue::from(18_i64),
+                },
             ]
-            .contains(&json!(row))
+            .contains(&row)
         }));
 
         // Clean up:
@@ -1383,9 +1370,9 @@ mod tests {
             "test_upsert",
             &["foo"],
             &[
-                &json!({"foo": 1}).as_object().unwrap(),
-                &json!({"foo": 2}).as_object().unwrap(),
-                &json!({"foo": 3}).as_object().unwrap(),
+                &db_row! {"foo".into() => ParamValue::from(1_i64)},
+                &db_row! {"foo".into() => ParamValue::from(2_i64)},
+                &db_row! {"foo".into() => ParamValue::from(3_i64)},
             ],
         )
         .await
@@ -1395,64 +1382,58 @@ mod tests {
             "test_upsert",
             &["foo", "bar", "car", "dar", "ear"],
             &[
-                &json!({
-                    "foo": 1,
-                    "bar": 10,
-                    "car": 11,
-                    "dar": 12,
-                    "ear": 13,
-                })
-                .as_object()
-                .unwrap(),
-                &json!({
-                    "foo": 2,
-                    "bar": 14,
-                    "car": 15,
-                    "dar": 16,
-                    "ear": 17,
-                })
-                .as_object()
-                .unwrap(),
-                &json!({
-                    "foo": 3,
-                    "bar": 18,
-                    "car": 19,
-                    "dar": 20,
-                    "ear": 21,
-                })
-                .as_object()
-                .unwrap(),
+                &db_row! {
+                    "foo".into() => ParamValue::from(1_i64),
+                    "bar".into() => ParamValue::from(10_i64),
+                    "car".into() => ParamValue::from(11_i64),
+                    "dar".into() => ParamValue::from(12_i64),
+                    "ear".into() => ParamValue::from(13_i64),
+                },
+                &db_row! {
+                    "foo".into() => ParamValue::from(2_i64),
+                    "bar".into() => ParamValue::from(14_i64),
+                    "car".into() => ParamValue::from(15_i64),
+                    "dar".into() => ParamValue::from(16_i64),
+                    "ear".into() => ParamValue::from(17_i64),
+                },
+                &db_row! {
+                    "foo".into() => ParamValue::from(3_i64),
+                    "bar".into() => ParamValue::from(18_i64),
+                    "car".into() => ParamValue::from(19_i64),
+                    "dar".into() => ParamValue::from(20_i64),
+                    "ear".into() => ParamValue::from(21_i64),
+                },
             ],
         )
         .await
         .unwrap();
 
-        let rows = pool.query("SELECT * from test_upsert", ()).await.unwrap();
+        let rows: Vec<DbRow> = pool.query("SELECT * from test_upsert", ()).await.unwrap();
         assert_eq!(
-            json!(rows),
-            json!([
-                {
-                    "foo": 1,
-                    "bar": 10,
-                    "car": 11,
-                    "dar": 12,
-                    "ear": 13,
+            rows,
+            [
+                db_row! {
+                    "foo".into() => ParamValue::from(1_i64),
+                    "bar".into() => ParamValue::from(10_i64),
+                    "car".into() => ParamValue::from(11_i64),
+                    "dar".into() => ParamValue::from(12_i64),
+                    "ear".into() => ParamValue::from(13_i64),
                 },
-                {
-                    "foo": 2,
-                    "bar": 14,
-                    "car": 15,
-                    "dar": 16,
-                    "ear": 17,
+                db_row! {
+                    "foo".into() => ParamValue::from(2_i64),
+                    "bar".into() => ParamValue::from(14_i64),
+                    "car".into() => ParamValue::from(15_i64),
+                    "dar".into() => ParamValue::from(16_i64),
+                    "ear".into() => ParamValue::from(17_i64),
                 },
-                {
-                    "foo": 3,
-                    "bar": 18,
-                    "car": 19,
-                    "dar": 20,
-                    "ear": 21,
+                db_row! {
+                    "foo".into() => ParamValue::from(3_i64),
+                    "bar".into() => ParamValue::from(18_i64),
+                    "car".into() => ParamValue::from(19_i64),
+                    "dar".into() => ParamValue::from(20_i64),
+                    "ear".into() => ParamValue::from(21_i64),
                 },
-            ])
+            ]
         );
 
         // Clean up:
@@ -1491,46 +1472,49 @@ mod tests {
             "test_upsert_returning",
             &["foo", "bar", "car", "dar", "ear"],
             &[
-                &json!({"foo": 1, "bar": 1}).as_object().unwrap(),
-                &json!({"foo": 2, "bar": 2}).as_object().unwrap(),
-                &json!({"foo": 3, "bar": 3}).as_object().unwrap(),
+                &db_row! {
+                    "foo".into() => ParamValue::from(1_i64),
+                    "bar".into() => ParamValue::from(1_i64),
+                },
+                &db_row! {
+                    "foo".into() => ParamValue::from(2_i64),
+                    "bar".into() => ParamValue::from(2_i64),
+                },
+                &db_row! {
+                    "foo".into() => ParamValue::from(3_i64),
+                    "bar".into() => ParamValue::from(3_i64),
+                },
             ],
         )
         .await
         .unwrap();
 
-        let rows = pool
+        let rows: Vec<DbRow> = pool
             .upsert_returning(
                 "test_upsert_returning",
                 &["foo", "bar", "car", "dar", "ear"],
                 &[
-                    &json!({
-                        "foo": 1,
-                        "bar": 1,
-                        "car": 10,
-                        "dar": 11,
-                        "ear": 12,
-                    })
-                    .as_object()
-                    .unwrap(),
-                    &json!({
-                        "foo": 2,
-                        "bar": 2,
-                        "car": 13,
-                        "dar": 14,
-                        "ear": 15,
-                    })
-                    .as_object()
-                    .unwrap(),
-                    &json!({
-                        "foo": 3,
-                        "bar": 3,
-                        "car": 16,
-                        "dar": 17,
-                        "ear": 18,
-                    })
-                    .as_object()
-                    .unwrap(),
+                    &db_row! {
+                        "foo".into() => ParamValue::from(1_i64),
+                        "bar".into() => ParamValue::from(1_i64),
+                        "car".into() => ParamValue::from(10_i64),
+                        "dar".into() => ParamValue::from(11_i64),
+                        "ear".into() => ParamValue::from(12_i64),
+                    },
+                    &db_row! {
+                        "foo".into() => ParamValue::from(2_i64),
+                        "bar".into() => ParamValue::from(2_i64),
+                        "car".into() => ParamValue::from(13_i64),
+                        "dar".into() => ParamValue::from(14_i64),
+                        "ear".into() => ParamValue::from(15_i64),
+                    },
+                    &db_row! {
+                        "foo".into() => ParamValue::from(3_i64),
+                        "bar".into() => ParamValue::from(3_i64),
+                        "car".into() => ParamValue::from(16_i64),
+                        "dar".into() => ParamValue::from(17_i64),
+                        "ear".into() => ParamValue::from(18_i64),
+                    },
                 ],
                 &["car", "dar", "ear"],
             )
@@ -1538,23 +1522,23 @@ mod tests {
             .unwrap();
         assert!(rows.iter().all(|row| {
             [
-                json!({
-                    "car": 10,
-                    "dar": 11,
-                    "ear": 12,
-                }),
-                json!({
-                    "car": 13,
-                    "dar": 14,
-                    "ear": 15,
-                }),
-                json!({
-                    "car": 16,
-                    "dar": 17,
-                    "ear": 18,
-                }),
+                db_row! {
+                    "car".into() => ParamValue::from(10_i64),
+                    "dar".into() => ParamValue::from(11_i64),
+                    "ear".into() => ParamValue::from(12_i64),
+                },
+                db_row! {
+                    "car".into() => ParamValue::from(13_i64),
+                    "dar".into() => ParamValue::from(14_i64),
+                    "ear".into() => ParamValue::from(15_i64),
+                },
+                db_row! {
+                    "car".into() => ParamValue::from(16_i64),
+                    "dar".into() => ParamValue::from(17_i64),
+                    "ear".into() => ParamValue::from(18_i64),
+                },
             ]
-            .contains(&json!(row))
+            .contains(&row)
         }));
 
         // Clean up:
@@ -1614,14 +1598,18 @@ mod tests {
             "test_table_caching_1",
             &["value"],
             &[
-                &json!({"value": "alpha"}).as_object().unwrap(),
-                &json!({"value": "beta"}).as_object().unwrap(),
+                &db_row! {
+                    "value".into() => ParamValue::from("alpha"),
+                },
+                &db_row! {
+                    "value".into() => ParamValue::from("beta"),
+                },
             ],
         )
         .await
         .unwrap();
 
-        let rows = pool
+        let rows: Vec<DbRow> = pool
             .cache(
                 &["test_table_caching_1"],
                 "SELECT * from test_table_caching_1",
@@ -1638,12 +1626,12 @@ mod tests {
         assert_eq!(
             rows,
             vec![
-                json!({"value": "alpha"}).as_object().unwrap().clone(),
-                json!({"value": "beta"}).as_object().unwrap().clone(),
+                db_row! {"value".into() => ParamValue::from("alpha")},
+                db_row! {"value".into() => ParamValue::from("beta")},
             ]
         );
 
-        let rows = pool
+        let rows: Vec<DbRow> = pool
             .cache(
                 &["test_table_caching_1"],
                 "SELECT * from test_table_caching_1",
@@ -1660,8 +1648,8 @@ mod tests {
         assert_eq!(
             rows,
             vec![
-                json!({"value": "alpha"}).as_object().unwrap().clone(),
-                json!({"value": "beta"}).as_object().unwrap().clone(),
+                db_row! {"value".into() => ParamValue::from("alpha")},
+                db_row! {"value".into() => ParamValue::from("beta")},
             ]
         );
 
@@ -1669,8 +1657,8 @@ mod tests {
             "test_table_caching_1",
             &["value"],
             &[
-                &json!({"value": "gamma"}).as_object().unwrap(),
-                &json!({"value": "delta"}).as_object().unwrap(),
+                &db_row! {"value".into() => ParamValue::from("gamma")},
+                &db_row! {"value".into() => ParamValue::from("delta")},
             ],
         )
         .await
@@ -1682,7 +1670,7 @@ mod tests {
             _ => assert_eq!(count_cache_table_rows(pool).await, 0),
         };
 
-        let rows = pool
+        let rows: Vec<DbRow> = pool
             .cache(
                 &["test_table_caching_1"],
                 "SELECT * from test_table_caching_1",
@@ -1699,14 +1687,14 @@ mod tests {
         assert_eq!(
             rows,
             vec![
-                json!({"value": "alpha"}).as_object().unwrap().clone(),
-                json!({"value": "beta"}).as_object().unwrap().clone(),
-                json!({"value": "gamma"}).as_object().unwrap().clone(),
-                json!({"value": "delta"}).as_object().unwrap().clone(),
+                db_row! {"value".into() => ParamValue::from("alpha")},
+                db_row! {"value".into() => ParamValue::from("beta")},
+                db_row! {"value".into() => ParamValue::from("gamma")},
+                db_row! {"value".into() => ParamValue::from("delta")},
             ]
         );
 
-        let rows = pool
+        let rows: Vec<DbRow> = pool
             .cache(
                 &["test_table_caching_1"],
                 "SELECT * from test_table_caching_1",
@@ -1718,27 +1706,30 @@ mod tests {
         assert_eq!(
             rows,
             vec![
-                json!({"value": "alpha"}).as_object().unwrap().clone(),
-                json!({"value": "beta"}).as_object().unwrap().clone(),
-                json!({"value": "gamma"}).as_object().unwrap().clone(),
-                json!({"value": "delta"}).as_object().unwrap().clone(),
+                db_row! {"value".into() => ParamValue::from("alpha")},
+                db_row! {"value".into() => ParamValue::from("beta")},
+                db_row! {"value".into() => ParamValue::from("gamma")},
+                db_row! {"value".into() => ParamValue::from("delta")},
             ]
         );
 
-        pool.cache(
-            &["test_table_caching_1"],
-            "SELECT COUNT(1) FROM test_table_caching_1",
-            (),
-        )
-        .await
-        .unwrap();
-        pool.cache(
-            &["test_table_caching_2"],
-            "SELECT COUNT(1) FROM test_table_caching_2",
-            (),
-        )
-        .await
-        .unwrap();
+        let _: Vec<DbRow> = pool
+            .cache(
+                &["test_table_caching_1"],
+                "SELECT COUNT(1) FROM test_table_caching_1",
+                (),
+            )
+            .await
+            .unwrap();
+
+        let _: Vec<DbRow> = pool
+            .cache(
+                &["test_table_caching_2"],
+                "SELECT COUNT(1) FROM test_table_caching_2",
+                (),
+            )
+            .await
+            .unwrap();
 
         match strategy {
             CachingStrategy::None => (),
@@ -1762,7 +1753,7 @@ mod tests {
             CachingStrategy::TruncateAll => assert_eq!(count_cache_table_rows(pool).await, 0),
         };
 
-        let rows = pool
+        let rows: Vec<DbRow> = pool
             .cache(
                 &["test_table_caching_1"],
                 "SELECT * from test_table_caching_1",
@@ -1782,12 +1773,12 @@ mod tests {
         assert_eq!(
             rows,
             vec![
-                json!({"value": "alpha"}).as_object().unwrap().clone(),
-                json!({"value": "beta"}).as_object().unwrap().clone(),
-                json!({"value": "gamma"}).as_object().unwrap().clone(),
-                json!({"value": "delta"}).as_object().unwrap().clone(),
-                json!({"value": "rho"}).as_object().unwrap().clone(),
-                json!({"value": "sigma"}).as_object().unwrap().clone(),
+                db_row! {"value".into() => ParamValue::from("alpha")},
+                db_row! {"value".into() => ParamValue::from("beta")},
+                db_row! {"value".into() => ParamValue::from("gamma")},
+                db_row! {"value".into() => ParamValue::from("delta")},
+                db_row! {"value".into() => ParamValue::from("rho")},
+                db_row! {"value".into() => ParamValue::from("sigma")},
             ]
         );
     }
@@ -1797,16 +1788,22 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_caching_performance() {
-        let runs = 10000;
-        let fail_after = 150;
-        let edit_rate = 100;
+        let runs = 5000;
+        let edit_rate = 25;
         #[cfg(feature = "rusqlite")]
-        perform_caching(":memory:", runs, fail_after, edit_rate).await;
+        perform_caching(":memory:", runs, edit_rate, 75).await;
         #[cfg(feature = "tokio-postgres")]
-        perform_caching("postgresql:///rltbl_db", runs, fail_after, edit_rate).await;
+        perform_caching("postgresql:///rltbl_db", runs, edit_rate, 75).await;
     }
 
-    async fn perform_caching(url: &str, runs: usize, fail_after: usize, edit_rate: usize) {
+    // Performs the caching performance test on the database located at the given url, using
+    // the given number of runs and edit rate. The latter represents the rate at which the
+    // tables in the simulation are edited (e.g., a value of 25 means that a table will be edited
+    // in one out every 25th run, on average), which causes the cache to become out of date and
+    // require maintenance in accordance with the current caching strategy. The test is run
+    // for the given number of runs for each of the supported caching strategies. The running
+    // time for each strategy is then summarized and reported via STDOUT.
+    async fn perform_caching(url: &str, runs: usize, edit_rate: usize, fail_after: usize) {
         let mut pool = AnyPool::connect(url).await.unwrap();
         let all_strategies = ["none", "truncate_all", "truncate", "trigger", "memory:1000"]
             .iter()
@@ -1814,9 +1811,11 @@ mod tests {
             .collect::<Vec<_>>();
 
         pool.set_cache_aware_query(true);
+        let this_test = "Caching Performance Test -";
         println!(
-            "\nTesting caching performance for {} with cache_aware_query {}.",
+            "{this_test} Starting test for {} connection '{}' with cache_aware_query {}.",
             pool.kind(),
+            url,
             match pool.get_cache_aware_query() {
                 true => "on",
                 false => "off",
@@ -1824,15 +1823,15 @@ mod tests {
         );
         let mut times = BTreeMap::new();
         for strategy in &all_strategies {
-            println!("Setting caching strategy to {strategy}.");
+            println!("{this_test} Using strategy: {strategy}.");
             pool.set_caching_strategy(&strategy);
             let elapsed = perform_caching_detail(&pool, runs, fail_after, edit_rate).await;
             times.insert(format!("{strategy}"), elapsed);
         }
 
-        println!("\nCaching times for {} (summary).", pool.kind());
+        println!("{this_test} Elapsed times for {} (summary):", pool.kind());
         for (strategy, elapsed) in times.iter() {
-            println!("Strategy: {strategy}, elapsed time: {elapsed}s");
+            println!("  Strategy: {strategy}, elapsed time: {elapsed}s");
         }
     }
 
@@ -1897,7 +1896,7 @@ mod tests {
         let mut actual_edits = 0;
         while i < runs {
             let select_table = random_table(&tables_to_choose_from);
-            let _ = pool
+            let _: Vec<DbRow> = pool
                 .cache(
                     &[select_table],
                     &format!("SELECT foo, SUM(bar) FROM {select_table} GROUP BY foo ORDER BY foo"),
@@ -1925,7 +1924,11 @@ mod tests {
             i += 1;
         }
         elapsed = now.elapsed().as_secs();
-        println!("Elapsed time: {elapsed}s ({actual_edits} edits out of {runs})");
+        println!(
+            "Caching Performance Test - Elapsed time for strategy {}: {elapsed}s \
+             ({actual_edits} edits in {runs} runs)",
+            pool.get_caching_strategy()
+        );
         for table in tables_to_choose_from.iter() {
             pool.execute(&format!("DROP TABLE IF EXISTS {table}"), ())
                 .await

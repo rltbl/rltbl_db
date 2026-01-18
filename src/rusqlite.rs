@@ -2,8 +2,8 @@
 
 use crate::{
     core::{
-        CachingStrategy, ColumnMap, DbError, DbKind, DbQuery, IntoParams, JsonRow, JsonValue,
-        ParamValue, Params, validate_table_name,
+        CachingStrategy, ColumnMap, DbError, DbKind, DbQuery, DbRow, FromDbRows, IntoDbRows,
+        IntoParams, ParamValue, Params, validate_table_name,
     },
     params,
     shared::{EditType, edit},
@@ -17,7 +17,8 @@ use deadpool_sqlite::{
         types::{Null, ValueRef},
     },
 };
-use serde_json::json;
+use rust_decimal::Decimal;
+use std::str::from_utf8;
 
 /// The [maximum number of parameters](https://www.sqlite.org/limits.html#max_variable_number)
 /// that can be bound to a SQLite query
@@ -27,7 +28,7 @@ static MAX_PARAMS_SQLITE: usize = 32766;
 fn query_prepared(
     stmt: &mut Statement<'_>,
     params: impl IntoParams + Send,
-) -> Result<Vec<JsonRow>, DbError> {
+) -> Result<Vec<DbRow>, DbError> {
     match params.into_params() {
         Params::None => (),
         Params::Positional(params) => {
@@ -135,39 +136,41 @@ fn query_prepared(
     let results = stmt
         .raw_query()
         .map(|row| {
-            let mut json_row = JsonRow::new();
+            let mut db_row = DbRow::new();
             for column in &columns {
                 let column_name = &column.name;
                 let column_type = &column.datatype;
                 let value = row.get_ref(column_name.as_str())?;
                 let value = match value {
-                    ValueRef::Null => JsonValue::Null,
+                    ValueRef::Null => ParamValue::Null,
                     ValueRef::Integer(value) => match column_type {
                         Some(ctype) if ctype.to_lowercase() == "bool" => {
-                            JsonValue::Bool(value != 0)
+                            ParamValue::Boolean(value != 0)
                         }
                         // The remaining cases are (a) the column's datatype is integer, and
                         // (b) the column is an expression. In the latter case it doesn't seem
                         // possible to get the datatype of the expression from the metadata.
                         // So the only thing to do here is just to convert the value
-                        // to JSON using the default method, and since we already know that it
-                        // is an integer, the result of the conversion will be a JSON number.
-                        _ => JsonValue::from(value),
+                        // to using the default method, and since we already know that it
+                        // is an integer, the result of the conversion will be a number.
+                        _ => ParamValue::from(value),
                     },
-                    ValueRef::Real(value) => JsonValue::from(value),
+                    ValueRef::Real(value) => ParamValue::from(value),
                     ValueRef::Text(value) | ValueRef::Blob(value) => match column_type {
                         Some(ctype) if ctype.to_lowercase() == "numeric" => {
-                            json!(value)
+                            let value = from_utf8(value).unwrap_or_default();
+                            let value = value.parse::<Decimal>().unwrap();
+                            ParamValue::Numeric(value)
                         }
                         _ => {
-                            let value = std::str::from_utf8(value).unwrap_or_default();
-                            JsonValue::String(value.to_string())
+                            let value = from_utf8(value).unwrap_or_default();
+                            ParamValue::Text(value.to_string())
                         }
                     },
                 };
-                json_row.insert(column_name.to_string(), value);
+                db_row.insert(column_name.to_string(), value);
             }
-            Ok(json_row)
+            Ok(db_row)
         })
         .collect::<Vec<_>>();
     results.map_err(|err| DbError::DatabaseError(err.to_string()))
@@ -261,7 +264,7 @@ impl DbQuery for RusqlitePool {
     async fn ensure_caching_triggers_exist(&self, tables: &[&str]) -> Result<(), DbError> {
         self.ensure_cache_table_exists().await?;
         for table in tables {
-            let rows: Vec<JsonRow> = self
+            let rows: Vec<DbRow> = self
                 .query_no_cache(
                     r#"SELECT 1
                        FROM sqlite_master
@@ -342,12 +345,11 @@ impl DbQuery for RusqlitePool {
                      ORDER BY "name""#
             .to_string();
 
-        for row in self.query_no_cache(&sql, params![&table]).await? {
+        let rows: Vec<DbRow> = self.query_no_cache(&sql, params![&table]).await?;
+        for row in &rows {
             match (
-                row.get("name")
-                    .and_then(|name| name.as_str().and_then(|name| Some(name))),
-                row.get("type")
-                    .and_then(|name| name.as_str().and_then(|name| Some(name))),
+                row.get("name").and_then(|name| Some::<String>(name.into())),
+                row.get("type").and_then(|name| Some::<String>(name.into())),
             ) {
                 (Some(column), Some(sql_type)) => {
                     columns.insert(column.to_string(), sql_type.to_lowercase().to_string())
@@ -370,25 +372,23 @@ impl DbQuery for RusqlitePool {
 
     /// Implements [DbQuery::primary_keys()] for SQLite.
     async fn primary_keys(&self, table: &str) -> Result<Vec<String>, DbError> {
-        self.query_no_cache(
-            r#"SELECT "name"
+        let rows: Vec<DbRow> = self
+            .query_no_cache(
+                r#"SELECT "name"
                FROM pragma_table_info(?1)
                WHERE "pk" > 0
                ORDER BY "pk""#,
-            params![&table],
-        )
-        .await?
-        .iter()
-        .map(|row| {
-            match row
-                .get("name")
-                .and_then(|name| name.as_str().and_then(|name| Some(name)))
-            {
-                Some(pk_col) => Ok(pk_col.to_string()),
-                None => Err(DbError::DataError("Empty row".to_owned())),
-            }
-        })
-        .collect()
+                params![&table],
+            )
+            .await?;
+        rows.iter()
+            .map(
+                |row| match row.get("name").and_then(|name| Some::<String>(name.into())) {
+                    Some(pk_col) => Ok(pk_col.to_string()),
+                    None => Err(DbError::DataError("Empty row".to_owned())),
+                },
+            )
+            .collect()
     }
 
     /// Implements [DbQuery::execute_batch()] for PostgreSQL
@@ -419,11 +419,11 @@ impl DbQuery for RusqlitePool {
     }
 
     /// Implements [DbQuery::query_no_cache()] for SQLite.
-    async fn query_no_cache(
+    async fn query_no_cache<T: FromDbRows>(
         &self,
         sql: &str,
         params: impl IntoParams + Send,
-    ) -> Result<Vec<JsonRow>, DbError> {
+    ) -> Result<T, DbError> {
         let rows = {
             let conn = self
                 .pool
@@ -436,16 +436,23 @@ impl DbQuery for RusqlitePool {
                 let mut stmt = conn.prepare(&sql_string).map_err(|err| {
                     DbError::DatabaseError(format!("Error preparing statement: {err}"))
                 })?;
-                let rows = query_prepared(&mut stmt, params).map_err(|err| {
-                    DbError::DatabaseError(format!("Error querying prepared statement: {err}"))
-                })?;
-                Ok::<Vec<JsonRow>, DbError>(rows)
+                let rows = query_prepared(&mut stmt, params)
+                    .map_err(|err: DbError| {
+                        DbError::DatabaseError(format!("Error querying prepared statement: {err}"))
+                    })?
+                    .into_iter()
+                    .map(|row| {
+                        row.into_iter()
+                            .map(|(key, val)| (key, ParamValue::from(val)))
+                            .collect()
+                    })
+                    .collect();
+                Ok(rows)
             })
             .await
-            .map_err(|err| DbError::DatabaseError(err.to_string()))?
-            .map_err(|err| DbError::DatabaseError(err.to_string()))?
+            .map_err(|err| DbError::DatabaseError(err.to_string()))??
         };
-        Ok(rows)
+        Ok(FromDbRows::from(rows))
     }
 
     /// Implements [DbQuery::insert()] for SQLite.
@@ -453,9 +460,9 @@ impl DbQuery for RusqlitePool {
         &self,
         table: &str,
         columns: &[&str],
-        rows: &[&JsonRow],
+        rows: impl IntoDbRows,
     ) -> Result<(), DbError> {
-        edit(
+        let _: Vec<DbRow> = edit(
             self,
             &EditType::Insert,
             &MAX_PARAMS_SQLITE,
@@ -470,13 +477,13 @@ impl DbQuery for RusqlitePool {
     }
 
     /// Implements [DbQuery::insert_returning()] for SQLite.
-    async fn insert_returning(
+    async fn insert_returning<T: FromDbRows>(
         &self,
         table: &str,
         columns: &[&str],
-        rows: &[&JsonRow],
+        rows: impl IntoDbRows,
         returning: &[&str],
-    ) -> Result<Vec<JsonRow>, DbError> {
+    ) -> Result<T, DbError> {
         edit(
             self,
             &EditType::Insert,
@@ -495,9 +502,9 @@ impl DbQuery for RusqlitePool {
         &self,
         table: &str,
         columns: &[&str],
-        rows: &[&JsonRow],
+        rows: impl IntoDbRows,
     ) -> Result<(), DbError> {
-        edit(
+        let _: Vec<DbRow> = edit(
             self,
             &EditType::Update,
             &MAX_PARAMS_SQLITE,
@@ -512,13 +519,13 @@ impl DbQuery for RusqlitePool {
     }
 
     /// Implements [DbQuery::update_returning()] for SQLite.
-    async fn update_returning(
+    async fn update_returning<T: FromDbRows>(
         &self,
         table: &str,
         columns: &[&str],
-        rows: &[&JsonRow],
+        rows: impl IntoDbRows,
         returning: &[&str],
-    ) -> Result<Vec<JsonRow>, DbError> {
+    ) -> Result<T, DbError> {
         edit(
             self,
             &EditType::Update,
@@ -537,9 +544,9 @@ impl DbQuery for RusqlitePool {
         &self,
         table: &str,
         columns: &[&str],
-        rows: &[&JsonRow],
+        rows: impl IntoDbRows,
     ) -> Result<(), DbError> {
-        edit(
+        let _: Vec<DbRow> = edit(
             self,
             &EditType::Upsert,
             &MAX_PARAMS_SQLITE,
@@ -554,13 +561,13 @@ impl DbQuery for RusqlitePool {
     }
 
     /// Implements [DbQuery::upsert_returning()] for SQLite.
-    async fn upsert_returning(
+    async fn upsert_returning<T: FromDbRows>(
         &self,
         table: &str,
         columns: &[&str],
-        rows: &[&JsonRow],
+        rows: impl IntoDbRows,
         returning: &[&str],
-    ) -> Result<Vec<JsonRow>, DbError> {
+    ) -> Result<T, DbError> {
         edit(
             self,
             &EditType::Upsert,
@@ -576,15 +583,14 @@ impl DbQuery for RusqlitePool {
 
     /// Implements [DbQuery::table_exists()] for SQLite.
     async fn table_exists(&self, table: &str) -> Result<bool, DbError> {
-        match self
+        let rows: Vec<DbRow> = self
             .query_no_cache(
                 r#"SELECT 1 FROM "sqlite_master"
                    WHERE "type" = 'table' AND "name" = ?1"#,
                 &[table],
             )
-            .await?
-            .first()
-        {
+            .await?;
+        match rows.first() {
             None => Ok(false),
             Some(_) => Ok(true),
         }
@@ -596,7 +602,7 @@ mod tests {
     use super::*;
 
     use crate::params;
-    use serde_json::json;
+    use indexmap::indexmap as db_row;
 
     #[tokio::test]
     async fn test_aliases_and_builtin_functions() {
@@ -623,24 +629,30 @@ mod tests {
         .unwrap();
 
         // Test aggregate:
-        let rows = pool
+        let rows: Vec<DbRow> = pool
             .query("SELECT MAX(int_value) FROM test_table_indirect", ())
             .await
             .unwrap();
-        assert_eq!(json!(rows), json!([{"MAX(int_value)": 1}]));
+        assert_eq!(
+            rows,
+            [db_row! {"MAX(int_value)".into() => ParamValue::from(1_i64)}]
+        );
 
         // Test alias:
-        let rows = pool
+        let rows: Vec<DbRow> = pool
             .query(
                 "SELECT bool_value AS bool_value_alias FROM test_table_indirect",
                 (),
             )
             .await
             .unwrap();
-        assert_eq!(json!(rows), json!([{"bool_value_alias": true}]));
+        assert_eq!(
+            rows,
+            [db_row! {"bool_value_alias".into() => ParamValue::from(true)}]
+        );
 
         // Test aggregate with alias:
-        let rows = pool
+        let rows: Vec<DbRow> = pool
             .query(
                 "SELECT MAX(int_value) AS max_int_value FROM test_table_indirect",
                 (),
@@ -648,30 +660,39 @@ mod tests {
             .await
             .unwrap();
         // Note that the alias is not shown in the results:
-        assert_eq!(json!(rows), json!([{"max_int_value": 1}]));
+        assert_eq!(
+            rows,
+            [db_row! {"max_int_value".into() => ParamValue::from(1_i64)}]
+        );
 
         // Test non-aggregate function:
-        let rows = pool
+        let rows: Vec<DbRow> = pool
             .query(
                 "SELECT CAST(int_value AS TEXT) FROM test_table_indirect",
                 (),
             )
             .await
             .unwrap();
-        assert_eq!(json!(rows), json!([{"CAST(int_value AS TEXT)": "1"}]));
+        assert_eq!(
+            rows,
+            [db_row! {"CAST(int_value AS TEXT)".into() => ParamValue::from("1")}]
+        );
 
         // Test non-aggregate function with alias:
-        let rows = pool
+        let rows: Vec<DbRow> = pool
             .query(
                 "SELECT CAST(int_value AS TEXT) AS int_value_cast FROM test_table_indirect",
                 (),
             )
             .await
             .unwrap();
-        assert_eq!(json!(rows), json!([{"int_value_cast": "1"}]));
+        assert_eq!(
+            rows,
+            [db_row! {"int_value_cast".into() => ParamValue::from("1")}]
+        );
 
         // Test functions over booleans:
-        let rows = pool
+        let rows: Vec<DbRow> = pool
             .query("SELECT MAX(bool_value) FROM test_table_indirect", ())
             .await
             .unwrap();
@@ -684,7 +705,10 @@ mod tests {
         //          name and argument types. You might need to add explicit type casts.
         // So, perhaps, this is tu quoque an argument that the behaviour below is acceptable for
         // sqlite.
-        assert_eq!(json!(rows), json!([{"MAX(bool_value)": 1}]));
+        assert_eq!(
+            rows,
+            [db_row! {"MAX(bool_value)".into() => ParamValue::from(1_i64)}]
+        );
     }
 
     /// This test is resource intensive and therefore ignored by default. It verifies that
