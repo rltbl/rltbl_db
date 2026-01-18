@@ -2,9 +2,10 @@
 
 use crate::{
     core::{
-        CachingStrategy, ColumnMap, DbError, DbKind, DbQuery, DbRow, FromDbRows, IntoDbRows,
-        IntoParams, ParamValue, Params, validate_table_name,
+        CachingStrategy, ColumnMap, DbError, DbQuery, DbRow, FromDbRows, IntoDbRows, IntoParams,
+        ParamValue, Params, validate_table_name,
     },
+    db_kind::DbKind,
     params,
     shared::{EditType, edit},
 };

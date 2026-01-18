@@ -1,5 +1,6 @@
-use crate::core::{
-    DbError, DbKind, DbQuery, DbRow, FromDbRows, IntoDbRows, ParamValue, validate_table_name,
+use crate::{
+    core::{DbError, DbQuery, DbRow, FromDbRows, IntoDbRows, ParamValue, validate_table_name},
+    db_kind::DbKind,
 };
 use std::fmt::Display;
 

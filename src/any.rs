@@ -14,9 +14,12 @@
 ///     Ok(value)
 /// }
 /// ```
-use crate::core::{
-    CachingStrategy, ColumnMap, DbError, DbKind, DbQuery, FromDbRows, IntoDbRows, IntoParams,
-    ParamValue,
+use crate::{
+    core::{
+        CachingStrategy, ColumnMap, DbError, DbQuery, FromDbRows, IntoDbRows, IntoParams,
+        ParamValue,
+    },
+    db_kind::DbKind,
 };
 
 #[cfg(feature = "rusqlite")]

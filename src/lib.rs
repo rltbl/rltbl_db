@@ -1,8 +1,7 @@
-pub mod core;
-
-pub mod shared;
-
 pub mod any;
+pub mod core;
+pub mod db_kind;
+pub mod shared;
 
 #[cfg(feature = "rusqlite")]
 pub mod rusqlite;
