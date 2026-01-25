@@ -30,7 +30,7 @@ async fn run_axum(url: &str) {
     };
     pool.execute_batch(&format!(
         "DROP TABLE IF EXISTS test{cascade};\
-             CREATE TABLE test ( value TEXT )",
+         CREATE TABLE test ( value TEXT )",
     ))
     .await
     .unwrap();
@@ -74,6 +74,8 @@ async fn run_axum(url: &str) {
 #[tokio::test]
 async fn test_axum() {
     #[cfg(feature = "rusqlite")]
+    run_axum(":memory:").await;
+    #[cfg(feature = "libsql")]
     run_axum(":memory:").await;
     #[cfg(feature = "tokio-postgres")]
     run_axum("postgresql:///rltbl_db").await;

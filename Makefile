@@ -14,10 +14,6 @@ test_ignored:
 	cargo test -- --no-capture --ignored
 	cargo test --no-default-features --features libsql -- --no-capture --ignored
 
-test_all:
-	cargo test -- --no-capture --include-ignored
-	cargo test --no-default-features --features libsql -- --no-capture --include-ignored
-
 crate_docs:
 	RUSTDOCFLAGS="-D warnings" cargo doc
 

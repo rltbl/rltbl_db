@@ -319,6 +319,8 @@ mod tests {
     async fn test_text_column_query() {
         #[cfg(feature = "rusqlite")]
         text_column_query(":memory:").await;
+        #[cfg(feature = "libsql")]
+        text_column_query(":memory:").await;
         #[cfg(feature = "tokio-postgres")]
         text_column_query("postgresql:///rltbl_db").await;
     }
@@ -381,6 +383,8 @@ mod tests {
     #[tokio::test]
     async fn test_integer_column_query() {
         #[cfg(feature = "rusqlite")]
+        integer_column_query(":memory:").await;
+        #[cfg(feature = "libsql")]
         integer_column_query(":memory:").await;
         #[cfg(feature = "tokio-postgres")]
         integer_column_query("postgresql:///rltbl_db").await;
@@ -445,6 +449,8 @@ mod tests {
     #[tokio::test]
     async fn test_float_column_query() {
         #[cfg(feature = "rusqlite")]
+        float_column_query(":memory:").await;
+        #[cfg(feature = "libsql")]
         float_column_query(":memory:").await;
         #[cfg(feature = "tokio-postgres")]
         float_column_query("postgresql:///rltbl_db").await;
@@ -520,6 +526,8 @@ mod tests {
     #[tokio::test]
     async fn test_mixed_column_query() {
         #[cfg(feature = "rusqlite")]
+        mixed_column_query(":memory:").await;
+        #[cfg(feature = "libsql")]
         mixed_column_query(":memory:").await;
         #[cfg(feature = "tokio-postgres")]
         mixed_column_query("postgresql:///rltbl_db").await;
@@ -607,7 +615,18 @@ mod tests {
                 "alt_float_value".into() => ParamValue::Null,
                 "int_value".into() => ParamValue::from(1_i64),
                 "alt_int_value".into() => ParamValue::Null,
-                "bool_value".into() => ParamValue::from(true),
+                "bool_value".into() => {
+                    #[cfg(feature = "libsql")]
+                    {
+                        // libsql does not support booleans:
+                        // https://docs.rs/libsql/0.9.29/libsql/enum.Value.html,
+                        ParamValue::from(1_i64)
+                    }
+                    #[cfg(not(feature = "libsql"))]
+                    {
+                        ParamValue::from(true)
+                    }
+                },
                 "alt_bool_value".into() => ParamValue::Null,
                 "numeric_value".into() => ParamValue::from(1_i64),
                 "alt_numeric_value".into() => ParamValue::Null,
@@ -624,7 +643,18 @@ mod tests {
                 "alt_float_value".into() => ParamValue::Null,
                 "int_value".into() => ParamValue::from(1_i64),
                 "alt_int_value".into() => ParamValue::Null,
-                "bool_value".into() => ParamValue::from(true),
+                "bool_value".into() => {
+                    #[cfg(feature = "libsql")]
+                    {
+                        // libsql does not support booleans:
+                        // https://docs.rs/libsql/0.9.29/libsql/enum.Value.html,
+                        ParamValue::from(1_i64)
+                    }
+                    #[cfg(not(feature = "libsql"))]
+                    {
+                        ParamValue::from(true)
+                    }
+                },
                 "alt_bool_value".into() => ParamValue::Null,
                 "numeric_value".into() => ParamValue::from(1_i64),
                 "alt_numeric_value".into() => ParamValue::Null,
@@ -638,6 +668,8 @@ mod tests {
     #[tokio::test]
     async fn test_input_params() {
         #[cfg(feature = "rusqlite")]
+        input_params(":memory:").await;
+        #[cfg(feature = "libsql")]
         input_params(":memory:").await;
         #[cfg(feature = "tokio-postgres")]
         input_params("postgresql:///rltbl_db").await;
@@ -761,6 +793,8 @@ mod tests {
     async fn test_insert() {
         #[cfg(feature = "rusqlite")]
         insert(":memory:").await;
+        #[cfg(feature = "libsql")]
+        insert(":memory:").await;
         #[cfg(feature = "tokio-postgres")]
         insert("postgresql:///rltbl_db").await;
     }
@@ -792,7 +826,18 @@ mod tests {
                 &db_row! {"text_value".into() => ParamValue::from("TEXT")},
                 &db_row! {
                     "int_value".into() => ParamValue::from(1_i64),
-                    "bool_value".into() => ParamValue::from(true)
+                    "bool_value".into() => {
+                        #[cfg(feature = "libsql")]
+                        {
+                            // libsql does not support booleans:
+                            // https://docs.rs/libsql/0.9.29/libsql/enum.Value.html,
+                            ParamValue::from(1_i64)
+                        }
+                        #[cfg(not(feature = "libsql"))]
+                        {
+                            ParamValue::from(true)
+                        }
+                    }
                 },
             ],
         )
@@ -819,7 +864,20 @@ mod tests {
                     "alt_text_value".into() => ParamValue::Null,
                     "float_value".into() => ParamValue::Null,
                     "int_value".into() => ParamValue::from(1_i64),
-                    "bool_value".into() => ParamValue::from(true),
+                    "bool_value".into() => {
+                        {
+                            #[cfg(feature = "libsql")]
+                            {
+                                // libsql does not support booleans:
+                                // https://docs.rs/libsql/0.9.29/libsql/enum.Value.html,
+                                ParamValue::from(1_i64)
+                            }
+                            #[cfg(not(feature = "libsql"))]
+                            {
+                                ParamValue::from(true)
+                            }
+                        }
+                    },
                 }
             ]
         );
@@ -831,6 +889,8 @@ mod tests {
     #[tokio::test]
     async fn test_insert_returning() {
         #[cfg(feature = "rusqlite")]
+        insert_returning(":memory:").await;
+        #[cfg(feature = "libsql")]
         insert_returning(":memory:").await;
         #[cfg(feature = "tokio-postgres")]
         insert_returning("postgresql:///rltbl_db").await;
@@ -886,7 +946,20 @@ mod tests {
                     "alt_text_value".into() => ParamValue::Null,
                     "float_value".into() => ParamValue::Null,
                     "int_value".into() => ParamValue::from(1_i64),
-                    "bool_value".into() => ParamValue::from(true),
+                    "bool_value".into() => {
+                        {
+                            #[cfg(feature = "libsql")]
+                            {
+                                // libsql does not support booleans:
+                                // https://docs.rs/libsql/0.9.29/libsql/enum.Value.html,
+                                ParamValue::from(1_i64)
+                            }
+                            #[cfg(not(feature = "libsql"))]
+                            {
+                                ParamValue::from(true)
+                            }
+                        }
+                    },
                 }
             ]
         );
@@ -928,6 +1001,8 @@ mod tests {
     #[tokio::test]
     async fn test_drop_table() {
         #[cfg(feature = "rusqlite")]
+        drop_table(":memory:").await;
+        #[cfg(feature = "libsql")]
         drop_table(":memory:").await;
         #[cfg(feature = "tokio-postgres")]
         drop_table("postgresql:///rltbl_db").await;
@@ -974,6 +1049,8 @@ mod tests {
     async fn test_primary_keys() {
         #[cfg(feature = "rusqlite")]
         primary_keys(":memory:").await;
+        #[cfg(feature = "libsql")]
+        primary_keys(":memory:").await;
         #[cfg(feature = "tokio-postgres")]
         primary_keys("postgresql:///rltbl_db").await;
     }
@@ -1017,6 +1094,8 @@ mod tests {
     #[tokio::test]
     async fn test_update() {
         #[cfg(feature = "rusqlite")]
+        update(":memory:").await;
+        #[cfg(feature = "libsql")]
         update(":memory:").await;
         #[cfg(feature = "tokio-postgres")]
         update("postgresql:///rltbl_db").await;
@@ -1118,6 +1197,8 @@ mod tests {
     #[tokio::test]
     async fn test_update_returning() {
         #[cfg(feature = "rusqlite")]
+        update_returning(":memory:").await;
+        #[cfg(feature = "libsql")]
         update_returning(":memory:").await;
         #[cfg(feature = "tokio-postgres")]
         update_returning("postgresql:///rltbl_db").await;
@@ -1322,6 +1403,8 @@ mod tests {
     async fn test_upsert() {
         #[cfg(feature = "rusqlite")]
         upsert(":memory:").await;
+        #[cfg(feature = "libsql")]
+        upsert(":memory:").await;
         #[cfg(feature = "tokio-postgres")]
         upsert("postgresql:///rltbl_db").await;
     }
@@ -1422,6 +1505,8 @@ mod tests {
     #[tokio::test]
     async fn test_upsert_returning() {
         #[cfg(feature = "rusqlite")]
+        upsert_returning(":memory:").await;
+        #[cfg(feature = "libsql")]
         upsert_returning(":memory:").await;
         #[cfg(feature = "tokio-postgres")]
         upsert_returning("postgresql:///rltbl_db").await;
@@ -1531,6 +1616,13 @@ mod tests {
             .map(|strategy| CachingStrategy::from_str(strategy).unwrap())
             .collect::<Vec<_>>();
         #[cfg(feature = "rusqlite")]
+        {
+            let mut pool = AnyPool::connect(":memory:").await.unwrap();
+            for caching_strategy in &all_strategies {
+                cache_with_strategy(&mut pool, &caching_strategy).await;
+            }
+        }
+        #[cfg(feature = "libsql")]
         {
             let mut pool = AnyPool::connect(":memory:").await.unwrap();
             for caching_strategy in &all_strategies {
@@ -1770,6 +1862,8 @@ mod tests {
         let runs = 5000;
         let edit_rate = 25;
         #[cfg(feature = "rusqlite")]
+        perform_caching(":memory:", runs, edit_rate, 75).await;
+        #[cfg(feature = "libsql")]
         perform_caching(":memory:", runs, edit_rate, 75).await;
         #[cfg(feature = "tokio-postgres")]
         perform_caching("postgresql:///rltbl_db", runs, edit_rate, 75).await;

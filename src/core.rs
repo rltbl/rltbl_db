@@ -737,9 +737,11 @@ pub trait DbQuery {
                         create_caching_triggers(&table).await?;
                     }
                 }
+                // If the database and/or db driver do not support boolean values, then we
+                // need to interpret the integer value as a bool:
                 Some(triggers_exist) => {
-                    let triggers_exist: u64 = triggers_exist.try_into()?;
-                    if triggers_exist == 0 {
+                    let triggers_exist = TryInto::<u64>::try_into(triggers_exist)? == 1;
+                    if !triggers_exist {
                         create_caching_triggers(&table).await?;
                     }
                 }

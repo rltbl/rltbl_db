@@ -171,11 +171,10 @@ impl DbQuery for TokioPostgresPool {
 
     /// Implements [DbQuery::execute_batch()] for PostgreSQL
     async fn execute_batch(&self, sql: &str) -> Result<(), DbError> {
-        let client = self
-            .pool
-            .get()
-            .await
-            .map_err(|err| DbError::ConnectError(format!("Unable to get pool: {err:?}")))?;
+        let client =
+            self.pool.get().await.map_err(|err| {
+                DbError::ConnectError(format!("Unable to get from pool: {err:?}"))
+            })?;
         client
             .batch_execute(sql)
             .await
@@ -192,11 +191,10 @@ impl DbQuery for TokioPostgresPool {
         into_params: impl IntoParams + Send,
     ) -> Result<T, DbError> {
         let into_params = into_params.into_params();
-        let client = self
-            .pool
-            .get()
-            .await
-            .map_err(|err| DbError::ConnectError(format!("Unable to get pool: {err:?}")))?;
+        let client =
+            self.pool.get().await.map_err(|err| {
+                DbError::ConnectError(format!("Unable to get from pool: {err:?}"))
+            })?;
 
         // The expected types of all of the parameters as reported by the database via prepare():
         let param_pg_types = client

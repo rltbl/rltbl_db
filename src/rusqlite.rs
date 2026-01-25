@@ -234,7 +234,7 @@ impl DbQuery for RusqlitePool {
             .pool
             .get()
             .await
-            .map_err(|err| DbError::ConnectError(format!("Unable to get pool: {err}")))?;
+            .map_err(|err| DbError::ConnectError(format!("Unable to get from pool: {err}")))?;
         let sql_string = sql.to_string();
         match conn
             .interact(move |conn| match conn.execute_batch(&sql_string) {
@@ -262,11 +262,10 @@ impl DbQuery for RusqlitePool {
         params: impl IntoParams + Send,
     ) -> Result<T, DbError> {
         let rows = {
-            let conn = self
-                .pool
-                .get()
-                .await
-                .map_err(|err| DbError::ConnectError(format!("Error getting pool: {err}")))?;
+            let conn =
+                self.pool.get().await.map_err(|err| {
+                    DbError::ConnectError(format!("Error getting from pool: {err}"))
+                })?;
             let sql_string = sql.to_string();
             let params: Params = params.into_params();
             conn.interact(move |conn| {
