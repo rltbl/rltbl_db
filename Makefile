@@ -1,6 +1,6 @@
 MAKEFLAGS += --warn-undefined-variables
 SHELL := bash
-.DEFAULT_GOAL := postgres
+.DEFAULT_GOAL := build
 .DELETE_ON_ERROR:
 .SUFFIXES:
 
@@ -8,21 +8,21 @@ SHELL := bash
 
 test:
 	cargo test -- --no-capture
+	cargo test --no-default-features --features libsql -- --no-capture
 
 test_ignored:
 	cargo test -- --no-capture --ignored
+	cargo test --no-default-features --features libsql -- --no-capture --ignored
 
 test_all:
 	cargo test -- --no-capture --include-ignored
+	cargo test --no-default-features --features libsql -- --no-capture --include-ignored
 
 crate_docs:
 	RUSTDOCFLAGS="-D warnings" cargo doc
 
-crate_docs_postgres:
-	RUSTDOCFLAGS="-D warnings" cargo doc --features tokio-postgres
-
-sqlite_only:
+build:
 	cargo build
 
-postgres:
-	cargo build --features tokio-postgres
+build_libsql:
+	cargo build --no-default-features --features libsql

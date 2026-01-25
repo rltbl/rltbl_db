@@ -2,20 +2,22 @@
 
 use crate::{
     core::{
-        CachingStrategy, ColumnMap, DbError, DbQuery, DbRow, FromDbRows, IntoDbRows, IntoParams,
-        ParamValue, Params,
+        CachingStrategy, DbError, DbQuery, DbRow, FromDbRows, IntoDbRows, IntoParams, ParamValue,
+        Params,
     },
     db_kind::DbKind,
     shared::{EditType, edit},
 };
 
-use deadpool_postgres::{Config, Pool, Runtime};
-use rust_decimal::Decimal;
-use tokio_postgres::{
-    NoTls,
-    row::Row,
-    types::{ToSql, Type},
+use deadpool_postgres::{
+    Config, Pool, Runtime,
+    tokio_postgres::{
+        NoTls,
+        row::Row,
+        types::{ToSql, Type},
+    },
 };
+use rust_decimal::Decimal;
 
 /// The [maximum number of parameters](https://www.postgresql.org/docs/current/limits.html)
 /// that can be bound to a Postgres query is 65535. This has been true since at least PostgreSQL
@@ -165,75 +167,6 @@ impl DbQuery for TokioPostgresPool {
     /// Implements [DbQuery::get_cache_aware_query()] for PostgreSQL.
     fn get_cache_aware_query(&self) -> bool {
         self.cache_aware_query
-    }
-
-    /// Implements [DbQuery::ensure_cache_table_exists()] for PostgreSQL.
-    async fn ensure_cache_table_exists(&self) -> Result<(), DbError> {
-        self.kind().ensure_cache_table_exists(self).await
-    }
-
-    /// Implements [DbQuery::ensure_caching_triggers_exist()] for PostgreSQL.
-    async fn ensure_caching_triggers_exist(&self, tables: &[&str]) -> Result<(), DbError> {
-        self.kind()
-            .ensure_caching_triggers_exist(self, tables)
-            .await
-    }
-
-    /// Implements [DbQuery::parse()] for PostgreSQL.
-    fn parse(&self, sql_type: &str, value: &str) -> Result<ParamValue, DbError> {
-        let err = || {
-            Err(DbError::ParseError(format!(
-                "Could not parse '{sql_type}' from '{value}'"
-            )))
-        };
-        match sql_type.to_lowercase().as_str() {
-            "text" => Ok(ParamValue::Text(value.to_string())),
-            "bool" | "boolean" => match value.to_lowercase().as_str() {
-                // TODO: improve this
-                "true" | "1" => Ok(ParamValue::Boolean(true)),
-                _ => Ok(ParamValue::Boolean(false)),
-            },
-            "smallint" | "smallinteger" => match value.parse::<i16>() {
-                Ok(int) => Ok(ParamValue::SmallInteger(int)),
-                Err(_) => err(),
-            },
-            "int" | "integer" => match value.parse::<i32>() {
-                Ok(int) => Ok(ParamValue::Integer(int)),
-                Err(_) => err(),
-            },
-            "bigint" | "biginteger" => match value.parse::<i64>() {
-                Ok(int) => Ok(ParamValue::BigInteger(int)),
-                Err(_) => err(),
-            },
-            "real" => match value.parse::<f32>() {
-                Ok(float) => Ok(ParamValue::Real(float)),
-                Err(_) => err(),
-            },
-            "bigreal" => match value.parse::<f64>() {
-                Ok(float) => Ok(ParamValue::BigReal(float)),
-                Err(_) => err(),
-            },
-            // WARN: Treat NUMERIC as an f64.
-            "numeric" => match value.parse::<f64>() {
-                Ok(float) => Ok(ParamValue::Numeric(
-                    Decimal::from_f64_retain(float).unwrap_or_default(),
-                )),
-                Err(_) => err(),
-            },
-            _ => Err(DbError::DatatypeError(format!(
-                "Unhandled SQL type: {sql_type}"
-            ))),
-        }
-    }
-
-    /// Implements [DbQuery::columns()] for PostgreSQL.
-    async fn columns(&self, table: &str) -> Result<ColumnMap, DbError> {
-        self.kind().columns(self, table).await
-    }
-
-    /// Implements [DbQuery::primary_keys()] for PostgreSQL.
-    async fn primary_keys(&self, table: &str) -> Result<Vec<String>, DbError> {
-        self.kind().primary_keys(self, table).await
     }
 
     /// Implements [DbQuery::execute_batch()] for PostgreSQL
@@ -491,11 +424,6 @@ impl DbQuery for TokioPostgresPool {
             returning,
         )
         .await
-    }
-
-    /// Implements [DbQuery::table_exists()] for PostgreSQL.
-    async fn table_exists(&self, table: &str) -> Result<bool, DbError> {
-        self.kind().table_exists(self, table).await
     }
 }
 

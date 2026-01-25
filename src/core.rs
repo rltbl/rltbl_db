@@ -103,6 +103,13 @@ pub enum ParamValue {
     Text(String),
 }
 
+impl Display for ParamValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let string_value: String = self.into();
+        write!(f, "{}", string_value)
+    }
+}
+
 // Implementations of attempted conversion of ParamValues into various types:
 
 impl Into<JsonValue> for ParamValue {
@@ -143,6 +150,12 @@ impl Into<String> for ParamValue {
     }
 }
 
+impl Into<String> for &ParamValue {
+    fn into(self) -> String {
+        self.clone().into()
+    }
+}
+
 impl TryInto<u64> for ParamValue {
     type Error = DbError;
 
@@ -161,6 +174,14 @@ impl TryInto<u64> for ParamValue {
                 "Not an unsigned integer: {self:?}"
             ))),
         }
+    }
+}
+
+impl TryInto<u64> for &ParamValue {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<u64, DbError> {
+        self.clone().try_into()
     }
 }
 
@@ -183,6 +204,14 @@ impl TryInto<i64> for ParamValue {
     }
 }
 
+impl TryInto<i64> for &ParamValue {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<i64, DbError> {
+        self.clone().try_into()
+    }
+}
+
 impl TryInto<f64> for ParamValue {
     type Error = DbError;
 
@@ -199,6 +228,14 @@ impl TryInto<f64> for ParamValue {
             }
             _ => Err(DbError::InputError(format!("Not an integer: {self:?}"))),
         }
+    }
+}
+
+impl TryInto<f64> for &ParamValue {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<f64, DbError> {
+        self.clone().try_into()
     }
 }
 
@@ -219,9 +256,11 @@ impl TryInto<f32> for ParamValue {
     }
 }
 
-impl Into<String> for &ParamValue {
-    fn into(self) -> String {
-        self.clone().into()
+impl TryInto<f32> for &ParamValue {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<f32, DbError> {
+        self.clone().try_into()
     }
 }
 
@@ -658,14 +697,61 @@ pub trait DbQuery {
     fn get_cache_aware_query(&self) -> bool;
 
     /// Ensure that the cache table exists
-    fn ensure_cache_table_exists(&self) -> impl Future<Output = Result<(), DbError>> + Send;
+    async fn ensure_cache_table_exists(&self) -> Result<(), DbError> {
+        let sql = self.kind().create_cache_table_sql();
+        match self.execute_no_cache(&sql, ()).await {
+            Ok(_) => Ok(()),
+            Err(_) => {
+                // Since we are not using transactions, a race condition could occur in
+                // which two or more threads are trying to create the cache at the same
+                // time, triggering a primary key violation in the metadata table. So if
+                // there is an error creating the cache table we just check that it exists
+                // and if it does we assume that all is ok.
+                match self.table_exists("cache").await? {
+                    false => Err(DbError::DatabaseError(
+                        "The cache table could not be created".to_string(),
+                    )),
+                    true => Ok(()),
+                }
+            }
+        }
+    }
 
     /// Ensure that caching triggers exist for the given tables. Note that this function calls
     /// [DbQuery::ensure_cache_table_exists()] implicitly.
-    fn ensure_caching_triggers_exist(
-        &self,
-        tables: &[&str],
-    ) -> impl Future<Output = Result<(), DbError>> + Send;
+    async fn ensure_caching_triggers_exist(&self, tables: &[&str]) -> Result<(), DbError> {
+        let create_caching_triggers = async |table: &str| -> Result<(), DbError> {
+            let sql = self.kind().create_caching_triggers_sql(&table).join(";\n");
+            self.execute_batch(&sql).await?;
+            Ok(())
+        };
+
+        self.ensure_cache_table_exists().await?;
+        for table in tables {
+            let table = validate_table_name(table)?;
+            let (sql, params) = self.kind().triggers_exist_sql(&table);
+            let rows: Vec<DbRow> = self.query_no_cache(&sql, &params).await?;
+            match rows.iter().next().and_then(|row| row.get("triggers_exist")) {
+                Some(ParamValue::Boolean(triggers_exist)) => {
+                    if !triggers_exist {
+                        create_caching_triggers(&table).await?;
+                    }
+                }
+                Some(triggers_exist) => {
+                    let triggers_exist: u64 = triggers_exist.try_into()?;
+                    if triggers_exist == 0 {
+                        create_caching_triggers(&table).await?;
+                    }
+                }
+                None => {
+                    return Err(DbError::DataError(format!(
+                        "Unable to determine whether caching triggers exist for table '{table}'"
+                    )));
+                }
+            };
+        }
+        Ok(())
+    }
 
     /// Parse the given semi-colon-separated SQL commands and determine which tables will be
     /// affected (either edited or dropped) by the commands, then ensure that there are no
@@ -935,19 +1021,53 @@ pub trait DbQuery {
         }
     }
 
-    /// Given a SQL type for this database and a string,
-    /// parse the string into the right ParamValue.
-    fn parse(&self, sql_type: &str, value: &str) -> Result<ParamValue, DbError>;
-
     /// Given a table, return a map from column names to column SQL types.
-    fn columns(&self, table: &str) -> impl Future<Output = Result<ColumnMap, DbError>> + Send;
+    async fn columns(&self, table: &str) -> Result<ColumnMap, DbError> {
+        let mut columns = ColumnMap::new();
+        let (sql, params) = self.kind().columns_sql(table);
+        let rows: Vec<DbRow> = self.query_no_cache(&sql, params).await?;
+        for row in &rows {
+            match (
+                row.get("column_name")
+                    .and_then(|value| Some::<String>(value.into())),
+                row.get("data_type")
+                    .and_then(|value| Some::<String>(value.into())),
+            ) {
+                (Some(column), Some(data_type)) => {
+                    columns.insert(column.to_string(), data_type.to_lowercase().to_string())
+                }
+                _ => {
+                    return Err(DbError::DataError(format!(
+                        "Error getting columns for table '{table}'"
+                    )));
+                }
+            };
+        }
 
-    // TODO: Consider combining this function with columns().
+        match columns.is_empty() {
+            true => Err(DbError::DataError(format!(
+                "No information found for table '{table}'"
+            ))),
+            false => Ok(columns),
+        }
+    }
+
     /// Retrieve the primary key columns for a given table.
-    fn primary_keys(
-        &self,
-        table: &str,
-    ) -> impl Future<Output = Result<Vec<String>, DbError>> + Send;
+    async fn primary_keys(&self, table: &str) -> Result<Vec<String>, DbError> {
+        let (sql, params) = self.kind().primary_keys_sql(table);
+        let rows: Vec<DbRow> = self.query_no_cache(&sql, params).await?;
+        rows.iter()
+            .map(|row| {
+                match row
+                    .get("column_name")
+                    .and_then(|name| Some::<String>(name.into()))
+                {
+                    Some(pk_col) => Ok(pk_col.to_string()),
+                    None => Err(DbError::DataError("Empty row".to_owned())),
+                }
+            })
+            .collect()
+    }
 
     /// Execute a SQL command, returning nothing.
     async fn execute(&self, sql: &str, params: impl IntoParams + Send) -> Result<(), DbError> {
@@ -1160,7 +1280,14 @@ pub trait DbQuery {
     ) -> impl Future<Output = Result<T, DbError>>;
 
     /// Check whether the given table exists in the database.
-    fn table_exists(&self, table: &str) -> impl Future<Output = Result<bool, DbError>> + Send;
+    async fn table_exists(&self, table: &str) -> Result<bool, DbError> {
+        let (sql, params) = self.kind().table_exists_sql(table);
+        let rows: Vec<DbRow> = self.query_no_cache(&sql, params).await?;
+        match rows.first() {
+            None => Ok(false),
+            Some(_) => Ok(true),
+        }
+    }
 
     /// Drop the given table from the database. Note that for PostgreSQL (see
     /// <https://www.postgresql.org/docs/current/sql-droptable.html>), in the case of a

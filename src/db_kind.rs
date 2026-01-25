@@ -1,7 +1,8 @@
 use crate::{
-    core::{ColumnMap, DbError, DbQuery, DbRow, validate_table_name},
+    core::{DbError, ParamValue},
     params,
 };
+use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 
@@ -32,54 +33,101 @@ impl DbKind {
         }
     }
 
-    /// Query the database's metadata using the given pool and return a map from column names
-    /// to column SQL types for the given table.
-    pub async fn columns(
-        &self,
-        pool: &(impl DbQuery + Sync),
-        table: &str,
-    ) -> Result<ColumnMap, DbError> {
-        async fn columns_sqlite(
-            pool: &(impl DbQuery + Sync),
-            table: &str,
-        ) -> Result<ColumnMap, DbError> {
-            let mut columns = ColumnMap::new();
-            let sql = r#"SELECT "name", "type"
-                         FROM pragma_table_info(?1)
-                         ORDER BY "name""#
-                .to_string();
-
-            let rows: Vec<DbRow> = pool.query_no_cache(&sql, params![&table]).await?;
-            for row in &rows {
-                match (
-                    row.get("name").and_then(|name| Some::<String>(name.into())),
-                    row.get("type").and_then(|name| Some::<String>(name.into())),
-                ) {
-                    (Some(column), Some(sql_type)) => {
-                        columns.insert(column.to_string(), sql_type.to_lowercase().to_string())
-                    }
-                    _ => {
-                        return Err(DbError::DataError(format!(
-                            "Error getting columns for table '{table}'"
-                        )));
-                    }
-                };
-            }
-
-            match columns.is_empty() {
-                true => Err(DbError::DataError(format!(
-                    "No information found for table '{table}'"
+    /// Given a SQL type for this database and a string, parse the string into the right
+    /// ParamValue.
+    pub fn parse(&self, sql_type: &str, value: &str) -> Result<ParamValue, DbError> {
+        fn parse_sqlite(sql_type: &str, value: &str) -> Result<ParamValue, DbError> {
+            let err = || {
+                Err(DbError::ParseError(format!(
+                    "Could not parse '{sql_type}' from '{value}'"
+                )))
+            };
+            match sql_type.to_lowercase().as_str() {
+                "text" => Ok(ParamValue::Text(value.to_string())),
+                "bool" => match value.to_lowercase().as_str() {
+                    "true" | "1" => Ok(ParamValue::Boolean(true)),
+                    "false" | "0" => Ok(ParamValue::Boolean(false)),
+                    _ => err(),
+                },
+                "int" | "integer" | "int8" | "bigint" => match value.parse::<i64>() {
+                    Ok(int) => Ok(ParamValue::BigInteger(int)),
+                    Err(_) => err(),
+                },
+                // NOTE: We are treating NUMERIC as an f64 here and for tokio-postgres.
+                "real" | "numeric" => match value.parse::<f64>() {
+                    Ok(float) => Ok(ParamValue::BigReal(float)),
+                    Err(_) => err(),
+                },
+                _ => Err(DbError::DatatypeError(format!(
+                    "Unhandled SQL type: {sql_type}"
                 ))),
-                false => Ok(columns),
             }
         }
 
-        async fn columns_postgresql(
-            pool: &(impl DbQuery + Sync),
-            table: &str,
-        ) -> Result<ColumnMap, DbError> {
-            let mut columns = ColumnMap::new();
-            let sql = format!(
+        fn parse_postgresql(sql_type: &str, value: &str) -> Result<ParamValue, DbError> {
+            let err = || {
+                Err(DbError::ParseError(format!(
+                    "Could not parse '{sql_type}' from '{value}'"
+                )))
+            };
+            match sql_type.to_lowercase().as_str() {
+                "text" => Ok(ParamValue::Text(value.to_string())),
+                "bool" | "boolean" => match value.to_lowercase().as_str() {
+                    // TODO: improve this
+                    "true" | "1" => Ok(ParamValue::Boolean(true)),
+                    _ => Ok(ParamValue::Boolean(false)),
+                },
+                "smallint" | "smallinteger" => match value.parse::<i16>() {
+                    Ok(int) => Ok(ParamValue::SmallInteger(int)),
+                    Err(_) => err(),
+                },
+                "int" | "integer" => match value.parse::<i32>() {
+                    Ok(int) => Ok(ParamValue::Integer(int)),
+                    Err(_) => err(),
+                },
+                "bigint" | "biginteger" => match value.parse::<i64>() {
+                    Ok(int) => Ok(ParamValue::BigInteger(int)),
+                    Err(_) => err(),
+                },
+                "real" => match value.parse::<f32>() {
+                    Ok(float) => Ok(ParamValue::Real(float)),
+                    Err(_) => err(),
+                },
+                "bigreal" => match value.parse::<f64>() {
+                    Ok(float) => Ok(ParamValue::BigReal(float)),
+                    Err(_) => err(),
+                },
+                // WARN: Treat NUMERIC as an f64.
+                "numeric" => match value.parse::<f64>() {
+                    Ok(float) => Ok(ParamValue::Numeric(
+                        Decimal::from_f64_retain(float).unwrap_or_default(),
+                    )),
+                    Err(_) => err(),
+                },
+                _ => Err(DbError::DatatypeError(format!(
+                    "Unhandled SQL type: {sql_type}"
+                ))),
+            }
+        }
+
+        match self {
+            DbKind::SQLite => parse_sqlite(sql_type, value),
+            DbKind::PostgreSQL => parse_postgresql(sql_type, value),
+        }
+    }
+
+    /// Generate the SQL and parameters needed to query the database's metadata for names and
+    /// types of the columns of the given table.
+    pub fn columns_sql(&self, table: &str) -> (String, [ParamValue; 1]) {
+        match self {
+            DbKind::SQLite => (
+                r#"SELECT "name" AS "column_name", "type" AS "data_type"
+                   FROM pragma_table_info(?1)
+                   ORDER BY "name""#
+                    .to_string(),
+                params![table],
+            ),
+            DbKind::PostgreSQL => (
                 r#"SELECT
                      "columns"."column_name"::TEXT,
                      "columns"."data_type"::TEXT
@@ -93,365 +141,185 @@ impl DbKind {
                      )
                      AND "columns"."table_name" = $1
                    ORDER BY "columns"."ordinal_position""#
-            );
-
-            let rows: Vec<DbRow> = pool.query_no_cache(&sql, params![&table]).await?;
-            for row in &rows {
-                match (
-                    row.get("column_name")
-                        .and_then(|name| Some::<String>(name.into())),
-                    row.get("data_type")
-                        .and_then(|name| Some::<String>(name.into())),
-                ) {
-                    (Some(column), Some(sql_type)) => {
-                        columns.insert(column.to_string(), sql_type.to_lowercase().to_string())
-                    }
-                    _ => {
-                        return Err(DbError::DataError(format!(
-                            "Error getting columns for table '{table}'"
-                        )));
-                    }
-                };
-            }
-
-            match columns.is_empty() {
-                true => Err(DbError::DataError(format!(
-                    "No information found for table '{table}'"
-                ))),
-                false => Ok(columns),
-            }
-        }
-        match self {
-            DbKind::SQLite => columns_sqlite(pool, table).await,
-            DbKind::PostgreSQL => columns_postgresql(pool, table).await,
+                    .to_string(),
+                params![table],
+            ),
         }
     }
 
-    // TODO: Consider combining this function with columns().
-    /// Query the database's metadata using the given pool and return the primary key columns
-    /// for the given table.
-    pub async fn primary_keys(
-        &self,
-        pool: &(impl DbQuery + Sync),
-        table: &str,
-    ) -> Result<Vec<String>, DbError> {
-        async fn primary_keys_sqlite(
-            pool: &(impl DbQuery + Sync),
-            table: &str,
-        ) -> Result<Vec<String>, DbError> {
-            let rows: Vec<DbRow> = pool
-                .query_no_cache(
-                    r#"SELECT "name"
-                       FROM pragma_table_info(?1)
-                       WHERE "pk" > 0
-                       ORDER BY "pk""#,
-                    params![&table],
-                )
-                .await?;
-            rows.iter()
-                .map(
-                    |row| match row.get("name").and_then(|name| Some::<String>(name.into())) {
-                        Some(pk_col) => Ok(pk_col.to_string()),
-                        None => Err(DbError::DataError("Empty row".to_owned())),
-                    },
-                )
-                .collect()
-        }
-
-        async fn primary_keys_postgresql(
-            pool: &(impl DbQuery + Sync),
-            table: &str,
-        ) -> Result<Vec<String>, DbError> {
-            let rows: Vec<DbRow> = pool
-                .query_no_cache(
-                    r#"SELECT "kcu"."column_name"
-                       FROM "information_schema"."table_constraints" "tco"
-                       JOIN "information_schema"."key_column_usage" "kcu"
-                         ON "kcu"."constraint_name" = "tco"."constraint_name"
-                        AND "kcu"."constraint_schema" = "tco"."constraint_schema"
-                        AND "kcu"."table_name" = $1
-                        AND "tco"."constraint_type" ILIKE 'primary key'
-                      WHERE "kcu"."table_schema" IN (
-                        SELECT REGEXP_SPLIT_TO_TABLE("setting", ', ')
-                        FROM "pg_settings"
-                        WHERE "name" = 'search_path'
-                      )
-                      ORDER by "kcu"."ordinal_position""#,
-                    params![&table],
-                )
-                .await?;
-
-            rows.iter()
-                .map(|row| {
-                    match row
-                        .get("column_name")
-                        .and_then(|name| Some::<String>(name.into()))
-                    {
-                        Some(pk_col) => Ok(pk_col.to_string()),
-                        None => Err(DbError::DataError("Empty row".to_owned())),
-                    }
-                })
-                .collect()
-        }
-
+    /// Generate the SQL and parameters needed to query the database's metadata for the primary
+    /// key columns of the given table.
+    pub fn primary_keys_sql(&self, table: &str) -> (String, [ParamValue; 1]) {
         match self {
-            DbKind::SQLite => primary_keys_sqlite(pool, table).await,
-            DbKind::PostgreSQL => primary_keys_postgresql(pool, table).await,
+            DbKind::SQLite => (
+                r#"SELECT "name" AS "column_name"
+                   FROM pragma_table_info(?1)
+                   WHERE "pk" > 0
+                   ORDER BY "pk""#
+                    .to_string(),
+                params![table],
+            ),
+            DbKind::PostgreSQL => (
+                r#"SELECT "kcu"."column_name"
+                   FROM "information_schema"."table_constraints" "tco"
+                   JOIN "information_schema"."key_column_usage" "kcu"
+                     ON "kcu"."constraint_name" = "tco"."constraint_name"
+                    AND "kcu"."constraint_schema" = "tco"."constraint_schema"
+                    AND "kcu"."table_name" = $1
+                    AND "tco"."constraint_type" ILIKE 'primary key'
+                   WHERE "kcu"."table_schema" IN (
+                     SELECT REGEXP_SPLIT_TO_TABLE("setting", ', ')
+                     FROM "pg_settings"
+                     WHERE "name" = 'search_path'
+                  )
+                  ORDER by "kcu"."ordinal_position""#
+                    .to_string(),
+                params![table],
+            ),
         }
     }
 
-    /// Determine whether the given table exists.
-    pub async fn table_exists(
-        self,
-        pool: &(impl DbQuery + Sync),
-        table: &str,
-    ) -> Result<bool, DbError> {
-        async fn table_exists_sqlite(
-            pool: &(impl DbQuery + Sync),
-            table: &str,
-        ) -> Result<bool, DbError> {
-            let rows: Vec<DbRow> = pool
-                .query_no_cache(
-                    r#"SELECT 1 FROM "sqlite_master"
-                       WHERE "type" = 'table' AND "name" = ?1"#,
-                    &[table],
-                )
-                .await?;
-            match rows.first() {
-                None => Ok(false),
-                Some(_) => Ok(true),
-            }
-        }
-
-        async fn table_exists_postgresql(
-            pool: &(impl DbQuery + Sync),
-            table: &str,
-        ) -> Result<bool, DbError> {
-            let rows: Vec<DbRow> = pool
-                .query_no_cache(
-                    r#"SELECT 1
-                       FROM "information_schema"."tables"
-                       WHERE "table_type" LIKE '%TABLE'
-                         AND "table_name" = $1
-                         AND "table_schema" IN (
-                           SELECT REGEXP_SPLIT_TO_TABLE("setting", ', ')
-                           FROM "pg_settings"
-                           WHERE "name" = 'search_path'
-                         )"#,
-                    &[table],
-                )
-                .await?;
-
-            match rows.first() {
-                None => Ok(false),
-                Some(_) => Ok(true),
-            }
-        }
-
+    /// Generate the SQL and parameters needed to determine whether the given table exists.
+    pub fn table_exists_sql(self, table: &str) -> (String, [ParamValue; 1]) {
         match self {
-            DbKind::SQLite => table_exists_sqlite(pool, table).await,
-            DbKind::PostgreSQL => table_exists_postgresql(pool, table).await,
+            DbKind::SQLite => (
+                r#"SELECT 1 FROM "sqlite_master"
+                   WHERE "type" = 'table' AND "name" = ?1"#
+                    .to_string(),
+                params![table],
+            ),
+            DbKind::PostgreSQL => (
+                r#"SELECT 1
+                   FROM "information_schema"."tables"
+                   WHERE "table_type" LIKE '%TABLE'
+                   AND "table_name" = $1
+                   AND "table_schema" IN (
+                     SELECT REGEXP_SPLIT_TO_TABLE("setting", ', ')
+                     FROM "pg_settings"
+                     WHERE "name" = 'search_path'
+                   )"#
+                .to_string(),
+                params![table],
+            ),
         }
     }
 
-    /// Ensure that the cache table exists
-    pub async fn ensure_cache_table_exists(
-        &self,
-        pool: &(impl DbQuery + Sync),
-    ) -> Result<(), DbError> {
-        async fn ensure_cache_table_exists_sqlite(
-            pool: &(impl DbQuery + Sync),
-        ) -> Result<(), DbError> {
-            match pool
-                .execute_no_cache(
-                    r#"CREATE TABLE IF NOT EXISTS "cache" (
-                         "tables" TEXT,
-                         "statement" TEXT,
-                         "parameters" TEXT,
-                         "value" TEXT,
-                         PRIMARY KEY ("tables", "statement", "parameters")
-                       )"#,
-                    (),
-                )
-                .await
-            {
-                Ok(_) => Ok(()),
-                Err(_) => {
-                    // Since we are not using transactions, a race condition could occur in
-                    // which two or more threads are trying to create the cache at the same
-                    // time, triggering a primary key violation in the metadata table. So if
-                    // there is an error creating the cache table we just check that it exists
-                    // and if it does we assume that all is ok.
-                    match pool.table_exists("cache").await? {
-                        false => Err(DbError::DatabaseError(
-                            "The cache table could not be created".to_string(),
-                        )),
-                        true => Ok(()),
-                    }
-                }
-            }
-        }
-
-        async fn ensure_cache_table_exists_postgresql(
-            pool: &(impl DbQuery + Sync),
-        ) -> Result<(), DbError> {
-            match pool
-                .execute_no_cache(
-                    r#"CREATE TABLE IF NOT EXISTS "cache" (
-                         "tables" TEXT,
-                         "statement" TEXT,
-                         "parameters" TEXT,
-                         "value" TEXT,
-                         PRIMARY KEY ("tables", "statement", "parameters")
-                       )"#,
-                    (),
-                )
-                .await
-            {
-                Ok(_) => Ok(()),
-                Err(_) => {
-                    // Since we are not using transactions, a race condition could occur in
-                    // which two or more threads are trying to create the cache at the same
-                    // time, triggering a primary key violation in the metadata table. So if
-                    // there is an error creating the cache table we just check that it exists
-                    // and if it does we assume that all is ok.
-                    match pool.table_exists("cache").await? {
-                        false => Err(DbError::DatabaseError(
-                            "The cache table could not be created".to_string(),
-                        )),
-                        true => Ok(()),
-                    }
-                }
-            }
-        }
-
+    /// Generate the SQL needed to create the cache table.
+    pub fn create_cache_table_sql(&self) -> String {
+        // The generated SQL is currently identical for SQLite and PostgreSQL but they could
+        // come apart in the future.
         match self {
-            DbKind::SQLite => ensure_cache_table_exists_sqlite(pool).await,
-            DbKind::PostgreSQL => ensure_cache_table_exists_postgresql(pool).await,
+            DbKind::SQLite | DbKind::PostgreSQL => {
+                let sql = r#"CREATE TABLE IF NOT EXISTS "cache" (
+                                "tables" TEXT,
+                                "statement" TEXT,
+                                "parameters" TEXT,
+                                "value" TEXT,
+                                PRIMARY KEY ("tables", "statement", "parameters")
+                             )"#
+                .to_string();
+                sql
+            }
         }
     }
 
-    /// Ensure that caching triggers exist for the given tables. Note that this function calls
-    /// [DbKind::ensure_cache_table_exists()] implicitly.
-    pub async fn ensure_caching_triggers_exist(
-        &self,
-        pool: &(impl DbQuery + Sync),
-        tables: &[&str],
-    ) -> Result<(), DbError> {
-        async fn ensure_caching_triggers_exist_sqlite(
-            pool: &(impl DbQuery + Sync),
-            tables: &[&str],
-        ) -> Result<(), DbError> {
-            for table in tables {
-                let rows: Vec<DbRow> = pool
-                    .query_no_cache(
-                        r#"SELECT 1
-                           FROM sqlite_master
-                           WHERE type = 'trigger'
-                             AND name IN (?1, ?2, ?3)"#,
-                        &[
-                            &format!("{table}_cache_after_insert"),
-                            &format!("{table}_cache_after_update"),
-                            &format!("{table}_cache_after_delete"),
-                        ],
-                    )
-                    .await?;
-
-                // Only recreate the triggers if they don't all already exist:
-                if rows.len() != 3 {
-                    // Note that parameters are not allowed in trigger creation statements in SQLite.
-                    pool.execute_batch(&format!(
-                        r#"DROP TRIGGER IF EXISTS "{table}_cache_after_insert";
-                           CREATE TRIGGER "{table}_cache_after_insert"
-                           AFTER INSERT ON "{table}"
-                           BEGIN
-                             DELETE FROM "cache" WHERE "tables" LIKE '%{table}%';
-                           END;
-                           DROP TRIGGER IF EXISTS "{table}_cache_after_update";
-                           CREATE TRIGGER "{table}_cache_after_update"
-                           AFTER UPDATE ON "{table}"
-                           BEGIN
-                             DELETE FROM "cache" WHERE "tables" LIKE '%{table}%';
-                           END;
-                           DROP TRIGGER IF EXISTS "{table}_cache_after_delete";
-                           CREATE TRIGGER "{table}_cache_after_delete"
-                           AFTER DELETE ON "{table}"
-                           BEGIN
-                             DELETE FROM "cache" WHERE "tables" LIKE '%{table}%';
-                           END"#,
-                        table = validate_table_name(table)?,
-                    ))
-                    .await?;
-                }
+    /// Generate the SQL needed to verify whether the caching triggers for the given table exist.
+    pub fn triggers_exist_sql(&self, table: &str) -> (String, [ParamValue; 3]) {
+        let sql = match self {
+            DbKind::SQLite => {
+                let sql = r#"SELECT (COUNT(1) = 3) AS triggers_exist
+                             FROM sqlite_master
+                             WHERE type = 'trigger'
+                               AND name IN (?1, ?2, ?3)"#;
+                sql.to_string()
             }
-            Ok(())
-        }
-
-        async fn ensure_caching_triggers_exist_postgresql(
-            pool: &(impl DbQuery + Sync),
-            tables: &[&str],
-        ) -> Result<(), DbError> {
-            for table in tables {
-                let rows: Vec<DbRow> = pool
-                    .query_no_cache(
-                        r#"SELECT 1
-                           FROM information_schema.triggers
-                           WHERE trigger_name IN ($1, $2, $3)
+            DbKind::PostgreSQL => {
+                let sql = r#"SELECT (COUNT(1) = 3) AS triggers_exist
+                             FROM information_schema.triggers
+                             WHERE trigger_name IN ($1, $2, $3)
                              AND "trigger_schema" IN (
                                SELECT REGEXP_SPLIT_TO_TABLE("setting", ', ')
                                FROM "pg_settings"
                                WHERE "name" = 'search_path'
-                             )"#,
-                        &[
-                            &format!("{table}_cache_after_insert"),
-                            &format!("{table}_cache_after_update"),
-                            &format!("{table}_cache_after_delete"),
-                        ],
-                    )
-                    .await?;
-
-                // Only recreate the triggers if they don't all already exist:
-                if rows.len() != 3 {
-                    // Note that parameters are not allowed in trigger creation statements
-                    // in PostgreSQL.
-                    pool.execute_batch(&format!(
-                        r#"CREATE OR REPLACE FUNCTION "clean_cache_for_{table}"()
-                             RETURNS TRIGGER
-                             LANGUAGE PLPGSQL
-                            AS
-                            $$
-                            BEGIN
-                              DELETE FROM "cache" WHERE "tables" LIKE '%{table}%';
-                              RETURN NEW;
-                            END;
-                            $$;
-                            DROP TRIGGER IF EXISTS "{table}_cache_after_insert" ON "{table}";
-                            CREATE TRIGGER "{table}_cache_after_insert"
-                              AFTER INSERT ON "{table}"
-                              EXECUTE FUNCTION "clean_cache_for_{table}"();
-                            DROP TRIGGER IF EXISTS "{table}_cache_after_update" ON "{table}";
-                            CREATE TRIGGER "{table}_cache_after_update"
-                              AFTER UPDATE ON "{table}"
-                              EXECUTE FUNCTION "clean_cache_for_{table}"();
-                            DROP TRIGGER IF EXISTS "{table}_cache_after_delete" ON "{table}";
-                            CREATE TRIGGER "{table}_cache_after_delete"
-                              AFTER DELETE ON "{table}"
-                              EXECUTE FUNCTION "clean_cache_for_{table}"()"#,
-                        table = validate_table_name(table)?,
-                    ))
-                    .await?;
-                }
+                             )"#;
+                sql.to_string()
             }
-            Ok(())
-        }
+        };
+        (
+            sql,
+            params![
+                format!("{table}_cache_after_insert"),
+                format!("{table}_cache_after_update"),
+                format!("{table}_cache_after_delete"),
+            ],
+        )
+    }
 
-        self.ensure_cache_table_exists(pool).await?;
+    /// Generate the SQL statements needed to create the caching triggers for the given table.
+    pub fn create_caching_triggers_sql(&self, table: &str) -> Vec<String> {
         match self {
             DbKind::SQLite => {
-                self.ensure_cache_table_exists(pool).await?;
-                ensure_caching_triggers_exist_sqlite(pool, tables).await
+                vec![
+                    format!(r#"DROP TRIGGER IF EXISTS "{table}_cache_after_insert""#),
+                    format!(
+                        r#"CREATE TRIGGER "{table}_cache_after_insert"
+                           AFTER INSERT ON "{table}"
+                           BEGIN
+                               DELETE FROM "cache" WHERE "tables" LIKE '%{table}%';
+                           END"#
+                    ),
+                    format!(r#"DROP TRIGGER IF EXISTS "{table}_cache_after_update""#),
+                    format!(
+                        r#"CREATE TRIGGER "{table}_cache_after_update"
+                           AFTER UPDATE ON "{table}"
+                           BEGIN
+                             DELETE FROM "cache" WHERE "tables" LIKE '%{table}%';
+                           END"#
+                    ),
+                    format!(r#"DROP TRIGGER IF EXISTS "{table}_cache_after_delete""#),
+                    format!(
+                        r#"CREATE TRIGGER "{table}_cache_after_delete"
+                           AFTER DELETE ON "{table}"
+                           BEGIN
+                             DELETE FROM "cache" WHERE "tables" LIKE '%{table}%';
+                           END"#
+                    ),
+                ]
             }
-            DbKind::PostgreSQL => ensure_caching_triggers_exist_postgresql(pool, tables).await,
+            DbKind::PostgreSQL => {
+                vec![
+                    format!(
+                        r#"CREATE OR REPLACE FUNCTION "clean_cache_for_{table}"()
+                               RETURNS TRIGGER
+                               LANGUAGE PLPGSQL
+                               AS
+                               $$
+                               BEGIN
+                                   DELETE FROM "cache" WHERE "tables" LIKE '%{table}%';
+                                   RETURN NEW;
+                               END;
+                               $$"#
+                    ),
+                    format!(r#"DROP TRIGGER IF EXISTS "{table}_cache_after_insert" ON "{table}""#),
+                    format!(
+                        r#"CREATE TRIGGER "{table}_cache_after_insert"
+                               AFTER INSERT ON "{table}"
+                               EXECUTE FUNCTION "clean_cache_for_{table}"()"#
+                    ),
+                    format!(r#"DROP TRIGGER IF EXISTS "{table}_cache_after_update" ON "{table}""#),
+                    format!(
+                        r#"CREATE TRIGGER "{table}_cache_after_update"
+                               AFTER UPDATE ON "{table}"
+                               EXECUTE FUNCTION "clean_cache_for_{table}"()"#
+                    ),
+                    format!(r#"DROP TRIGGER IF EXISTS "{table}_cache_after_delete" ON "{table}""#),
+                    format!(
+                        r#"CREATE TRIGGER "{table}_cache_after_delete"
+                               AFTER DELETE ON "{table}"
+                               EXECUTE FUNCTION "clean_cache_for_{table}"()"#
+                    ),
+                ]
+            }
         }
     }
 }

@@ -3,6 +3,9 @@ pub mod core;
 pub mod db_kind;
 pub mod shared;
 
+#[cfg(feature = "libsql")]
+pub mod libsql;
+
 #[cfg(feature = "rusqlite")]
 pub mod rusqlite;
 

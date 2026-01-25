@@ -2,8 +2,8 @@
 
 use crate::{
     core::{
-        CachingStrategy, ColumnMap, DbError, DbQuery, DbRow, FromDbRows, IntoDbRows, IntoParams,
-        ParamValue, Params,
+        CachingStrategy, DbError, DbQuery, DbRow, FromDbRows, IntoDbRows, IntoParams, ParamValue,
+        Params,
     },
     db_kind::DbKind,
     shared::{EditType, edit},
@@ -228,57 +228,6 @@ impl DbQuery for RusqlitePool {
         self.cache_aware_query
     }
 
-    /// Implements [DbQuery::ensure_cache_table_exists()] for SQLite.
-    async fn ensure_cache_table_exists(&self) -> Result<(), DbError> {
-        self.kind().ensure_cache_table_exists(self).await
-    }
-
-    /// Implements [DbQuery::ensure_caching_triggers_exist()] for SQLite.
-    async fn ensure_caching_triggers_exist(&self, tables: &[&str]) -> Result<(), DbError> {
-        self.kind()
-            .ensure_caching_triggers_exist(self, tables)
-            .await
-    }
-
-    /// Implements [DbQuery::parse()] for SQLite.
-    fn parse(&self, sql_type: &str, value: &str) -> Result<ParamValue, DbError> {
-        let err = || {
-            Err(DbError::ParseError(format!(
-                "Could not parse '{sql_type}' from '{value}'"
-            )))
-        };
-        match sql_type.to_lowercase().as_str() {
-            "text" => Ok(ParamValue::Text(value.to_string())),
-            "bool" => match value.to_lowercase().as_str() {
-                "true" | "1" => Ok(ParamValue::Boolean(true)),
-                "false" | "0" => Ok(ParamValue::Boolean(false)),
-                _ => err(),
-            },
-            "int" | "integer" | "int8" | "bigint" => match value.parse::<i64>() {
-                Ok(int) => Ok(ParamValue::BigInteger(int)),
-                Err(_) => err(),
-            },
-            // NOTE: We are treating NUMERIC as an f64 here and for tokio-postgres.
-            "real" | "numeric" => match value.parse::<f64>() {
-                Ok(float) => Ok(ParamValue::BigReal(float)),
-                Err(_) => err(),
-            },
-            _ => Err(DbError::DatatypeError(format!(
-                "Unhandled SQL type: {sql_type}"
-            ))),
-        }
-    }
-
-    /// Implements [DbQuery::columns()] for SQLite.
-    async fn columns(&self, table: &str) -> Result<ColumnMap, DbError> {
-        self.kind().columns(self, table).await
-    }
-
-    /// Implements [DbQuery::primary_keys()] for SQLite.
-    async fn primary_keys(&self, table: &str) -> Result<Vec<String>, DbError> {
-        self.kind().primary_keys(self, table).await
-    }
-
     /// Implements [DbQuery::execute_batch()] for PostgreSQL
     async fn execute_batch(&self, sql: &str) -> Result<(), DbError> {
         let conn = self
@@ -467,11 +416,6 @@ impl DbQuery for RusqlitePool {
             returning,
         )
         .await
-    }
-
-    /// Implements [DbQuery::table_exists()] for SQLite.
-    async fn table_exists(&self, table: &str) -> Result<bool, DbError> {
-        self.kind().table_exists(self, table).await
     }
 }
 
