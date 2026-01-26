@@ -155,6 +155,8 @@ impl DbQuery for AnyPool {
             AnyPool::Rusqlite(pool) => pool.get_caching_strategy(),
             #[cfg(feature = "tokio-postgres")]
             AnyPool::TokioPostgres(pool) => pool.get_caching_strategy(),
+            #[cfg(feature = "libsql")]
+            AnyPool::LibSQL(pool) => pool.get_caching_strategy(),
             #[cfg(feature = "sqlx")]
             AnyPool::Sqlx(pool) => pool.get_caching_strategy(),
         }

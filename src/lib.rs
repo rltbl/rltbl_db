@@ -9,5 +9,8 @@ pub mod rusqlite;
 #[cfg(feature = "tokio-postgres")]
 pub mod tokio_postgres;
 
+#[cfg(feature = "libsql")]
+pub mod libsql;
+
 #[cfg(feature = "sqlx")]
 pub mod sqlx;

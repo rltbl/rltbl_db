@@ -5,7 +5,11 @@ use crate::{
     db_kind::DbKind,
     shared::{EditType, edit},
 };
-use sqlx::{postgres::PgPool, sqlite::SqlitePool};
+use sqlx::{
+    Postgres, Sqlite,
+    postgres::{PgPool, PgPoolOptions},
+    sqlite::SqlitePool,
+};
 
 /// The [maximum number of parameters](https://www.sqlite.org/limits.html#max_variable_number)
 /// that can be bound to a SQLite query.
@@ -31,8 +35,29 @@ pub struct SqlxPool {
 
 impl SqlxPool {
     /// TODO: Add docstring here.
-    pub async fn connect(_url: &str) -> Result<Self, DbError> {
-        todo!()
+    pub async fn connect(url: &str) -> Result<Self, DbError> {
+        if url.starts_with("postgresql://") {
+            let pool = PgPoolOptions::new().connect(url).await.unwrap();
+            Ok(Self {
+                pool: Pool::PostgreSQL(pool),
+                caching_strategy: CachingStrategy::None,
+                cache_aware_query: false,
+            })
+        } else {
+            let url = {
+                if url.starts_with("sqlite://") {
+                    url.to_string()
+                } else {
+                    format!("sqlite://{url}?mode=rwc")
+                }
+            };
+            let pool = SqlitePool::connect(&url).await.unwrap();
+            Ok(Self {
+                pool: Pool::SQLite(pool),
+                caching_strategy: CachingStrategy::None,
+                cache_aware_query: false,
+            })
+        }
     }
 }
 
@@ -66,8 +91,16 @@ impl DbQuery for SqlxPool {
     }
 
     /// Implements [DbQuery::execute_batch()] for Sqlx
-    async fn execute_batch(&self, _sql: &str) -> Result<(), DbError> {
-        todo!()
+    async fn execute_batch(&self, sql: &str) -> Result<(), DbError> {
+        match &self.pool {
+            Pool::SQLite(pool) => {
+                sqlx::raw_sql(sql).execute(pool).await.unwrap();
+            }
+            Pool::PostgreSQL(pool) => {
+                sqlx::raw_sql(sql).execute(pool).await.unwrap();
+            }
+        }
+        Ok(())
     }
 
     /// Implements [DbQuery::query_no_cache()] for Sqlx.
@@ -227,5 +260,21 @@ impl DbQuery for SqlxPool {
             returning,
         )
         .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_basic() {
+        let sql = "CREATE TABLE IF NOT EXISTS foo ( bar INT ); INSERT INTO foo VALUES (1)";
+
+        let pool = SqlxPool::connect("MIKE_TEST.db").await.unwrap();
+        pool.execute_batch(sql).await.unwrap();
+
+        let pool = SqlxPool::connect("postgresql:///rltbl_db").await.unwrap();
+        pool.execute_batch(sql).await.unwrap();
     }
 }
