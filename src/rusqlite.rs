@@ -122,12 +122,16 @@ fn query_prepared(
 
     // Collect the column information from the prepared statement:
     let columns = stmt
-        .columns()
+        .column_names() //.columns()
         .iter()
         .map(|col| {
-            let name = col.name().to_string();
-            let datatype = col.decl_type().and_then(|s| Some(s.to_string()));
-            ColumnConfig { name, datatype }
+            //let name = col.name().to_string();
+            //let datatype = col.decl_type().and_then(|s| Some(s.to_string()));
+            //ColumnConfig { name, datatype }
+            ColumnConfig {
+                name: col.to_string(),
+                datatype: None,
+            }
         })
         .collect::<Vec<_>>();
 
