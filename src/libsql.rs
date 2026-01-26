@@ -43,7 +43,7 @@ impl TryFrom<Params> for Vec<Value> {
 
     fn try_from(item: Params) -> Result<Self, DbError> {
         match item {
-            Params::None => Ok(vec![Value::Null]),
+            Params::None => Ok(vec![]),
             Params::Positional(pvalues) => {
                 let mut values = vec![];
                 for pvalue in pvalues {

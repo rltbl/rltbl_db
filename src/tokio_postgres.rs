@@ -99,10 +99,7 @@ fn extract_value(row: &Row, idx: usize) -> Result<ParamValue, DbError> {
             }
             None => Ok(ParamValue::Null),
         },
-        _ => {
-            eprint!("Unimplemented column type: {column:?}");
-            unimplemented!();
-        }
+        _ => unimplemented!("Unimplemented column type: {column:?}"),
     }
 }
 

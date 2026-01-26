@@ -472,7 +472,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             rows,
-            [db_row! {"bool_value_alias".into() => ParamValue::from(true)}]
+            [db_row! {"bool_value_alias".into() => ParamValue::from(1_i64)}]
         );
 
         // Test aggregate with alias:
