@@ -1,4 +1,4 @@
-//! rusqlite implementation for rltbl_db.
+//! libsql implementation for rltbl_db.
 
 use crate::{
     core::{
@@ -8,177 +8,77 @@ use crate::{
     db_kind::DbKind,
     shared::{EditType, edit},
 };
-
-use deadpool_sqlite::{
-    Config, Pool, Runtime,
-    rusqlite::{
-        Statement,
-        fallible_iterator::FallibleIterator,
-        types::{Null, ValueRef},
-    },
+use deadpool_libsql::{
+    Manager, Pool,
+    libsql::{Builder, Value},
 };
-use rust_decimal::Decimal;
+use rust_decimal::prelude::ToPrimitive;
 use std::str::from_utf8;
 
 /// The [maximum number of parameters](https://www.sqlite.org/limits.html#max_variable_number)
 /// that can be bound to a SQLite query
 static MAX_PARAMS_SQLITE: usize = 32766;
 
-/// Query a database using the given prepared statement and parameters.
-fn query_prepared(
-    stmt: &mut Statement<'_>,
-    params: impl IntoParams + Send,
-) -> Result<Vec<DbRow>, DbError> {
-    match params.into_params() {
-        Params::None => (),
-        Params::Positional(params) => {
-            for (i, param) in params.iter().enumerate() {
-                match param {
-                    ParamValue::Text(text) => {
-                        stmt.raw_bind_parameter(i + 1, text).map_err(|err| {
-                            DbError::InputError(format!(
-                                "Error binding parameter '{param:?}': {err}"
-                            ))
-                        })?;
-                    }
-                    ParamValue::SmallInteger(num) => {
-                        stmt.raw_bind_parameter(i + 1, num.to_string())
-                            .map_err(|err| {
-                                DbError::InputError(format!(
-                                    "Error binding parameter '{param:?}': {err}"
-                                ))
-                            })?;
-                    }
-                    ParamValue::Integer(num) => {
-                        stmt.raw_bind_parameter(i + 1, num.to_string())
-                            .map_err(|err| {
-                                DbError::InputError(format!(
-                                    "Error binding parameter '{param:?}': {err}"
-                                ))
-                            })?;
-                    }
-                    ParamValue::BigInteger(num) => {
-                        stmt.raw_bind_parameter(i + 1, num.to_string())
-                            .map_err(|err| {
-                                DbError::InputError(format!(
-                                    "Error binding parameter '{param:?}': {err}"
-                                ))
-                            })?;
-                    }
-                    ParamValue::Real(num) => {
-                        stmt.raw_bind_parameter(i + 1, num.to_string())
-                            .map_err(|err| {
-                                DbError::InputError(format!(
-                                    "Error binding parameter '{param:?}': {err}"
-                                ))
-                            })?;
-                    }
-                    ParamValue::BigReal(num) => {
-                        stmt.raw_bind_parameter(i + 1, num.to_string())
-                            .map_err(|err| {
-                                DbError::InputError(format!(
-                                    "Error binding parameter '{param:?}': {err}"
-                                ))
-                            })?;
-                    }
-                    ParamValue::Numeric(num) => {
-                        stmt.raw_bind_parameter(i + 1, num.to_string())
-                            .map_err(|err| {
-                                DbError::InputError(format!(
-                                    "Error binding parameter '{param:?}': {err}"
-                                ))
-                            })?;
-                    }
-                    ParamValue::Boolean(flag) => {
-                        // Note that SQLite's type affinity means that booleans are actually
-                        // implemented as numbers (see https://sqlite.org/datatype3.html).
-                        let num = match flag {
-                            true => 1,
-                            false => 0,
-                        };
-                        stmt.raw_bind_parameter(i + 1, num.to_string())
-                            .map_err(|err| {
-                                DbError::InputError(format!(
-                                    "Error binding parameter '{param:?}': {err}"
-                                ))
-                            })?;
-                    }
-                    ParamValue::Null => {
-                        stmt.raw_bind_parameter(i + 1, &Null).map_err(|err| {
-                            DbError::InputError(format!(
-                                "Error binding parameter '{param:?}': {err}"
-                            ))
-                        })?;
-                    }
-                };
+impl TryFrom<Value> for ParamValue {
+    type Error = DbError;
+
+    fn try_from(item: Value) -> Result<Self, DbError> {
+        match &item {
+            Value::Null => Ok(Self::Null),
+            Value::Integer(number) => Ok(Self::from(*number)),
+            Value::Real(number) => Ok(Self::from(*number)),
+            Value::Text(string) => Ok(Self::Text(string.to_string())),
+            Value::Blob(blob) => {
+                let text_blob = from_utf8(blob).map_err(|err| {
+                    DbError::DatatypeError(format!("Error converting blob to text: {err}"))
+                })?;
+                Ok(Self::Text(text_blob.to_string()))
             }
         }
-    };
-
-    // Define the struct that we will use to represent information about a given column:
-    struct ColumnConfig {
-        name: String,
-        datatype: Option<String>,
     }
+}
 
-    // Collect the column information from the prepared statement:
-    let columns = stmt
-        .columns()
-        .iter()
-        .map(|col| {
-            let name = col.name().to_string();
-            let datatype = col.decl_type().and_then(|s| Some(s.to_string()));
-            ColumnConfig { name, datatype }
-        })
-        .collect::<Vec<_>>();
+impl TryFrom<Params> for Vec<Value> {
+    type Error = DbError;
 
-    // Execute the statement and send back the results
-    let results = stmt
-        .raw_query()
-        .map(|row| {
-            let mut db_row = DbRow::new();
-            for column in &columns {
-                let column_name = &column.name;
-                let column_type = &column.datatype;
-                let value = row.get_ref(column_name.as_str())?;
-                let value = match value {
-                    ValueRef::Null => ParamValue::Null,
-                    ValueRef::Integer(value) => match column_type {
-                        Some(ctype) if ctype.to_lowercase() == "bool" => {
-                            ParamValue::Boolean(value != 0)
+    fn try_from(item: Params) -> Result<Self, DbError> {
+        match item {
+            Params::None => Ok(vec![Value::Null]),
+            Params::Positional(pvalues) => {
+                let mut values = vec![];
+                for pvalue in pvalues {
+                    match pvalue {
+                        ParamValue::Null => values.push(Value::Null),
+                        // Libsql does not support booleans.
+                        // See: https://docs.rs/libsql/0.9.29/libsql/enum.Value.html,
+                        ParamValue::Boolean(pvalue) => values.push(Value::Integer(pvalue.into())),
+                        ParamValue::SmallInteger(pvalue) => {
+                            values.push(Value::Integer(pvalue.into()))
                         }
-                        // The remaining cases are (a) the column's datatype is integer, and
-                        // (b) the column is an expression. In the latter case it doesn't seem
-                        // possible to get the datatype of the expression from the metadata.
-                        // So the only thing to do here is just to convert the value
-                        // to using the default method, and since we already know that it
-                        // is an integer, the result of the conversion will be a number.
-                        _ => ParamValue::from(value),
-                    },
-                    ValueRef::Real(value) => ParamValue::from(value),
-                    ValueRef::Text(value) | ValueRef::Blob(value) => match column_type {
-                        Some(ctype) if ctype.to_lowercase() == "numeric" => {
-                            let value = from_utf8(value).unwrap_or_default();
-                            let value = value.parse::<Decimal>().unwrap();
-                            ParamValue::Numeric(value)
+                        ParamValue::Integer(pvalue) => values.push(Value::Integer(pvalue.into())),
+                        ParamValue::BigInteger(pvalue) => {
+                            values.push(Value::Integer(pvalue.into()))
                         }
-                        _ => {
-                            let value = from_utf8(value).unwrap_or_default();
-                            ParamValue::Text(value.to_string())
+                        ParamValue::Real(pvalue) => values.push(Value::Real(pvalue.into())),
+                        ParamValue::BigReal(pvalue) => values.push(Value::Real(pvalue.into())),
+                        ParamValue::Numeric(pvalue) => {
+                            let pvalue = pvalue.to_f64().ok_or(DbError::DatatypeError(format!(
+                                "Error converting value '{pvalue}' to f64"
+                            )))?;
+                            values.push(Value::Real(pvalue.into()))
                         }
-                    },
-                };
-                db_row.insert(column_name.to_string(), value);
+                        ParamValue::Text(pvalue) => values.push(Value::Text(pvalue)),
+                    };
+                }
+                Ok(values)
             }
-            Ok(db_row)
-        })
-        .collect::<Vec<_>>();
-    results.map_err(|err| DbError::DatabaseError(err.to_string()))
+        }
+    }
 }
 
 /// Represents a SQLite database connection pool
 #[derive(Debug)]
-pub struct RusqlitePool {
+pub struct LibSQLPool {
     pool: Pool,
     caching_strategy: CachingStrategy,
     /// When set to true, SQL statements sent to the [DbQuery::query()] and [DbQuery::execute()]
@@ -187,13 +87,16 @@ pub struct RusqlitePool {
     cache_aware_query: bool,
 }
 
-impl RusqlitePool {
+impl LibSQLPool {
     /// Connect to a SQLite database using the given url.
     pub async fn connect(url: &str) -> Result<Self, DbError> {
-        let cfg = Config::new(url);
-        let pool = cfg
-            .create_pool(Runtime::Tokio1)
-            .map_err(|err| DbError::ConnectError(format!("Error creating pool: {err}")))?;
+        let db = Builder::new_local(url).build().await.map_err(|err| {
+            DbError::ConnectError(format!("Error creating pool from URL: '{url}': {err}"))
+        })?;
+        let manager = Manager::from_libsql_database(db);
+        let pool = Pool::builder(manager).build().map_err(|err| {
+            DbError::ConnectError(format!("Error creating pool from URL: '{url}': {err}"))
+        })?;
         Ok(Self {
             pool: pool,
             caching_strategy: CachingStrategy::None,
@@ -202,7 +105,7 @@ impl RusqlitePool {
     }
 }
 
-impl DbQuery for RusqlitePool {
+impl DbQuery for LibSQLPool {
     /// Implements [DbQuery::kind()] for SQLite.
     fn kind(&self) -> DbKind {
         DbKind::SQLite
@@ -234,24 +137,12 @@ impl DbQuery for RusqlitePool {
             .pool
             .get()
             .await
-            .map_err(|err| DbError::ConnectError(format!("Unable to get from pool: {err}")))?;
-        let sql_string = sql.to_string();
-        match conn
-            .interact(move |conn| match conn.execute_batch(&sql_string) {
-                Err(err) => {
-                    return Err(DbError::DatabaseError(format!("Error during query: {err}")));
-                }
-                Ok(_) => Ok(()),
-            })
-            .await
-        {
-            Err(err) => Err(DbError::DatabaseError(format!("Error during query: {err}"))),
-            Ok(_) => {
-                // We need to drop conn here to ensure that any changes to the db are persisted.
-                drop(conn);
-                self.clear_cache_for_affected_tables(sql).await?;
-                Ok(())
+            .map_err(|err| DbError::ConnectError(format!("Error getting from pool: {err}")))?;
+        match conn.execute_batch(sql).await {
+            Err(err) => {
+                return Err(DbError::DatabaseError(format!("Error during query: {err}")));
             }
+            Ok(_) => Ok(()),
         }
     }
 
@@ -261,34 +152,38 @@ impl DbQuery for RusqlitePool {
         sql: &str,
         params: impl IntoParams + Send,
     ) -> Result<T, DbError> {
-        let rows = {
-            let conn =
-                self.pool.get().await.map_err(|err| {
-                    DbError::ConnectError(format!("Error getting from pool: {err}"))
-                })?;
-            let sql_string = sql.to_string();
-            let params: Params = params.into_params();
-            conn.interact(move |conn| {
-                let mut stmt = conn.prepare(&sql_string).map_err(|err| {
-                    DbError::DatabaseError(format!("Error preparing statement: {err}"))
-                })?;
-                let rows = query_prepared(&mut stmt, params)
-                    .map_err(|err: DbError| {
-                        DbError::DatabaseError(format!("Error querying prepared statement: {err}"))
-                    })?
-                    .into_iter()
-                    .map(|row| {
-                        row.into_iter()
-                            .map(|(key, val)| (key, ParamValue::from(val)))
-                            .collect()
-                    })
-                    .collect();
-                Ok(rows)
-            })
+        let conn = self
+            .pool
+            .get()
             .await
-            .map_err(|err| DbError::DatabaseError(err.to_string()))??
-        };
-        Ok(FromDbRows::from(rows))
+            .map_err(|err| DbError::ConnectError(format!("Error getting from pool: {err}")))?;
+
+        let params: Vec<Value> = params.into_params().try_into()?;
+        let mut rows = conn
+            .query(sql, params)
+            .await
+            .map_err(|err| DbError::ConnectError(format!("Query error: {err}")))?;
+
+        let mut db_rows = vec![];
+        while let Some(row) = rows
+            .next()
+            .await
+            .map_err(|err| DbError::DataError(err.to_string()))?
+        {
+            let mut db_row = DbRow::new();
+            for i in 0..row.column_count() {
+                let column = row.column_name(i).ok_or(DbError::DataError(format!(
+                    "Error getting name of column {i} of row."
+                )))?;
+                let value = row.get_value(i).map_err(|err| {
+                    DbError::DataError(format!("Error getting value of column {i} of row: {err}"))
+                })?;
+                db_row.insert(column.to_string(), value.try_into()?);
+            }
+            db_rows.push(db_row);
+        }
+
+        Ok(FromDbRows::from(db_rows))
     }
 
     /// Implements [DbQuery::insert()] for SQLite.
@@ -427,7 +322,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_aliases_and_builtin_functions() {
-        let pool = RusqlitePool::connect(":memory:").await.unwrap();
+        let pool = LibSQLPool::connect(":memory:").await.unwrap();
         pool.execute_batch(
             "DROP TABLE IF EXISTS test_table_indirect;\
              CREATE TABLE test_table_indirect (\
@@ -469,7 +364,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             rows,
-            [db_row! {"bool_value_alias".into() => ParamValue::from(true)}]
+            [db_row! {"bool_value_alias".into() => ParamValue::from(1_i64)}]
         );
 
         // Test aggregate with alias:
@@ -539,7 +434,7 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_max_params() {
-        let pool = RusqlitePool::connect(":memory:").await.unwrap();
+        let pool = LibSQLPool::connect(":memory:").await.unwrap();
         pool.execute_batch(
             "DROP TABLE IF EXISTS test_max_params;\
              CREATE TABLE test_max_params (\

@@ -1,5 +1,6 @@
-use crate::core::{
-    DbError, DbKind, DbQuery, DbRow, FromDbRows, IntoDbRows, ParamValue, validate_table_name,
+use crate::{
+    core::{DbError, DbQuery, DbRow, FromDbRows, IntoDbRows, ParamValue, validate_table_name},
+    db_kind::DbKind,
 };
 use std::fmt::Display;
 
@@ -195,12 +196,7 @@ pub(crate) async fn edit<T: FromDbRows>(
 
     // We use the column_map to determine the SQL type of each parameter.
     let column_map = pool.columns(&table).await?;
-    // Although SQLite allows '$' as a prefix, it is required to use '?' to represent integer
-    // literals (see https://sqlite.org/c3ref/bind_blob.html) which is what we are using here.
-    let param_prefix = match pool.kind() {
-        DbKind::SQLite => "?",
-        DbKind::PostgreSQL => "$",
-    };
+    let param_prefix = pool.kind().param_prefix().to_string();
     let mut rows_to_return = vec![];
     let mut lines_to_bind = Vec::new();
     let mut params_to_be_bound = Vec::new();

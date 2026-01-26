@@ -8,6 +8,7 @@ use indexmap::indexmap;
 use rltbl_db::{
     any::AnyPool,
     core::{DbQuery, DbRow, ParamValue},
+    db_kind::DbKind,
 };
 use std::{marker::Sync, sync::Arc};
 use tower_service::Service;
@@ -23,10 +24,14 @@ async fn get_root(State(pool): State<Arc<impl DbQuery + Sync>>) -> impl IntoResp
 
 async fn run_axum(url: &str) {
     let pool = AnyPool::connect(url).await.unwrap();
-    pool.execute_batch(
-        "DROP TABLE IF EXISTS test;\
+    let cascade = match pool.kind() {
+        DbKind::SQLite => "",
+        DbKind::PostgreSQL => " CASCADE",
+    };
+    pool.execute_batch(&format!(
+        "DROP TABLE IF EXISTS test{cascade};\
          CREATE TABLE test ( value TEXT )",
-    )
+    ))
     .await
     .unwrap();
 
@@ -69,6 +74,8 @@ async fn run_axum(url: &str) {
 #[tokio::test]
 async fn test_axum() {
     #[cfg(feature = "rusqlite")]
+    run_axum(":memory:").await;
+    #[cfg(feature = "libsql")]
     run_axum(":memory:").await;
     #[cfg(feature = "tokio-postgres")]
     run_axum("postgresql:///rltbl_db").await;
