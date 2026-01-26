@@ -615,17 +615,9 @@ mod tests {
                 "alt_float_value".into() => ParamValue::Null,
                 "int_value".into() => ParamValue::from(1_i64),
                 "alt_int_value".into() => ParamValue::Null,
-                "bool_value".into() => {
-                    #[cfg(feature = "libsql")]
-                    {
-                        // libsql does not support booleans:
-                        // https://docs.rs/libsql/0.9.29/libsql/enum.Value.html,
-                        ParamValue::from(1_i64)
-                    }
-                    #[cfg(not(feature = "libsql"))]
-                    {
-                        ParamValue::from(true)
-                    }
+                "bool_value".into() => match pool.kind() {
+                    DbKind::SQLite => ParamValue::from(1_i64),
+                    DbKind::PostgreSQL => ParamValue::from(true),
                 },
                 "alt_bool_value".into() => ParamValue::Null,
                 "numeric_value".into() => ParamValue::from(1_i64),
@@ -643,17 +635,9 @@ mod tests {
                 "alt_float_value".into() => ParamValue::Null,
                 "int_value".into() => ParamValue::from(1_i64),
                 "alt_int_value".into() => ParamValue::Null,
-                "bool_value".into() => {
-                    #[cfg(feature = "libsql")]
-                    {
-                        // libsql does not support booleans:
-                        // https://docs.rs/libsql/0.9.29/libsql/enum.Value.html,
-                        ParamValue::from(1_i64)
-                    }
-                    #[cfg(not(feature = "libsql"))]
-                    {
-                        ParamValue::from(true)
-                    }
+                "bool_value".into() => match pool.kind() {
+                    DbKind::SQLite => ParamValue::from(1_i64),
+                    DbKind::PostgreSQL => ParamValue::from(true),
                 },
                 "alt_bool_value".into() => ParamValue::Null,
                 "numeric_value".into() => ParamValue::from(1_i64),
@@ -826,18 +810,10 @@ mod tests {
                 &db_row! {"text_value".into() => ParamValue::from("TEXT")},
                 &db_row! {
                     "int_value".into() => ParamValue::from(1_i64),
-                    "bool_value".into() => {
-                        #[cfg(feature = "libsql")]
-                        {
-                            // libsql does not support booleans:
-                            // https://docs.rs/libsql/0.9.29/libsql/enum.Value.html,
-                            ParamValue::from(1_i64)
-                        }
-                        #[cfg(not(feature = "libsql"))]
-                        {
-                            ParamValue::from(true)
-                        }
-                    }
+                    "bool_value".into() => match pool.kind() {
+                        DbKind::SQLite => ParamValue::from(1_i64),
+                        DbKind::PostgreSQL => ParamValue::from(true),
+                    },
                 },
             ],
         )
@@ -864,19 +840,9 @@ mod tests {
                     "alt_text_value".into() => ParamValue::Null,
                     "float_value".into() => ParamValue::Null,
                     "int_value".into() => ParamValue::from(1_i64),
-                    "bool_value".into() => {
-                        {
-                            #[cfg(feature = "libsql")]
-                            {
-                                // libsql does not support booleans:
-                                // https://docs.rs/libsql/0.9.29/libsql/enum.Value.html,
-                                ParamValue::from(1_i64)
-                            }
-                            #[cfg(not(feature = "libsql"))]
-                            {
-                                ParamValue::from(true)
-                            }
-                        }
+                    "bool_value".into() => match pool.kind() {
+                        DbKind::SQLite => ParamValue::from(1_i64),
+                        DbKind::PostgreSQL => ParamValue::from(true),
                     },
                 }
             ]
@@ -946,20 +912,10 @@ mod tests {
                     "alt_text_value".into() => ParamValue::Null,
                     "float_value".into() => ParamValue::Null,
                     "int_value".into() => ParamValue::from(1_i64),
-                    "bool_value".into() => {
-                        {
-                            #[cfg(feature = "libsql")]
-                            {
-                                // libsql does not support booleans:
-                                // https://docs.rs/libsql/0.9.29/libsql/enum.Value.html,
-                                ParamValue::from(1_i64)
-                            }
-                            #[cfg(not(feature = "libsql"))]
-                            {
-                                ParamValue::from(true)
-                            }
-                        }
-                    },
+                    "bool_value".into() => match pool.kind() {
+                        DbKind::SQLite => ParamValue::from(1_i64),
+                        DbKind::PostgreSQL => ParamValue::from(true),
+                    }
                 }
             ]
         );

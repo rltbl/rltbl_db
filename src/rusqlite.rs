@@ -123,12 +123,11 @@ fn query_prepared(
 
     // Collect the column information from the prepared statement:
     let columns = stmt
-        .columns()
+        .column_names()
         .iter()
-        .map(|col| {
-            let name = col.name().to_string();
-            let datatype = col.decl_type().and_then(|s| Some(s.to_string()));
-            ColumnConfig { name, datatype }
+        .map(|col| ColumnConfig {
+            name: col.to_string(),
+            datatype: None,
         })
         .collect::<Vec<_>>();
 
@@ -469,7 +468,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             rows,
-            [db_row! {"bool_value_alias".into() => ParamValue::from(true)}]
+            [db_row! {"bool_value_alias".into() => ParamValue::from(1_i64)}]
         );
 
         // Test aggregate with alias:

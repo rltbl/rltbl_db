@@ -22,6 +22,13 @@ static MAX_PARAMS_SQLITE: usize = 32766;
 impl TryFrom<Value> for ParamValue {
     type Error = DbError;
 
+    // Note that libsql does not support representing booleans directly.
+    // See: https://docs.rs/libsql/0.9.29/libsql/enum.Value.html.
+    // TODO (maybe): We should be able to add bool support but we will need to query the database
+    // to get the column type. In rusqlite this is done automatically when a statement is
+    // prepared (e.g., see query_prepared() in rusqlite.rs). In libsql, we do not prepare statement
+    // in the same way currently, so this option isn't available, but perhaps we can do this here
+    // too.
     fn try_from(item: Value) -> Result<Self, DbError> {
         match &item {
             Value::Null => Ok(Self::Null),
@@ -49,8 +56,6 @@ impl TryFrom<Params> for Vec<Value> {
                 for pvalue in pvalues {
                     match pvalue {
                         ParamValue::Null => values.push(Value::Null),
-                        // Libsql does not support booleans.
-                        // See: https://docs.rs/libsql/0.9.29/libsql/enum.Value.html,
                         ParamValue::Boolean(pvalue) => values.push(Value::Integer(pvalue.into())),
                         ParamValue::SmallInteger(pvalue) => {
                             values.push(Value::Integer(pvalue.into()))
