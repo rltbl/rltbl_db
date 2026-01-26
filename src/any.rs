@@ -23,6 +23,8 @@ use crate::{
 use crate::libsql::LibSQLPool;
 #[cfg(feature = "rusqlite")]
 use crate::rusqlite::RusqlitePool;
+#[cfg(feature = "sqlx")]
+use crate::sqlx::SqlxPool;
 #[cfg(feature = "tokio-postgres")]
 use crate::tokio_postgres::TokioPostgresPool;
 
@@ -30,10 +32,12 @@ use crate::tokio_postgres::TokioPostgresPool;
 pub enum AnyPool {
     #[cfg(feature = "rusqlite")]
     Rusqlite(RusqlitePool),
-    #[cfg(feature = "libsql")]
-    LibSQL(LibSQLPool),
     #[cfg(feature = "tokio-postgres")]
     TokioPostgres(TokioPostgresPool),
+    #[cfg(feature = "libsql")]
+    LibSQL(LibSQLPool),
+    #[cfg(feature = "sqlx")]
+    Sqlx(SqlxPool),
 }
 
 impl AnyPool {
@@ -63,7 +67,14 @@ impl AnyPool {
                 }
                 #[cfg(not(feature = "libsql"))]
                 {
-                    return Err(DbError::ConnectError("SQLite not configured".to_string()));
+                    #[cfg(feature = "sqlx")]
+                    {
+                        Ok(DbKind::SQLite)
+                    }
+                    #[cfg(not(feature = "sqlx"))]
+                    {
+                        return Err(DbError::ConnectError("SQLite not configured".to_string()));
+                    }
                 }
             }
         }
@@ -97,7 +108,14 @@ impl AnyPool {
                 }
                 #[cfg(not(feature = "libsql"))]
                 {
-                    return Err(DbError::ConnectError("SQLite not configured".to_string()));
+                    #[cfg(feature = "sqlx")]
+                    {
+                        return Ok(AnyPool::Sqlx(SqlxPool::connect(url).await?));
+                    }
+                    #[cfg(not(feature = "sqlx"))]
+                    {
+                        return Err(DbError::ConnectError("SQLite not configured".to_string()));
+                    }
                 }
             }
         }
@@ -109,10 +127,12 @@ impl DbQuery for AnyPool {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.kind(),
-            #[cfg(feature = "libsql")]
-            AnyPool::LibSQL(pool) => pool.kind(),
             #[cfg(feature = "tokio-postgres")]
             AnyPool::TokioPostgres(pool) => pool.kind(),
+            #[cfg(feature = "libsql")]
+            AnyPool::LibSQL(pool) => pool.kind(),
+            #[cfg(feature = "sqlx")]
+            AnyPool::Sqlx(pool) => pool.kind(),
         }
     }
 
@@ -120,10 +140,12 @@ impl DbQuery for AnyPool {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.set_caching_strategy(strategy),
-            #[cfg(feature = "libsql")]
-            AnyPool::LibSQL(pool) => pool.set_caching_strategy(strategy),
             #[cfg(feature = "tokio-postgres")]
             AnyPool::TokioPostgres(pool) => pool.set_caching_strategy(strategy),
+            #[cfg(feature = "libsql")]
+            AnyPool::LibSQL(pool) => pool.set_caching_strategy(strategy),
+            #[cfg(feature = "sqlx")]
+            AnyPool::Sqlx(pool) => pool.set_caching_strategy(strategy),
         }
     }
 
@@ -131,10 +153,10 @@ impl DbQuery for AnyPool {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.get_caching_strategy(),
-            #[cfg(feature = "libsql")]
-            AnyPool::LibSQL(pool) => pool.get_caching_strategy(),
             #[cfg(feature = "tokio-postgres")]
             AnyPool::TokioPostgres(pool) => pool.get_caching_strategy(),
+            #[cfg(feature = "sqlx")]
+            AnyPool::Sqlx(pool) => pool.get_caching_strategy(),
         }
     }
 
@@ -142,10 +164,12 @@ impl DbQuery for AnyPool {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.set_cache_aware_query(value),
-            #[cfg(feature = "libsql")]
-            AnyPool::LibSQL(pool) => pool.set_cache_aware_query(value),
             #[cfg(feature = "tokio-postgres")]
             AnyPool::TokioPostgres(pool) => pool.set_cache_aware_query(value),
+            #[cfg(feature = "libsql")]
+            AnyPool::LibSQL(pool) => pool.set_cache_aware_query(value),
+            #[cfg(feature = "sqlx")]
+            AnyPool::Sqlx(pool) => pool.set_cache_aware_query(value),
         }
     }
 
@@ -153,10 +177,12 @@ impl DbQuery for AnyPool {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.get_cache_aware_query(),
-            #[cfg(feature = "libsql")]
-            AnyPool::LibSQL(pool) => pool.get_cache_aware_query(),
             #[cfg(feature = "tokio-postgres")]
             AnyPool::TokioPostgres(pool) => pool.get_cache_aware_query(),
+            #[cfg(feature = "libsql")]
+            AnyPool::LibSQL(pool) => pool.get_cache_aware_query(),
+            #[cfg(feature = "sqlx")]
+            AnyPool::Sqlx(pool) => pool.get_cache_aware_query(),
         }
     }
 
@@ -164,10 +190,12 @@ impl DbQuery for AnyPool {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.execute_batch(sql).await,
-            #[cfg(feature = "libsql")]
-            AnyPool::LibSQL(pool) => pool.execute_batch(sql).await,
             #[cfg(feature = "tokio-postgres")]
             AnyPool::TokioPostgres(pool) => pool.execute_batch(sql).await,
+            #[cfg(feature = "libsql")]
+            AnyPool::LibSQL(pool) => pool.execute_batch(sql).await,
+            #[cfg(feature = "sqlx")]
+            AnyPool::Sqlx(pool) => pool.execute_batch(sql).await,
         }
     }
 
@@ -179,10 +207,12 @@ impl DbQuery for AnyPool {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.query_no_cache(sql, params).await,
-            #[cfg(feature = "libsql")]
-            AnyPool::LibSQL(pool) => pool.query_no_cache(sql, params).await,
             #[cfg(feature = "tokio-postgres")]
             AnyPool::TokioPostgres(pool) => pool.query_no_cache(sql, params).await,
+            #[cfg(feature = "libsql")]
+            AnyPool::LibSQL(pool) => pool.query_no_cache(sql, params).await,
+            #[cfg(feature = "sqlx")]
+            AnyPool::Sqlx(pool) => pool.query_no_cache(sql, params).await,
         }
     }
 
@@ -195,10 +225,12 @@ impl DbQuery for AnyPool {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.insert(table, columns, rows).await,
-            #[cfg(feature = "libsql")]
-            AnyPool::LibSQL(pool) => pool.insert(table, columns, rows).await,
             #[cfg(feature = "tokio-postgres")]
             AnyPool::TokioPostgres(pool) => pool.insert(table, columns, rows).await,
+            #[cfg(feature = "libsql")]
+            AnyPool::LibSQL(pool) => pool.insert(table, columns, rows).await,
+            #[cfg(feature = "sqlx")]
+            AnyPool::Sqlx(pool) => pool.insert(table, columns, rows).await,
         }
     }
 
@@ -212,12 +244,14 @@ impl DbQuery for AnyPool {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.insert_returning(table, columns, rows, returning).await,
-            #[cfg(feature = "libsql")]
-            AnyPool::LibSQL(pool) => pool.insert_returning(table, columns, rows, returning).await,
             #[cfg(feature = "tokio-postgres")]
             AnyPool::TokioPostgres(pool) => {
                 pool.insert_returning(table, columns, rows, returning).await
             }
+            #[cfg(feature = "libsql")]
+            AnyPool::LibSQL(pool) => pool.insert_returning(table, columns, rows, returning).await,
+            #[cfg(feature = "sqlx")]
+            AnyPool::Sqlx(pool) => pool.insert_returning(table, columns, rows, returning).await,
         }
     }
 
@@ -230,10 +264,12 @@ impl DbQuery for AnyPool {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.update(table, columns, rows).await,
-            #[cfg(feature = "libsql")]
-            AnyPool::LibSQL(pool) => pool.update(table, columns, rows).await,
             #[cfg(feature = "tokio-postgres")]
             AnyPool::TokioPostgres(pool) => pool.update(table, columns, rows).await,
+            #[cfg(feature = "libsql")]
+            AnyPool::LibSQL(pool) => pool.update(table, columns, rows).await,
+            #[cfg(feature = "sqlx")]
+            AnyPool::Sqlx(pool) => pool.update(table, columns, rows).await,
         }
     }
 
@@ -247,12 +283,14 @@ impl DbQuery for AnyPool {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.update_returning(table, columns, rows, returning).await,
-            #[cfg(feature = "libsql")]
-            AnyPool::LibSQL(pool) => pool.update_returning(table, columns, rows, returning).await,
             #[cfg(feature = "tokio-postgres")]
             AnyPool::TokioPostgres(pool) => {
                 pool.update_returning(table, columns, rows, returning).await
             }
+            #[cfg(feature = "libsql")]
+            AnyPool::LibSQL(pool) => pool.update_returning(table, columns, rows, returning).await,
+            #[cfg(feature = "sqlx")]
+            AnyPool::Sqlx(pool) => pool.update_returning(table, columns, rows, returning).await,
         }
     }
 
@@ -265,10 +303,12 @@ impl DbQuery for AnyPool {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.upsert(table, columns, rows).await,
-            #[cfg(feature = "libsql")]
-            AnyPool::LibSQL(pool) => pool.upsert(table, columns, rows).await,
             #[cfg(feature = "tokio-postgres")]
             AnyPool::TokioPostgres(pool) => pool.upsert(table, columns, rows).await,
+            #[cfg(feature = "libsql")]
+            AnyPool::LibSQL(pool) => pool.upsert(table, columns, rows).await,
+            #[cfg(feature = "sqlx")]
+            AnyPool::Sqlx(pool) => pool.upsert(table, columns, rows).await,
         }
     }
 
@@ -282,12 +322,14 @@ impl DbQuery for AnyPool {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.upsert_returning(table, columns, rows, returning).await,
-            #[cfg(feature = "libsql")]
-            AnyPool::LibSQL(pool) => pool.upsert_returning(table, columns, rows, returning).await,
             #[cfg(feature = "tokio-postgres")]
             AnyPool::TokioPostgres(pool) => {
                 pool.upsert_returning(table, columns, rows, returning).await
             }
+            #[cfg(feature = "libsql")]
+            AnyPool::LibSQL(pool) => pool.upsert_returning(table, columns, rows, returning).await,
+            #[cfg(feature = "sqlx")]
+            AnyPool::Sqlx(pool) => pool.upsert_returning(table, columns, rows, returning).await,
         }
     }
 }

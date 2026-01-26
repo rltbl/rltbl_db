@@ -23,7 +23,7 @@ use rust_decimal::Decimal;
 /// that can be bound to a Postgres query is 65535. This has been true since at least PostgreSQL
 /// version 12. However, for some (unknown) reason, tokio-postgres limits the actual number of
 /// parameters to just under half that number.
-pub static MAX_PARAMS_POSTGRES: usize = 32765;
+static MAX_PARAMS_POSTGRES: usize = 32765;
 
 /// Extracts the value at the given index from the given [Row].
 fn extract_value(row: &Row, idx: usize) -> Result<ParamValue, DbError> {

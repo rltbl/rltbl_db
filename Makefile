@@ -22,3 +22,6 @@ build:
 
 build_libsql:
 	cargo build --no-default-features --features libsql
+
+build_sqlx:
+	cargo build --no-default-features --features sqlx

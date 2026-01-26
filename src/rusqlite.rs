@@ -8,15 +8,14 @@ use crate::{
     db_kind::DbKind,
     shared::{EditType, edit},
 };
-
 use deadpool_sqlite::{
     Config, Pool, Runtime,
     rusqlite::{
         Statement,
-        fallible_iterator::FallibleIterator,
         types::{Null, ValueRef},
     },
 };
+use fallible_iterator::FallibleIterator;
 use rust_decimal::Decimal;
 use std::str::from_utf8;
 
