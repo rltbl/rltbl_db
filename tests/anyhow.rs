@@ -1,5 +1,8 @@
 use anyhow::Result;
-use rltbl_db::{any::AnyPool, core::DbQuery};
+use rltbl_db::{
+    any::AnyPool,
+    // core::DbQuery
+};
 
 #[tokio::test]
 async fn test_anyhow() {
@@ -8,8 +11,8 @@ async fn test_anyhow() {
     assert_eq!(value, 1);
 }
 
-async fn query_u64(pool: AnyPool) -> Result<u64> {
+async fn query_u64(_pool: AnyPool) -> Result<u64> {
     // TODO: Why is this failing for sqlx?
-    //Ok(pool.query_u64("SELECT 1", ()).await?)
+    // Ok(pool.query_u64("SELECT 1", ()).await?)
     Ok(1)
 }

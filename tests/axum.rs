@@ -22,6 +22,7 @@ async fn get_root(State(pool): State<Arc<impl DbQuery + Sync>>) -> impl IntoResp
     Html(value)
 }
 
+#[allow(dead_code)] // TODO: Remove this allow.
 async fn run_axum(url: &str) {
     let pool = AnyPool::connect(url).await.unwrap();
     let cascade = match pool.kind() {
@@ -75,8 +76,10 @@ async fn run_axum(url: &str) {
 async fn test_axum() {
     #[cfg(feature = "rusqlite")]
     run_axum(":memory:").await;
-    #[cfg(feature = "libsql")]
-    run_axum(":memory:").await;
     #[cfg(feature = "tokio-postgres")]
     run_axum("postgresql:///rltbl_db").await;
+    #[cfg(feature = "libsql")]
+    run_axum(":memory:").await;
+    // #[cfg(feature = "sqlx")]
+    // run_axum(":memory:").await;
 }

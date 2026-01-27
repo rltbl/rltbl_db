@@ -257,8 +257,7 @@ pub(crate) async fn edit<T: FromDbRows>(
         let mut cells: Vec<String> = Vec::with_capacity(columns.len());
         for column in columns {
             let sql_type = column_map.get(*column).ok_or(DbError::InputError(format!(
-                "Column '{column}' does not exist in table '{table}' !!!! POOL {}!!!!",
-                pool.kind()
+                "Column '{column}' does not exist in table '{table}'"
             )))?;
             param_idx += 1;
             // In the CTE we generate for UPDATE statements, tokio-postgres can't infer the types

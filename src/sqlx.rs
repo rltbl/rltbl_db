@@ -11,9 +11,8 @@ use crate::{
 use rust_decimal::{Decimal, prelude::ToPrimitive};
 use sqlx::{
     Column, Postgres, Row, Sqlite, TypeInfo,
-    error::UnexpectedNullError,
-    postgres::{PgArguments, PgPool, PgPoolOptions, PgRow},
-    sqlite::{SqliteArguments, SqlitePool, SqliteRow},
+    postgres::{PgPool, PgPoolOptions, PgRow},
+    sqlite::{SqlitePool, SqliteRow},
 };
 
 /// The [maximum number of parameters](https://www.sqlite.org/limits.html#max_variable_number)
@@ -34,7 +33,7 @@ fn pg_to_db_rows(pg_rows: &Vec<PgRow>) -> Result<Vec<DbRow>, DbError> {
             match ctype {
                 "TEXT" | "VARCHAR" | "NAME" => match pg_row.try_get::<&str, usize>(idx) {
                     Ok(value) => db_row.insert(cname.to_string(), value.into()),
-                    Err(err) => {
+                    Err(_) => {
                         // TODO: Try to be more specific about the type of error accepted
                         // (UnexpectedNullError?)
                         db_row.insert(cname.to_string(), ParamValue::Null)
@@ -42,7 +41,7 @@ fn pg_to_db_rows(pg_rows: &Vec<PgRow>) -> Result<Vec<DbRow>, DbError> {
                 },
                 "INT2" => match pg_row.try_get::<i16, usize>(idx) {
                     Ok(value) => db_row.insert(cname.to_string(), value.into()),
-                    Err(err) => {
+                    Err(_) => {
                         // TODO: Try to be more specific about the type of error accepted
                         // (UnexpectedNullError?)
                         db_row.insert(cname.to_string(), ParamValue::Null)
@@ -50,7 +49,7 @@ fn pg_to_db_rows(pg_rows: &Vec<PgRow>) -> Result<Vec<DbRow>, DbError> {
                 },
                 "INT4" => match pg_row.try_get::<i32, usize>(idx) {
                     Ok(value) => db_row.insert(cname.to_string(), value.into()),
-                    Err(err) => {
+                    Err(_) => {
                         // TODO: Try to be more specific about the type of error accepted
                         // (UnexpectedNullError?)
                         db_row.insert(cname.to_string(), ParamValue::Null)
@@ -58,7 +57,7 @@ fn pg_to_db_rows(pg_rows: &Vec<PgRow>) -> Result<Vec<DbRow>, DbError> {
                 },
                 "INT8" => match pg_row.try_get::<i64, usize>(idx) {
                     Ok(value) => db_row.insert(cname.to_string(), value.into()),
-                    Err(err) => {
+                    Err(_) => {
                         // TODO: Try to be more specific about the type of error accepted
                         // (UnexpectedNullError?)
                         db_row.insert(cname.to_string(), ParamValue::Null)
@@ -66,7 +65,7 @@ fn pg_to_db_rows(pg_rows: &Vec<PgRow>) -> Result<Vec<DbRow>, DbError> {
                 },
                 "BOOL" => match pg_row.try_get::<bool, usize>(idx) {
                     Ok(value) => db_row.insert(cname.to_string(), value.into()),
-                    Err(err) => {
+                    Err(_) => {
                         // TODO: Try to be more specific about the type of error accepted
                         // (UnexpectedNullError?)
                         db_row.insert(cname.to_string(), ParamValue::Null)
@@ -74,7 +73,7 @@ fn pg_to_db_rows(pg_rows: &Vec<PgRow>) -> Result<Vec<DbRow>, DbError> {
                 },
                 "FLOAT4" => match pg_row.try_get::<f32, usize>(idx) {
                     Ok(value) => db_row.insert(cname.to_string(), value.into()),
-                    Err(err) => {
+                    Err(_) => {
                         // TODO: Try to be more specific about the type of error accepted
                         // (UnexpectedNullError?)
                         db_row.insert(cname.to_string(), ParamValue::Null)
@@ -82,7 +81,7 @@ fn pg_to_db_rows(pg_rows: &Vec<PgRow>) -> Result<Vec<DbRow>, DbError> {
                 },
                 "FLOAT8" => match pg_row.try_get::<f64, usize>(idx) {
                     Ok(value) => db_row.insert(cname.to_string(), value.into()),
-                    Err(err) => {
+                    Err(_) => {
                         // TODO: Try to be more specific about the type of error accepted
                         // (UnexpectedNullError?)
                         db_row.insert(cname.to_string(), ParamValue::Null)
@@ -90,7 +89,7 @@ fn pg_to_db_rows(pg_rows: &Vec<PgRow>) -> Result<Vec<DbRow>, DbError> {
                 },
                 "NUMERIC" => match pg_row.try_get::<Decimal, usize>(idx) {
                     Ok(value) => db_row.insert(cname.to_string(), value.into()),
-                    Err(err) => {
+                    Err(_) => {
                         // TODO: Try to be more specific about the type of error accepted
                         // (UnexpectedNullError?)
                         db_row.insert(cname.to_string(), ParamValue::Null)
@@ -115,7 +114,7 @@ fn sqlite_to_db_rows(sqlite_rows: &Vec<SqliteRow>) -> Result<Vec<DbRow>, DbError
             match ctype {
                 "TEXT" | "VARCHAR" => match sqlite_row.try_get::<&str, usize>(idx) {
                     Ok(value) => db_row.insert(cname.to_string(), value.into()),
-                    Err(err) => {
+                    Err(_) => {
                         // TODO: Try to be more specific about the type of error accepted
                         // (UnexpectedNullError?)
                         db_row.insert(cname.to_string(), ParamValue::Null)
@@ -123,7 +122,7 @@ fn sqlite_to_db_rows(sqlite_rows: &Vec<SqliteRow>) -> Result<Vec<DbRow>, DbError
                 },
                 "INTEGER" => match sqlite_row.try_get::<i16, usize>(idx) {
                     Ok(value) => db_row.insert(cname.to_string(), value.into()),
-                    Err(err) => {
+                    Err(_) => {
                         // TODO: Try to be more specific about the type of error accepted
                         // (UnexpectedNullError?)
                         db_row.insert(cname.to_string(), ParamValue::Null)
@@ -131,7 +130,7 @@ fn sqlite_to_db_rows(sqlite_rows: &Vec<SqliteRow>) -> Result<Vec<DbRow>, DbError
                 },
                 "BOOLEAN" => match sqlite_row.try_get::<bool, usize>(idx) {
                     Ok(value) => db_row.insert(cname.to_string(), value.into()),
-                    Err(err) => {
+                    Err(_) => {
                         // TODO: Try to be more specific about the type of error accepted
                         // (UnexpectedNullError?)
                         db_row.insert(cname.to_string(), ParamValue::Null)
@@ -139,18 +138,19 @@ fn sqlite_to_db_rows(sqlite_rows: &Vec<SqliteRow>) -> Result<Vec<DbRow>, DbError
                 },
                 "REAL" => match sqlite_row.try_get::<f32, usize>(idx) {
                     Ok(value) => db_row.insert(cname.to_string(), value.into()),
-                    Err(err) => {
+                    Err(_) => {
                         // TODO: Try to be more specific about the type of error accepted
                         // (UnexpectedNullError?)
                         db_row.insert(cname.to_string(), ParamValue::Null)
                     }
                 },
                 // Columns of numeric type are not reported correctly by column.type_info()
-                // but are reported to be type "NULL". In this case we try to parse it as an
-                // f64. If the value is something else this will return an error.
+                // but are reported to be type "NULL" (TODO: Is this a bug in sqlx 0.7.0 or by
+                // design?) In this case we try to parse it as an f64. If the value is something
+                // else this will return an error.
                 _ => match sqlite_row.try_get::<f64, usize>(idx) {
                     Ok(value) => db_row.insert(cname.to_string(), value.into()),
-                    Err(err) => {
+                    Err(_) => {
                         // TODO: Try to be more specific about the type of error accepted
                         // (UnexpectedNullError?)
                         db_row.insert(cname.to_string(), ParamValue::Null)
@@ -288,10 +288,7 @@ impl DbQuery for SqlxPool {
                         for param in params {
                             match param {
                                 // TODO: Get the correct type in case of a NULL:
-                                ParamValue::Null => {
-                                    //println!("Svaboodia!!");
-                                    query = query.bind(None::<String>)
-                                }
+                                ParamValue::Null => query = query.bind(None::<String>),
                                 ParamValue::Boolean(value) => query = query.bind(value),
                                 ParamValue::SmallInteger(value) => query = query.bind(value),
                                 ParamValue::Integer(value) => query = query.bind(value),
@@ -470,21 +467,82 @@ impl DbQuery for SqlxPool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use indexmap::{indexmap as column_map, indexmap as db_row};
 
+    // TODO: Remove all these tests later and replace them with the aliases_and_builtins test.
     #[tokio::test]
     async fn test_basic() {
+        for url in [":memory:", "postgresql:///rltbl_db"] {
+            basic(url).await;
+        }
+    }
+
+    async fn basic(url: &str) {
         let sql = "DROP TABLE IF EXISTS foo; \
-                   CREATE TABLE IF NOT EXISTS foo ( bar NUMERIC ); \
-                   INSERT INTO foo VALUES (1.33)";
+                   CREATE TABLE IF NOT EXISTS foo ( bar INT, jar INT, PRIMARY KEY (bar) ); \
+                   INSERT INTO foo (bar) VALUES (1)";
 
-        let pool = SqlxPool::connect(":memory:").await.unwrap();
+        let pool = SqlxPool::connect(url).await.unwrap();
         pool.execute_batch(sql).await.unwrap();
         let rows: Vec<DbRow> = pool.query("SELECT * from foo", ()).await.unwrap();
-        println!("ROWS (from sqlite): {rows:?}");
+        assert_eq!(
+            rows,
+            match pool.kind() {
+                DbKind::SQLite => [db_row! {
+                    "bar".into() => ParamValue::from(1_i16),
+                    "jar".into() => ParamValue::from(0_i16),
+                }],
+                DbKind::PostgreSQL => [db_row! {
+                    "bar".into() => ParamValue::from(1_i32),
+                    "jar".into() => ParamValue::Null,
+                }],
+            }
+        );
+    }
 
-        let pool = SqlxPool::connect("postgresql:///rltbl_db").await.unwrap();
+    // TODO: Remove all these tests later and replace it with the aliases_and_builtins test.
+    #[tokio::test]
+    async fn test_columns() {
+        for url in [":memory:", "postgresql:///rltbl_db"] {
+            columns(url).await;
+        }
+    }
+
+    async fn columns(url: &str) {
+        let sql = "DROP TABLE IF EXISTS foo; \
+                   CREATE TABLE IF NOT EXISTS foo ( bar INT, jar INT, PRIMARY KEY (bar) ); \
+                   INSERT INTO foo (bar) VALUES (1)";
+
+        let pool = SqlxPool::connect(url).await.unwrap();
         pool.execute_batch(sql).await.unwrap();
-        let rows: Vec<DbRow> = pool.query("SELECT * from foo", ()).await.unwrap();
-        println!("ROWS (from postgresql): {rows:?}");
+
+        if pool.kind() == DbKind::SQLite {
+            // TODO: It's unclear why this isn't working. It appears to be an issue with
+            // sqlx 0.7.0, that it cannot reliably get data from sqlite's metatables.
+            let sql = r#"SELECT "name", "type"
+                         FROM pragma_table_info('foo')
+                         ORDER BY "name""#
+                .to_string();
+            let rows: Vec<DbRow> = pool.query_no_cache(&sql, ()).await.unwrap();
+            println!("COLUMNS: {rows:?}");
+            let sql = r#"SELECT "name" AS "column_name"
+                         FROM pragma_table_info(?1)
+                         WHERE "pk" > 0
+                         ORDER BY "pk""#
+                .to_string();
+            let rows: Vec<DbRow> = pool.query_no_cache(&sql, &["foo"]).await.unwrap();
+            println!("PRIMARY KEYS: {rows:?}");
+        } else {
+            let columns = pool.columns("foo").await.unwrap();
+            assert_eq!(
+                columns,
+                column_map! {
+                    "bar".to_string() => "integer".to_string(),
+                    "jar".to_string() => "integer".to_string(),
+                }
+            );
+            let primary_keys = pool.primary_keys("foo").await.unwrap();
+            assert_eq!(primary_keys, ["bar"]);
+        }
     }
 }

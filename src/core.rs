@@ -1028,7 +1028,7 @@ pub trait DbQuery {
         let mut columns = ColumnMap::new();
         let (sql, params) = self.kind().columns_sql(table);
         let rows: Vec<DbRow> = self.query_no_cache(&sql, params).await?;
-        println!("ROWS: {rows:?}");
+        //println!("ROWS: {rows:?}");
         for row in &rows {
             match (
                 row.get("column_name")

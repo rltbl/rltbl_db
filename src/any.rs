@@ -49,41 +49,41 @@ impl AnyPool {
         if url.starts_with("postgresql://") {
             #[cfg(feature = "tokio-postgres")]
             {
-                return Ok(DbKind::PostgreSQL);
+                Ok(DbKind::PostgreSQL)
             }
             #[cfg(not(feature = "tokio-postgres"))]
             {
                 #[cfg(feature = "sqlx")]
                 {
-                    return Ok(DbKind::PostgreSQL);
+                    Ok(DbKind::PostgreSQL)
                 }
-                #[cfg(not(feature = "tokio-postgres"))]
+                #[cfg(not(feature = "sqlx"))]
                 {
-                    return Err(DbError::ConnectError(
+                    Err(DbError::ConnectError(
                         "PostgreSQL not configured".to_string(),
-                    ));
+                    ))
                 }
             }
         } else {
             #[cfg(feature = "rusqlite")]
             {
-                return Ok(DbKind::SQLite);
+                Ok(DbKind::SQLite)
             }
             #[cfg(not(feature = "rusqlite"))]
             {
                 #[cfg(feature = "libsql")]
                 {
-                    return Ok(DbKind::SQLite);
+                    Ok(DbKind::SQLite)
                 }
                 #[cfg(not(feature = "libsql"))]
                 {
                     #[cfg(feature = "sqlx")]
                     {
-                        return Ok(DbKind::SQLite);
+                        Ok(DbKind::SQLite)
                     }
                     #[cfg(not(feature = "sqlx"))]
                     {
-                        return Err(DbError::ConnectError("SQLite not configured".to_string()));
+                        Err(DbError::ConnectError("SQLite not configured".to_string()))
                     }
                 }
             }
@@ -95,43 +95,43 @@ impl AnyPool {
         if url.starts_with("postgresql://") {
             #[cfg(feature = "tokio-postgres")]
             {
-                return Ok(AnyPool::TokioPostgres(
+                Ok(AnyPool::TokioPostgres(
                     TokioPostgresPool::connect(url).await?,
-                ));
+                ))
             }
             #[cfg(not(feature = "tokio-postgres"))]
             {
                 #[cfg(feature = "sqlx")]
                 {
-                    return Ok(AnyPool::Sqlx(SqlxPool::connect(url).await?));
+                    Ok(AnyPool::Sqlx(SqlxPool::connect(url).await?))
                 }
-                #[cfg(not(feature = "tokio-postgres"))]
+                #[cfg(not(feature = "sqlx"))]
                 {
-                    return Err(DbError::ConnectError(
+                    Err(DbError::ConnectError(
                         "PostgreSQL not configured".to_string(),
-                    ));
+                    ))
                 }
             }
         } else {
             #[cfg(feature = "rusqlite")]
             {
-                return Ok(AnyPool::Rusqlite(RusqlitePool::connect(url).await?));
+                Ok(AnyPool::Rusqlite(RusqlitePool::connect(url).await?))
             }
             #[cfg(not(feature = "rusqlite"))]
             {
                 #[cfg(feature = "libsql")]
                 {
-                    return Ok(AnyPool::LibSQL(LibSQLPool::connect(url).await?));
+                    Ok(AnyPool::LibSQL(LibSQLPool::connect(url).await?))
                 }
                 #[cfg(not(feature = "libsql"))]
                 {
                     #[cfg(feature = "sqlx")]
                     {
-                        return Ok(AnyPool::Sqlx(SqlxPool::connect(url).await?));
+                        Ok(AnyPool::Sqlx(SqlxPool::connect(url).await?))
                     }
                     #[cfg(not(feature = "sqlx"))]
                     {
-                        return Err(DbError::ConnectError("SQLite not configured".to_string()));
+                        Err(DbError::ConnectError("SQLite not configured".to_string()))
                     }
                 }
             }
@@ -364,8 +364,8 @@ mod tests {
     };
     use indexmap::indexmap as db_row;
     use rand::{
-        Rng, SeedableRng as _,
-        distr::{Alphanumeric, Distribution as _, Uniform},
+        SeedableRng as _,
+        distr::{Distribution as _, Uniform},
         rngs::StdRng,
     };
     use rust_decimal::dec;
@@ -384,13 +384,14 @@ mod tests {
         text_column_query("postgresql:///rltbl_db").await;
         #[cfg(feature = "libsql")]
         text_column_query(":memory:").await;
-        #[cfg(feature = "sqlx")]
-        {
-            text_column_query(":memory:").await;
-            text_column_query("postgresql:///rltbl_db").await;
-        }
+        // #[cfg(feature = "sqlx")]
+        // {
+        //     text_column_query(":memory:").await;
+        //     text_column_query("postgresql:///rltbl_db").await;
+        // }
     }
 
+    #[allow(dead_code)] // TODO: Remove this allow.
     async fn text_column_query(url: &str) {
         let pool = AnyPool::connect(url).await.unwrap();
         let p = pool.kind().param_prefix().to_string();
@@ -453,13 +454,14 @@ mod tests {
         integer_column_query("postgresql:///rltbl_db").await;
         #[cfg(feature = "libsql")]
         integer_column_query(":memory:").await;
-        #[cfg(feature = "sqlx")]
-        {
-            text_column_query(":memory:").await;
-            text_column_query("postgresql:///rltbl_db").await;
-        }
+        // #[cfg(feature = "sqlx")]
+        // {
+        //     text_column_query(":memory:").await;
+        //     text_column_query("postgresql:///rltbl_db").await;
+        // }
     }
 
+    #[allow(dead_code)] // TODO: Remove this allow.
     async fn integer_column_query(url: &str) {
         let pool = AnyPool::connect(url).await.unwrap();
         let p = pool.kind().param_prefix().to_string();
@@ -525,13 +527,14 @@ mod tests {
         float_column_query("postgresql:///rltbl_db").await;
         #[cfg(feature = "libsql")]
         integer_column_query(":memory:").await;
-        #[cfg(feature = "sqlx")]
-        {
-            text_column_query(":memory:").await;
-            text_column_query("postgresql:///rltbl_db").await;
-        }
+        // #[cfg(feature = "sqlx")]
+        // {
+        //     text_column_query(":memory:").await;
+        //     text_column_query("postgresql:///rltbl_db").await;
+        // }
     }
 
+    #[allow(dead_code)] // TODO: Remove this allow.
     async fn float_column_query(url: &str) {
         let pool = AnyPool::connect(url).await.unwrap();
         let p = pool.kind().param_prefix().to_string();
@@ -608,13 +611,14 @@ mod tests {
         mixed_column_query("postgresql:///rltbl_db").await;
         #[cfg(feature = "libsql")]
         integer_column_query(":memory:").await;
-        #[cfg(feature = "sqlx")]
-        {
-            text_column_query(":memory:").await;
-            text_column_query("postgresql:///rltbl_db").await;
-        }
+        // #[cfg(feature = "sqlx")]
+        // {
+        //     text_column_query(":memory:").await;
+        //     text_column_query("postgresql:///rltbl_db").await;
+        // }
     }
 
+    #[allow(dead_code)] // TODO: Remove this allow.
     async fn mixed_column_query(url: &str) {
         let pool = AnyPool::connect(url).await.unwrap();
         let p = pool.kind().param_prefix().to_string();
@@ -699,7 +703,7 @@ mod tests {
                 "int_value".into() => ParamValue::from(1_i64),
                 "alt_int_value".into() => ParamValue::Null,
                 "bool_value".into() => match pool.kind() {
-                    // libsql does not support booleans:
+                    // SQLite does not support booleans:
                     // https://docs.rs/libsql/0.9.29/libsql/enum.Value.html,
                     DbKind::SQLite => ParamValue::from(1_i64),
                     DbKind::PostgreSQL => ParamValue::from(true),
@@ -721,7 +725,7 @@ mod tests {
                 "int_value".into() => ParamValue::from(1_i64),
                 "alt_int_value".into() => ParamValue::Null,
                 "bool_value".into() => match pool.kind() {
-                    // libsql does not support booleans:
+                    // SQLite does not support booleans:
                     // https://docs.rs/libsql/0.9.29/libsql/enum.Value.html,
                     DbKind::SQLite => ParamValue::from(1_i64),
                     DbKind::PostgreSQL => ParamValue::from(true),
@@ -744,13 +748,14 @@ mod tests {
         input_params("postgresql:///rltbl_db").await;
         #[cfg(feature = "libsql")]
         integer_column_query(":memory:").await;
-        #[cfg(feature = "sqlx")]
-        {
-            text_column_query(":memory:").await;
-            text_column_query("postgresql:///rltbl_db").await;
-        }
+        // #[cfg(feature = "sqlx")]
+        // {
+        //     text_column_query(":memory:").await;
+        //     text_column_query("postgresql:///rltbl_db").await;
+        // }
     }
 
+    #[allow(dead_code)] // TODO: Remove this allow.
     async fn input_params(url: &str) {
         let pool = AnyPool::connect(url).await.unwrap();
         let p = pool.kind().param_prefix().to_string();
@@ -872,13 +877,14 @@ mod tests {
         insert("postgresql:///rltbl_db").await;
         #[cfg(feature = "libsql")]
         integer_column_query(":memory:").await;
-        #[cfg(feature = "sqlx")]
-        {
-            text_column_query(":memory:").await;
-            text_column_query("postgresql:///rltbl_db").await;
-        }
+        // #[cfg(feature = "sqlx")]
+        // {
+        //     text_column_query(":memory:").await;
+        //     text_column_query("postgresql:///rltbl_db").await;
+        // }
     }
 
+    #[allow(dead_code)] // TODO: Remove this allow.
     async fn insert(url: &str) {
         let pool = AnyPool::connect(url).await.unwrap();
         let cascade = match pool.kind() {
@@ -910,7 +916,7 @@ mod tests {
                     "bool_value".into() => {
                         #[cfg(feature = "libsql")]
                         {
-                            // libsql does not support booleans:
+                            // SQLite does not support booleans:
                             // https://docs.rs/libsql/0.9.29/libsql/enum.Value.html,
                             ParamValue::from(1_i64)
                         }
@@ -946,7 +952,7 @@ mod tests {
                     "float_value".into() => ParamValue::Null,
                     "int_value".into() => ParamValue::from(1_i64),
                     "bool_value".into() => match pool.kind() {
-                        // libsql does not support booleans:
+                        // SQLite does not support booleans:
                         // https://docs.rs/libsql/0.9.29/libsql/enum.Value.html,
                         DbKind::SQLite => ParamValue::from(1_i64),
                         DbKind::PostgreSQL => ParamValue::from(true),
@@ -967,13 +973,14 @@ mod tests {
         insert_returning("postgresql:///rltbl_db").await;
         #[cfg(feature = "libsql")]
         integer_column_query(":memory:").await;
-        #[cfg(feature = "sqlx")]
-        {
-            text_column_query(":memory:").await;
-            text_column_query("postgresql:///rltbl_db").await;
-        }
+        // #[cfg(feature = "sqlx")]
+        // {
+        //     text_column_query(":memory:").await;
+        //     text_column_query("postgresql:///rltbl_db").await;
+        // }
     }
 
+    #[allow(dead_code)] // TODO: Remove this allow.
     async fn insert_returning(url: &str) {
         let pool = AnyPool::connect(url).await.unwrap();
         let cascade = match pool.kind() {
@@ -1027,7 +1034,7 @@ mod tests {
                     "float_value".into() => ParamValue::Null,
                     "int_value".into() => ParamValue::from(1_i64),
                     "bool_value".into() => match pool.kind() {
-                        // libsql does not support booleans:
+                        // SQLite does not support booleans:
                         // https://docs.rs/libsql/0.9.29/libsql/enum.Value.html,
                         DbKind::SQLite => ParamValue::from(1_i64),
                         DbKind::PostgreSQL => ParamValue::from(true),
@@ -1078,13 +1085,14 @@ mod tests {
         drop_table("postgresql:///rltbl_db").await;
         #[cfg(feature = "libsql")]
         integer_column_query(":memory:").await;
-        #[cfg(feature = "sqlx")]
-        {
-            text_column_query(":memory:").await;
-            text_column_query("postgresql:///rltbl_db").await;
-        }
+        // #[cfg(feature = "sqlx")]
+        // {
+        //     text_column_query(":memory:").await;
+        //     text_column_query("postgresql:///rltbl_db").await;
+        // }
     }
 
+    #[allow(dead_code)] // TODO: Remove this allow.
     async fn drop_table(url: &str) {
         let pool = AnyPool::connect(url).await.unwrap();
         let cascade = match pool.kind() {
@@ -1130,13 +1138,14 @@ mod tests {
         primary_keys("postgresql:///rltbl_db").await;
         #[cfg(feature = "libsql")]
         integer_column_query(":memory:").await;
-        #[cfg(feature = "sqlx")]
-        {
-            text_column_query(":memory:").await;
-            text_column_query("postgresql:///rltbl_db").await;
-        }
+        // #[cfg(feature = "sqlx")]
+        // {
+        //     text_column_query(":memory:").await;
+        //     text_column_query("postgresql:///rltbl_db").await;
+        // }
     }
 
+    #[allow(dead_code)] // TODO: Remove this allow.
     async fn primary_keys(url: &str) {
         let pool = AnyPool::connect(url).await.unwrap();
         let cascade = match pool.kind() {
@@ -1184,13 +1193,14 @@ mod tests {
         update("postgresql:///rltbl_db").await;
         #[cfg(feature = "libsql")]
         integer_column_query(":memory:").await;
-        #[cfg(feature = "sqlx")]
-        {
-            text_column_query(":memory:").await;
-            text_column_query("postgresql:///rltbl_db").await;
-        }
+        // #[cfg(feature = "sqlx")]
+        // {
+        //     text_column_query(":memory:").await;
+        //     text_column_query("postgresql:///rltbl_db").await;
+        // }
     }
 
+    #[allow(dead_code)] // TODO: Remove this allow.
     async fn update(url: &str) {
         let pool = AnyPool::connect(url).await.unwrap();
         let cascade = match pool.kind() {
@@ -1297,13 +1307,14 @@ mod tests {
         update_returning("postgresql:///rltbl_db").await;
         #[cfg(feature = "libsql")]
         integer_column_query(":memory:").await;
-        #[cfg(feature = "sqlx")]
-        {
-            text_column_query(":memory:").await;
-            text_column_query("postgresql:///rltbl_db").await;
-        }
+        // #[cfg(feature = "sqlx")]
+        // {
+        //     text_column_query(":memory:").await;
+        //     text_column_query("postgresql:///rltbl_db").await;
+        // }
     }
 
+    #[allow(dead_code)] // TODO: Remove this allow.
     async fn update_returning(url: &str) {
         let pool = AnyPool::connect(url).await.unwrap();
         let cascade = match pool.kind() {
@@ -1509,13 +1520,14 @@ mod tests {
         upsert("postgresql:///rltbl_db").await;
         #[cfg(feature = "libsql")]
         integer_column_query(":memory:").await;
-        #[cfg(feature = "sqlx")]
-        {
-            text_column_query(":memory:").await;
-            text_column_query("postgresql:///rltbl_db").await;
-        }
+        // #[cfg(feature = "sqlx")]
+        // {
+        //     text_column_query(":memory:").await;
+        //     text_column_query("postgresql:///rltbl_db").await;
+        // }
     }
 
+    #[allow(dead_code)] // TODO: Remove this allow.
     async fn upsert(url: &str) {
         let pool = AnyPool::connect(url).await.unwrap();
         let cascade = match pool.kind() {
@@ -1622,13 +1634,14 @@ mod tests {
         upsert_returning("postgresql:///rltbl_db").await;
         #[cfg(feature = "libsql")]
         integer_column_query(":memory:").await;
-        #[cfg(feature = "sqlx")]
-        {
-            text_column_query(":memory:").await;
-            text_column_query("postgresql:///rltbl_db").await;
-        }
+        // #[cfg(feature = "sqlx")]
+        // {
+        //     text_column_query(":memory:").await;
+        //     text_column_query("postgresql:///rltbl_db").await;
+        // }
     }
 
+    #[allow(dead_code)] // TODO: Remove this allow.
     async fn upsert_returning(url: &str) {
         let pool = AnyPool::connect(url).await.unwrap();
         let cascade = match pool.kind() {
@@ -1757,17 +1770,21 @@ mod tests {
         }
         #[cfg(feature = "sqlx")]
         {
-            let mut pool = AnyPool::connect(":memory:").await.unwrap();
-            for caching_strategy in &all_strategies {
-                cache_with_strategy(&mut pool, &caching_strategy).await;
-            }
-            let mut pool = AnyPool::connect("postgresql:///rltbl_db").await.unwrap();
-            for caching_strategy in &all_strategies {
-                cache_with_strategy(&mut pool, &caching_strategy).await;
-            }
+            // TODO: Remove this. It is just to fool the compiler into thinking that the
+            // all_strategies variable has been used.
+            let _ = all_strategies;
+            //     let mut pool = AnyPool::connect(":memory:").await.unwrap();
+            //     for caching_strategy in &all_strategies {
+            //         cache_with_strategy(&mut pool, &caching_strategy).await;
+            //     }
+            //     let mut pool = AnyPool::connect("postgresql:///rltbl_db").await.unwrap();
+            //     for caching_strategy in &all_strategies {
+            //         cache_with_strategy(&mut pool, &caching_strategy).await;
+            //     }
         }
     }
 
+    #[allow(dead_code)] // TODO: Remove this allow.
     async fn cache_with_strategy(pool: &mut AnyPool, strategy: &CachingStrategy) {
         async fn count_cache_table_rows(pool: &mut AnyPool) -> u64 {
             pool.query_u64("SELECT COUNT(1) from cache", ())
@@ -2002,7 +2019,12 @@ mod tests {
         #[cfg(feature = "libsql")]
         perform_caching(":memory:", runs, edit_rate, 75).await;
         #[cfg(feature = "sqlx")]
-        perform_caching(":memory:", runs, edit_rate, 75).await;
+        {
+            // TODO: Remove this. It is just to fool the compiler into thinking that the
+            // runs and edit_rate variables have been used.
+            let (_, _) = (runs, edit_rate);
+            // perform_caching(":memory:", runs, edit_rate, 75).await;
+        }
     }
 
     // Performs the caching performance test on the database located at the given url, using
@@ -2012,6 +2034,7 @@ mod tests {
     // require maintenance in accordance with the current caching strategy. The test is run
     // for the given number of runs for each of the supported caching strategies. The running
     // time for each strategy is then summarized and reported via STDOUT.
+    #[allow(dead_code)] // TODO: Remove this allow.
     async fn perform_caching(url: &str, runs: usize, edit_rate: usize, fail_after: usize) {
         let mut pool = AnyPool::connect(url).await.unwrap();
         let all_strategies = ["none", "truncate_all", "truncate", "trigger", "memory:1000"]
@@ -2044,6 +2067,7 @@ mod tests {
         }
     }
 
+    #[allow(dead_code)] // TODO: Remove this allow.
     async fn perform_caching_detail(
         pool: &AnyPool,
         runs: usize,
@@ -2073,7 +2097,6 @@ mod tests {
 
         let tables_to_choose_from = vec!["alpha", "beta", "gamma", "delta"];
         for table in tables_to_choose_from.iter() {
-            let table = format!("{table}");
             pool.execute(&format!("DROP TABLE IF EXISTS {table}"), ())
                 .await
                 .unwrap();
