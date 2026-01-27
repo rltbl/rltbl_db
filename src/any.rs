@@ -384,14 +384,13 @@ mod tests {
         text_column_query("postgresql:///rltbl_db").await;
         #[cfg(feature = "libsql")]
         text_column_query(":memory:").await;
-        // #[cfg(feature = "sqlx")]
-        // {
-        //     text_column_query(":memory:").await;
-        //     text_column_query("postgresql:///rltbl_db").await;
-        // }
+        #[cfg(feature = "sqlx")]
+        {
+            text_column_query(":memory:").await;
+            text_column_query("postgresql:///rltbl_db").await;
+        }
     }
 
-    #[allow(dead_code)] // TODO: Remove this allow.
     async fn text_column_query(url: &str) {
         let pool = AnyPool::connect(url).await.unwrap();
         let p = pool.kind().param_prefix().to_string();
@@ -454,14 +453,13 @@ mod tests {
         integer_column_query("postgresql:///rltbl_db").await;
         #[cfg(feature = "libsql")]
         integer_column_query(":memory:").await;
-        // #[cfg(feature = "sqlx")]
-        // {
-        //     text_column_query(":memory:").await;
-        //     text_column_query("postgresql:///rltbl_db").await;
-        // }
+        #[cfg(feature = "sqlx")]
+        {
+            integer_column_query(":memory:").await;
+            integer_column_query("postgresql:///rltbl_db").await;
+        }
     }
 
-    #[allow(dead_code)] // TODO: Remove this allow.
     async fn integer_column_query(url: &str) {
         let pool = AnyPool::connect(url).await.unwrap();
         let p = pool.kind().param_prefix().to_string();
@@ -520,21 +518,21 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_float_column_query() {
         #[cfg(feature = "rusqlite")]
         float_column_query(":memory:").await;
         #[cfg(feature = "tokio-postgres")]
         float_column_query("postgresql:///rltbl_db").await;
         #[cfg(feature = "libsql")]
-        integer_column_query(":memory:").await;
-        // #[cfg(feature = "sqlx")]
-        // {
-        //     text_column_query(":memory:").await;
-        //     text_column_query("postgresql:///rltbl_db").await;
-        // }
+        float_column_query(":memory:").await;
+        #[cfg(feature = "sqlx")]
+        {
+            float_column_query(":memory:").await;
+            float_column_query("postgresql:///rltbl_db").await;
+        }
     }
 
-    #[allow(dead_code)] // TODO: Remove this allow.
     async fn float_column_query(url: &str) {
         let pool = AnyPool::connect(url).await.unwrap();
         let p = pool.kind().param_prefix().to_string();
@@ -604,21 +602,21 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_mixed_column_query() {
         #[cfg(feature = "rusqlite")]
         mixed_column_query(":memory:").await;
         #[cfg(feature = "tokio-postgres")]
         mixed_column_query("postgresql:///rltbl_db").await;
         #[cfg(feature = "libsql")]
-        integer_column_query(":memory:").await;
-        // #[cfg(feature = "sqlx")]
-        // {
-        //     text_column_query(":memory:").await;
-        //     text_column_query("postgresql:///rltbl_db").await;
-        // }
+        mixed_column_query(":memory:").await;
+        #[cfg(feature = "sqlx")]
+        {
+            mixed_column_query(":memory:").await;
+            mixed_column_query("postgresql:///rltbl_db").await;
+        }
     }
 
-    #[allow(dead_code)] // TODO: Remove this allow.
     async fn mixed_column_query(url: &str) {
         let pool = AnyPool::connect(url).await.unwrap();
         let p = pool.kind().param_prefix().to_string();
@@ -747,15 +745,14 @@ mod tests {
         #[cfg(feature = "tokio-postgres")]
         input_params("postgresql:///rltbl_db").await;
         #[cfg(feature = "libsql")]
-        integer_column_query(":memory:").await;
-        // #[cfg(feature = "sqlx")]
-        // {
-        //     text_column_query(":memory:").await;
-        //     text_column_query("postgresql:///rltbl_db").await;
-        // }
+        input_params(":memory:").await;
+        #[cfg(feature = "sqlx")]
+        {
+            input_params(":memory:").await;
+            input_params("postgresql:///rltbl_db").await;
+        }
     }
 
-    #[allow(dead_code)] // TODO: Remove this allow.
     async fn input_params(url: &str) {
         let pool = AnyPool::connect(url).await.unwrap();
         let p = pool.kind().param_prefix().to_string();
@@ -870,21 +867,21 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_insert() {
         #[cfg(feature = "rusqlite")]
         insert(":memory:").await;
         #[cfg(feature = "tokio-postgres")]
         insert("postgresql:///rltbl_db").await;
         #[cfg(feature = "libsql")]
-        integer_column_query(":memory:").await;
-        // #[cfg(feature = "sqlx")]
-        // {
-        //     text_column_query(":memory:").await;
-        //     text_column_query("postgresql:///rltbl_db").await;
-        // }
+        insert(":memory:").await;
+        #[cfg(feature = "sqlx")]
+        {
+            insert(":memory:").await;
+            insert("postgresql:///rltbl_db").await;
+        }
     }
 
-    #[allow(dead_code)] // TODO: Remove this allow.
     async fn insert(url: &str) {
         let pool = AnyPool::connect(url).await.unwrap();
         let cascade = match pool.kind() {
@@ -966,21 +963,21 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_insert_returning() {
         #[cfg(feature = "rusqlite")]
         insert_returning(":memory:").await;
         #[cfg(feature = "tokio-postgres")]
         insert_returning("postgresql:///rltbl_db").await;
         #[cfg(feature = "libsql")]
-        integer_column_query(":memory:").await;
-        // #[cfg(feature = "sqlx")]
-        // {
-        //     text_column_query(":memory:").await;
-        //     text_column_query("postgresql:///rltbl_db").await;
-        // }
+        insert_returning(":memory:").await;
+        #[cfg(feature = "sqlx")]
+        {
+            insert_returning(":memory:").await;
+            insert_returning("postgresql:///rltbl_db").await;
+        }
     }
 
-    #[allow(dead_code)] // TODO: Remove this allow.
     async fn insert_returning(url: &str) {
         let pool = AnyPool::connect(url).await.unwrap();
         let cascade = match pool.kind() {
@@ -1084,15 +1081,14 @@ mod tests {
         #[cfg(feature = "tokio-postgres")]
         drop_table("postgresql:///rltbl_db").await;
         #[cfg(feature = "libsql")]
-        integer_column_query(":memory:").await;
-        // #[cfg(feature = "sqlx")]
-        // {
-        //     text_column_query(":memory:").await;
-        //     text_column_query("postgresql:///rltbl_db").await;
-        // }
+        drop_table(":memory:").await;
+        #[cfg(feature = "sqlx")]
+        {
+            drop_table(":memory:").await;
+            drop_table("postgresql:///rltbl_db").await;
+        }
     }
 
-    #[allow(dead_code)] // TODO: Remove this allow.
     async fn drop_table(url: &str) {
         let pool = AnyPool::connect(url).await.unwrap();
         let cascade = match pool.kind() {
@@ -1137,15 +1133,14 @@ mod tests {
         #[cfg(feature = "tokio-postgres")]
         primary_keys("postgresql:///rltbl_db").await;
         #[cfg(feature = "libsql")]
-        integer_column_query(":memory:").await;
-        // #[cfg(feature = "sqlx")]
-        // {
-        //     text_column_query(":memory:").await;
-        //     text_column_query("postgresql:///rltbl_db").await;
-        // }
+        primary_keys(":memory:").await;
+        #[cfg(feature = "sqlx")]
+        {
+            primary_keys(":memory:").await;
+            primary_keys("postgresql:///rltbl_db").await;
+        }
     }
 
-    #[allow(dead_code)] // TODO: Remove this allow.
     async fn primary_keys(url: &str) {
         let pool = AnyPool::connect(url).await.unwrap();
         let cascade = match pool.kind() {
@@ -1192,15 +1187,14 @@ mod tests {
         #[cfg(feature = "tokio-postgres")]
         update("postgresql:///rltbl_db").await;
         #[cfg(feature = "libsql")]
-        integer_column_query(":memory:").await;
-        // #[cfg(feature = "sqlx")]
-        // {
-        //     text_column_query(":memory:").await;
-        //     text_column_query("postgresql:///rltbl_db").await;
-        // }
+        update(":memory:").await;
+        #[cfg(feature = "sqlx")]
+        {
+            update(":memory:").await;
+            update("postgresql:///rltbl_db").await;
+        }
     }
 
-    #[allow(dead_code)] // TODO: Remove this allow.
     async fn update(url: &str) {
         let pool = AnyPool::connect(url).await.unwrap();
         let cascade = match pool.kind() {
@@ -1300,21 +1294,21 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_update_returning() {
         #[cfg(feature = "rusqlite")]
         update_returning(":memory:").await;
         #[cfg(feature = "tokio-postgres")]
         update_returning("postgresql:///rltbl_db").await;
         #[cfg(feature = "libsql")]
-        integer_column_query(":memory:").await;
-        // #[cfg(feature = "sqlx")]
-        // {
-        //     text_column_query(":memory:").await;
-        //     text_column_query("postgresql:///rltbl_db").await;
-        // }
+        update_returning(":memory:").await;
+        #[cfg(feature = "sqlx")]
+        {
+            update_returning(":memory:").await;
+            update_returning("postgresql:///rltbl_db").await;
+        }
     }
 
-    #[allow(dead_code)] // TODO: Remove this allow.
     async fn update_returning(url: &str) {
         let pool = AnyPool::connect(url).await.unwrap();
         let cascade = match pool.kind() {
@@ -1519,15 +1513,14 @@ mod tests {
         #[cfg(feature = "tokio-postgres")]
         upsert("postgresql:///rltbl_db").await;
         #[cfg(feature = "libsql")]
-        integer_column_query(":memory:").await;
-        // #[cfg(feature = "sqlx")]
-        // {
-        //     text_column_query(":memory:").await;
-        //     text_column_query("postgresql:///rltbl_db").await;
-        // }
+        upsert(":memory:").await;
+        #[cfg(feature = "sqlx")]
+        {
+            upsert(":memory:").await;
+            upsert("postgresql:///rltbl_db").await;
+        }
     }
 
-    #[allow(dead_code)] // TODO: Remove this allow.
     async fn upsert(url: &str) {
         let pool = AnyPool::connect(url).await.unwrap();
         let cascade = match pool.kind() {
@@ -1627,21 +1620,21 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_upsert_returning() {
         #[cfg(feature = "rusqlite")]
         upsert_returning(":memory:").await;
         #[cfg(feature = "tokio-postgres")]
         upsert_returning("postgresql:///rltbl_db").await;
         #[cfg(feature = "libsql")]
-        integer_column_query(":memory:").await;
-        // #[cfg(feature = "sqlx")]
-        // {
-        //     text_column_query(":memory:").await;
-        //     text_column_query("postgresql:///rltbl_db").await;
-        // }
+        upsert_returning(":memory:").await;
+        #[cfg(feature = "sqlx")]
+        {
+            upsert_returning(":memory:").await;
+            upsert_returning("postgresql:///rltbl_db").await;
+        }
     }
 
-    #[allow(dead_code)] // TODO: Remove this allow.
     async fn upsert_returning(url: &str) {
         let pool = AnyPool::connect(url).await.unwrap();
         let cascade = match pool.kind() {
@@ -1770,21 +1763,17 @@ mod tests {
         }
         #[cfg(feature = "sqlx")]
         {
-            // TODO: Remove this. It is just to fool the compiler into thinking that the
-            // all_strategies variable has been used.
-            let _ = all_strategies;
-            //     let mut pool = AnyPool::connect(":memory:").await.unwrap();
-            //     for caching_strategy in &all_strategies {
-            //         cache_with_strategy(&mut pool, &caching_strategy).await;
-            //     }
-            //     let mut pool = AnyPool::connect("postgresql:///rltbl_db").await.unwrap();
-            //     for caching_strategy in &all_strategies {
-            //         cache_with_strategy(&mut pool, &caching_strategy).await;
-            //     }
+            let mut pool = AnyPool::connect(":memory:").await.unwrap();
+            for caching_strategy in &all_strategies {
+                cache_with_strategy(&mut pool, &caching_strategy).await;
+            }
+            let mut pool = AnyPool::connect("postgresql:///rltbl_db").await.unwrap();
+            for caching_strategy in &all_strategies {
+                cache_with_strategy(&mut pool, &caching_strategy).await;
+            }
         }
     }
 
-    #[allow(dead_code)] // TODO: Remove this allow.
     async fn cache_with_strategy(pool: &mut AnyPool, strategy: &CachingStrategy) {
         async fn count_cache_table_rows(pool: &mut AnyPool) -> u64 {
             pool.query_u64("SELECT COUNT(1) from cache", ())
@@ -2020,10 +2009,7 @@ mod tests {
         perform_caching(":memory:", runs, edit_rate, 75).await;
         #[cfg(feature = "sqlx")]
         {
-            // TODO: Remove this. It is just to fool the compiler into thinking that the
-            // runs and edit_rate variables have been used.
-            let (_, _) = (runs, edit_rate);
-            // perform_caching(":memory:", runs, edit_rate, 75).await;
+            perform_caching(":memory:", runs, edit_rate, 90).await;
         }
     }
 
@@ -2034,7 +2020,6 @@ mod tests {
     // require maintenance in accordance with the current caching strategy. The test is run
     // for the given number of runs for each of the supported caching strategies. The running
     // time for each strategy is then summarized and reported via STDOUT.
-    #[allow(dead_code)] // TODO: Remove this allow.
     async fn perform_caching(url: &str, runs: usize, edit_rate: usize, fail_after: usize) {
         let mut pool = AnyPool::connect(url).await.unwrap();
         let all_strategies = ["none", "truncate_all", "truncate", "trigger", "memory:1000"]
@@ -2067,7 +2052,6 @@ mod tests {
         }
     }
 
-    #[allow(dead_code)] // TODO: Remove this allow.
     async fn perform_caching_detail(
         pool: &AnyPool,
         runs: usize,

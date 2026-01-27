@@ -109,53 +109,82 @@ fn sqlite_to_db_rows(sqlite_rows: &Vec<SqliteRow>) -> Result<Vec<DbRow>, DbError
         let mut db_row = DbRow::new();
         for (idx, column) in sqlite_row.columns().iter().enumerate() {
             let cname: &str = column.name();
-            let ctype: &str = column.type_info().name();
-            //println!("CNAME: {cname}, CTYPE: {ctype}");
+            let ctype = column.type_info().name();
             match ctype {
                 "TEXT" | "VARCHAR" => match sqlite_row.try_get::<&str, usize>(idx) {
-                    Ok(value) => db_row.insert(cname.to_string(), value.into()),
+                    Ok(value) => {
+                        db_row.insert(cname.to_string(), value.into());
+                    }
                     Err(_) => {
                         // TODO: Try to be more specific about the type of error accepted
                         // (UnexpectedNullError?)
-                        db_row.insert(cname.to_string(), ParamValue::Null)
+                        db_row.insert(cname.to_string(), ParamValue::Null);
                     }
                 },
-                "INTEGER" => match sqlite_row.try_get::<i16, usize>(idx) {
-                    Ok(value) => db_row.insert(cname.to_string(), value.into()),
+                "INTEGER" => match sqlite_row.try_get::<i64, usize>(idx) {
+                    Ok(value) => {
+                        db_row.insert(cname.to_string(), value.into());
+                    }
                     Err(_) => {
                         // TODO: Try to be more specific about the type of error accepted
                         // (UnexpectedNullError?)
-                        db_row.insert(cname.to_string(), ParamValue::Null)
+                        db_row.insert(cname.to_string(), ParamValue::Null);
                     }
                 },
                 "BOOLEAN" => match sqlite_row.try_get::<bool, usize>(idx) {
-                    Ok(value) => db_row.insert(cname.to_string(), value.into()),
+                    Ok(value) => {
+                        db_row.insert(cname.to_string(), value.into());
+                    }
                     Err(_) => {
                         // TODO: Try to be more specific about the type of error accepted
                         // (UnexpectedNullError?)
-                        db_row.insert(cname.to_string(), ParamValue::Null)
+                        db_row.insert(cname.to_string(), ParamValue::Null);
                     }
                 },
-                "REAL" => match sqlite_row.try_get::<f32, usize>(idx) {
-                    Ok(value) => db_row.insert(cname.to_string(), value.into()),
+                "REAL" => match sqlite_row.try_get::<f64, usize>(idx) {
+                    Ok(value) => {
+                        db_row.insert(cname.to_string(), value.into());
+                    }
                     Err(_) => {
                         // TODO: Try to be more specific about the type of error accepted
                         // (UnexpectedNullError?)
-                        db_row.insert(cname.to_string(), ParamValue::Null)
+                        db_row.insert(cname.to_string(), ParamValue::Null);
                     }
                 },
                 // Columns of numeric type are not reported correctly by column.type_info()
-                // but are reported to be type "NULL" (TODO: Is this a bug in sqlx 0.7.0 or by
-                // design?) In this case we try to parse it as an f64. If the value is something
-                // else this will return an error.
-                _ => match sqlite_row.try_get::<f64, usize>(idx) {
-                    Ok(value) => db_row.insert(cname.to_string(), value.into()),
+                // but are reported to be type "NULL" (TODO: Is this a bug in sqlx or by
+                // design?) In that case we try to parse it as an f64. Other columns, such as
+                // those that exist in the pragma tables, will also have type NULL. In that
+                // case we will try parsing as a string, and who knows what else we might
+                // encounter. We'll try to handle all the possible cases here.
+                "NULL" => match sqlite_row.try_get::<i64, usize>(idx) {
+                    Ok(value) => {
+                        db_row.insert(cname.to_string(), value.into());
+                    }
                     Err(_) => {
                         // TODO: Try to be more specific about the type of error accepted
                         // (UnexpectedNullError?)
-                        db_row.insert(cname.to_string(), ParamValue::Null)
+                        match sqlite_row.try_get::<f64, usize>(idx) {
+                            Ok(value) => {
+                                db_row.insert(cname.to_string(), value.into());
+                            }
+                            Err(_) => match sqlite_row.try_get::<bool, usize>(idx) {
+                                Ok(value) => {
+                                    db_row.insert(cname.to_string(), value.into());
+                                }
+                                Err(_) => match sqlite_row.try_get::<&str, usize>(idx) {
+                                    Ok(value) => {
+                                        db_row.insert(cname.to_string(), value.into());
+                                    }
+                                    Err(_) => {
+                                        db_row.insert(cname.to_string(), ParamValue::Null);
+                                    }
+                                },
+                            },
+                        }
                     }
                 },
+                _ => unimplemented!("Unsupported column type: '{ctype}'"),
             };
         }
         db_rows.push(db_row);
@@ -284,7 +313,7 @@ impl DbQuery for SqlxPool {
                 let mut query = sqlx::query::<Sqlite>(sql);
                 match params {
                     Params::None => (),
-                    Params::Positional(params) => {
+                    Params::Positional(ref params) => {
                         for param in params {
                             match param {
                                 // TODO: Get the correct type in case of a NULL:
@@ -489,8 +518,8 @@ mod tests {
             rows,
             match pool.kind() {
                 DbKind::SQLite => [db_row! {
-                    "bar".into() => ParamValue::from(1_i16),
-                    "jar".into() => ParamValue::from(0_i16),
+                    "bar".into() => ParamValue::from(1_i64),
+                    "jar".into() => ParamValue::from(0_i64),
                 }],
                 DbKind::PostgreSQL => [db_row! {
                     "bar".into() => ParamValue::from(1_i32),
@@ -500,7 +529,6 @@ mod tests {
         );
     }
 
-    // TODO: Remove all these tests later and replace it with the aliases_and_builtins test.
     #[tokio::test]
     async fn test_columns() {
         for url in [":memory:", "postgresql:///rltbl_db"] {
@@ -517,21 +545,16 @@ mod tests {
         pool.execute_batch(sql).await.unwrap();
 
         if pool.kind() == DbKind::SQLite {
-            // TODO: It's unclear why this isn't working. It appears to be an issue with
-            // sqlx 0.7.0, that it cannot reliably get data from sqlite's metatables.
-            let sql = r#"SELECT "name", "type"
-                         FROM pragma_table_info('foo')
-                         ORDER BY "name""#
-                .to_string();
-            let rows: Vec<DbRow> = pool.query_no_cache(&sql, ()).await.unwrap();
-            println!("COLUMNS: {rows:?}");
-            let sql = r#"SELECT "name" AS "column_name"
-                         FROM pragma_table_info(?1)
-                         WHERE "pk" > 0
-                         ORDER BY "pk""#
-                .to_string();
-            let rows: Vec<DbRow> = pool.query_no_cache(&sql, &["foo"]).await.unwrap();
-            println!("PRIMARY KEYS: {rows:?}");
+            let columns = pool.columns("foo").await.unwrap();
+            assert_eq!(
+                columns,
+                column_map! {
+                    "bar".to_string() => "int".to_string(),
+                    "jar".to_string() => "int".to_string(),
+                }
+            );
+            let primary_keys = pool.primary_keys("foo").await.unwrap();
+            assert_eq!(primary_keys, ["bar"]);
         } else {
             let columns = pool.columns("foo").await.unwrap();
             assert_eq!(
