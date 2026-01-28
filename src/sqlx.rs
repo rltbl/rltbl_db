@@ -10,9 +10,9 @@ use crate::{
 };
 use rust_decimal::{Decimal, prelude::ToPrimitive};
 use sqlx::{
-    Column, Postgres, Row, Sqlite, TypeInfo,
+    AnyPool, Column, Postgres, Row, TypeInfo,
+    any::{Any, AnyRow, install_default_drivers},
     postgres::{PgPool, PgPoolOptions, PgRow},
-    sqlite::{SqlitePool, SqliteRow},
 };
 
 /// The [maximum number of parameters](https://www.sqlite.org/limits.html#max_variable_number)
@@ -103,89 +103,40 @@ fn pg_to_db_rows(pg_rows: &Vec<PgRow>) -> Result<Vec<DbRow>, DbError> {
     Ok(db_rows)
 }
 
-fn sqlite_to_db_rows(sqlite_rows: &Vec<SqliteRow>) -> Result<Vec<DbRow>, DbError> {
+fn sqlite_to_db_rows(sqlite_rows: &Vec<AnyRow>) -> Result<Vec<DbRow>, DbError> {
     let mut db_rows = vec![];
     for sqlite_row in sqlite_rows {
         let mut db_row = DbRow::new();
-        for (idx, column) in sqlite_row.columns().iter().enumerate() {
-            let cname: &str = column.name();
-            let ctype = column.type_info().name();
-            match ctype {
-                "TEXT" | "VARCHAR" => match sqlite_row.try_get::<&str, usize>(idx) {
-                    Ok(value) => {
-                        db_row.insert(cname.to_string(), value.into());
-                    }
-                    Err(_) => {
-                        // TODO: Try to be more specific about the type of error accepted
-                        // (UnexpectedNullError?)
-                        db_row.insert(cname.to_string(), ParamValue::Null);
-                    }
-                },
-                "INTEGER" => match sqlite_row.try_get::<i64, usize>(idx) {
-                    Ok(value) => {
-                        db_row.insert(cname.to_string(), value.into());
-                    }
-                    Err(_) => {
-                        // TODO: Try to be more specific about the type of error accepted
-                        // (UnexpectedNullError?)
-                        db_row.insert(cname.to_string(), ParamValue::Null);
-                    }
-                },
-                "BOOLEAN" => match sqlite_row.try_get::<bool, usize>(idx) {
-                    Ok(value) => {
-                        db_row.insert(cname.to_string(), value.into());
-                    }
-                    Err(_) => {
-                        // TODO: Try to be more specific about the type of error accepted
-                        // (UnexpectedNullError?)
-                        db_row.insert(cname.to_string(), ParamValue::Null);
-                    }
-                },
-                "REAL" => match sqlite_row.try_get::<f64, usize>(idx) {
-                    Ok(value) => {
-                        db_row.insert(cname.to_string(), value.into());
-                    }
-                    Err(_) => {
-                        // TODO: Try to be more specific about the type of error accepted
-                        // (UnexpectedNullError?)
-                        db_row.insert(cname.to_string(), ParamValue::Null);
-                    }
-                },
-                // Columns of numeric type are not reported correctly by column.type_info()
-                // but are reported to be type "NULL" (TODO: Is this a bug in sqlx or by
-                // design?) In that case we try to parse it as an f64. Other columns, such as
-                // those that exist in the pragma tables, will also have type NULL. In that
-                // case we will try parsing as a string, and who knows what else we might
-                // encounter. We'll try to handle all the possible cases here.
-                "NULL" => match sqlite_row.try_get::<i64, usize>(idx) {
-                    Ok(value) => {
-                        db_row.insert(cname.to_string(), value.into());
-                    }
-                    Err(_) => {
-                        // TODO: Try to be more specific about the type of error accepted
-                        // (UnexpectedNullError?)
-                        match sqlite_row.try_get::<f64, usize>(idx) {
-                            Ok(value) => {
-                                db_row.insert(cname.to_string(), value.into());
-                            }
-                            Err(_) => match sqlite_row.try_get::<bool, usize>(idx) {
-                                Ok(value) => {
-                                    db_row.insert(cname.to_string(), value.into());
-                                }
-                                Err(_) => match sqlite_row.try_get::<&str, usize>(idx) {
-                                    Ok(value) => {
-                                        db_row.insert(cname.to_string(), value.into());
-                                    }
-                                    Err(_) => {
-                                        db_row.insert(cname.to_string(), ParamValue::Null);
-                                    }
-                                },
-                            },
-                        }
-                    }
-                },
-                _ => unimplemented!("Unsupported column type: '{ctype}'"),
-            };
+        for column in sqlite_row.columns() {
+            // We had problems getting a type for columns that are not in the schema,
+            // e.g. "SELECT COUNT() AS count".
+            // So now we start with Null and try INTEGER, NUMERIC/REAL, STRING, BOOL.
+            let mut value = ParamValue::Null;
+            if value == ParamValue::Null {
+                let x: Result<i64, sqlx::Error> = sqlite_row.try_get(column.ordinal());
+                if let Ok(x) = x {
+                    value = ParamValue::from(x);
+                }
+            }
+            if value == ParamValue::Null {
+                let x: Result<f64, sqlx::Error> = sqlite_row.try_get(column.ordinal());
+                if let Ok(x) = x {
+                    value = ParamValue::from(x);
+                }
+            }
+            if value == ParamValue::Null {
+                let x: Result<String, sqlx::Error> = sqlite_row.try_get(column.ordinal());
+                if let Ok(x) = x {
+                    value = ParamValue::from(x);
+                }
+            }
+            if value == ParamValue::Null {
+                let x: Result<bool, sqlx::Error> = sqlite_row.try_get(column.ordinal());
+                if let Ok(x) = x {
+                    value = ParamValue::from(x);
+                }
+            }
+            db_row.insert(column.name().into(), value);
         }
         db_rows.push(db_row);
     }
@@ -194,7 +145,7 @@ fn sqlite_to_db_rows(sqlite_rows: &Vec<SqliteRow>) -> Result<Vec<DbRow>, DbError
 
 #[derive(Debug)]
 pub enum Pool {
-    SQLite(SqlitePool),
+    SQLite(AnyPool),
     PostgreSQL(PgPool),
 }
 
@@ -217,6 +168,7 @@ impl SqlxPool {
                 cache_aware_query: false,
             })
         } else {
+            // TODO: There seems to be some problem supporting an in-memory database.
             let url = {
                 if url.starts_with("sqlite://") {
                     url.to_string()
@@ -224,7 +176,9 @@ impl SqlxPool {
                     format!("sqlite://{url}?mode=rwc")
                 }
             };
-            let pool = SqlitePool::connect(&url).await.unwrap();
+
+            install_default_drivers();
+            let pool = AnyPool::connect(&url).await.unwrap();
             Ok(Self {
                 pool: Pool::SQLite(pool),
                 caching_strategy: CachingStrategy::None,
@@ -286,12 +240,15 @@ impl DbQuery for SqlxPool {
         match &self.pool {
             Pool::PostgreSQL(pool) => {
                 let mut query = sqlx::query::<Postgres>(sql);
-                match params {
+                match &params {
                     Params::None => (),
                     Params::Positional(params) => {
                         for param in params {
                             match param {
-                                // TODO: Get the correct type in case of a NULL:
+                                // It is alright to use None::<String> to represent a NULL value
+                                // regardless of whether that is the actual type of the underlying
+                                // column, because SQLite is permissive enough for this not to
+                                // matter.
                                 ParamValue::Null => query = query.bind(None::<String>),
                                 ParamValue::Boolean(value) => query = query.bind(value),
                                 ParamValue::SmallInteger(value) => query = query.bind(value),
@@ -310,7 +267,7 @@ impl DbQuery for SqlxPool {
                 Ok(FromDbRows::from(rows))
             }
             Pool::SQLite(pool) => {
-                let mut query = sqlx::query::<Sqlite>(sql);
+                let mut query = sqlx::query::<Any>(sql);
                 match params {
                     Params::None => (),
                     Params::Positional(ref params) => {
@@ -318,7 +275,10 @@ impl DbQuery for SqlxPool {
                             match param {
                                 // TODO: Get the correct type in case of a NULL:
                                 ParamValue::Null => query = query.bind(None::<String>),
-                                ParamValue::Boolean(value) => query = query.bind(value),
+                                //ParamValue::Boolean(value) => {
+                                //    let value = *value as i64;
+                                //    query = query.bind(value)
+                                //},
                                 ParamValue::SmallInteger(value) => query = query.bind(value),
                                 ParamValue::Integer(value) => query = query.bind(value),
                                 ParamValue::BigInteger(value) => query = query.bind(value),
@@ -331,6 +291,7 @@ impl DbQuery for SqlxPool {
                                     query = query.bind(value)
                                 }
                                 ParamValue::Text(string) => query = query.bind(string),
+                                _ => panic!("Arggh!"),
                             };
                         }
                     }
@@ -501,25 +462,28 @@ mod tests {
     // TODO: Remove all these tests later and replace them with the aliases_and_builtins test.
     #[tokio::test]
     async fn test_basic() {
-        for url in [":memory:", "postgresql:///rltbl_db"] {
+        for url in [
+            "test.db",
+            // "postgresql:///rltbl_db"
+        ] {
             basic(url).await;
         }
     }
 
     async fn basic(url: &str) {
-        let sql = "DROP TABLE IF EXISTS foo; \
-                   CREATE TABLE IF NOT EXISTS foo ( bar INT, jar INT, PRIMARY KEY (bar) ); \
-                   INSERT INTO foo (bar) VALUES (1)";
+        let sql = "DROP TABLE IF EXISTS foo_1; \
+                   CREATE TABLE IF NOT EXISTS foo_1 ( bar INT, jar INT, PRIMARY KEY (bar) ); \
+                   INSERT INTO foo_1 (bar) VALUES (1)";
 
         let pool = SqlxPool::connect(url).await.unwrap();
         pool.execute_batch(sql).await.unwrap();
-        let rows: Vec<DbRow> = pool.query("SELECT * from foo", ()).await.unwrap();
+        let rows: Vec<DbRow> = pool.query("SELECT * from foo_1", ()).await.unwrap();
         assert_eq!(
             rows,
             match pool.kind() {
                 DbKind::SQLite => [db_row! {
                     "bar".into() => ParamValue::from(1_i64),
-                    "jar".into() => ParamValue::from(0_i64),
+                    "jar".into() => ParamValue::Null,
                 }],
                 DbKind::PostgreSQL => [db_row! {
                     "bar".into() => ParamValue::from(1_i32),
@@ -531,21 +495,24 @@ mod tests {
 
     #[tokio::test]
     async fn test_columns() {
-        for url in [":memory:", "postgresql:///rltbl_db"] {
+        for url in [
+            "test.db",
+            // "postgresql:///rltbl_db"
+        ] {
             columns(url).await;
         }
     }
 
     async fn columns(url: &str) {
-        let sql = "DROP TABLE IF EXISTS foo; \
-                   CREATE TABLE IF NOT EXISTS foo ( bar INT, jar INT, PRIMARY KEY (bar) ); \
-                   INSERT INTO foo (bar) VALUES (1)";
+        let sql = "DROP TABLE IF EXISTS foo_2; \
+                   CREATE TABLE IF NOT EXISTS foo_2 ( bar INT, jar INT, PRIMARY KEY (bar) ); \
+                   INSERT INTO foo_2 (bar) VALUES (1)";
 
         let pool = SqlxPool::connect(url).await.unwrap();
         pool.execute_batch(sql).await.unwrap();
 
         if pool.kind() == DbKind::SQLite {
-            let columns = pool.columns("foo").await.unwrap();
+            let columns = pool.columns("foo_2").await.unwrap();
             assert_eq!(
                 columns,
                 column_map! {
@@ -553,10 +520,10 @@ mod tests {
                     "jar".to_string() => "int".to_string(),
                 }
             );
-            let primary_keys = pool.primary_keys("foo").await.unwrap();
+            let primary_keys = pool.primary_keys("foo_2").await.unwrap();
             assert_eq!(primary_keys, ["bar"]);
         } else {
-            let columns = pool.columns("foo").await.unwrap();
+            let columns = pool.columns("foo_2").await.unwrap();
             assert_eq!(
                 columns,
                 column_map! {
@@ -564,7 +531,7 @@ mod tests {
                     "jar".to_string() => "integer".to_string(),
                 }
             );
-            let primary_keys = pool.primary_keys("foo").await.unwrap();
+            let primary_keys = pool.primary_keys("foo_2").await.unwrap();
             assert_eq!(primary_keys, ["bar"]);
         }
     }

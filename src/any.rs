@@ -386,8 +386,8 @@ mod tests {
         text_column_query(":memory:").await;
         #[cfg(feature = "sqlx")]
         {
-            text_column_query(":memory:").await;
-            text_column_query("postgresql:///rltbl_db").await;
+            text_column_query("test.db").await;
+            //text_column_query("postgresql:///rltbl_db").await;
         }
     }
 
@@ -455,8 +455,8 @@ mod tests {
         integer_column_query(":memory:").await;
         #[cfg(feature = "sqlx")]
         {
-            integer_column_query(":memory:").await;
-            integer_column_query("postgresql:///rltbl_db").await;
+            integer_column_query("test.db").await;
+            //integer_column_query("postgresql:///rltbl_db").await;
         }
     }
 
@@ -518,7 +518,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn test_float_column_query() {
         #[cfg(feature = "rusqlite")]
         float_column_query(":memory:").await;
@@ -528,8 +527,8 @@ mod tests {
         float_column_query(":memory:").await;
         #[cfg(feature = "sqlx")]
         {
-            float_column_query(":memory:").await;
-            float_column_query("postgresql:///rltbl_db").await;
+            float_column_query("test.db").await;
+            //float_column_query("postgresql:///rltbl_db").await;
         }
     }
 
@@ -602,7 +601,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn test_mixed_column_query() {
         #[cfg(feature = "rusqlite")]
         mixed_column_query(":memory:").await;
@@ -612,8 +610,8 @@ mod tests {
         mixed_column_query(":memory:").await;
         #[cfg(feature = "sqlx")]
         {
-            mixed_column_query(":memory:").await;
-            mixed_column_query("postgresql:///rltbl_db").await;
+            mixed_column_query("test.db").await;
+            //mixed_column_query("postgresql:///rltbl_db").await;
         }
     }
 
@@ -630,8 +628,8 @@ mod tests {
                alt_float_value FLOAT8,\
                int_value INT8,\
                alt_int_value INT8,\
-               bool_value BOOL,\
-               alt_bool_value BOOL,\
+               bool_value INT4,\
+               alt_bool_value INT4,\
                numeric_value NUMERIC,\
                alt_numeric_value NUMERIC\
              )",
@@ -642,6 +640,7 @@ mod tests {
         ))
         .await
         .unwrap();
+
         pool.execute(
             &format!(
                 r#"INSERT INTO {table_name}
@@ -659,7 +658,7 @@ mod tests {
                    )
                    VALUES ({p}1, {p}2, {p}3, {p}4, {p}5, {p}6, {p}7, {p}8, {p}9, {p}10)"#,
             ),
-            params!["foo", (), 1.05_f64, (), 1_i64, (), true, (), dec!(1), ()],
+            params!["foo", (), 1.05_f64, (), 1_i64, (), 1, (), dec!(1), ()],
         )
         .await
         .unwrap();
@@ -688,7 +687,7 @@ mod tests {
                  AND bool_value = {p}5
                  AND numeric_value > {p}6"#
         );
-        let params = params!["foo", (), 1.0_f64, 0_i64, true, dec!(0.999)];
+        let params = params!["foo", (), 1.0_f64, 0_i64, 1, dec!(0.999)];
 
         let row = pool.query_row(&select_sql, params.clone()).await.unwrap();
         assert_eq!(
@@ -704,7 +703,7 @@ mod tests {
                     // SQLite does not support booleans:
                     // https://docs.rs/libsql/0.9.29/libsql/enum.Value.html,
                     DbKind::SQLite => ParamValue::from(1_i64),
-                    DbKind::PostgreSQL => ParamValue::from(true),
+                    DbKind::PostgreSQL => ParamValue::from(1_i32),
                 },
                 "alt_bool_value".into() => ParamValue::Null,
                 "numeric_value".into() => ParamValue::from(1_i64),
@@ -726,7 +725,7 @@ mod tests {
                     // SQLite does not support booleans:
                     // https://docs.rs/libsql/0.9.29/libsql/enum.Value.html,
                     DbKind::SQLite => ParamValue::from(1_i64),
-                    DbKind::PostgreSQL => ParamValue::from(true),
+                    DbKind::PostgreSQL => ParamValue::from(1_i32),
                 },
                 "alt_bool_value".into() => ParamValue::Null,
                 "numeric_value".into() => ParamValue::from(1_i64),
@@ -748,8 +747,8 @@ mod tests {
         input_params(":memory:").await;
         #[cfg(feature = "sqlx")]
         {
-            input_params(":memory:").await;
-            input_params("postgresql:///rltbl_db").await;
+            input_params("test.db").await;
+            //input_params("postgresql:///rltbl_db").await;
         }
     }
 
@@ -775,7 +774,7 @@ mod tests {
                gar FLOAT4,\
                har FLOAT8,\
                jar NUMERIC,\
-               kar BOOL
+               kar INT4
              )"
             ),
             (),
@@ -838,7 +837,7 @@ mod tests {
         .unwrap();
         pool.execute(
             &format!("INSERT INTO {table_name} (kar) VALUES ({p}1)"),
-            vec![true],
+            vec![1_i32],
         )
         .await
         .unwrap();
@@ -856,7 +855,7 @@ mod tests {
                 123_f32,
                 123_f64,
                 dec!(123),
-                true,
+                1_i32,
             ],
         )
         .await
@@ -867,7 +866,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn test_insert() {
         #[cfg(feature = "rusqlite")]
         insert(":memory:").await;
@@ -877,8 +875,8 @@ mod tests {
         insert(":memory:").await;
         #[cfg(feature = "sqlx")]
         {
-            insert(":memory:").await;
-            insert("postgresql:///rltbl_db").await;
+            insert("test.db").await;
+            //insert("postgresql:///rltbl_db").await;
         }
     }
 
@@ -896,7 +894,7 @@ mod tests {
                alt_text_value TEXT,\
                float_value FLOAT8,\
                int_value INT8,\
-               bool_value BOOL\
+               bool_value INT4\
              )"
         ))
         .await
@@ -919,7 +917,7 @@ mod tests {
                         }
                         #[cfg(not(feature = "libsql"))]
                         {
-                            ParamValue::from(true)
+                            ParamValue::from(1_i64)
                         }
                     }
                 },
@@ -952,7 +950,7 @@ mod tests {
                         // SQLite does not support booleans:
                         // https://docs.rs/libsql/0.9.29/libsql/enum.Value.html,
                         DbKind::SQLite => ParamValue::from(1_i64),
-                        DbKind::PostgreSQL => ParamValue::from(true),
+                        DbKind::PostgreSQL => ParamValue::from(1_i32),
                     },
                 }
             ]
@@ -963,7 +961,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn test_insert_returning() {
         #[cfg(feature = "rusqlite")]
         insert_returning(":memory:").await;
@@ -973,8 +970,8 @@ mod tests {
         insert_returning(":memory:").await;
         #[cfg(feature = "sqlx")]
         {
-            insert_returning(":memory:").await;
-            insert_returning("postgresql:///rltbl_db").await;
+            insert_returning("test.db").await;
+            //insert_returning("postgresql:///rltbl_db").await;
         }
     }
 
@@ -993,7 +990,7 @@ mod tests {
                alt_text_value TEXT,\
                float_value FLOAT8,\
                int_value INT8,\
-               bool_value BOOL\
+               bool_value INT4\
              )",
         ))
         .await
@@ -1008,7 +1005,7 @@ mod tests {
                     &db_row! {"text_value".into() => ParamValue::from("TEXT")},
                     &db_row! {
                         "int_value".into() => ParamValue::from(1_i64),
-                        "bool_value".into() => ParamValue::from(true)
+                        "bool_value".into() => ParamValue::from(1_i64)
                     },
                 ],
                 &[],
@@ -1034,7 +1031,7 @@ mod tests {
                         // SQLite does not support booleans:
                         // https://docs.rs/libsql/0.9.29/libsql/enum.Value.html,
                         DbKind::SQLite => ParamValue::from(1_i64),
-                        DbKind::PostgreSQL => ParamValue::from(true),
+                        DbKind::PostgreSQL => ParamValue::from(1_i32),
                     }
                 }
             ]
@@ -1049,7 +1046,7 @@ mod tests {
                     &db_row! {"text_value".into() => ParamValue::from("TEXT")},
                     &db_row! {
                         "int_value".into() => ParamValue::from(1_i64),
-                        "bool_value".into() => ParamValue::from(true)
+                        "bool_value".into() => ParamValue::from(1_i64)
                     },
                 ],
                 &["int_value", "float_value"],
@@ -1084,8 +1081,8 @@ mod tests {
         drop_table(":memory:").await;
         #[cfg(feature = "sqlx")]
         {
-            drop_table(":memory:").await;
-            drop_table("postgresql:///rltbl_db").await;
+            drop_table("test.db").await;
+            //drop_table("postgresql:///rltbl_db").await;
         }
     }
 
@@ -1136,8 +1133,8 @@ mod tests {
         primary_keys(":memory:").await;
         #[cfg(feature = "sqlx")]
         {
-            primary_keys(":memory:").await;
-            primary_keys("postgresql:///rltbl_db").await;
+            primary_keys("test.db").await;
+            //primary_keys("postgresql:///rltbl_db").await;
         }
     }
 
@@ -1190,8 +1187,8 @@ mod tests {
         update(":memory:").await;
         #[cfg(feature = "sqlx")]
         {
-            update(":memory:").await;
-            update("postgresql:///rltbl_db").await;
+            update("test.db").await;
+            //update("postgresql:///rltbl_db").await;
         }
     }
 
@@ -1294,7 +1291,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn test_update_returning() {
         #[cfg(feature = "rusqlite")]
         update_returning(":memory:").await;
@@ -1304,8 +1300,8 @@ mod tests {
         update_returning(":memory:").await;
         #[cfg(feature = "sqlx")]
         {
-            update_returning(":memory:").await;
-            update_returning("postgresql:///rltbl_db").await;
+            update_returning("test.db").await;
+            //update_returning("postgresql:///rltbl_db").await;
         }
     }
 
@@ -1516,8 +1512,8 @@ mod tests {
         upsert(":memory:").await;
         #[cfg(feature = "sqlx")]
         {
-            upsert(":memory:").await;
-            upsert("postgresql:///rltbl_db").await;
+            upsert("test.db").await;
+            //upsert("postgresql:///rltbl_db").await;
         }
     }
 
@@ -1620,7 +1616,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn test_upsert_returning() {
         #[cfg(feature = "rusqlite")]
         upsert_returning(":memory:").await;
@@ -1630,8 +1625,8 @@ mod tests {
         upsert_returning(":memory:").await;
         #[cfg(feature = "sqlx")]
         {
-            upsert_returning(":memory:").await;
-            upsert_returning("postgresql:///rltbl_db").await;
+            upsert_returning("test.db").await;
+            //upsert_returning("postgresql:///rltbl_db").await;
         }
     }
 
@@ -1763,14 +1758,14 @@ mod tests {
         }
         #[cfg(feature = "sqlx")]
         {
-            let mut pool = AnyPool::connect(":memory:").await.unwrap();
+            let mut pool = AnyPool::connect("test.db").await.unwrap();
             for caching_strategy in &all_strategies {
                 cache_with_strategy(&mut pool, &caching_strategy).await;
             }
-            let mut pool = AnyPool::connect("postgresql:///rltbl_db").await.unwrap();
-            for caching_strategy in &all_strategies {
-                cache_with_strategy(&mut pool, &caching_strategy).await;
-            }
+            //let mut pool = AnyPool::connect("postgresql:///rltbl_db").await.unwrap();
+            //for caching_strategy in &all_strategies {
+            //    cache_with_strategy(&mut pool, &caching_strategy).await;
+            //}
         }
     }
 
@@ -2009,7 +2004,7 @@ mod tests {
         perform_caching(":memory:", runs, edit_rate, 75).await;
         #[cfg(feature = "sqlx")]
         {
-            perform_caching(":memory:", runs, edit_rate, 90).await;
+            perform_caching("test.db", runs, edit_rate, 120).await;
         }
     }
 

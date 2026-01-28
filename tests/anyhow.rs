@@ -6,7 +6,7 @@ use rltbl_db::{
 
 #[tokio::test]
 async fn test_anyhow() {
-    let pool = AnyPool::connect(":memory:").await.unwrap();
+    let pool = AnyPool::connect("MIKE.db").await.unwrap();
     let value = query_u64(pool).await.expect("Error getting u64 value");
     assert_eq!(value, 1);
 }

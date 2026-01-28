@@ -4,9 +4,15 @@ SHELL := bash
 .DELETE_ON_ERROR:
 .SUFFIXES:
 
-# TODO Add .PHONY
+# TODO Add .PHONY targets
 
-test: test_default test_libsql test_sqlx
+# test: test_default test_libsql test_sqlx
+test:
+	cargo test --no-default-features --features sqlx -- --no-capture test_float_column_query
+
+check:
+	cargo check --no-default-features --features sqlx
+
 
 test_ignored: test_default_ignored test_libsql_ignored test_sqlx_ignored
 
