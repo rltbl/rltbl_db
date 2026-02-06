@@ -22,7 +22,6 @@ async fn get_root(State(pool): State<Arc<impl DbQuery + Sync>>) -> impl IntoResp
     Html(value)
 }
 
-#[allow(dead_code)] // TODO: Remove this allow.
 async fn run_axum(url: &str) {
     let pool = AnyPool::connect(url).await.unwrap();
     let cascade = match pool.kind() {
@@ -80,6 +79,6 @@ async fn test_axum() {
     run_axum("postgresql:///rltbl_db").await;
     #[cfg(feature = "libsql")]
     run_axum(":memory:").await;
-    // #[cfg(feature = "sqlx")]
-    // run_axum(":memory:").await;
+    #[cfg(feature = "sqlx")]
+    run_axum("test.db").await;
 }

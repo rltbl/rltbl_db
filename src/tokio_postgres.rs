@@ -78,25 +78,11 @@ fn extract_value(row: &Row, idx: usize) -> Result<ParamValue, DbError> {
             Some(value) => Ok(value.into()),
             None => Ok(ParamValue::Null),
         },
-        // WARN: This downcasts a Postgres NUMERIC to a 64 bit Number.
         Type::NUMERIC => match row
             .try_get::<usize, Option<Decimal>>(idx)
             .map_err(|err| DbError::DataError(err.to_string()))?
         {
-            Some(value) => {
-                let v = value.to_string();
-                if let Ok(number) = v.parse::<u64>() {
-                    Ok(number.into())
-                } else if let Ok(number) = v.parse::<i64>() {
-                    Ok(number.into())
-                } else if let Ok(number) = v.parse::<f64>() {
-                    Ok(number.into())
-                } else {
-                    Err(DbError::DataError(format!(
-                        "Not a u64, i64, or f64: {value}"
-                    )))
-                }
-            }
+            Some(value) => Ok(value.into()),
             None => Ok(ParamValue::Null),
         },
         _ => unimplemented!("Unimplemented column type: {column:?}"),

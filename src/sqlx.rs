@@ -243,7 +243,6 @@ impl DbQuery for SqlxPool {
                 fn sqlx_query<'a>(
                     sql: &'a str,
                     params: &'a Params,
-                    attempt: usize,
                 ) -> Query<'a, Postgres, PgArguments> {
                     let mut query = sqlx::query::<Postgres>(sql);
                     match &params {
@@ -276,13 +275,14 @@ impl DbQuery for SqlxPool {
                                                 }
                                             }
                                             None => {
-                                                if (attempt % 5) == 0 {
+                                                let match_val = rand::random_range(0..5);
+                                                if match_val == 0 {
                                                     query = query.bind(None::<String>)
-                                                } else if (attempt % 5) == 1 {
+                                                } else if match_val == 1 {
                                                     query = query.bind(None::<i64>)
-                                                } else if (attempt % 5) == 2 {
+                                                } else if match_val == 2 {
                                                     query = query.bind(None::<bool>)
-                                                } else if (attempt % 5) == 3 {
+                                                } else if match_val == 3 {
                                                     query = query.bind(None::<f64>)
                                                 } else {
                                                     query = query.bind(None::<Decimal>)
@@ -306,8 +306,9 @@ impl DbQuery for SqlxPool {
                 }
 
                 let mut saved_err: Option<DbError> = None;
-                for i in 0..4 {
-                    let query = sqlx_query(sql, &params, i);
+                // TODO: Think of a better solution ...
+                for _ in 0..1000 {
+                    let query = sqlx_query(sql, &params);
                     match query.fetch_all(pool).await {
                         Ok(rows) => {
                             let rows = pg_to_db_rows(&rows)?;

@@ -376,6 +376,29 @@ mod tests {
         time::{Duration, Instant},
     };
 
+    fn get_bool_type_and_values(pool: &AnyPool) -> (&str, ParamValue, ParamValue) {
+        match pool.kind() {
+            DbKind::PostgreSQL => ("BOOL", ParamValue::from(true), ParamValue::from(false)),
+            DbKind::SQLite => {
+                #[cfg(feature = "sqlx")]
+                {
+                    ("INT4", ParamValue::from(1_i64), ParamValue::from(0_i64))
+                }
+                #[cfg(not(feature = "sqlx"))]
+                {
+                    ("BOOL", ParamValue::from(1_i64), ParamValue::from(0_i64))
+                }
+            }
+        }
+    }
+
+    fn get_numeric_value(pool: &AnyPool) -> ParamValue {
+        match pool.kind() {
+            DbKind::PostgreSQL => ParamValue::Numeric(1.into()),
+            DbKind::SQLite => ParamValue::from(1_i64),
+        }
+    }
+
     #[tokio::test]
     async fn test_text_column_query() {
         #[cfg(feature = "rusqlite")]
@@ -394,11 +417,9 @@ mod tests {
     async fn text_column_query(url: &str) {
         let pool = AnyPool::connect(url).await.unwrap();
         let p = pool.kind().param_prefix().to_string();
-        let table_name = format!("test_table_text");
-
         pool.execute_batch(&format!(
-            "DROP TABLE IF EXISTS {table_name}{cascade};\
-             CREATE TABLE {table_name} ( value TEXT )",
+            "DROP TABLE IF EXISTS test_table_text{cascade};\
+             CREATE TABLE test_table_text ( value TEXT )",
             cascade = match pool.kind() {
                 DbKind::PostgreSQL => " CASCADE",
                 DbKind::SQLite => "",
@@ -406,10 +427,13 @@ mod tests {
         ))
         .await
         .unwrap();
-        pool.execute(&format!("INSERT INTO {table_name} VALUES ({p}1)"), &["foo"])
-            .await
-            .unwrap();
-        let select_sql = format!("SELECT value FROM {table_name} WHERE value = {p}1");
+        pool.execute(
+            &format!("INSERT INTO test_table_text VALUES ({p}1)"),
+            &["foo"],
+        )
+        .await
+        .unwrap();
+        let select_sql = format!("SELECT value FROM test_table_text WHERE value = {p}1");
         let value: String = pool
             .query_value(&select_sql, &["foo"])
             .await
@@ -442,7 +466,7 @@ mod tests {
         assert_eq!(rows, [db_row! {"value".into() => ParamValue::from("foo")}]);
 
         // Clean up:
-        pool.drop_table(&format!("{table_name}")).await.unwrap();
+        pool.drop_table("test_table_text").await.unwrap();
     }
 
     #[tokio::test]
@@ -463,10 +487,9 @@ mod tests {
     async fn integer_column_query(url: &str) {
         let pool = AnyPool::connect(url).await.unwrap();
         let p = pool.kind().param_prefix().to_string();
-        let table_name = format!("test_table_int");
         pool.execute_batch(&format!(
-            "DROP TABLE IF EXISTS {table_name}{cascade};\
-             CREATE TABLE {table_name} ( value_2 INT2, value_4 INT4, value_8 INT8 )",
+            "DROP TABLE IF EXISTS test_table_int{cascade};\
+             CREATE TABLE test_table_int ( value_2 INT2, value_4 INT4, value_8 INT8 )",
             cascade = match pool.kind() {
                 DbKind::PostgreSQL => " CASCADE",
                 DbKind::SQLite => "",
@@ -476,7 +499,7 @@ mod tests {
         .unwrap();
 
         pool.execute(
-            &format!("INSERT INTO {table_name} VALUES ({p}1, {p}2, {p}3)"),
+            &format!("INSERT INTO test_table_int VALUES ({p}1, {p}2, {p}3)"),
             params![1_i16, 1_i32, 1_i64],
         )
         .await
@@ -489,7 +512,7 @@ mod tests {
                 "value_8" => params![1_i64],
                 _ => unreachable!(),
             };
-            let select_sql = format!("SELECT {column} FROM {table_name} WHERE {column} = {p}1");
+            let select_sql = format!("SELECT {column} FROM test_table_int WHERE {column} = {p}1");
             let value = pool.query_value(&select_sql, params.clone()).await.unwrap();
             let value = TryInto::<i64>::try_into(value).unwrap();
             assert_eq!(1, value);
@@ -514,7 +537,7 @@ mod tests {
         }
 
         // Clean up:
-        pool.drop_table(&format!("{table_name}")).await.unwrap();
+        pool.drop_table("test_table_int").await.unwrap();
     }
 
     #[tokio::test]
@@ -535,12 +558,11 @@ mod tests {
     async fn float_column_query(url: &str) {
         let pool = AnyPool::connect(url).await.unwrap();
         let p = pool.kind().param_prefix().to_string();
-        let table_name = format!("test_table_float");
 
         // FLOAT8
         pool.execute_batch(&format!(
-            "DROP TABLE IF EXISTS {table_name}{cascade};\
-             CREATE TABLE {table_name} ( value FLOAT8 )",
+            "DROP TABLE IF EXISTS test_table_float{cascade};\
+             CREATE TABLE test_table_float ( value FLOAT8 )",
             cascade = match pool.kind() {
                 DbKind::PostgreSQL => " CASCADE",
                 DbKind::SQLite => "",
@@ -549,12 +571,12 @@ mod tests {
         .await
         .unwrap();
         pool.execute(
-            &format!("INSERT INTO {table_name} VALUES ({p}1)"),
+            &format!("INSERT INTO test_table_float VALUES ({p}1)"),
             &[1.05_f64],
         )
         .await
         .unwrap();
-        let select_sql = format!("SELECT value FROM {table_name} WHERE value > {p}1");
+        let select_sql = format!("SELECT value FROM test_table_float WHERE value > {p}1");
         let value = pool.query_value(&select_sql, &[1.0_f64]).await.unwrap();
         let value = TryInto::<f64>::try_into(value).unwrap();
         assert_eq!("1.05", format!("{value:.2}"));
@@ -576,8 +598,8 @@ mod tests {
 
         // FLOAT4
         pool.execute_batch(&format!(
-            "DROP TABLE IF EXISTS {table_name}{cascade};\
-             CREATE TABLE {table_name} ( value FLOAT4 )",
+            "DROP TABLE IF EXISTS test_table_float{cascade};\
+             CREATE TABLE test_table_float ( value FLOAT4 )",
             cascade = match pool.kind() {
                 DbKind::PostgreSQL => " CASCADE",
                 DbKind::SQLite => "",
@@ -586,48 +608,19 @@ mod tests {
         .await
         .unwrap();
 
-        #[cfg(feature = "sqlx")]
-        {
-            if pool.kind() == DbKind::PostgreSQL {
-                pool.execute(
-                    &format!("INSERT INTO {table_name} VALUES ({p}1)"),
-                    &[1.05_f64],
-                )
-                .await
-                .unwrap();
-                //let select_sql = format!("SELECT value FROM {table_name} WHERE value > {p}1");
-                //let value = pool.query_value(&select_sql, &[1.0_f64]).await.unwrap();
-                //let value = TryInto::<f64>::try_into(value).unwrap();
-                //assert_eq!("1.05", format!("{value:.2}"));
-            } else {
-                pool.execute(
-                    &format!("INSERT INTO {table_name} VALUES ({p}1)"),
-                    &[1.05_f32],
-                )
-                .await
-                .unwrap();
-                let select_sql = format!("SELECT value FROM {table_name} WHERE value > {p}1");
-                let value = pool.query_value(&select_sql, &[1.0_f32]).await.unwrap();
-                let value = TryInto::<f32>::try_into(value).unwrap();
-                assert_eq!("1.05", format!("{value:.2}"));
-            }
-        }
-        #[cfg(not(feature = "sqlx"))]
-        {
-            pool.execute(
-                &format!("INSERT INTO {table_name} VALUES ({p}1)"),
-                &[1.05_f32],
-            )
-            .await
-            .unwrap();
-            let select_sql = format!("SELECT value FROM {table_name} WHERE value > {p}1");
-            let value = pool.query_value(&select_sql, &[1.0_f32]).await.unwrap();
-            let value = TryInto::<f32>::try_into(value).unwrap();
-            assert_eq!("1.05", format!("{value:.2}"));
-        }
+        pool.execute(
+            &format!("INSERT INTO test_table_float VALUES ({p}1)"),
+            &[1.05_f32],
+        )
+        .await
+        .unwrap();
+        let select_sql = format!("SELECT value FROM test_table_float WHERE value > {p}1");
+        let value = pool.query_value(&select_sql, &[1.0_f32]).await.unwrap();
+        let value = TryInto::<f32>::try_into(value).unwrap();
+        assert_eq!("1.05", format!("{value:.2}"));
 
         // Clean up:
-        pool.drop_table(&format!("{table_name}")).await.unwrap();
+        pool.drop_table("test_table_float").await.unwrap();
     }
 
     #[tokio::test]
@@ -648,18 +641,19 @@ mod tests {
     async fn mixed_column_query(url: &str) {
         let pool = AnyPool::connect(url).await.unwrap();
         let p = pool.kind().param_prefix().to_string();
-        let table_name = format!("test_table_mixed");
+        let (bool_type, true_value, _) = get_bool_type_and_values(&pool);
+        let numeric_value = get_numeric_value(&pool);
         pool.execute_batch(&format!(
-            "DROP TABLE IF EXISTS {table_name}{cascade};\
-             CREATE TABLE {table_name} (\
+            "DROP TABLE IF EXISTS test_table_mixed{cascade};\
+             CREATE TABLE test_table_mixed (\
                text_value TEXT,\
                alt_text_value TEXT,\
                float_value FLOAT8,\
                alt_float_value FLOAT8,\
                int_value INT8,\
                alt_int_value INT8,\
-               bool_value INT4,\
-               alt_bool_value INT4,\
+               bool_value {bool_type},\
+               alt_bool_value {bool_type},\
                numeric_value NUMERIC,\
                alt_numeric_value NUMERIC\
              )",
@@ -670,10 +664,9 @@ mod tests {
         ))
         .await
         .unwrap();
-
         pool.execute(
             &format!(
-                r#"INSERT INTO {table_name}
+                r#"INSERT INTO test_table_mixed
                    (
                      text_value,
                      alt_text_value,
@@ -688,12 +681,23 @@ mod tests {
                    )
                    VALUES ({p}1, {p}2, {p}3, {p}4, {p}5, {p}6, {p}7, {p}8, {p}9, {p}10)"#,
             ),
-            params!["foo", (), 1.05_f64, (), 1_i64, (), 1, (), dec!(1), ()],
+            params![
+                "foo",
+                (),
+                1.05_f64,
+                (),
+                1_i64,
+                (),
+                true_value.clone(),
+                (),
+                dec!(1),
+                ()
+            ],
         )
         .await
         .unwrap();
 
-        let select_sql = format!("SELECT text_value FROM {table_name} WHERE text_value = {p}1");
+        let select_sql = format!("SELECT text_value FROM test_table_mixed WHERE text_value = {p}1");
         let value: String = pool.query_value(&select_sql, ["foo"]).await.unwrap().into();
         assert_eq!("foo", value);
 
@@ -709,7 +713,7 @@ mod tests {
                  alt_bool_value,
                  numeric_value,
                  alt_numeric_value
-               FROM {table_name}
+               FROM test_table_mixed
                WHERE text_value = {p}1
                  AND alt_text_value IS NOT DISTINCT FROM {p}2
                  AND float_value > {p}3
@@ -717,7 +721,7 @@ mod tests {
                  AND bool_value = {p}5
                  AND numeric_value > {p}6"#
         );
-        let params = params!["foo", (), 1.0_f64, 0_i64, 1, dec!(0.999)];
+        let params = params!["foo", (), 1.0_f64, 0_i64, true_value.clone(), dec!(0.999)];
 
         let row = pool.query_row(&select_sql, params.clone()).await.unwrap();
         assert_eq!(
@@ -729,26 +733,9 @@ mod tests {
                 "alt_float_value".into() => ParamValue::Null,
                 "int_value".into() => ParamValue::from(1_i64),
                 "alt_int_value".into() => ParamValue::Null,
-                "bool_value".into() => match pool.kind() {
-                    // SQLite does not support booleans:
-                    // https://docs.rs/libsql/0.9.29/libsql/enum.Value.html,
-                    DbKind::SQLite => ParamValue::from(1_i64),
-                    DbKind::PostgreSQL => ParamValue::from(1_i32),
-                },
+                "bool_value".into() => true_value.clone(),
                 "alt_bool_value".into() => ParamValue::Null,
-                "numeric_value".into() => {
-                    #[cfg(feature = "sqlx")]
-                    {
-                        match pool.kind() {
-                            DbKind::PostgreSQL => ParamValue::Numeric(1.into()),
-                            DbKind::SQLite => ParamValue::from(1_i64),
-                        }
-                    }
-                    #[cfg(not(feature = "sqlx"))]
-                    {
-                        ParamValue::from(1_i64)
-                    }
-                },
+                "numeric_value".into() => numeric_value.clone(),
                 "alt_numeric_value".into() => ParamValue::Null,
             }
         );
@@ -763,32 +750,15 @@ mod tests {
                 "alt_float_value".into() => ParamValue::Null,
                 "int_value".into() => ParamValue::from(1_i64),
                 "alt_int_value".into() => ParamValue::Null,
-                "bool_value".into() => match pool.kind() {
-                    // SQLite does not support booleans:
-                    // https://docs.rs/libsql/0.9.29/libsql/enum.Value.html,
-                    DbKind::SQLite => ParamValue::from(1_i64),
-                    DbKind::PostgreSQL => ParamValue::from(1_i32),
-                },
+                "bool_value".into() => true_value.clone(),
                 "alt_bool_value".into() => ParamValue::Null,
-                "numeric_value".into() => {
-                    #[cfg(feature = "sqlx")]
-                    {
-                        match pool.kind() {
-                            DbKind::PostgreSQL => ParamValue::Numeric(1.into()),
-                            DbKind::SQLite => ParamValue::from(1_i64),
-                        }
-                    }
-                    #[cfg(not(feature = "sqlx"))]
-                    {
-                        ParamValue::from(1_i64)
-                    }
-                },
+                "numeric_value".into() => numeric_value.clone(),
                 "alt_numeric_value".into() => ParamValue::Null,
             }]
         );
 
         // Clean up:
-        pool.drop_table(&format!("{table_name}")).await.unwrap();
+        pool.drop_table("test_table_mixed").await.unwrap();
     }
 
     #[tokio::test]
@@ -813,14 +783,16 @@ mod tests {
             DbKind::PostgreSQL => " CASCADE",
             DbKind::SQLite => "",
         };
-        let table_name = format!("test_input_params");
-
-        pool.execute(&format!("DROP TABLE IF EXISTS {table_name}{cascade}"), ())
-            .await
-            .unwrap();
+        let (bool_type, true_value, _) = get_bool_type_and_values(&pool);
+        pool.execute(
+            &format!("DROP TABLE IF EXISTS test_any_table_input_params{cascade}"),
+            (),
+        )
+        .await
+        .unwrap();
         pool.execute(
             &format!(
-                "CREATE TABLE {table_name} (\
+                "CREATE TABLE test_any_table_input_params (\
                bar TEXT,\
                car INT2,\
                dar INT4,\
@@ -828,7 +800,7 @@ mod tests {
                gar FLOAT4,\
                har FLOAT8,\
                jar NUMERIC,\
-               kar INT4
+               kar {bool_type}
              )"
             ),
             (),
@@ -836,68 +808,68 @@ mod tests {
         .await
         .unwrap();
         pool.execute(
-            &format!("INSERT INTO {table_name} (bar) VALUES ({p}1)"),
+            &format!("INSERT INTO test_any_table_input_params (bar) VALUES ({p}1)"),
             &["one"],
         )
         .await
         .unwrap();
         pool.execute(
-            &format!("INSERT INTO {table_name} (far) VALUES ({p}1)"),
+            &format!("INSERT INTO test_any_table_input_params (far) VALUES ({p}1)"),
             &[1 as i64],
         )
         .await
         .unwrap();
         pool.execute(
-            &format!("INSERT INTO {table_name} (bar) VALUES ({p}1)"),
+            &format!("INSERT INTO test_any_table_input_params (bar) VALUES ({p}1)"),
             ["two"],
         )
         .await
         .unwrap();
         pool.execute(
-            &format!("INSERT INTO {table_name} (far) VALUES ({p}1)"),
+            &format!("INSERT INTO test_any_table_input_params (far) VALUES ({p}1)"),
             [2 as i64],
         )
         .await
         .unwrap();
         pool.execute(
-            &format!("INSERT INTO {table_name} (bar) VALUES ({p}1)"),
+            &format!("INSERT INTO test_any_table_input_params (bar) VALUES ({p}1)"),
             vec!["three"],
         )
         .await
         .unwrap();
         pool.execute(
-            &format!("INSERT INTO {table_name} (far) VALUES ({p}1)"),
+            &format!("INSERT INTO test_any_table_input_params (far) VALUES ({p}1)"),
             vec![3 as i64],
         )
         .await
         .unwrap();
         pool.execute(
-            &format!("INSERT INTO {table_name} (gar) VALUES ({p}1)"),
+            &format!("INSERT INTO test_any_table_input_params (gar) VALUES ({p}1)"),
             vec![3 as f32],
         )
         .await
         .unwrap();
         pool.execute(
-            &format!("INSERT INTO {table_name} (har) VALUES ({p}1)"),
+            &format!("INSERT INTO test_any_table_input_params (har) VALUES ({p}1)"),
             vec![3 as f64],
         )
         .await
         .unwrap();
         pool.execute(
-            &format!("INSERT INTO {table_name} (jar) VALUES ({p}1)"),
+            &format!("INSERT INTO test_any_table_input_params (jar) VALUES ({p}1)"),
             vec![dec!(3)],
         )
         .await
         .unwrap();
         pool.execute(
-            &format!("INSERT INTO {table_name} (kar) VALUES ({p}1)"),
-            vec![1_i32],
+            &format!("INSERT INTO test_any_table_input_params (kar) VALUES ({p}1)"),
+            vec![true_value.clone()],
         )
         .await
         .unwrap();
         pool.execute(
             &format!(
-                "INSERT INTO {table_name} \
+                "INSERT INTO test_any_table_input_params \
                  (bar, car, dar, far, gar, har, jar, kar) \
                  VALUES ({p}1, {p}2, {p}3, {p}4, {p}5 ,{p}6, {p}7, {p}8)"
             ),
@@ -909,14 +881,16 @@ mod tests {
                 123_f32,
                 123_f64,
                 dec!(123),
-                1_i32,
+                true_value.clone(),
             ],
         )
         .await
         .unwrap();
 
         // Clean up:
-        pool.drop_table(&format!("{table_name}")).await.unwrap();
+        pool.drop_table("test_any_table_input_params")
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -940,15 +914,15 @@ mod tests {
             DbKind::PostgreSQL => " CASCADE",
             DbKind::SQLite => "",
         };
-        let table_name = format!("test_insert");
+        let (bool_type, true_value, _) = get_bool_type_and_values(&pool);
         pool.execute_batch(&format!(
-            "DROP TABLE IF EXISTS {table_name}{cascade};\
-             CREATE TABLE {table_name} (\
+            "DROP TABLE IF EXISTS test_insert{cascade};\
+             CREATE TABLE test_insert (\
                text_value TEXT,\
                alt_text_value TEXT,\
                float_value FLOAT8,\
                int_value INT8,\
-               bool_value INT4\
+               bool_value {bool_type}\
              )"
         ))
         .await
@@ -956,24 +930,13 @@ mod tests {
 
         // Insert rows:
         pool.insert(
-            &format!("{table_name}"),
+            "test_insert",
             &["text_value", "int_value", "bool_value"],
             &[
                 &db_row! {"text_value".into() => ParamValue::from("TEXT")},
                 &db_row! {
                     "int_value".into() => ParamValue::from(1_i64),
-                    "bool_value".into() => {
-                        #[cfg(feature = "libsql")]
-                        {
-                            // SQLite does not support booleans:
-                            // https://docs.rs/libsql/0.9.29/libsql/enum.Value.html,
-                            ParamValue::from(1_i64)
-                        }
-                        #[cfg(not(feature = "libsql"))]
-                        {
-                            ParamValue::from(1_i64)
-                        }
-                    }
+                    "bool_value".into() => true_value.clone(),
                 },
             ],
         )
@@ -982,7 +945,7 @@ mod tests {
 
         // Validate the inserted data:
         let rows: Vec<DbRow> = pool
-            .query(&format!(r#"SELECT * FROM {table_name}"#), ())
+            .query(r#"SELECT * FROM test_insert"#, ())
             .await
             .unwrap();
         assert_eq!(
@@ -1000,18 +963,13 @@ mod tests {
                     "alt_text_value".into() => ParamValue::Null,
                     "float_value".into() => ParamValue::Null,
                     "int_value".into() => ParamValue::from(1_i64),
-                    "bool_value".into() => match pool.kind() {
-                        // SQLite does not support booleans:
-                        // https://docs.rs/libsql/0.9.29/libsql/enum.Value.html,
-                        DbKind::SQLite => ParamValue::from(1_i64),
-                        DbKind::PostgreSQL => ParamValue::from(1_i32),
-                    },
+                    "bool_value".into() => true_value.clone(),
                 }
             ]
         );
 
         // Clean up.
-        pool.drop_table(&format!("{table_name}")).await.unwrap();
+        pool.drop_table("test_insert").await.unwrap();
     }
 
     #[tokio::test]
@@ -1035,16 +993,15 @@ mod tests {
             DbKind::PostgreSQL => " CASCADE",
             DbKind::SQLite => "",
         };
-        let table_name = format!("test_insert_returning");
-
+        let (bool_type, true_value, _) = get_bool_type_and_values(&pool);
         pool.execute_batch(&format!(
-            "DROP TABLE IF EXISTS {table_name}{cascade};\
-             CREATE TABLE {table_name} (\
+            "DROP TABLE IF EXISTS test_insert_returning{cascade};\
+             CREATE TABLE test_insert_returning (\
                text_value TEXT,\
                alt_text_value TEXT,\
                float_value FLOAT8,\
                int_value INT8,\
-               bool_value INT4\
+               bool_value {bool_type}\
              )",
         ))
         .await
@@ -1053,13 +1010,13 @@ mod tests {
         // Without specific returning columns:
         let rows: Vec<DbRow> = pool
             .insert_returning(
-                &format!("{table_name}"),
+                "test_insert_returning",
                 &["text_value", "int_value", "bool_value"],
                 &[
                     &db_row! {"text_value".into() => ParamValue::from("TEXT")},
                     &db_row! {
                         "int_value".into() => ParamValue::from(1_i64),
-                        "bool_value".into() => ParamValue::from(1_i64)
+                        "bool_value".into() => true_value.clone(),
                     },
                 ],
                 &[],
@@ -1081,12 +1038,7 @@ mod tests {
                     "alt_text_value".into() => ParamValue::Null,
                     "float_value".into() => ParamValue::Null,
                     "int_value".into() => ParamValue::from(1_i64),
-                    "bool_value".into() => match pool.kind() {
-                        // SQLite does not support booleans:
-                        // https://docs.rs/libsql/0.9.29/libsql/enum.Value.html,
-                        DbKind::SQLite => ParamValue::from(1_i64),
-                        DbKind::PostgreSQL => ParamValue::from(1_i32),
-                    }
+                    "bool_value".into() => true_value.clone(),
                 }
             ]
         );
@@ -1094,13 +1046,13 @@ mod tests {
         // With specific returning columns:
         let rows: Vec<DbRow> = pool
             .insert_returning(
-                &format!("{table_name}"),
+                "test_insert_returning",
                 &["text_value", "int_value", "bool_value"],
                 &[
                     &db_row! {"text_value".into() => ParamValue::from("TEXT")},
                     &db_row! {
                         "int_value".into() => ParamValue::from(1_i64),
-                        "bool_value".into() => ParamValue::from(1_i64)
+                        "bool_value".into() => true_value.clone(),
                     },
                 ],
                 &["int_value", "float_value"],
@@ -1122,7 +1074,7 @@ mod tests {
         );
 
         // Clean up.
-        pool.drop_table(&format!("{table_name}")).await.unwrap();
+        pool.drop_table("test_insert_returning").await.unwrap();
     }
 
     #[tokio::test]
@@ -1146,8 +1098,8 @@ mod tests {
             DbKind::PostgreSQL => " CASCADE",
             DbKind::SQLite => "",
         };
-        let table1 = format!("test_drop1");
-        let table2 = format!("test_drop2");
+        let table1 = "test_drop1";
+        let table2 = "test_drop2";
         pool.execute_batch(&format!(
             "DROP TABLE IF EXISTS {table1}{cascade};\
              DROP TABLE IF EXISTS {table2}{cascade};\
@@ -1161,20 +1113,20 @@ mod tests {
         .await
         .unwrap();
 
-        let columns = pool.columns(&table1).await.unwrap();
+        let columns = pool.columns(table1).await.unwrap();
         assert_eq!(
             columns,
             ColumnMap::from([("foo".to_owned(), "text".to_owned())])
         );
-        pool.drop_table(&table1).await.unwrap();
+        pool.drop_table(table1).await.unwrap();
 
-        match pool.columns(&table1).await {
+        match pool.columns(table1).await {
             Ok(columns) => panic!("No columns expected for '{table1}' but got {columns:?}"),
             Err(_) => (),
         };
 
         // Clean up.
-        pool.drop_table(&table2).await.unwrap();
+        pool.drop_table(table2).await.unwrap();
     }
 
     #[tokio::test]
@@ -1198,16 +1150,13 @@ mod tests {
             DbKind::PostgreSQL => " CASCADE",
             DbKind::SQLite => "",
         };
-        let table1 = format!("test_primary_keys1");
-        let table2 = format!("test_primary_keys2");
-
         pool.execute_batch(&format!(
-            "DROP TABLE IF EXISTS {table1}{cascade};\
-             DROP TABLE IF EXISTS {table2}{cascade};\
-             CREATE TABLE {table1} (\
+            "DROP TABLE IF EXISTS test_primary_keys1{cascade};\
+             DROP TABLE IF EXISTS test_primary_keys2{cascade};\
+             CREATE TABLE test_primary_keys1 (\
                foo TEXT PRIMARY KEY\
              );\
-             CREATE TABLE {table2} (\
+             CREATE TABLE test_primary_keys2 (\
                foo TEXT,\
                bar TEXT,\
                car TEXT,
@@ -1218,17 +1167,17 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            pool.primary_keys(&format!("{table1}")).await.unwrap(),
+            pool.primary_keys("test_primary_keys1").await.unwrap(),
             ["foo"]
         );
         assert_eq!(
-            pool.primary_keys(&format!("{table2}")).await.unwrap(),
+            pool.primary_keys("test_primary_keys2").await.unwrap(),
             ["foo", "bar"]
         );
 
         // Clean up:
-        pool.drop_table(&format!("{table1}")).await.unwrap();
-        pool.drop_table(&format!("{table2}")).await.unwrap();
+        pool.drop_table("test_primary_keys1").await.unwrap();
+        pool.drop_table("test_primary_keys2").await.unwrap();
     }
 
     #[tokio::test]
@@ -1252,11 +1201,9 @@ mod tests {
             DbKind::PostgreSQL => " CASCADE",
             DbKind::SQLite => "",
         };
-        let table_name = format!("test_update");
-
         pool.execute_batch(&format!(
-            "DROP TABLE IF EXISTS {table_name}{cascade};\
-             CREATE TABLE {table_name} (\
+            "DROP TABLE IF EXISTS test_update{cascade};\
+             CREATE TABLE test_update (\
                foo BIGINT PRIMARY KEY,\
                bar BIGINT,\
                car BIGINT,\
@@ -1268,7 +1215,7 @@ mod tests {
         .unwrap();
 
         pool.insert(
-            &format!("{table_name}"),
+            "test_update",
             &["foo"],
             &[
                 &db_row! {"foo".into() => ParamValue::from(1_i64)},
@@ -1280,7 +1227,7 @@ mod tests {
         .unwrap();
 
         pool.update(
-            &format!("{table_name}"),
+            "test_update",
             &["foo", "bar", "car", "dar", "ear"],
             &[
                 &db_row! {
@@ -1309,10 +1256,7 @@ mod tests {
         .await
         .unwrap();
 
-        let rows: Vec<DbRow> = pool
-            .query(&format!("SELECT * from {table_name}"), ())
-            .await
-            .unwrap();
+        let rows: Vec<DbRow> = pool.query("SELECT * from test_update", ()).await.unwrap();
         assert_eq!(
             rows,
             [
@@ -1341,7 +1285,7 @@ mod tests {
         );
 
         // Clean up:
-        pool.drop_table(&format!("{table_name}")).await.unwrap();
+        pool.drop_table("test_update").await.unwrap();
     }
 
     #[tokio::test]
@@ -1365,11 +1309,9 @@ mod tests {
             DbKind::PostgreSQL => " CASCADE",
             DbKind::SQLite => "",
         };
-        let table_name = format!("test_update_returning");
-
         pool.execute_batch(&format!(
-            "DROP TABLE IF EXISTS {table_name}{cascade};\
-             CREATE TABLE {table_name} (\
+            "DROP TABLE IF EXISTS test_update_returning{cascade};\
+             CREATE TABLE test_update_returning (\
                foo BIGINT,\
                bar BIGINT,\
                car BIGINT,\
@@ -1382,7 +1324,7 @@ mod tests {
         .unwrap();
 
         pool.insert(
-            &format!("{table_name}"),
+            "test_update_returning",
             &["foo", "bar", "car", "dar", "ear"],
             &[
                 &db_row! {
@@ -1428,7 +1370,7 @@ mod tests {
         check_returning_rows(
             &pool
                 .update_returning(
-                    &format!("{table_name}"),
+                    "test_update_returning",
                     &["foo", "bar", "car", "dar", "ear"],
                     &[
                         &db_row! {
@@ -1461,12 +1403,12 @@ mod tests {
 
         // This is the same update as the first one above, just with the columns of the input
         // rows to the update, as well as the rows themselves, specified in a different order.
-        pool.execute(&format!("DELETE FROM {table_name}"), ())
+        pool.execute("DELETE FROM test_update_returning", ())
             .await
             .unwrap();
 
         pool.insert(
-            &format!("{table_name}"),
+            "test_update_returning",
             &["foo", "bar"],
             &[
                 &db_row! {
@@ -1489,7 +1431,7 @@ mod tests {
         check_returning_rows(
             &pool
                 .update_returning(
-                    &format!("{table_name}"),
+                    "test_update_returning",
                     &["foo", "bar", "car", "dar", "ear"],
                     &[
                         &db_row! {
@@ -1522,7 +1464,7 @@ mod tests {
 
         // Final sanity check on the values of all columns:
         let rows: Vec<DbRow> = pool
-            .query(&format!("SELECT * from {table_name}"), ())
+            .query("SELECT * from test_update_returning", ())
             .await
             .unwrap();
         assert!(rows.iter().all(|row| {
@@ -1553,7 +1495,7 @@ mod tests {
         }));
 
         // Clean up:
-        pool.drop_table(&format!("{table_name}")).await.unwrap();
+        pool.drop_table("test_update_returning").await.unwrap();
     }
 
     #[tokio::test]
@@ -1577,11 +1519,9 @@ mod tests {
             DbKind::PostgreSQL => " CASCADE",
             DbKind::SQLite => "",
         };
-        let table_name = format!("test_upsert");
-
         pool.execute_batch(&format!(
-            "DROP TABLE IF EXISTS {table_name}{cascade};\
-             CREATE TABLE {table_name} (\
+            "DROP TABLE IF EXISTS test_upsert{cascade};\
+             CREATE TABLE test_upsert (\
                foo BIGINT PRIMARY KEY,\
                bar BIGINT,\
                car BIGINT,\
@@ -1593,7 +1533,7 @@ mod tests {
         .unwrap();
 
         pool.insert(
-            &format!("{table_name}"),
+            "test_upsert",
             &["foo"],
             &[
                 &db_row! {"foo".into() => ParamValue::from(1_i64)},
@@ -1605,7 +1545,7 @@ mod tests {
         .unwrap();
 
         pool.upsert(
-            &format!("{table_name}"),
+            "test_upsert",
             &["foo", "bar", "car", "dar", "ear"],
             &[
                 &db_row! {
@@ -1634,10 +1574,7 @@ mod tests {
         .await
         .unwrap();
 
-        let rows: Vec<DbRow> = pool
-            .query(&format!("SELECT * from {table_name}"), ())
-            .await
-            .unwrap();
+        let rows: Vec<DbRow> = pool.query("SELECT * from test_upsert", ()).await.unwrap();
         assert_eq!(
             rows,
             [
@@ -1666,7 +1603,7 @@ mod tests {
         );
 
         // Clean up:
-        pool.drop_table(&format!("{table_name}")).await.unwrap();
+        pool.drop_table("test_upsert").await.unwrap();
     }
 
     #[tokio::test]
@@ -1690,11 +1627,9 @@ mod tests {
             DbKind::PostgreSQL => " CASCADE",
             DbKind::SQLite => "",
         };
-        let table_name = format!("test_upsert_returning");
-
         pool.execute_batch(&format!(
-            "DROP TABLE IF EXISTS {table_name}{cascade};\
-             CREATE TABLE {table_name} (\
+            "DROP TABLE IF EXISTS test_upsert_returning{cascade};\
+             CREATE TABLE test_upsert_returning (\
                foo BIGINT,\
                bar BIGINT,\
                car BIGINT,\
@@ -1707,7 +1642,7 @@ mod tests {
         .unwrap();
 
         pool.insert(
-            &format!("{table_name}"),
+            "test_upsert_returning",
             &["foo", "bar", "car", "dar", "ear"],
             &[
                 &db_row! {
@@ -1729,7 +1664,7 @@ mod tests {
 
         let rows: Vec<DbRow> = pool
             .upsert_returning(
-                &format!("{table_name}"),
+                "test_upsert_returning",
                 &["foo", "bar", "car", "dar", "ear"],
                 &[
                     &db_row! {
@@ -1780,7 +1715,7 @@ mod tests {
         }));
 
         // Clean up:
-        pool.drop_table(&format!("{table_name}")).await.unwrap();
+        pool.drop_table("test_upsert_returning").await.unwrap();
     }
 
     #[tokio::test]
@@ -1837,25 +1772,21 @@ mod tests {
 
         pool.set_caching_strategy(strategy);
         pool.set_cache_aware_query(true);
-
-        let table1 = format!("test_table_caching_1");
-        let table2 = format!("test_table_caching_2");
-
-        pool.drop_table(&format!("{table1}")).await.unwrap();
-        pool.drop_table(&format!("{table2}")).await.unwrap();
-        pool.execute_batch(&format!(
-            "CREATE TABLE {table1} (\
+        pool.drop_table("test_table_caching_1").await.unwrap();
+        pool.drop_table("test_table_caching_2").await.unwrap();
+        pool.execute_batch(
+            "CREATE TABLE test_table_caching_1 (\
                value TEXT \
              );\
-             CREATE TABLE {table2} (\
+             CREATE TABLE test_table_caching_2 (\
                value TEXT \
              )",
-        ))
+        )
         .await
         .unwrap();
 
         pool.insert(
-            &format!("{table1}"),
+            "test_table_caching_1",
             &["value"],
             &[
                 &db_row! {
@@ -1871,8 +1802,8 @@ mod tests {
 
         let rows: Vec<DbRow> = pool
             .cache(
-                &[&format!("{table1}")],
-                &format!("SELECT * from {table1}"),
+                &["test_table_caching_1"],
+                "SELECT * from test_table_caching_1",
                 (),
             )
             .await
@@ -1893,8 +1824,8 @@ mod tests {
 
         let rows: Vec<DbRow> = pool
             .cache(
-                &[&format!("{table1}")],
-                &format!("SELECT * from {table1}"),
+                &["test_table_caching_1"],
+                "SELECT * from test_table_caching_1",
                 (),
             )
             .await
@@ -1914,7 +1845,7 @@ mod tests {
         );
 
         pool.insert(
-            &format!("{table1}"),
+            "test_table_caching_1",
             &["value"],
             &[
                 &db_row! {"value".into() => ParamValue::from("gamma")},
@@ -1932,8 +1863,8 @@ mod tests {
 
         let rows: Vec<DbRow> = pool
             .cache(
-                &[&format!("{table1}")],
-                &format!("SELECT * from {table1}"),
+                &["test_table_caching_1"],
+                "SELECT * from test_table_caching_1",
                 (),
             )
             .await
@@ -1956,8 +1887,8 @@ mod tests {
 
         let rows: Vec<DbRow> = pool
             .cache(
-                &[&format!("{table1}")],
-                &format!("SELECT * from {table1}"),
+                &["test_table_caching_1"],
+                "SELECT * from test_table_caching_1",
                 (),
             )
             .await
@@ -1975,8 +1906,8 @@ mod tests {
 
         let _: Vec<DbRow> = pool
             .cache(
-                &[&format!("{table1}")],
-                &format!("SELECT COUNT(1) FROM {table1}"),
+                &["test_table_caching_1"],
+                "SELECT COUNT(1) FROM test_table_caching_1",
                 (),
             )
             .await
@@ -1984,8 +1915,8 @@ mod tests {
 
         let _: Vec<DbRow> = pool
             .cache(
-                &[&format!("{table2}")],
-                &format!("SELECT COUNT(1) FROM {table2}"),
+                &["test_table_caching_2"],
+                "SELECT COUNT(1) FROM test_table_caching_2",
                 (),
             )
             .await
@@ -1998,7 +1929,7 @@ mod tests {
         };
 
         pool.execute(
-            &format!(r#"INSERT INTO {table1} VALUES ('rho'), ('sigma')"#),
+            r#"INSERT INTO test_table_caching_1 VALUES ('rho'), ('sigma')"#,
             (),
         )
         .await
@@ -2015,8 +1946,8 @@ mod tests {
 
         let rows: Vec<DbRow> = pool
             .cache(
-                &[&format!("{table1}")],
-                &format!("SELECT * from {table1}"),
+                &["test_table_caching_1"],
+                "SELECT * from test_table_caching_1",
                 (),
             )
             .await

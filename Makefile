@@ -4,17 +4,14 @@ SHELL := bash
 .DELETE_ON_ERROR:
 .SUFFIXES:
 
-# TODO Add .PHONY targets
-
-# test: test_default test_libsql test_sqlx
-test:
-	cargo test --no-default-features --features sqlx -- --no-capture test_float_column_query
+.PHONY: check crate_docs build build_libsql build_sqlx
+.PHONY: test test_default test_libsql test_sqlx
+.PHONY: test_ignored test_default_ignored test_libsql_ignored test_sqlx_ignored
 
 check:
 	cargo check --no-default-features --features sqlx
 
-
-test_ignored: test_default_ignored test_libsql_ignored test_sqlx_ignored
+test: test_default test_libsql test_sqlx
 
 test_default:
 	@echo "Running unit tests using default features."
@@ -30,6 +27,8 @@ test_libsql:
 	@echo "Running unit tests using Libsql."
 	cargo test --no-default-features --features libsql -- --no-capture
 	@echo "Libsql unit tests succeeded."
+
+test_ignored: test_default_ignored test_libsql_ignored test_sqlx_ignored
 
 test_libsql_ignored:
 	@echo "Running ignored unit tests using Libsql."
