@@ -10,9 +10,10 @@ use crate::{
 };
 use rust_decimal::{Decimal, prelude::ToPrimitive};
 use sqlx::{
-    AnyPool, Column, Postgres, Row, TypeInfo,
+    AnyPool, Column, Execute, Postgres, Row, Statement, TypeInfo,
     any::{Any, AnyRow, install_default_drivers},
-    postgres::{PgPool, PgPoolOptions, PgRow},
+    postgres::{PgArguments, PgPool, PgPoolOptions, PgRow},
+    query::Query,
 };
 
 /// The [maximum number of parameters](https://www.sqlite.org/limits.html#max_variable_number)
@@ -239,10 +240,93 @@ impl DbQuery for SqlxPool {
         let params = params.into_params();
         match &self.pool {
             Pool::PostgreSQL(pool) => {
-                let mut query = sqlx::query::<Postgres>(sql);
-                match &params {
+                fn sqlx_query<'a>(
+                    sql: &'a str,
+                    params: &'a Params,
+                    attempt: usize,
+                ) -> Query<'a, Postgres, PgArguments> {
+                    let mut query = sqlx::query::<Postgres>(sql);
+                    match &params {
+                        Params::None => (),
+                        Params::Positional(params) => {
+                            for (i, param) in params.iter().enumerate() {
+                                match param {
+                                    ParamValue::Null => {
+                                        let statement = query.statement();
+                                        match statement {
+                                            Some(statement) => {
+                                                let column = &statement.columns()[i];
+                                                let ctype: &str = column.type_info().name();
+                                                match ctype {
+                                                    "TEXT" | "VARCHAR" | "NAME" => {
+                                                        query = query.bind(None::<String>)
+                                                    }
+                                                    "INT2" => query = query.bind(None::<i64>),
+                                                    "INT4" => query = query.bind(None::<i64>),
+                                                    "INT8" => query = query.bind(None::<i64>),
+                                                    "BOOL" => query = query.bind(None::<bool>),
+                                                    "FLOAT4" => query = query.bind(None::<f64>),
+                                                    "FLOAT8" => query = query.bind(None::<f64>),
+                                                    "NUMERIC" => {
+                                                        query = query.bind(None::<Decimal>)
+                                                    }
+                                                    _ => unimplemented!(
+                                                        "Unimplemented column type: {column:?}"
+                                                    ),
+                                                }
+                                            }
+                                            None => {
+                                                if (attempt % 5) == 0 {
+                                                    query = query.bind(None::<String>)
+                                                } else if (attempt % 5) == 1 {
+                                                    query = query.bind(None::<i64>)
+                                                } else if (attempt % 5) == 2 {
+                                                    query = query.bind(None::<bool>)
+                                                } else if (attempt % 5) == 3 {
+                                                    query = query.bind(None::<f64>)
+                                                } else {
+                                                    query = query.bind(None::<Decimal>)
+                                                }
+                                            }
+                                        }
+                                    }
+                                    ParamValue::Boolean(value) => query = query.bind(value),
+                                    ParamValue::SmallInteger(value) => query = query.bind(value),
+                                    ParamValue::Integer(value) => query = query.bind(value),
+                                    ParamValue::BigInteger(value) => query = query.bind(value),
+                                    ParamValue::Real(value) => query = query.bind(value),
+                                    ParamValue::BigReal(value) => query = query.bind(value),
+                                    ParamValue::Numeric(value) => query = query.bind(value),
+                                    ParamValue::Text(string) => query = query.bind(string),
+                                };
+                            }
+                        }
+                    }
+                    query
+                }
+
+                let mut saved_err: Option<DbError> = None;
+                for i in 0..4 {
+                    let query = sqlx_query(sql, &params, i);
+                    match query.fetch_all(pool).await {
+                        Ok(rows) => {
+                            let rows = pg_to_db_rows(&rows)?;
+                            return Ok(FromDbRows::from(rows));
+                        }
+                        Err(err) => {
+                            saved_err = Some(DbError::DatabaseError(format!(
+                                "Error: '{err}' while querying database using SQL: '{sql}'"
+                            )))
+                        }
+                    }
+                }
+                Err(saved_err.unwrap())
+            }
+            Pool::SQLite(pool) => {
+                let mut query = sqlx::query::<Any>(sql);
+                match params {
                     Params::None => (),
-                    Params::Positional(params) => {
+                    Params::Positional(ref params) => {
                         for param in params {
                             match param {
                                 // It is alright to use None::<String> to represent a NULL value
@@ -256,34 +340,6 @@ impl DbQuery for SqlxPool {
                                 ParamValue::BigInteger(value) => query = query.bind(value),
                                 ParamValue::Real(value) => query = query.bind(value),
                                 ParamValue::BigReal(value) => query = query.bind(value),
-                                ParamValue::Numeric(value) => query = query.bind(value),
-                                ParamValue::Text(string) => query = query.bind(string),
-                            };
-                        }
-                    }
-                };
-                let rows = query.fetch_all(pool).await.unwrap();
-                let rows = pg_to_db_rows(&rows)?;
-                Ok(FromDbRows::from(rows))
-            }
-            Pool::SQLite(pool) => {
-                let mut query = sqlx::query::<Any>(sql);
-                match params {
-                    Params::None => (),
-                    Params::Positional(ref params) => {
-                        for param in params {
-                            match param {
-                                // TODO: Get the correct type in case of a NULL:
-                                ParamValue::Null => query = query.bind(None::<String>),
-                                //ParamValue::Boolean(value) => {
-                                //    let value = *value as i64;
-                                //    query = query.bind(value)
-                                //},
-                                ParamValue::SmallInteger(value) => query = query.bind(value),
-                                ParamValue::Integer(value) => query = query.bind(value),
-                                ParamValue::BigInteger(value) => query = query.bind(value),
-                                ParamValue::Real(value) => query = query.bind(value),
-                                ParamValue::BigReal(value) => query = query.bind(value),
                                 ParamValue::Numeric(value) => {
                                     let value = value.to_f64().ok_or(DbError::DatatypeError(
                                         format!("Error converting value '{value}' to f64"),
@@ -291,7 +347,6 @@ impl DbQuery for SqlxPool {
                                     query = query.bind(value)
                                 }
                                 ParamValue::Text(string) => query = query.bind(string),
-                                _ => panic!("Arggh!"),
                             };
                         }
                     }
@@ -462,10 +517,7 @@ mod tests {
     // TODO: Remove all these tests later and replace them with the aliases_and_builtins test.
     #[tokio::test]
     async fn test_basic() {
-        for url in [
-            "test.db",
-            // "postgresql:///rltbl_db"
-        ] {
+        for url in ["test.db", "postgresql:///rltbl_db"] {
             basic(url).await;
         }
     }
@@ -495,10 +547,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_columns() {
-        for url in [
-            "test.db",
-            // "postgresql:///rltbl_db"
-        ] {
+        for url in ["test.db", "postgresql:///rltbl_db"] {
             columns(url).await;
         }
     }

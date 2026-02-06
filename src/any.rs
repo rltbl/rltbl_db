@@ -387,7 +387,7 @@ mod tests {
         #[cfg(feature = "sqlx")]
         {
             text_column_query("test.db").await;
-            //text_column_query("postgresql:///rltbl_db").await;
+            text_column_query("postgresql:///rltbl_db").await;
         }
     }
 
@@ -456,7 +456,7 @@ mod tests {
         #[cfg(feature = "sqlx")]
         {
             integer_column_query("test.db").await;
-            //integer_column_query("postgresql:///rltbl_db").await;
+            integer_column_query("postgresql:///rltbl_db").await;
         }
     }
 
@@ -528,7 +528,7 @@ mod tests {
         #[cfg(feature = "sqlx")]
         {
             float_column_query("test.db").await;
-            //float_column_query("postgresql:///rltbl_db").await;
+            float_column_query("postgresql:///rltbl_db").await;
         }
     }
 
@@ -585,16 +585,46 @@ mod tests {
         ))
         .await
         .unwrap();
-        pool.execute(
-            &format!("INSERT INTO {table_name} VALUES ({p}1)"),
-            &[1.05_f32],
-        )
-        .await
-        .unwrap();
-        let select_sql = format!("SELECT value FROM {table_name} WHERE value > {p}1");
-        let value = pool.query_value(&select_sql, &[1.0_f32]).await.unwrap();
-        let value = TryInto::<f32>::try_into(value).unwrap();
-        assert_eq!("1.05", format!("{value:.2}"));
+
+        #[cfg(feature = "sqlx")]
+        {
+            if pool.kind() == DbKind::PostgreSQL {
+                pool.execute(
+                    &format!("INSERT INTO {table_name} VALUES ({p}1)"),
+                    &[1.05_f64],
+                )
+                .await
+                .unwrap();
+                //let select_sql = format!("SELECT value FROM {table_name} WHERE value > {p}1");
+                //let value = pool.query_value(&select_sql, &[1.0_f64]).await.unwrap();
+                //let value = TryInto::<f64>::try_into(value).unwrap();
+                //assert_eq!("1.05", format!("{value:.2}"));
+            } else {
+                pool.execute(
+                    &format!("INSERT INTO {table_name} VALUES ({p}1)"),
+                    &[1.05_f32],
+                )
+                .await
+                .unwrap();
+                let select_sql = format!("SELECT value FROM {table_name} WHERE value > {p}1");
+                let value = pool.query_value(&select_sql, &[1.0_f32]).await.unwrap();
+                let value = TryInto::<f32>::try_into(value).unwrap();
+                assert_eq!("1.05", format!("{value:.2}"));
+            }
+        }
+        #[cfg(not(feature = "sqlx"))]
+        {
+            pool.execute(
+                &format!("INSERT INTO {table_name} VALUES ({p}1)"),
+                &[1.05_f32],
+            )
+            .await
+            .unwrap();
+            let select_sql = format!("SELECT value FROM {table_name} WHERE value > {p}1");
+            let value = pool.query_value(&select_sql, &[1.0_f32]).await.unwrap();
+            let value = TryInto::<f32>::try_into(value).unwrap();
+            assert_eq!("1.05", format!("{value:.2}"));
+        }
 
         // Clean up:
         pool.drop_table(&format!("{table_name}")).await.unwrap();
@@ -611,7 +641,7 @@ mod tests {
         #[cfg(feature = "sqlx")]
         {
             mixed_column_query("test.db").await;
-            //mixed_column_query("postgresql:///rltbl_db").await;
+            mixed_column_query("postgresql:///rltbl_db").await;
         }
     }
 
@@ -706,7 +736,19 @@ mod tests {
                     DbKind::PostgreSQL => ParamValue::from(1_i32),
                 },
                 "alt_bool_value".into() => ParamValue::Null,
-                "numeric_value".into() => ParamValue::from(1_i64),
+                "numeric_value".into() => {
+                    #[cfg(feature = "sqlx")]
+                    {
+                        match pool.kind() {
+                            DbKind::PostgreSQL => ParamValue::Numeric(1.into()),
+                            DbKind::SQLite => ParamValue::from(1_i64),
+                        }
+                    }
+                    #[cfg(not(feature = "sqlx"))]
+                    {
+                        ParamValue::from(1_i64)
+                    }
+                },
                 "alt_numeric_value".into() => ParamValue::Null,
             }
         );
@@ -728,7 +770,19 @@ mod tests {
                     DbKind::PostgreSQL => ParamValue::from(1_i32),
                 },
                 "alt_bool_value".into() => ParamValue::Null,
-                "numeric_value".into() => ParamValue::from(1_i64),
+                "numeric_value".into() => {
+                    #[cfg(feature = "sqlx")]
+                    {
+                        match pool.kind() {
+                            DbKind::PostgreSQL => ParamValue::Numeric(1.into()),
+                            DbKind::SQLite => ParamValue::from(1_i64),
+                        }
+                    }
+                    #[cfg(not(feature = "sqlx"))]
+                    {
+                        ParamValue::from(1_i64)
+                    }
+                },
                 "alt_numeric_value".into() => ParamValue::Null,
             }]
         );
@@ -748,7 +802,7 @@ mod tests {
         #[cfg(feature = "sqlx")]
         {
             input_params("test.db").await;
-            //input_params("postgresql:///rltbl_db").await;
+            input_params("postgresql:///rltbl_db").await;
         }
     }
 
@@ -876,7 +930,7 @@ mod tests {
         #[cfg(feature = "sqlx")]
         {
             insert("test.db").await;
-            //insert("postgresql:///rltbl_db").await;
+            insert("postgresql:///rltbl_db").await;
         }
     }
 
@@ -971,7 +1025,7 @@ mod tests {
         #[cfg(feature = "sqlx")]
         {
             insert_returning("test.db").await;
-            //insert_returning("postgresql:///rltbl_db").await;
+            insert_returning("postgresql:///rltbl_db").await;
         }
     }
 
@@ -1082,7 +1136,7 @@ mod tests {
         #[cfg(feature = "sqlx")]
         {
             drop_table("test.db").await;
-            //drop_table("postgresql:///rltbl_db").await;
+            drop_table("postgresql:///rltbl_db").await;
         }
     }
 
@@ -1134,7 +1188,7 @@ mod tests {
         #[cfg(feature = "sqlx")]
         {
             primary_keys("test.db").await;
-            //primary_keys("postgresql:///rltbl_db").await;
+            primary_keys("postgresql:///rltbl_db").await;
         }
     }
 
@@ -1188,7 +1242,7 @@ mod tests {
         #[cfg(feature = "sqlx")]
         {
             update("test.db").await;
-            //update("postgresql:///rltbl_db").await;
+            update("postgresql:///rltbl_db").await;
         }
     }
 
@@ -1301,7 +1355,7 @@ mod tests {
         #[cfg(feature = "sqlx")]
         {
             update_returning("test.db").await;
-            //update_returning("postgresql:///rltbl_db").await;
+            update_returning("postgresql:///rltbl_db").await;
         }
     }
 
@@ -1513,7 +1567,7 @@ mod tests {
         #[cfg(feature = "sqlx")]
         {
             upsert("test.db").await;
-            //upsert("postgresql:///rltbl_db").await;
+            upsert("postgresql:///rltbl_db").await;
         }
     }
 
@@ -1626,7 +1680,7 @@ mod tests {
         #[cfg(feature = "sqlx")]
         {
             upsert_returning("test.db").await;
-            //upsert_returning("postgresql:///rltbl_db").await;
+            upsert_returning("postgresql:///rltbl_db").await;
         }
     }
 
@@ -1762,10 +1816,10 @@ mod tests {
             for caching_strategy in &all_strategies {
                 cache_with_strategy(&mut pool, &caching_strategy).await;
             }
-            //let mut pool = AnyPool::connect("postgresql:///rltbl_db").await.unwrap();
-            //for caching_strategy in &all_strategies {
-            //    cache_with_strategy(&mut pool, &caching_strategy).await;
-            //}
+            let mut pool = AnyPool::connect("postgresql:///rltbl_db").await.unwrap();
+            for caching_strategy in &all_strategies {
+                cache_with_strategy(&mut pool, &caching_strategy).await;
+            }
         }
     }
 
@@ -2005,6 +2059,7 @@ mod tests {
         #[cfg(feature = "sqlx")]
         {
             perform_caching("test.db", runs, edit_rate, 120).await;
+            perform_caching("postgresql:///rltbl_db", runs, edit_rate, 120).await;
         }
     }
 
