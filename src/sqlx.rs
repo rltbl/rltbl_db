@@ -24,6 +24,7 @@ static MAX_PARAMS_SQLITE: usize = 32766;
 /// that can be bound to a PostgreSQL query.
 static MAX_PARAMS_POSTGRES: usize = 65535;
 
+/// Convert the given PostgreSQL database rows to [DbRow]s
 fn pg_to_db_rows(pg_rows: &Vec<PgRow>) -> Result<Vec<DbRow>, DbError> {
     let mut db_rows = vec![];
     for pg_row in pg_rows {
@@ -34,69 +35,41 @@ fn pg_to_db_rows(pg_rows: &Vec<PgRow>) -> Result<Vec<DbRow>, DbError> {
             match ctype {
                 "TEXT" | "VARCHAR" | "NAME" => match pg_row.try_get::<&str, usize>(idx) {
                     Ok(value) => db_row.insert(cname.to_string(), value.into()),
-                    Err(_) => {
-                        // TODO: Try to be more specific about the type of error accepted
-                        // (UnexpectedNullError?)
-                        db_row.insert(cname.to_string(), ParamValue::Null)
-                    }
+                    Err(_) => db_row.insert(cname.to_string(), ParamValue::Null),
                 },
                 "INT2" => match pg_row.try_get::<i16, usize>(idx) {
                     Ok(value) => db_row.insert(cname.to_string(), value.into()),
-                    Err(_) => {
-                        // TODO: Try to be more specific about the type of error accepted
-                        // (UnexpectedNullError?)
-                        db_row.insert(cname.to_string(), ParamValue::Null)
-                    }
+                    Err(_) => db_row.insert(cname.to_string(), ParamValue::Null),
                 },
                 "INT4" => match pg_row.try_get::<i32, usize>(idx) {
                     Ok(value) => db_row.insert(cname.to_string(), value.into()),
-                    Err(_) => {
-                        // TODO: Try to be more specific about the type of error accepted
-                        // (UnexpectedNullError?)
-                        db_row.insert(cname.to_string(), ParamValue::Null)
-                    }
+                    Err(_) => db_row.insert(cname.to_string(), ParamValue::Null),
                 },
                 "INT8" => match pg_row.try_get::<i64, usize>(idx) {
                     Ok(value) => db_row.insert(cname.to_string(), value.into()),
-                    Err(_) => {
-                        // TODO: Try to be more specific about the type of error accepted
-                        // (UnexpectedNullError?)
-                        db_row.insert(cname.to_string(), ParamValue::Null)
-                    }
+                    Err(_) => db_row.insert(cname.to_string(), ParamValue::Null),
                 },
                 "BOOL" => match pg_row.try_get::<bool, usize>(idx) {
                     Ok(value) => db_row.insert(cname.to_string(), value.into()),
-                    Err(_) => {
-                        // TODO: Try to be more specific about the type of error accepted
-                        // (UnexpectedNullError?)
-                        db_row.insert(cname.to_string(), ParamValue::Null)
-                    }
+                    Err(_) => db_row.insert(cname.to_string(), ParamValue::Null),
                 },
                 "FLOAT4" => match pg_row.try_get::<f32, usize>(idx) {
                     Ok(value) => db_row.insert(cname.to_string(), value.into()),
-                    Err(_) => {
-                        // TODO: Try to be more specific about the type of error accepted
-                        // (UnexpectedNullError?)
-                        db_row.insert(cname.to_string(), ParamValue::Null)
-                    }
+                    Err(_) => db_row.insert(cname.to_string(), ParamValue::Null),
                 },
                 "FLOAT8" => match pg_row.try_get::<f64, usize>(idx) {
                     Ok(value) => db_row.insert(cname.to_string(), value.into()),
-                    Err(_) => {
-                        // TODO: Try to be more specific about the type of error accepted
-                        // (UnexpectedNullError?)
-                        db_row.insert(cname.to_string(), ParamValue::Null)
-                    }
+                    Err(_) => db_row.insert(cname.to_string(), ParamValue::Null),
                 },
                 "NUMERIC" => match pg_row.try_get::<Decimal, usize>(idx) {
                     Ok(value) => db_row.insert(cname.to_string(), value.into()),
-                    Err(_) => {
-                        // TODO: Try to be more specific about the type of error accepted
-                        // (UnexpectedNullError?)
-                        db_row.insert(cname.to_string(), ParamValue::Null)
-                    }
+                    Err(_) => db_row.insert(cname.to_string(), ParamValue::Null),
                 },
-                _ => unimplemented!("Unimplemented column type: {column:?}"),
+                _ => {
+                    return Err(DbError::DataError(format!(
+                        "Unimplemented column type: {column:?}"
+                    )));
+                }
             };
         }
         db_rows.push(db_row);
@@ -104,49 +77,69 @@ fn pg_to_db_rows(pg_rows: &Vec<PgRow>) -> Result<Vec<DbRow>, DbError> {
     Ok(db_rows)
 }
 
+/// Convert the given SQLite database rows to [DbRow]s
 fn sqlite_to_db_rows(sqlite_rows: &Vec<AnyRow>) -> Result<Vec<DbRow>, DbError> {
     let mut db_rows = vec![];
     for sqlite_row in sqlite_rows {
         let mut db_row = DbRow::new();
-        for column in sqlite_row.columns() {
-            // We had problems getting a type for columns that are not in the schema,
-            // e.g. "SELECT COUNT() AS count".
-            // So now we start with Null and try INTEGER, NUMERIC/REAL, STRING, BOOL.
-            let mut value = ParamValue::Null;
-            if value == ParamValue::Null {
-                let x: Result<i64, sqlx::Error> = sqlite_row.try_get(column.ordinal());
-                if let Ok(x) = x {
-                    value = ParamValue::from(x);
+        for (idx, column) in sqlite_row.columns().iter().enumerate() {
+            let cname: &str = column.name();
+            let ctype: &str = column.type_info().name();
+            match ctype {
+                "TEXT" | "VARCHAR" => match sqlite_row.try_get::<&str, usize>(idx) {
+                    Ok(value) => db_row.insert(cname.to_string(), value.into()),
+                    Err(_) => db_row.insert(cname.to_string(), ParamValue::Null),
+                },
+                "BIGINT" | "INTEGER" => match sqlite_row.try_get::<i64, usize>(idx) {
+                    Ok(value) => db_row.insert(cname.to_string(), value.into()),
+                    Err(_) => db_row.insert(cname.to_string(), ParamValue::Null),
+                },
+                "FLOAT" | "REAL" => match sqlite_row.try_get::<f32, usize>(idx) {
+                    Ok(value) => db_row.insert(cname.to_string(), value.into()),
+                    Err(_) => db_row.insert(cname.to_string(), ParamValue::Null),
+                },
+                "DOUBLE" => match sqlite_row.try_get::<f64, usize>(idx) {
+                    Ok(value) => db_row.insert(cname.to_string(), value.into()),
+                    Err(_) => db_row.insert(cname.to_string(), ParamValue::Null),
+                },
+                _ => {
+                    // We had problems getting a type for columns that are not in the schema,
+                    // e.g. "SELECT COUNT() AS count".
+                    // So now we start with Null and try INTEGER, NUMERIC/REAL, STRING, BOOL.
+                    let mut value = ParamValue::Null;
+                    if value == ParamValue::Null {
+                        let x: Result<i64, sqlx::Error> = sqlite_row.try_get(column.ordinal());
+                        if let Ok(x) = x {
+                            value = ParamValue::from(x);
+                        }
+                    }
+                    if value == ParamValue::Null {
+                        let x: Result<f64, sqlx::Error> = sqlite_row.try_get(column.ordinal());
+                        if let Ok(x) = x {
+                            value = ParamValue::from(x);
+                        }
+                    }
+                    if value == ParamValue::Null {
+                        let x: Result<String, sqlx::Error> = sqlite_row.try_get(column.ordinal());
+                        if let Ok(x) = x {
+                            value = ParamValue::from(x);
+                        }
+                    }
+                    db_row.insert(column.name().into(), value)
                 }
-            }
-            if value == ParamValue::Null {
-                let x: Result<f64, sqlx::Error> = sqlite_row.try_get(column.ordinal());
-                if let Ok(x) = x {
-                    value = ParamValue::from(x);
-                }
-            }
-            if value == ParamValue::Null {
-                let x: Result<String, sqlx::Error> = sqlite_row.try_get(column.ordinal());
-                if let Ok(x) = x {
-                    value = ParamValue::from(x);
-                }
-            }
-            if value == ParamValue::Null {
-                let x: Result<bool, sqlx::Error> = sqlite_row.try_get(column.ordinal());
-                if let Ok(x) = x {
-                    value = ParamValue::from(x);
-                }
-            }
-            db_row.insert(column.name().into(), value);
+            };
         }
         db_rows.push(db_row);
     }
     Ok(db_rows)
 }
 
+/// Wrapper around [AnyPool] and [PgPool].
 #[derive(Debug)]
 pub enum Pool {
+    /// Wrapper for [AnyPool]
     SQLite(AnyPool),
+    /// Wrapper for [PgPool]
     PostgreSQL(PgPool),
 }
 
@@ -159,7 +152,7 @@ pub struct SqlxPool {
 }
 
 impl SqlxPool {
-    /// TODO: Add docstring here.
+    /// Connect to a database using the given url.
     pub async fn connect(url: &str) -> Result<Self, DbError> {
         if url.starts_with("postgresql://") {
             let pool = PgPoolOptions::new().connect(url).await.unwrap();
@@ -169,7 +162,6 @@ impl SqlxPool {
                 cache_aware_query: false,
             })
         } else {
-            // TODO: There seems to be some problem supporting an in-memory database.
             let url = {
                 if url.starts_with("sqlite://") {
                     url.to_string()
