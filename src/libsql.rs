@@ -5,7 +5,7 @@ use crate::{
         CachingStrategy, DbError, DbQuery, DbRow, FromDbRows, IntoDbRows, IntoParams, ParamValue,
         Params,
     },
-    db_kind::DbKind,
+    db_kind::{DbKind, MAX_PARAMS_SQLITE},
     shared::{EditType, edit},
 };
 use deadpool_libsql::{
@@ -14,10 +14,6 @@ use deadpool_libsql::{
 };
 use rust_decimal::prelude::ToPrimitive;
 use std::str::from_utf8;
-
-/// The [maximum number of parameters](https://www.sqlite.org/limits.html#max_variable_number)
-/// that can be bound to a SQLite query
-static MAX_PARAMS_SQLITE: usize = 32766;
 
 impl TryFrom<Value> for ParamValue {
     type Error = DbError;

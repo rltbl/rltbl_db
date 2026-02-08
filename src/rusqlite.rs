@@ -5,7 +5,7 @@ use crate::{
         CachingStrategy, DbError, DbQuery, DbRow, FromDbRows, IntoDbRows, IntoParams, ParamValue,
         Params,
     },
-    db_kind::DbKind,
+    db_kind::{DbKind, MAX_PARAMS_SQLITE},
     shared::{EditType, edit},
 };
 use deadpool_sqlite::{
@@ -18,10 +18,6 @@ use deadpool_sqlite::{
 use fallible_iterator::FallibleIterator;
 use rust_decimal::Decimal;
 use std::str::from_utf8;
-
-/// The [maximum number of parameters](https://www.sqlite.org/limits.html#max_variable_number)
-/// that can be bound to a SQLite query
-static MAX_PARAMS_SQLITE: usize = 32766;
 
 /// Query a database using the given prepared statement and parameters.
 fn query_prepared(
@@ -122,16 +118,11 @@ fn query_prepared(
 
     // Collect the column information from the prepared statement:
     let columns = stmt
-        .column_names() //.columns()
+        .column_names()
         .iter()
-        .map(|col| {
-            //let name = col.name().to_string();
-            //let datatype = col.decl_type().and_then(|s| Some(s.to_string()));
-            //ColumnConfig { name, datatype }
-            ColumnConfig {
-                name: col.to_string(),
-                datatype: None,
-            }
+        .map(|col| ColumnConfig {
+            name: col.to_string(),
+            datatype: None,
         })
         .collect::<Vec<_>>();
 

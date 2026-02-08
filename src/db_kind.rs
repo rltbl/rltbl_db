@@ -6,6 +6,16 @@ use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 
+/// The [maximum number of parameters](https://www.sqlite.org/limits.html#max_variable_number)
+/// that can be bound to a SQLite query
+pub static MAX_PARAMS_SQLITE: usize = 32766;
+
+/// The [maximum number of parameters](https://www.postgresql.org/docs/current/limits.html)
+/// that can be bound to a Postgres query is 65535. This has been true since at least PostgreSQL
+/// version 12. However, for some (unknown) reason, tokio-postgres limits the actual number of
+/// parameters to just under half that number.
+pub static MAX_PARAMS_POSTGRES: usize = 32765;
+
 /// Defines the supported database kinds.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DbKind {
