@@ -4,19 +4,20 @@ use axum::{
     response::{Html, IntoResponse},
     routing::get,
 };
-use rltbl_db::{any::AnyPool, core::DbQuery};
-use serde_json::json;
+use indexmap::indexmap;
+use rltbl_db::{
+    any::AnyPool,
+    core::{DbQuery, DbRow, ParamValue},
+};
 use std::{marker::Sync, sync::Arc};
 use tower_service::Service;
 
 async fn get_root(State(pool): State<Arc<impl DbQuery + Sync>>) -> impl IntoResponse {
-    let value = pool
+    let value: String = pool
         .query_value("SELECT value FROM test LIMIT 1", ())
         .await
         .unwrap()
-        .as_str()
-        .unwrap()
-        .to_string();
+        .into();
     Html(value)
 }
 
@@ -32,15 +33,17 @@ async fn run_axum(url: &str) {
     pool.insert(
         "test",
         &["value"],
-        &[&json!({"value": "foo"}).as_object().unwrap()],
+        &[&indexmap! {"value".into() => ParamValue::from("foo")}],
     )
     .await
     .unwrap();
 
-    pool.cache(&["test"], "SELECT 1 FROM test", ())
+    let _: Vec<DbRow> = pool
+        .cache(&["test"], "SELECT 1 FROM test", ())
         .await
         .unwrap();
-    pool.cache(&["test"], "SELECT 1 FROM test", ())
+    let _: Vec<DbRow> = pool
+        .cache(&["test"], "SELECT 1 FROM test", ())
         .await
         .unwrap();
 

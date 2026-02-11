@@ -1,4 +1,6 @@
-use crate::core::{DbError, DbKind, DbQuery, JsonRow, ParamValue, validate_table_name};
+use crate::core::{
+    DbError, DbKind, DbQuery, DbRow, FromDbRows, IntoDbRows, ParamValue, validate_table_name,
+};
 use std::fmt::Display;
 
 #[derive(PartialEq, Eq)]
@@ -124,16 +126,16 @@ ON CONFLICT ({constraint_clause}) DO UPDATE SET {set_clause}{returning_clause}"#
 /// clause (set with_returning = false to turn this off). When generating the SQL statements
 /// used to edit the table, do not use more than max_params bound parameters at a time. If more
 /// than max_params are required, multiple SQL statements will be generated.
-pub(crate) async fn edit(
+pub(crate) async fn edit<T: FromDbRows>(
     pool: &(impl DbQuery + Sync),
     edit_type: &EditType,
     max_params: &usize,
     table: &str,
     columns: &[&str],
-    rows: &[&JsonRow],
+    rows: impl IntoDbRows,
     with_returning: bool,
     returning: &[&str],
-) -> Result<Vec<JsonRow>, DbError> {
+) -> Result<T, DbError> {
     // Begin by verifying that the given table name is valid, which has the side-effect of
     // removing any enclosing double-quotes:
     let table = validate_table_name(table)?;
@@ -210,7 +212,7 @@ pub(crate) async fn edit(
     let execute_batch_edit_and_reset = async |lines_to_bind: &mut Vec<String>,
                                               param_idx: &mut usize,
                                               params_to_be_bound: &mut Vec<ParamValue>|
-           -> Result<Vec<JsonRow>, DbError> {
+           -> Result<Vec<DbRow>, DbError> {
         let sql = match edit_type {
             EditType::Update => generate_update_statement(
                 &table,
@@ -230,7 +232,7 @@ pub(crate) async fn edit(
                 &lines_to_bind,
             ),
         };
-        let rows = pool
+        let rows: Vec<DbRow> = pool
             .query_no_cache(&sql, params_to_be_bound.clone())
             .await?;
         lines_to_bind.clear();
@@ -239,6 +241,7 @@ pub(crate) async fn edit(
         Ok(rows)
     };
 
+    let rows: Vec<DbRow> = rows.into_db_rows();
     for row in rows {
         // If we have reached the limit on the number of bound parameters, edit the rows that
         // we have processed so far and then reset all of the counters and collections:
@@ -276,7 +279,7 @@ pub(crate) async fn edit(
                 cells.push(format!("{param_prefix}{param_idx}"));
             }
             let param = match row.get(*column) {
-                Some(value) => pool.convert_json(sql_type, value)?,
+                Some(value) => value.clone(),
                 None => ParamValue::Null,
             };
             params_to_be_bound.push(param);
@@ -300,5 +303,5 @@ pub(crate) async fn edit(
     // Delete dirty entries from the cache in accordance with our caching strategy:
     pool.clear_cache_for_edited_tables(&[&table]).await?;
 
-    Ok(rows_to_return)
+    Ok(FromDbRows::from(rows_to_return))
 }
