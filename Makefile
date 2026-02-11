@@ -4,18 +4,38 @@ SHELL := bash
 .DELETE_ON_ERROR:
 .SUFFIXES:
 
-.PHONY: test test_ignored test_all crate_docs crate_docs_postgres sqlite_only postgres
+.PHONY: check crate_docs build build_libsql
+.PHONY: test test_default test_libsql
+.PHONY: test_ignored test_default_ignored test_libsql_ignored
 
-test:
+test: test_default test_libsql
+
+test_default:
+	@echo "Running unit tests using default features."
 	cargo test -- --no-capture
-	cargo test --no-default-features --features libsql -- --no-capture
+	@echo "Default unit tests succeeded."
 
-test_ignored:
+test_libsql:
+	@echo "Running unit tests using Libsql."
+	cargo test --no-default-features --features libsql -- --no-capture
+	@echo "Libsql unit tests succeeded."
+
+test_ignored: test_default_ignored test_libsql_ignored
+
+test_default_ignored:
+	@echo "Running ignored unit tests using default features."
 	cargo test -- --no-capture --ignored
+	@echo "Ignored default unit tests succeeded."
+
+test_libsql_ignored:
+	@echo "Running ignored unit tests using Libsql."
 	cargo test --no-default-features --features libsql -- --no-capture --ignored
+	@echo "Ignored Libsql unit tests succeeded."
 
 crate_docs:
+	@echo "Testing documentation comments."
 	RUSTDOCFLAGS="-D warnings" cargo doc
+	@echo "Documentation comments are ok."
 
 build:
 	cargo build

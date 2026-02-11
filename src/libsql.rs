@@ -5,7 +5,7 @@ use crate::{
         CachingStrategy, DbError, DbQuery, DbRow, FromDbRows, IntoDbRows, IntoParams, ParamValue,
         Params,
     },
-    db_kind::DbKind,
+    db_kind::{DbKind, MAX_PARAMS_SQLITE},
     shared::{EditType, edit},
 };
 use deadpool_libsql::{
@@ -15,20 +15,9 @@ use deadpool_libsql::{
 use rust_decimal::prelude::ToPrimitive;
 use std::str::from_utf8;
 
-/// The [maximum number of parameters](https://www.sqlite.org/limits.html#max_variable_number)
-/// that can be bound to a SQLite query
-static MAX_PARAMS_SQLITE: usize = 32766;
-
 impl TryFrom<Value> for ParamValue {
     type Error = DbError;
 
-    // Note that libsql does not support representing booleans directly.
-    // See: https://docs.rs/libsql/0.9.29/libsql/enum.Value.html.
-    // TODO (maybe): We should be able to add bool support but we will need to query the database
-    // to get the column type. In rusqlite this is done automatically when a statement is
-    // prepared (e.g., see query_prepared() in rusqlite.rs). In libsql, we do not prepare statement
-    // in the same way currently, so this option isn't available, but perhaps we can do this here
-    // too.
     fn try_from(item: Value) -> Result<Self, DbError> {
         match &item {
             Value::Null => Ok(Self::Null),
@@ -50,12 +39,14 @@ impl TryFrom<Params> for Vec<Value> {
 
     fn try_from(item: Params) -> Result<Self, DbError> {
         match item {
-            Params::None => Ok(vec![Value::Null]),
+            Params::None => Ok(vec![]),
             Params::Positional(pvalues) => {
                 let mut values = vec![];
                 for pvalue in pvalues {
                     match pvalue {
                         ParamValue::Null => values.push(Value::Null),
+                        // Libsql does not support booleans.
+                        // See: https://docs.rs/libsql/0.9.29/libsql/enum.Value.html,
                         ParamValue::Boolean(pvalue) => values.push(Value::Integer(pvalue.into())),
                         ParamValue::SmallInteger(pvalue) => {
                             values.push(Value::Integer(pvalue.into()))

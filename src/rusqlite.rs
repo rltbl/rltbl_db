@@ -5,10 +5,9 @@ use crate::{
         CachingStrategy, DbError, DbQuery, DbRow, FromDbRows, IntoDbRows, IntoParams, ParamValue,
         Params,
     },
-    db_kind::DbKind,
+    db_kind::{DbKind, MAX_PARAMS_SQLITE},
     shared::{EditType, edit},
 };
-
 use deadpool_sqlite::{
     Config, Pool, Runtime,
     rusqlite::{
@@ -19,10 +18,6 @@ use deadpool_sqlite::{
 };
 use rust_decimal::Decimal;
 use std::str::from_utf8;
-
-/// The [maximum number of parameters](https://www.sqlite.org/limits.html#max_variable_number)
-/// that can be bound to a SQLite query
-static MAX_PARAMS_SQLITE: usize = 32766;
 
 /// Query a database using the given prepared statement and parameters.
 fn query_prepared(
