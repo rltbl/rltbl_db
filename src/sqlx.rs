@@ -10,7 +10,16 @@ use crate::{
 };
 use rust_decimal::{Decimal, prelude::ToPrimitive};
 use sqlx::{
-    AnyPool, Column, Execute, Postgres, Row, Statement, TypeInfo,
+    // Note that we are using sqlx's Any driver since we had problems with their native
+    // Sqlite driver, which was converting NULL values into the default value for the column's
+    // type in the results of queries.
+    AnyPool,
+    Column,
+    Execute,
+    Postgres,
+    Row,
+    Statement,
+    TypeInfo,
     any::{Any, AnyRow, install_default_drivers},
     postgres::{PgArguments, PgPool, PgPoolOptions, PgRow},
     query::Query,

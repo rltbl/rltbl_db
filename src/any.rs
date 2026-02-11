@@ -59,9 +59,7 @@ impl AnyPool {
                 }
                 #[cfg(not(feature = "sqlx"))]
                 {
-                    Err(DbError::ConnectError(
-                        "PostgreSQL not configured".to_string(),
-                    ))
+                    Err(DbError::ConnectError(format!("Unsupported URL: '{url}'")))
                 }
             }
         } else {
@@ -83,7 +81,7 @@ impl AnyPool {
                     }
                     #[cfg(not(feature = "sqlx"))]
                     {
-                        Err(DbError::ConnectError("SQLite not configured".to_string()))
+                        Err(DbError::ConnectError(format!("Unsupported URL: '{url}'")))
                     }
                 }
             }
@@ -107,9 +105,7 @@ impl AnyPool {
                 }
                 #[cfg(not(feature = "sqlx"))]
                 {
-                    Err(DbError::ConnectError(
-                        "PostgreSQL not configured".to_string(),
-                    ))
+                    Err(DbError::ConnectError(format!("Unsupported URL: '{url}'")))
                 }
             }
         } else {
@@ -131,7 +127,7 @@ impl AnyPool {
                     }
                     #[cfg(not(feature = "sqlx"))]
                     {
-                        Err(DbError::ConnectError("SQLite not configured".to_string()))
+                        Err(DbError::ConnectError(format!("Unsupported URL: '{url}'")))
                     }
                 }
             }
