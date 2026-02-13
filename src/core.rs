@@ -264,6 +264,26 @@ impl TryInto<f32> for &ParamValue {
     }
 }
 
+impl TryInto<bool> for ParamValue {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<bool, DbError> {
+        match self {
+            ParamValue::Boolean(value) => Ok(value),
+            ParamValue::Integer(value) => Ok(value == 1),
+            _ => Err(DbError::InputError(format!("Not a boolean: {self:?}"))),
+        }
+    }
+}
+
+impl TryInto<bool> for &ParamValue {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<bool, DbError> {
+        self.clone().try_into()
+    }
+}
+
 // Implementations of attempted conversions of various types into ParamValues:
 
 impl From<&str> for ParamValue {
@@ -755,28 +775,252 @@ pub trait DbQuery {
         Ok(())
     }
 
-    /// Parse the given semi-colon-separated SQL commands and determine which tables will be
-    /// affected (either edited or dropped) by the commands, then ensure that there are no
-    /// entries for those tables in the cache in accordance with the current [CachingStrategy].
-    async fn clear_cache_for_affected_tables(&self, sql: &str) -> Result<(), DbError> {
-        if self.get_caching_strategy() != CachingStrategy::None {
-            let (edited_tables, dropped_tables): (Vec<_>, Vec<_>) = {
-                let (edited_tables, dropped_tables) = get_affected_tables(sql)?;
-                (
-                    edited_tables.into_iter().collect(),
-                    dropped_tables.into_iter().collect(),
-                )
-            };
-            if !edited_tables.is_empty() {
-                let edited_tables: Vec<_> = edited_tables.iter().map(|t| t.as_str()).collect();
-                self.clear_cache_for_edited_tables(&edited_tables).await?;
+    /// TODO: Add docstring here.
+    async fn get_tables_for_view(&self, view: &str) -> Result<HashSet<String>, DbError> {
+        // TODO: Refactor into db_kind.rs
+        let sql = match self.kind() {
+            DbKind::SQLite => {
+                r#"SELECT "sql" FROM "sqlite_master"
+                   WHERE "type" = 'view' AND "name" = ?1"#
             }
-            if !dropped_tables.is_empty() {
-                let dropped_tables: Vec<_> = dropped_tables.iter().map(|t| t.as_str()).collect();
-                self.clear_cache_for_dropped_tables(&dropped_tables).await?;
+            DbKind::PostgreSQL => todo!(),
+        };
+        let view_sql = self.query_string(&sql, params![view]).await?;
+        todo!()
+    }
+
+    /// For all of the members of `tables_and_views` that are views, check if any of them have
+    /// source tables that have been modified more recently than it, and add any such source
+    /// tables to `tables_and_views`.
+    async fn add_recently_edited_sources(
+        &self,
+        tables_and_views: &mut HashSet<String>,
+    ) -> Result<(), DbError> {
+        for db_object in tables_and_views.clone() {
+            let (sql, params) = self.kind().view_exists_sql(&db_object);
+            if self.query_value(&sql, &params).await?.try_into()? {
+                let tables = self.get_tables_for_view(&db_object).await?;
+                // TODO: Check the modification times for those tables in the cache and return
+                // those that have been changed more recently than the view.
+                todo!()
             }
         }
-        Ok(())
+        todo!()
+    }
+
+    /// Parse the given string, representing a series of (semi-colon-separated) SQL commands,
+    /// into their constituents and determine the tables that will be affected when the commands
+    /// are executed, if any. Two sets of tables are returned. The first contains the tables that
+    /// are going to be edited (targets of commands like INSERT, UPDATE, DELETE, and TRUNCATE), the
+    /// second contains tables that are going to be dropped (targets of a DROP TABLE command).
+    /// All other kinds of statements will be silently ignored. In particular, table modifications
+    /// that occur _within_ a CTE are not recognized by this function. Such table-modifying CTEs are
+    /// supported by PostgreSQL (see
+    /// <https://www.postgresql.org/docs/current/queries-with.html#QUERIES-WITH-MODIFYING>) but
+    /// seemingly not by SQLite (see <https://sqlite.org/lang_with.html>).
+    async fn get_affected_tables(
+        &self,
+        sql: &str,
+    ) -> Result<(HashSet<String>, HashSet<String>), DbError> {
+        // Validates that a given node is not an error node:
+        let check_for_error = |node: &Node<'_>| -> Result<(), DbError> {
+            if node.is_error() {
+                return Err(DbError::ParseError(format!(
+                    "Error parsing '{sql}': {node}"
+                )));
+            }
+            Ok(())
+        };
+
+        // Checks that the given node list is of the expected length:
+        fn verify_list_len(node_list: &Vec<Node<'_>>, len: usize) -> Result<(), DbError> {
+            if node_list.len() != len {
+                return Err(DbError::ParseError(format!(
+                    "Wrong number of values: {}. Expected: {}",
+                    node_list.len(),
+                    len
+                )));
+            }
+            Ok(())
+        }
+
+        // Instantiate the parser and read in the given sql string:
+        let mut parser = Parser::new();
+        parser
+            .set_language(&SQL_LANGUAGE.into())
+            .map_err(|err| DbError::ParseError(format!("Error setting language to SQL: {err}")))?;
+        let tree = match parser.parse(sql, None) {
+            Some(tree) => tree,
+            None => return Err(DbError::ParseError(format!("Could not parse '{sql}'"))),
+        };
+
+        // Collect the top-level statements:
+        let statements = {
+            let root_node = tree.root_node();
+            check_for_error(&root_node)?;
+            if root_node.kind().to_lowercase() != "program" {
+                return Err(DbError::ParseError(format!(
+                    "Unexpected root node kind: {}",
+                    root_node.kind()
+                )));
+            }
+            root_node
+                .children(&mut root_node.walk())
+                .filter(|child| child.kind().to_lowercase() == "statement")
+                .collect::<Vec<_>>()
+        };
+
+        // Determine the db_objects that will be modified:
+        let mut edited_db_objects = HashSet::new();
+        let mut dropped_db_objects = HashSet::new();
+        for statement in &statements {
+            check_for_error(&statement)?;
+            for instruction in statement.children(&mut tree.walk()) {
+                check_for_error(&instruction)?;
+                match instruction.kind().to_lowercase().as_str() {
+                    "insert" => {
+                        let db_object_name = {
+                            let object_ref = instruction
+                                .children(&mut instruction.walk())
+                                .filter(|child| child.kind().to_lowercase() == "object_reference")
+                                .collect::<Vec<_>>();
+                            verify_list_len(&object_ref, 1)?;
+                            let object_ref = object_ref[0];
+
+                            let identifier = object_ref
+                                .children(&mut object_ref.walk())
+                                .filter(|child| child.kind().to_lowercase() == "identifier")
+                                .collect::<Vec<_>>();
+                            verify_list_len(&identifier, 1)?;
+                            let identifier = identifier[0];
+
+                            validate_table_name(
+                                &sql.to_string()[identifier.start_byte()..identifier.end_byte()],
+                            )?
+                        };
+                        edited_db_objects.insert(db_object_name);
+                    }
+                    "update" => {
+                        let db_object_name = {
+                            let relation = instruction
+                                .children(&mut instruction.walk())
+                                .filter(|child| child.kind().to_lowercase() == "relation")
+                                .collect::<Vec<_>>();
+                            verify_list_len(&relation, 1)?;
+                            let relation = relation[0];
+
+                            let object_ref = relation
+                                .children(&mut relation.walk())
+                                .filter(|child| child.kind().to_lowercase() == "object_reference")
+                                .collect::<Vec<_>>();
+                            verify_list_len(&object_ref, 1)?;
+                            let object_ref = object_ref[0];
+
+                            let identifier = object_ref
+                                .children(&mut object_ref.walk())
+                                .filter(|child| child.kind().to_lowercase() == "identifier")
+                                .collect::<Vec<_>>();
+                            verify_list_len(&identifier, 1)?;
+                            let identifier = identifier[0];
+
+                            validate_table_name(
+                                &sql.to_string()[identifier.start_byte()..identifier.end_byte()],
+                            )?
+                        };
+                        edited_db_objects.insert(db_object_name);
+                    }
+                    "delete" => {
+                        let db_object_name = {
+                            let details =
+                                instruction
+                                    .next_sibling()
+                                    .ok_or(DbError::ParseError(format!(
+                                        "No details found for '{}'",
+                                        instruction.kind()
+                                    )))?;
+                            let object_ref = details
+                                .children(&mut details.walk())
+                                .filter(|child| child.kind().to_lowercase() == "object_reference")
+                                .collect::<Vec<_>>();
+                            verify_list_len(&object_ref, 1)?;
+                            let object_ref = object_ref[0];
+
+                            let identifier = object_ref
+                                .children(&mut object_ref.walk())
+                                .filter(|child| child.kind().to_lowercase() == "identifier")
+                                .collect::<Vec<_>>();
+                            verify_list_len(&identifier, 1)?;
+                            let identifier = identifier[0];
+
+                            validate_table_name(
+                                &sql.to_string()[identifier.start_byte()..identifier.end_byte()],
+                            )?
+                        };
+                        edited_db_objects.insert(db_object_name);
+                    }
+                    "keyword_truncate" => {
+                        let mut possible_next_word = instruction.next_sibling();
+                        while let Some(next_word) = possible_next_word {
+                            if next_word.kind().to_lowercase() == "object_reference" {
+                                let identifier = next_word
+                                    .children(&mut next_word.walk())
+                                    .filter(|child| child.kind().to_lowercase() == "identifier")
+                                    .collect::<Vec<_>>();
+                                verify_list_len(&identifier, 1)?;
+                                let identifier = identifier[0];
+
+                                let db_object = validate_table_name(
+                                    &sql.to_string()
+                                        [identifier.start_byte()..identifier.end_byte()],
+                                )?;
+                                edited_db_objects.insert(db_object);
+                            }
+                            possible_next_word = next_word.next_sibling();
+                        }
+                    }
+                    "drop_table" => {
+                        let table_name = {
+                            let object_ref = instruction
+                                .children(&mut instruction.walk())
+                                .filter(|child| child.kind().to_lowercase() == "object_reference")
+                                .collect::<Vec<_>>();
+                            verify_list_len(&object_ref, 1)?;
+                            let object_ref = object_ref[0];
+
+                            let identifier = object_ref
+                                .children(&mut object_ref.walk())
+                                .filter(|child| child.kind().to_lowercase() == "identifier")
+                                .collect::<Vec<_>>();
+                            verify_list_len(&identifier, 1)?;
+                            let identifier = identifier[0];
+
+                            validate_table_name(
+                                &sql.to_string()[identifier.start_byte()..identifier.end_byte()],
+                            )?
+                        };
+                        dropped_db_objects.insert(table_name);
+                    }
+                    "drop_view" => todo!(),
+                    // Silently ignore all other kinds of instructions.
+                    _ => (),
+                };
+            }
+        }
+
+        // Edits of the cache table itself are never cached so we do not need to report them.
+        // (However we do report a drop of the cache table.)
+        let mut edited_db_objects = edited_db_objects
+            .into_iter()
+            .filter(|db_object| *db_object != "cache")
+            .collect::<HashSet<_>>();
+
+        // If some of the dropped objects are views which have source tables that have been
+        // modified more recently than the view, these need to be added to the "affected" lists
+        // as well. Note that we only consider the dropped objects since views cannot be edited.
+        self.add_recently_edited_sources(&mut dropped_db_objects)
+            .await?;
+
+        Ok((edited_db_objects, dropped_db_objects))
     }
 
     // Triggers cannot apply to DROP commands, only to INSERT, UPDATE, DELETE, or TRUNCATE.
@@ -793,6 +1037,31 @@ pub trait DbQuery {
     // Although strictly speaking, PostgreSQL (which has event triggers) is not subject to this
     // limitation, for simplicity we will not be creating a PostgreSQL event trigger and we will
     // use both functions below for both database types.
+
+    /// Parse the given semi-colon-separated SQL commands and determine which tables will be
+    /// affected (either edited or dropped) by the commands, then ensure that there are no
+    /// entries for those tables in the cache in accordance with the current [CachingStrategy].
+    async fn clear_cache_for_affected_tables(&self, sql: &str) -> Result<(), DbError> {
+        if self.get_caching_strategy() != CachingStrategy::None {
+            self.ensure_cache_table_exists().await?;
+            let (edited_tables, dropped_tables): (Vec<_>, Vec<_>) = {
+                let (edited_tables, dropped_tables) = self.get_affected_tables(sql).await?;
+                (
+                    edited_tables.into_iter().collect(),
+                    dropped_tables.into_iter().collect(),
+                )
+            };
+            if !edited_tables.is_empty() {
+                let edited_tables: Vec<_> = edited_tables.iter().map(|t| t.as_str()).collect();
+                self.clear_cache_for_edited_tables(&edited_tables).await?;
+            }
+            if !dropped_tables.is_empty() {
+                let dropped_tables: Vec<_> = dropped_tables.iter().map(|t| t.as_str()).collect();
+                self.clear_cache_for_dropped_tables(&dropped_tables).await?;
+            }
+        }
+        Ok(())
+    }
 
     /// Clear the entries from the cache table for the given list of tables, using the
     /// current [CachingStrategy], under the assumption that the tables in the given list have
@@ -1354,210 +1623,6 @@ pub fn validate_table_name(table_name: &str) -> Result<String, DbError> {
     }
 }
 
-/// Parse the given string, representing a series of (semi-colon-separated) SQL commands,
-/// into their constituents and determine the tables that will be affected when the commands
-/// are executed, if any. Two sets of tables are returned. The first contains the tables that
-/// are going to be edited (targets of commands like INSERT, UPDATE, DELETE, and TRUNCATE), the
-/// second contains tables that are going to be dropped (targets of a DROP TABLE command).
-/// All other kinds of statements will be silently ignored. In particular, table modifications
-/// that occur _within_ a CTE are not recognized by this function. Such table-modifying CTEs are
-/// supported by PostgreSQL (see
-/// <https://www.postgresql.org/docs/current/queries-with.html#QUERIES-WITH-MODIFYING>) but
-/// seemingly not by SQLite (see <https://sqlite.org/lang_with.html>).
-fn get_affected_tables(sql: &str) -> Result<(HashSet<String>, HashSet<String>), DbError> {
-    // Validates that a given node is not an error node:
-    let check_for_error = |node: &Node<'_>| -> Result<(), DbError> {
-        if node.is_error() {
-            return Err(DbError::ParseError(format!(
-                "Error parsing '{sql}': {node}"
-            )));
-        }
-        Ok(())
-    };
-
-    // Checks that the given node list is of the expected length:
-    fn verify_list_len(node_list: &Vec<Node<'_>>, len: usize) -> Result<(), DbError> {
-        if node_list.len() != len {
-            return Err(DbError::ParseError(format!(
-                "Wrong number of values: {}. Expected: {}",
-                node_list.len(),
-                len
-            )));
-        }
-        Ok(())
-    }
-
-    // Instantiate the parser and read in the given sql string:
-    let mut parser = Parser::new();
-    parser
-        .set_language(&SQL_LANGUAGE.into())
-        .map_err(|err| DbError::ParseError(format!("Error setting language to SQL: {err}")))?;
-    let tree = match parser.parse(sql, None) {
-        Some(tree) => tree,
-        None => return Err(DbError::ParseError(format!("Could not parse '{sql}'"))),
-    };
-
-    // Collect the top-level statements:
-    let statements = {
-        let root_node = tree.root_node();
-        check_for_error(&root_node)?;
-        if root_node.kind().to_lowercase() != "program" {
-            return Err(DbError::ParseError(format!(
-                "Unexpected root node kind: {}",
-                root_node.kind()
-            )));
-        }
-        root_node
-            .children(&mut root_node.walk())
-            .filter(|child| child.kind().to_lowercase() == "statement")
-            .collect::<Vec<_>>()
-    };
-
-    // Determine the tables that will be modified:
-    let mut edited_tables = HashSet::new();
-    let mut dropped_tables = HashSet::new();
-    for statement in &statements {
-        check_for_error(&statement)?;
-        for instruction in statement.children(&mut tree.walk()) {
-            check_for_error(&instruction)?;
-            match instruction.kind().to_lowercase().as_str() {
-                "insert" => {
-                    let table_name = {
-                        let object_ref = instruction
-                            .children(&mut instruction.walk())
-                            .filter(|child| child.kind().to_lowercase() == "object_reference")
-                            .collect::<Vec<_>>();
-                        verify_list_len(&object_ref, 1)?;
-                        let object_ref = object_ref[0];
-
-                        let identifier = object_ref
-                            .children(&mut object_ref.walk())
-                            .filter(|child| child.kind().to_lowercase() == "identifier")
-                            .collect::<Vec<_>>();
-                        verify_list_len(&identifier, 1)?;
-                        let identifier = identifier[0];
-
-                        validate_table_name(
-                            &sql.to_string()[identifier.start_byte()..identifier.end_byte()],
-                        )?
-                    };
-                    edited_tables.insert(table_name);
-                }
-                "update" => {
-                    let table_name = {
-                        let relation = instruction
-                            .children(&mut instruction.walk())
-                            .filter(|child| child.kind().to_lowercase() == "relation")
-                            .collect::<Vec<_>>();
-                        verify_list_len(&relation, 1)?;
-                        let relation = relation[0];
-
-                        let object_ref = relation
-                            .children(&mut relation.walk())
-                            .filter(|child| child.kind().to_lowercase() == "object_reference")
-                            .collect::<Vec<_>>();
-                        verify_list_len(&object_ref, 1)?;
-                        let object_ref = object_ref[0];
-
-                        let identifier = object_ref
-                            .children(&mut object_ref.walk())
-                            .filter(|child| child.kind().to_lowercase() == "identifier")
-                            .collect::<Vec<_>>();
-                        verify_list_len(&identifier, 1)?;
-                        let identifier = identifier[0];
-
-                        validate_table_name(
-                            &sql.to_string()[identifier.start_byte()..identifier.end_byte()],
-                        )?
-                    };
-                    edited_tables.insert(table_name);
-                }
-                "delete" => {
-                    let table_name = {
-                        let details =
-                            instruction
-                                .next_sibling()
-                                .ok_or(DbError::ParseError(format!(
-                                    "No details found for '{}'",
-                                    instruction.kind()
-                                )))?;
-                        let object_ref = details
-                            .children(&mut details.walk())
-                            .filter(|child| child.kind().to_lowercase() == "object_reference")
-                            .collect::<Vec<_>>();
-                        verify_list_len(&object_ref, 1)?;
-                        let object_ref = object_ref[0];
-
-                        let identifier = object_ref
-                            .children(&mut object_ref.walk())
-                            .filter(|child| child.kind().to_lowercase() == "identifier")
-                            .collect::<Vec<_>>();
-                        verify_list_len(&identifier, 1)?;
-                        let identifier = identifier[0];
-
-                        validate_table_name(
-                            &sql.to_string()[identifier.start_byte()..identifier.end_byte()],
-                        )?
-                    };
-                    edited_tables.insert(table_name);
-                }
-                "keyword_truncate" => {
-                    let mut possible_next_word = instruction.next_sibling();
-                    while let Some(next_word) = possible_next_word {
-                        if next_word.kind().to_lowercase() == "object_reference" {
-                            let identifier = next_word
-                                .children(&mut next_word.walk())
-                                .filter(|child| child.kind().to_lowercase() == "identifier")
-                                .collect::<Vec<_>>();
-                            verify_list_len(&identifier, 1)?;
-                            let identifier = identifier[0];
-
-                            let table = validate_table_name(
-                                &sql.to_string()[identifier.start_byte()..identifier.end_byte()],
-                            )?;
-                            edited_tables.insert(table);
-                        }
-                        possible_next_word = next_word.next_sibling();
-                    }
-                }
-                "drop_table" => {
-                    let table_name = {
-                        let object_ref = instruction
-                            .children(&mut instruction.walk())
-                            .filter(|child| child.kind().to_lowercase() == "object_reference")
-                            .collect::<Vec<_>>();
-                        verify_list_len(&object_ref, 1)?;
-                        let object_ref = object_ref[0];
-
-                        let identifier = object_ref
-                            .children(&mut object_ref.walk())
-                            .filter(|child| child.kind().to_lowercase() == "identifier")
-                            .collect::<Vec<_>>();
-                        verify_list_len(&identifier, 1)?;
-                        let identifier = identifier[0];
-
-                        validate_table_name(
-                            &sql.to_string()[identifier.start_byte()..identifier.end_byte()],
-                        )?
-                    };
-                    dropped_tables.insert(table_name);
-                }
-                // Silently ignore all other kinds of instructions
-                _ => (),
-            };
-        }
-    }
-
-    // Edits of the cache table itself are never cached so we do not need to report them.
-    // However we do report a drop of the cache.
-    let edited_tables = edited_tables
-        .into_iter()
-        .filter(|table| *table != "cache")
-        .collect::<HashSet<_>>();
-
-    Ok((edited_tables, dropped_tables))
-}
-
 /// Retrieve the in-memory [MEMORY_META_CACHE].
 fn get_meta_cache<'a>() -> Result<MutexGuard<'a, HashSet<String>>, DbError> {
     let max_attempts = 20;
@@ -1689,133 +1754,5 @@ mod tests {
         if let Ok(_) = validate_table_name(r#"my table"#) {
             panic!("Expected an error");
         }
-    }
-
-    #[tokio::test]
-    async fn test_sql_parsing() {
-        // Single statements, possibly with parameters:
-
-        let (edited_tables, dropped_tables) =
-            get_affected_tables(&format!(r#"INSERT INTO "alpha" VALUES ($1, $2, $3)"#)).unwrap();
-        let edited_tables: Vec<_> = edited_tables.into_iter().collect();
-        assert_eq!(edited_tables, ["alpha"]);
-        assert_eq!(dropped_tables, [].into());
-
-        let (edited_tables, dropped_tables) = get_affected_tables(
-            r#"WITH bar AS (SELECT * FROM alpha),
-                        mar AS (SELECT * FROM beta)
-                   INSERT INTO gamma
-                   SELECT alpha.*
-                   FROM alpha, beta
-                   WHERE alpha.value = beta.value"#,
-        )
-        .unwrap();
-        let edited_tables: Vec<_> = edited_tables.into_iter().collect();
-        assert_eq!(edited_tables, ["gamma"]);
-        assert_eq!(dropped_tables, [].into());
-
-        let (edited_tables, dropped_tables) =
-            get_affected_tables(&format!(r#"UPDATE "delta" set bar = $1 WHERE bar = $2"#)).unwrap();
-        let edited_tables: Vec<_> = edited_tables.into_iter().collect();
-        assert_eq!(edited_tables, ["delta"]);
-        assert_eq!(dropped_tables, [].into());
-
-        let (edited_tables, dropped_tables) = get_affected_tables(&format!(
-            r#"WITH bar AS (SELECT * FROM test),
-                        mar AS (SELECT * FROM test)
-                   UPDATE delta
-                   SET value = bar.value
-                   FROM bar, mar
-                   WHERE bar.value = $1 AND bar.value = mar.value"#,
-        ))
-        .unwrap();
-        let edited_tables: Vec<_> = edited_tables.into_iter().collect();
-        assert_eq!(edited_tables, ["delta"]);
-        assert_eq!(dropped_tables, [].into());
-
-        let (edited_tables, dropped_tables) =
-            get_affected_tables(&format!(r#"DELETE FROM "epsilon" WHERE bar >= $1"#)).unwrap();
-        let edited_tables: Vec<_> = edited_tables.into_iter().collect();
-        assert_eq!(edited_tables, ["epsilon"]);
-        assert_eq!(dropped_tables, [].into());
-
-        let (edited_tables, dropped_tables) = get_affected_tables(
-            r#"WITH bar AS (SELECT * FROM test),
-                        mar AS (SELECT * FROM test)
-                   DELETE FROM lambda WHERE value IN (SELECT value FROM bar)"#,
-        )
-        .unwrap();
-        let edited_tables: Vec<_> = edited_tables.into_iter().collect();
-        assert_eq!(edited_tables, ["lambda"]);
-        assert_eq!(dropped_tables, [].into());
-
-        let (edited_tables, dropped_tables) = get_affected_tables(r#"DROP TABLE "rho""#).unwrap();
-        let dropped_tables: Vec<_> = dropped_tables.into_iter().collect();
-        assert_eq!(dropped_tables, ["rho"]);
-        assert_eq!(edited_tables, [].into());
-
-        let (edited_tables, dropped_tables) =
-            get_affected_tables(r#"DROP TABLE IF EXISTS "phi" CASCADE"#).unwrap();
-        let dropped_tables: Vec<_> = dropped_tables.into_iter().collect();
-        assert_eq!(dropped_tables, ["phi"]);
-        assert_eq!(edited_tables, [].into());
-
-        let (edited_tables, dropped_tables) =
-            get_affected_tables("TRUNCATE TABLE mu, nu CASCADE").unwrap();
-        let mut edited_tables: Vec<_> = edited_tables.into_iter().collect();
-        edited_tables.sort();
-        assert_eq!(edited_tables, ["mu", "nu"]);
-        assert_eq!(dropped_tables, [].into());
-
-        // Multiple statements, no parameters:
-
-        let sql = r#"
-            INSERT INTO "alpha" VALUES (1, 2, 3), (4, 5, 6);
-
-            INSERT INTO gamma
-            SELECT alpha.*
-            FROM alpha, beta
-            WHERE alpha.value = beta.value;
-
-            WITH t AS (
-              SELECT * from delta_base ORDER BY quality LIMIT 1
-            )
-            UPDATE delta SET price = t.price * 1.05;
-
-            WITH t AS (
-              SELECT * FROM phi_base
-              WHERE
-                "date" >= '2010-10-01' AND
-                "date" < '2010-11-01'
-            )
-            INSERT INTO phi
-            SELECT * FROM t;
-
-            DELETE FROM "psi" WHERE bar >= 10;
-
-            WITH RECURSIVE included_lambda(sub_lambda, lambda) AS (
-                SELECT sub_lambda, lambda FROM lambda WHERE lambda = 'our_product'
-              UNION ALL
-                SELECT p.sub_lambda, p.lambda
-                FROM included_lambda pr, lambda p
-                WHERE p.lambda = pr.sub_lambda
-            )
-            DELETE FROM lambda
-              WHERE lambda IN (SELECT lambda FROM included_lambda);
-
-            DROP TABLE "rho";
-
-            DROP TABLE "sigma" CASCADE"#;
-
-        let (edited_tables, dropped_tables) = get_affected_tables(&sql).unwrap();
-        let mut edited_tables: Vec<_> = edited_tables.into_iter().collect();
-        let mut dropped_tables: Vec<_> = dropped_tables.into_iter().collect();
-        edited_tables.sort();
-        dropped_tables.sort();
-        assert_eq!(
-            edited_tables,
-            ["alpha", "delta", "gamma", "lambda", "phi", "psi",]
-        );
-        assert_eq!(dropped_tables, ["rho", "sigma",]);
     }
 }

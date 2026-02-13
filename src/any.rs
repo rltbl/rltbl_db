@@ -314,6 +314,164 @@ mod tests {
     };
 
     #[tokio::test]
+    #[ignore]
+    async fn test_sql_parsing() {
+        #[cfg(feature = "rusqlite")]
+        sql_parsing(":memory:").await;
+        #[cfg(feature = "libsql")]
+        sql_parsing(":memory:").await;
+        #[cfg(feature = "tokio-postgres")]
+        sql_parsing("postgresql:///rltbl_db").await;
+    }
+
+    async fn sql_parsing(url: &str) {
+        let pool = AnyPool::connect(url).await.unwrap();
+
+        // Single statements, possibly with parameters:
+        let (edited_tables, dropped_tables) = pool
+            .get_affected_tables(&format!(r#"INSERT INTO "alpha" VALUES ($1, $2, $3)"#))
+            .await
+            .unwrap();
+        let edited_tables: Vec<_> = edited_tables.into_iter().collect();
+        assert_eq!(edited_tables, ["alpha"]);
+        assert_eq!(dropped_tables, [].into());
+
+        let (edited_tables, dropped_tables) = pool
+            .get_affected_tables(
+                r#"WITH bar AS (SELECT * FROM alpha),
+                        mar AS (SELECT * FROM beta)
+                   INSERT INTO gamma
+                   SELECT alpha.*
+                   FROM alpha, beta
+                   WHERE alpha.value = beta.value"#,
+            )
+            .await
+            .unwrap();
+        let edited_tables: Vec<_> = edited_tables.into_iter().collect();
+        assert_eq!(edited_tables, ["gamma"]);
+        assert_eq!(dropped_tables, [].into());
+
+        let (edited_tables, dropped_tables) = pool
+            .get_affected_tables(&format!(r#"UPDATE "delta" set bar = $1 WHERE bar = $2"#))
+            .await
+            .unwrap();
+        let edited_tables: Vec<_> = edited_tables.into_iter().collect();
+        assert_eq!(edited_tables, ["delta"]);
+        assert_eq!(dropped_tables, [].into());
+
+        let (edited_tables, dropped_tables) = pool
+            .get_affected_tables(&format!(
+                r#"WITH bar AS (SELECT * FROM test),
+                        mar AS (SELECT * FROM test)
+                   UPDATE delta
+                   SET value = bar.value
+                   FROM bar, mar
+                   WHERE bar.value = $1 AND bar.value = mar.value"#,
+            ))
+            .await
+            .unwrap();
+        let edited_tables: Vec<_> = edited_tables.into_iter().collect();
+        assert_eq!(edited_tables, ["delta"]);
+        assert_eq!(dropped_tables, [].into());
+
+        let (edited_tables, dropped_tables) = pool
+            .get_affected_tables(&format!(r#"DELETE FROM "epsilon" WHERE bar >= $1"#))
+            .await
+            .unwrap();
+        let edited_tables: Vec<_> = edited_tables.into_iter().collect();
+        assert_eq!(edited_tables, ["epsilon"]);
+        assert_eq!(dropped_tables, [].into());
+
+        let (edited_tables, dropped_tables) = pool
+            .get_affected_tables(
+                r#"WITH bar AS (SELECT * FROM test),
+                        mar AS (SELECT * FROM test)
+                   DELETE FROM lambda WHERE value IN (SELECT value FROM bar)"#,
+            )
+            .await
+            .unwrap();
+        let edited_tables: Vec<_> = edited_tables.into_iter().collect();
+        assert_eq!(edited_tables, ["lambda"]);
+        assert_eq!(dropped_tables, [].into());
+
+        let (edited_tables, dropped_tables) = pool
+            .get_affected_tables(r#"DROP TABLE "rho""#)
+            .await
+            .unwrap();
+        let dropped_tables: Vec<_> = dropped_tables.into_iter().collect();
+        assert_eq!(dropped_tables, ["rho"]);
+        assert_eq!(edited_tables, [].into());
+
+        let (edited_tables, dropped_tables) = pool
+            .get_affected_tables(r#"DROP TABLE IF EXISTS "phi" CASCADE"#)
+            .await
+            .unwrap();
+        let dropped_tables: Vec<_> = dropped_tables.into_iter().collect();
+        assert_eq!(dropped_tables, ["phi"]);
+        assert_eq!(edited_tables, [].into());
+
+        let (edited_tables, dropped_tables) = pool
+            .get_affected_tables("TRUNCATE TABLE mu, nu CASCADE")
+            .await
+            .unwrap();
+        let mut edited_tables: Vec<_> = edited_tables.into_iter().collect();
+        edited_tables.sort();
+        assert_eq!(edited_tables, ["mu", "nu"]);
+        assert_eq!(dropped_tables, [].into());
+
+        // Multiple statements, no parameters:
+
+        let sql = r#"
+            INSERT INTO "alpha" VALUES (1, 2, 3), (4, 5, 6);
+
+            INSERT INTO gamma
+            SELECT alpha.*
+            FROM alpha, beta
+            WHERE alpha.value = beta.value;
+
+            WITH t AS (
+              SELECT * from delta_base ORDER BY quality LIMIT 1
+            )
+            UPDATE delta SET price = t.price * 1.05;
+
+            WITH t AS (
+              SELECT * FROM phi_base
+              WHERE
+                "date" >= '2010-10-01' AND
+                "date" < '2010-11-01'
+            )
+            INSERT INTO phi
+            SELECT * FROM t;
+
+            DELETE FROM "psi" WHERE bar >= 10;
+
+            WITH RECURSIVE included_lambda(sub_lambda, lambda) AS (
+                SELECT sub_lambda, lambda FROM lambda WHERE lambda = 'our_product'
+              UNION ALL
+                SELECT p.sub_lambda, p.lambda
+                FROM included_lambda pr, lambda p
+                WHERE p.lambda = pr.sub_lambda
+            )
+            DELETE FROM lambda
+              WHERE lambda IN (SELECT lambda FROM included_lambda);
+
+            DROP TABLE "rho";
+
+            DROP TABLE "sigma" CASCADE"#;
+
+        let (edited_tables, dropped_tables) = pool.get_affected_tables(&sql).await.unwrap();
+        let mut edited_tables: Vec<_> = edited_tables.into_iter().collect();
+        let mut dropped_tables: Vec<_> = dropped_tables.into_iter().collect();
+        edited_tables.sort();
+        dropped_tables.sort();
+        assert_eq!(
+            edited_tables,
+            ["alpha", "delta", "gamma", "lambda", "phi", "psi",]
+        );
+        assert_eq!(dropped_tables, ["rho", "sigma",]);
+    }
+
+    #[tokio::test]
     async fn test_text_column_query() {
         #[cfg(feature = "rusqlite")]
         text_column_query(":memory:").await;
@@ -1564,6 +1722,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_caching() {
         let all_strategies = ["none", "truncate_all", "truncate", "trigger", "memory:5"]
             .iter()

@@ -214,23 +214,58 @@ impl DbKind {
         }
     }
 
+    /// Generate the SQL and parameters needed to determine whether the given view exists.
+    pub fn view_exists_sql(self, view: &str) -> (String, [ParamValue; 1]) {
+        match self {
+            DbKind::SQLite => (
+                r#"SELECT 1 FROM "sqlite_master"
+                   WHERE "type" = 'view' AND "name" = ?1"#
+                    .to_string(),
+                params![view],
+            ),
+            DbKind::PostgreSQL => (
+                r#"SELECT 1
+                   FROM "information_schema"."tables"
+                   WHERE "table_type" LIKE '%VIEW'
+                   AND "table_name" = $1
+                   AND "table_schema" IN (
+                     SELECT REGEXP_SPLIT_TO_TABLE("setting", ', ')
+                     FROM "pg_settings"
+                     WHERE "name" = 'search_path'
+                   )"#
+                .to_string(),
+                params![view],
+            ),
+        }
+    }
+
     /// Generate the SQL needed to create the cache table.
     pub fn create_cache_table_sql(&self) -> String {
         // The generated SQL is currently identical for SQLite and PostgreSQL but they could
         // come apart in the future.
-        match self {
-            DbKind::SQLite | DbKind::PostgreSQL => {
-                let sql = r#"CREATE TABLE IF NOT EXISTS "cache" (
-                                "tables" TEXT,
-                                "statement" TEXT,
-                                "parameters" TEXT,
-                                "value" TEXT,
-                                PRIMARY KEY ("tables", "statement", "parameters")
-                             )"#
-                .to_string();
-                sql
+        let sql = match self {
+            DbKind::SQLite => {
+                r#"CREATE TABLE IF NOT EXISTS "cache" (
+                       "tables" TEXT,
+                       "statement" TEXT,
+                       "parameters" TEXT,
+                       "value" TEXT,
+                       "last_modified" BIGINT DEFAULT (strftime('%s', 'now')),
+                       PRIMARY KEY ("tables", "statement", "parameters")
+                   )"#
             }
-        }
+            DbKind::PostgreSQL => {
+                r#"CREATE TABLE IF NOT EXISTS "cache" (
+                       "tables" TEXT,
+                       "statement" TEXT,
+                       "parameters" TEXT,
+                       "value" TEXT,
+                       "last_modified" BIGINT DEFAULT round(extract(epoch from now())),
+                       PRIMARY KEY ("tables", "statement", "parameters")
+                   )"#
+            }
+        };
+        sql.to_string()
     }
 
     /// Generate the SQL needed to verify whether the caching triggers for the given table exist.
