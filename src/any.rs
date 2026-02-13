@@ -390,7 +390,7 @@ mod tests {
 
     fn get_numeric_value(pool: &AnyPool) -> ParamValue {
         match pool.kind() {
-            DbKind::PostgreSQL => ParamValue::Numeric(1.into()),
+            DbKind::PostgreSQL => ParamValue::BigReal(1.into()),
             DbKind::SQLite => ParamValue::from(1_i64),
         }
     }

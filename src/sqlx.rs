@@ -62,8 +62,22 @@ fn pg_to_db_rows(pg_rows: &Vec<PgRow>) -> Result<Vec<DbRow>, DbError> {
                     Ok(value) => db_row.insert(cname.to_string(), value.into()),
                     Err(_) => db_row.insert(cname.to_string(), ParamValue::Null),
                 },
+                // WARN: This downcasts a Postgres NUMERIC to a 64 bit Number.
                 "NUMERIC" => match pg_row.try_get::<Decimal, usize>(idx) {
-                    Ok(value) => db_row.insert(cname.to_string(), value.into()),
+                    Ok(value) => {
+                        let v = value.to_string();
+                        if let Ok(number) = v.parse::<u64>() {
+                            db_row.insert(cname.to_string(), ParamValue::BigReal(number as f64))
+                        } else if let Ok(number) = v.parse::<i64>() {
+                            db_row.insert(cname.to_string(), ParamValue::BigReal(number as f64))
+                        } else if let Ok(number) = v.parse::<f64>() {
+                            db_row.insert(cname.to_string(), ParamValue::BigReal(number as f64))
+                        } else {
+                            return Err(DbError::DataError(format!(
+                                "Not a u64, i64, or f64: {value}"
+                            )));
+                        }
+                    }
                     Err(_) => db_row.insert(cname.to_string(), ParamValue::Null),
                 },
                 _ => {
@@ -99,7 +113,7 @@ fn sqlite_to_db_rows(sqlite_rows: &Vec<AnyRow>) -> Result<Vec<DbRow>, DbError> {
                     Ok(value) => db_row.insert(cname.to_string(), value.into()),
                     Err(_) => db_row.insert(cname.to_string(), ParamValue::Null),
                 },
-                "DOUBLE" => match sqlite_row.try_get::<f64, usize>(idx) {
+                "DOUBLE" | "NUMERIC" => match sqlite_row.try_get::<f64, usize>(idx) {
                     Ok(value) => db_row.insert(cname.to_string(), value.into()),
                     Err(_) => db_row.insert(cname.to_string(), ParamValue::Null),
                 },
