@@ -45,6 +45,8 @@ test_sqlx_ignored:
 crate_docs:
 	@echo "Testing documentation comments."
 	RUSTDOCFLAGS="-D warnings" cargo doc
+	RUSTDOCFLAGS="-D warnings" cargo doc --no-default-features --features libsql
+	RUSTDOCFLAGS="-D warnings" cargo doc --no-default-features --features sqlx
 	@echo "Documentation comments are ok."
 
 build:
