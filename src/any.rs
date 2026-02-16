@@ -314,7 +314,95 @@ mod tests {
     };
 
     #[tokio::test]
-    #[ignore]
+    async fn test_temp_view_caching() {
+        #[cfg(feature = "rusqlite")]
+        temp_view_caching("mike_temp_test.db").await;
+        #[cfg(feature = "libsql")]
+        temp_view_caching("mike_temp_test.db").await;
+        //#[cfg(feature = "tokio-postgres")]
+        //temp_view_caching("postgresql:///rltbl_db").await;
+    }
+
+    async fn temp_view_caching(url: &str) {
+        let mut pool = AnyPool::connect(url).await.unwrap();
+        pool.execute_batch(
+            "DROP VIEW IF EXISTS test_view_caching_view; \
+             DROP TABLE IF EXISTS test_view_caching_table_1; \
+             DROP TABLE IF EXISTS test_view_caching_table_2; \
+             CREATE TABLE test_view_caching_table_1 ( \
+               foo BIGINT, \
+               bar BIGINT, \
+               PRIMARY KEY (foo) \
+             ); \
+             CREATE TABLE test_view_caching_table_2 ( \
+               foo BIGINT, \
+               car TEXT, \
+               PRIMARY KEY (foo) \
+             ); \
+             INSERT INTO test_view_caching_table_1 VALUES (1, 1000); \
+             INSERT INTO test_view_caching_table_2 VALUES (1, 'Fiat'); \
+             CREATE VIEW test_view_caching_view AS \
+             SELECT t1.bar, t2.car \
+             FROM test_view_caching_table_1 t1, test_view_caching_table_2 t2 \
+             WHERE t1.foo = t2.foo",
+        )
+        .await
+        .unwrap();
+
+        pool.set_caching_strategy(&CachingStrategy::Truncate);
+        pool.set_cache_aware_query(true);
+
+        println!("************* TEST BEGINS *************");
+        // A trivial query which ensures that the cache table is created:
+        let _: Vec<DbRow> = pool.cache(&[], "SELECT 1", ()).await.unwrap();
+
+        let _: Vec<DbRow> = pool
+            .cache(
+                &["test_view_caching_view"],
+                "SELECT * FROM test_view_caching_view",
+                (),
+            )
+            .await
+            .unwrap();
+
+        let _: Vec<DbRow> = pool
+            .cache(
+                &["test_view_caching_view"],
+                "SELECT * FROM test_view_caching_view",
+                (),
+            )
+            .await
+            .unwrap();
+
+        println!("----- INSERTING TO test_view_caching_table_1");
+        pool.insert(
+            "test_view_caching_table_1",
+            &["foo", "bar"],
+            &[&db_row! {
+                "bar".into() => ParamValue::from(1_u64),
+                "car".into() => ParamValue::from("val"),
+            }],
+        )
+        .await
+        .unwrap();
+
+        println!("----- INSERTED!");
+
+        let _: Vec<DbRow> = pool
+            .cache(
+                &["test_view_caching_view"],
+                "SELECT * FROM test_view_caching_view",
+                (),
+            )
+            .await
+            .unwrap();
+
+        // if 1 == 1 {
+        //     todo!()
+        // }
+    }
+
+    #[tokio::test]
     async fn test_sql_parsing() {
         #[cfg(feature = "rusqlite")]
         sql_parsing(":memory:").await;
@@ -1722,7 +1810,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn test_caching() {
         let all_strategies = ["none", "truncate_all", "truncate", "trigger", "memory:5"]
             .iter()

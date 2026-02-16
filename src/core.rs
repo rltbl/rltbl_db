@@ -1,6 +1,6 @@
 //! # rltbl/rltbl_db
 
-use crate::db_kind::DbKind;
+use crate::{db_kind::DbKind, shared::generate_upsert_statement};
 
 use async_trait::async_trait;
 use indexmap::IndexMap;
@@ -775,75 +775,20 @@ pub trait DbQuery {
         Ok(())
     }
 
-    /// TODO: Add docstring here.
-    async fn get_tables_for_view(&self, view: &str) -> Result<HashSet<String>, DbError> {
-        // TODO: Refactor into db_kind.rs
-        let sql = match self.kind() {
-            DbKind::SQLite => {
-                r#"SELECT "sql" FROM "sqlite_master"
-                   WHERE "type" = 'view' AND "name" = ?1"#
-            }
-            DbKind::PostgreSQL => todo!(),
-        };
-        let view_sql = self.query_string(&sql, params![view]).await?;
-        todo!()
-    }
-
-    /// For all of the members of `tables_and_views` that are views, check if any of them have
-    /// source tables that have been modified more recently than it, and add any such source
-    /// tables to `tables_and_views`.
-    async fn add_recently_edited_sources(
-        &self,
-        tables_and_views: &mut HashSet<String>,
-    ) -> Result<(), DbError> {
-        for db_object in tables_and_views.clone() {
-            let (sql, params) = self.kind().view_exists_sql(&db_object);
-            if self.query_value(&sql, &params).await?.try_into()? {
-                let tables = self.get_tables_for_view(&db_object).await?;
-                // TODO: Check the modification times for those tables in the cache and return
-                // those that have been changed more recently than the view.
-                todo!()
-            }
-        }
-        todo!()
-    }
-
     /// Parse the given string, representing a series of (semi-colon-separated) SQL commands,
-    /// into their constituents and determine the tables that will be affected when the commands
-    /// are executed, if any. Two sets of tables are returned. The first contains the tables that
-    /// are going to be edited (targets of commands like INSERT, UPDATE, DELETE, and TRUNCATE), the
-    /// second contains tables that are going to be dropped (targets of a DROP TABLE command).
-    /// All other kinds of statements will be silently ignored. In particular, table modifications
-    /// that occur _within_ a CTE are not recognized by this function. Such table-modifying CTEs are
-    /// supported by PostgreSQL (see
+    /// into their constituents and determine the tables and views that will be affected when
+    /// the commands are executed, if any. Two sets are returned. The first contains the tables
+    /// and views that are going to be edited (targets of commands like INSERT, UPDATE, DELETE,
+    /// ALTER, and TRUNCATE), the second contains tables and views that are going to be dropped
+    /// (targets of a DROP TABLE command). All other kinds of statements will be silently ignored.
+    /// In particular, table modifications that occur _within_ a CTE are not recognized by this
+    /// function. Such table-modifying CTEs are supported by PostgreSQL (see
     /// <https://www.postgresql.org/docs/current/queries-with.html#QUERIES-WITH-MODIFYING>) but
     /// seemingly not by SQLite (see <https://sqlite.org/lang_with.html>).
     async fn get_affected_tables(
         &self,
         sql: &str,
     ) -> Result<(HashSet<String>, HashSet<String>), DbError> {
-        // Validates that a given node is not an error node:
-        let check_for_error = |node: &Node<'_>| -> Result<(), DbError> {
-            if node.is_error() {
-                return Err(DbError::ParseError(format!(
-                    "Error parsing '{sql}': {node}"
-                )));
-            }
-            Ok(())
-        };
-
-        // Checks that the given node list is of the expected length:
-        fn verify_list_len(node_list: &Vec<Node<'_>>, len: usize) -> Result<(), DbError> {
-            if node_list.len() != len {
-                return Err(DbError::ParseError(format!(
-                    "Wrong number of values: {}. Expected: {}",
-                    node_list.len(),
-                    len
-                )));
-            }
-            Ok(())
-        }
-
         // Instantiate the parser and read in the given sql string:
         let mut parser = Parser::new();
         parser
@@ -857,7 +802,7 @@ pub trait DbQuery {
         // Collect the top-level statements:
         let statements = {
             let root_node = tree.root_node();
-            check_for_error(&root_node)?;
+            check_for_error(&root_node, sql)?;
             if root_node.kind().to_lowercase() != "program" {
                 return Err(DbError::ParseError(format!(
                     "Unexpected root node kind: {}",
@@ -874,9 +819,9 @@ pub trait DbQuery {
         let mut edited_db_objects = HashSet::new();
         let mut dropped_db_objects = HashSet::new();
         for statement in &statements {
-            check_for_error(&statement)?;
+            check_for_error(&statement, sql)?;
             for instruction in statement.children(&mut tree.walk()) {
-                check_for_error(&instruction)?;
+                check_for_error(&instruction, sql)?;
                 match instruction.kind().to_lowercase().as_str() {
                     "insert" => {
                         let db_object_name = {
@@ -1001,6 +946,8 @@ pub trait DbQuery {
                         dropped_db_objects.insert(table_name);
                     }
                     "drop_view" => todo!(),
+                    // TODO: alter table
+                    // TODO: alter view (note: postgres only)
                     // Silently ignore all other kinds of instructions.
                     _ => (),
                 };
@@ -1009,18 +956,12 @@ pub trait DbQuery {
 
         // Edits of the cache table itself are never cached so we do not need to report them.
         // (However we do report a drop of the cache table.)
-        let mut edited_db_objects = edited_db_objects
+        let edited_db_objects = edited_db_objects
             .into_iter()
             .filter(|db_object| *db_object != "cache")
             .collect::<HashSet<_>>();
 
-        // If some of the dropped objects are views which have source tables that have been
-        // modified more recently than the view, these need to be added to the "affected" lists
-        // as well. Note that we only consider the dropped objects since views cannot be edited.
-        self.add_recently_edited_sources(&mut dropped_db_objects)
-            .await?;
-
-        Ok((edited_db_objects, dropped_db_objects))
+        Ok((edited_db_objects.clone(), dropped_db_objects.clone()))
     }
 
     // Triggers cannot apply to DROP commands, only to INSERT, UPDATE, DELETE, or TRUNCATE.
@@ -1067,10 +1008,13 @@ pub trait DbQuery {
     /// current [CachingStrategy], under the assumption that the tables in the given list have
     /// all just been edited (i.e., truncated, deleted from, inserted to, or updated).
     async fn clear_cache_for_edited_tables(&self, tables: &[&str]) -> Result<(), DbError> {
+        println!("CLEARING CACHE FOR EDITED TABLES: {tables:?}");
         match self.get_caching_strategy() {
+            // TODO: Change the SQL trigger to update the dirty_since time.
             CachingStrategy::None | CachingStrategy::Trigger => (),
-            CachingStrategy::TruncateAll => self.delete_cache_entries_for_tables(&[]).await?,
-            CachingStrategy::Truncate => self.delete_cache_entries_for_tables(tables).await?,
+            CachingStrategy::TruncateAll => self.invalidate_cache_entries(&[]).await?,
+            CachingStrategy::Truncate => self.invalidate_cache_entries(tables).await?,
+            // TODO: Change the mem cache to have a dirty_since time as well.
             CachingStrategy::Memory(_) => clear_mem_cache(&tables)?,
         };
         Ok(())
@@ -1082,9 +1026,9 @@ pub trait DbQuery {
     async fn clear_cache_for_dropped_tables(&self, tables: &[&str]) -> Result<(), DbError> {
         match self.get_caching_strategy() {
             CachingStrategy::None => (),
-            CachingStrategy::TruncateAll => self.delete_cache_entries_for_tables(&[]).await?,
+            CachingStrategy::TruncateAll => self.invalidate_cache_entries(&[]).await?,
             CachingStrategy::Trigger | CachingStrategy::Truncate => {
-                self.delete_cache_entries_for_tables(tables).await?
+                self.invalidate_cache_entries(tables).await?
             }
             CachingStrategy::Memory(_) => clear_mem_cache(&tables)?,
         };
@@ -1101,27 +1045,258 @@ pub trait DbQuery {
         Ok(())
     }
 
-    /// Delete the entries for the tables in the given list (independently of the current
-    /// caching strategy) from the cache table, if it exists. If the given table list is empty,
+    /// Clears the cache for any of the given targets that (a) are views and (b) have source
+    /// tables that have been modified more recently than the view.
+    async fn update_cached_views(&self, targets: &[&str]) -> Result<(), DbError> {
+        let last_accessed = self.last_accessed(targets).await?;
+        println!("LAST ACCESSED FOR {targets:?}: {last_accessed}");
+
+        println!("CALLED UPDATE_CACHED_VIEWS WITH TARGETS: {targets:?}");
+        for target in targets {
+            // If the target is not a view just skip to the next one.
+            if !self.view_exists(target).await? {
+                continue;
+            }
+            println!("TARGET {target} IS A VIEW");
+
+            // Get the code that defines the view in the database:
+            let view_sql = {
+                let rows: Vec<DbRow> = {
+                    let (sql, params) = self.kind().view_sql_sql(target);
+                    self.query_no_cache(&sql, &params).await?
+                };
+                match rows.first() {
+                    Some(row) => row
+                        .get("sql")
+                        .ok_or(DbError::DataError("No column 'sql' in row".to_string()))?
+                        .to_string(),
+                    None => {
+                        return Err(DbError::DataError(format!(
+                            "Nothing found for target '{target}'"
+                        )));
+                    }
+                }
+            };
+
+            // Instantiate the parser and try to parse the code::
+            let mut parser = Parser::new();
+            parser.set_language(&SQL_LANGUAGE.into()).map_err(|err| {
+                DbError::ParseError(format!("Error setting language to SQL: {err}"))
+            })?;
+            let tree = match parser.parse(&view_sql, None) {
+                Some(tree) => tree,
+                None => return Err(DbError::ParseError(format!("Could not parse '{view_sql}'"))),
+            };
+
+            // Collect the top-level statements:
+            let statements = {
+                let root_node = tree.root_node();
+                check_for_error(&root_node, &view_sql)?;
+                if root_node.kind().to_lowercase() != "program" {
+                    return Err(DbError::ParseError(format!(
+                        "Unexpected root node kind: {}",
+                        root_node.kind()
+                    )));
+                }
+                root_node
+                    .children(&mut root_node.walk())
+                    .filter(|child| child.kind().to_lowercase() == "statement")
+                    .collect::<Vec<_>>()
+            };
+
+            for statement in &statements {
+                check_for_error(&statement, &view_sql)?;
+                for instruction in statement.children(&mut tree.walk()) {
+                    match instruction.kind().to_lowercase().as_str() {
+                        "create_view" => {
+                            let create_query = instruction
+                                .children(&mut instruction.walk())
+                                .filter(|child| child.kind().to_lowercase() == "create_query")
+                                .collect::<Vec<_>>();
+                            verify_list_len(&create_query, 1)?;
+                            let create_query = create_query[0];
+
+                            let from = create_query
+                                .children(&mut create_query.walk())
+                                .filter(|child| child.kind().to_lowercase() == "from")
+                                .collect::<Vec<_>>();
+                            verify_list_len(&from, 1)?;
+                            let from = from[0];
+
+                            let relations = from
+                                .children(&mut from.walk())
+                                .filter(|child| child.kind().to_lowercase() == "relation")
+                                .collect::<Vec<_>>();
+                            for relation in relations {
+                                let object_ref = relation
+                                    .children(&mut relation.walk())
+                                    .filter(|child| {
+                                        child.kind().to_lowercase() == "object_reference"
+                                    })
+                                    .collect::<Vec<_>>();
+                                verify_list_len(&object_ref, 1)?;
+                                let object_ref = object_ref[0];
+
+                                let source_table = view_sql.to_string()
+                                    [object_ref.start_byte()..object_ref.end_byte()]
+                                    .to_string();
+
+                                let dirty_since = self.dirty_since(&source_table).await?;
+                                println!(
+                                    "TABLE {source_table} has been dirty since: {dirty_since} \
+                                     AND THE TARGET {target} WAS LAST ACCESSED ON {last_accessed}."
+                                );
+                                if dirty_since > 0 && dirty_since >= last_accessed {
+                                    println!("DELETING ENTRIES FOR '{target}' FROM CACHE");
+                                    self.invalidate_cache_entries(&[target]).await?;
+                                    break;
+                                }
+                            }
+                            break;
+                        }
+                        _ => (),
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Delete the entries for the db_objects in the given list (independently of the current
+    /// caching strategy) from the cache table, if it exists. If the given list is empty,
     /// clear the entire cache.
-    async fn delete_cache_entries_for_tables(&self, tables: &[&str]) -> Result<(), DbError> {
+    async fn invalidate_cache_entries(&self, tables: &[&str]) -> Result<(), DbError> {
         if self.table_exists("cache").await? {
+            // TODO: Move this to db_kind:
+            let get_epoch_now = match self.kind() {
+                DbKind::SQLite => "strftime('%s', 'now')",
+                DbKind::PostgreSQL => "round(extract(epoch from now()))",
+            };
+            let prefix = self.kind().param_prefix().to_string();
+
             if tables.is_empty() {
-                self.execute(r#"DELETE FROM "cache""#, ()).await?;
+                self.execute(r#"UPDATE "cache" SET "dirty_since" = {get_epoch_now}"#, ())
+                    .await?;
             } else {
                 for table in tables {
-                    let table = format!(r#"%{table}%"#);
+                    println!("Invalidating table '{table}' in cache.");
+
+                    let sql =
+                        format!(r#"SELECT 1 FROM "cache" WHERE "tables" LIKE {prefix}1 LIMIT 1"#);
+                    let table_param = format!(r#"%{table}%"#);
+                    let rows: Vec<DbRow> = self.query_no_cache(&sql, &[&table_param]).await?;
+                    match rows.len() {
+                        0 => {
+                            let sql = format!(
+                                r#"INSERT INTO "cache"
+                                   ("tables", "statement", "parameters")
+                                   VALUES ({prefix}1, {prefix}1, {prefix}3)"#
+                            );
+                            self.execute_no_cache(&sql, params![format!("[{table}]"), "", ""])
+                                .await?;
+                        }
+                        _ => (),
+                    };
+
                     self.execute(
                         &format!(
-                            r#"DELETE FROM "cache" WHERE "tables" LIKE {}1"#,
-                            self.kind().param_prefix()
+                            r#"UPDATE "cache"
+                               SET "dirty_since" = {get_epoch_now}
+                               WHERE "tables" LIKE {prefix}1"#,
                         ),
-                        &[table],
+                        &[&table_param],
                     )
                     .await?;
                 }
             }
         }
+        Ok(())
+    }
+
+    /// TODO: Add docstring here.
+    async fn dirty_since(&self, table: &str) -> Result<u64, DbError> {
+        match self.table_exists("cache").await? {
+            true => {
+                let sql = format!(
+                    r#"SELECT "dirty_since"
+                       FROM "cache"
+                       WHERE "tables" LIKE {p}1
+                       ORDER BY "dirty_since""#,
+                    p = self.kind().param_prefix(),
+                );
+                let table = format!(r#"%{table}%"#);
+                let rows: Vec<DbRow> = self.query_no_cache(&sql, params![table]).await?;
+                // This effectively says, get all of the cache entries in which the `tables`
+                // field contains `table`. If any of them are clean, then we consider the table
+                // to be clean. If all of them are dirty, then it is most likely
+                // because the table has been edited, i.e., we consider the table to be dirty.
+                // Since the query orders by dirty_since, we send back the most recent edit time.
+                let mut dirty_since = 0;
+                for row in &rows {
+                    dirty_since = row
+                        .get("dirty_since")
+                        .ok_or(DbError::DataError(format!(
+                            "No field 'dirty_since' in row {row:?}"
+                        )))?
+                        .try_into()?;
+                    if dirty_since == 0 {
+                        return Ok(0);
+                    }
+                }
+                Ok(dirty_since)
+            }
+            false => Ok(0),
+        }
+    }
+
+    /// TODO: Add docstring
+    async fn last_accessed(&self, tables: &[&str]) -> Result<u64, DbError> {
+        match self.table_exists("cache").await? {
+            true => {
+                let sql = format!(
+                    r#"SELECT "last_accessed" FROM "cache" WHERE "tables" LIKE {p}1"#,
+                    p = self.kind().param_prefix(),
+                );
+                let tables_param = format!("[{}]", tables.join(", "));
+                let rows: Vec<DbRow> = self.query_no_cache(&sql, &[&tables_param]).await?;
+                match rows.first() {
+                    Some(row) => match row.get("last_accessed") {
+                        Some(last_accessed) => Ok(last_accessed.try_into()?),
+                        None => Err(DbError::DataError(format!(
+                            "No 'last_accessed' found in row: {row:?}"
+                        ))),
+                    },
+                    None => Ok(0),
+                }
+            }
+            false => Ok(0),
+        }
+    }
+
+    /// TODO: Add docstring.
+    async fn update_last_accessed(&self, tables: &[&str]) -> Result<(), DbError> {
+        match self.table_exists("cache").await? {
+            true => {
+                println!("UPDATING LAST_ACCESSED in cache");
+                // TODO: Move this to db_kind.rs
+                let get_current_timestamp = match self.kind() {
+                    DbKind::SQLite => "strftime('%s', 'now')",
+                    DbKind::PostgreSQL => "round(extract(epoch from now()))",
+                };
+                self.execute(
+                    &format!(
+                        r#"UPDATE "cache"
+                           SET "last_accessed" = {get_current_timestamp}, "dirty_since" = 0
+                           WHERE "tables" = {p}1"#,
+                        p = self.kind().param_prefix(),
+                    ),
+                    &[&format!("[{}]", tables.join(", "))],
+                )
+                .await?;
+            }
+            false => (),
+        };
         Ok(())
     }
 
@@ -1140,14 +1315,11 @@ pub trait DbQuery {
                 // string for the given tables and parameters. If so, return the data from the
                 // cache, otherwise execute the given SQL statement on the actualy specified
                 // tables.
-                let tables_cast = match self.kind() {
-                    DbKind::SQLite => r#"CAST("tables" AS TEXT)"#,
-                    DbKind::PostgreSQL => r#""tables"::TEXT"#,
-                };
                 let cache_sql = format!(
                     r#"SELECT {prefix}1||rtrim(ltrim("value", '['), ']')||{prefix}2 AS "value"
                        FROM "cache"
-                       WHERE {tables_cast} = {prefix}3
+                       WHERE "tables" = {prefix}3
+                       AND "dirty_since" = 0
                        AND "statement" = {prefix}4
                        AND "parameters" = {prefix}5
                        LIMIT 1"#,
@@ -1177,6 +1349,7 @@ pub trait DbQuery {
                 };
                 match strings.first() {
                     Some(values) => {
+                        println!("CACHE HIT!");
                         let json_rows: Vec<JsonRow> = match serde_json::from_str(&values) {
                             Ok(json_rows) => json_rows,
                             _ => {
@@ -1186,17 +1359,22 @@ pub trait DbQuery {
                             }
                         };
                         let db_rows = json_rows.into_db_rows();
+                        self.update_last_accessed(tables).await?;
                         Ok(db_rows)
                     }
                     None => {
+                        println!("CACHE MISS!");
                         let db_rows: Vec<DbRow> = self.query_no_cache(sql, params).await?;
                         let json_rows: Vec<JsonRow> = FromDbRows::from(db_rows.clone());
                         let json_rows_content = json!(json_rows).to_string();
-                        let insert_sql = format!(
-                            r#"INSERT INTO "cache"
-                               ("tables", "statement", "parameters", "value")
-                               VALUES ({prefix}1, {prefix}2, {prefix}3, {prefix}4)"#,
-                            prefix = self.kind().param_prefix(),
+
+                        let prefix = self.kind().param_prefix().to_string();
+                        let insert_sql = generate_upsert_statement(
+                            "cache",
+                            &["tables", "statement", "parameters", "value"],
+                            &vec!["tables".into(), "statement".into(), "parameters".into()],
+                            "",
+                            &vec![format!("({prefix}1, {prefix}2, {prefix}3, {prefix}4)")],
                         );
                         let insert_params = [&tables_param, sql, &params_param, &json_rows_content];
                         self.execute_no_cache(&insert_sql, &insert_params).await?;
@@ -1251,6 +1429,12 @@ pub trait DbQuery {
             }
         };
 
+        // In case any of the given tables are actually views, call update_cached_views() to
+        // check if their source tables have been edited more recently than the view and clear
+        // the view from the cache if that's the case:
+        self.update_cached_views(tables).await?;
+
+        // Now proceed to lookup the given query for the given tables in the cache:
         match self.get_caching_strategy() {
             CachingStrategy::None => {
                 let rows: Vec<DbRow> = self.query_no_cache(sql, params).await?;
@@ -1560,6 +1744,16 @@ pub trait DbQuery {
         }
     }
 
+    /// Check whether the given view exists in the database.
+    async fn view_exists(&self, view: &str) -> Result<bool, DbError> {
+        let (sql, params) = self.kind().view_exists_sql(view);
+        let rows: Vec<DbRow> = self.query_no_cache(&sql, params).await?;
+        match rows.first() {
+            None => Ok(false),
+            Some(_) => Ok(true),
+        }
+    }
+
     /// Drop the given table from the database. Note that for PostgreSQL (see
     /// <https://www.postgresql.org/docs/current/sql-droptable.html>), in the case of a
     /// dependent foreign key constraint, only the constraint will be removed, not the dependent
@@ -1583,6 +1777,8 @@ pub trait DbQuery {
         Ok(())
     }
 }
+
+// -------- Free functions ----------
 
 /// Convert a [DbRow] into a [StringRow]
 pub fn db_row_to_string_row(row: &DbRow) -> StringRow {
@@ -1692,6 +1888,28 @@ pub fn clear_mem_cache(tables: &[&str]) -> Result<(), DbError> {
                 cache.remove(key);
             }
         }
+    }
+    Ok(())
+}
+
+/// Validates that a given [Node] is not an error node:
+fn check_for_error(node: &Node<'_>, sql: &str) -> Result<(), DbError> {
+    if node.is_error() {
+        return Err(DbError::ParseError(format!(
+            "Error parsing '{sql}': {node}"
+        )));
+    }
+    Ok(())
+}
+
+/// Checks that the given list of [Node]s is of the expected length:
+fn verify_list_len(node_list: &Vec<Node<'_>>, len: usize) -> Result<(), DbError> {
+    if node_list.len() != len {
+        return Err(DbError::ParseError(format!(
+            "Wrong number of values: {}. Expected: {}",
+            node_list.len(),
+            len
+        )));
     }
     Ok(())
 }

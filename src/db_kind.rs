@@ -239,6 +239,20 @@ impl DbKind {
         }
     }
 
+    /// Generate the SQL and parameters needed to retrieve the underlying SQL code for the
+    /// given view.
+    pub fn view_sql_sql(self, view: &str) -> (String, [ParamValue; 1]) {
+        match self {
+            DbKind::SQLite => (
+                r#"SELECT "sql" FROM "sqlite_master"
+                       WHERE "type" = 'view' AND "name" = ?1"#
+                    .to_string(),
+                params![view],
+            ),
+            DbKind::PostgreSQL => todo!(),
+        }
+    }
+
     /// Generate the SQL needed to create the cache table.
     pub fn create_cache_table_sql(&self) -> String {
         // The generated SQL is currently identical for SQLite and PostgreSQL but they could
@@ -250,17 +264,20 @@ impl DbKind {
                        "statement" TEXT,
                        "parameters" TEXT,
                        "value" TEXT,
-                       "last_modified" BIGINT DEFAULT (strftime('%s', 'now')),
+                       "last_accessed" BIGINT DEFAULT (strftime('%s', 'now')),
+                       "dirty_since" BIGINT DEFAULT 0,
                        PRIMARY KEY ("tables", "statement", "parameters")
                    )"#
             }
             DbKind::PostgreSQL => {
+                // TODO: Use  to get current timestamp.
                 r#"CREATE TABLE IF NOT EXISTS "cache" (
                        "tables" TEXT,
                        "statement" TEXT,
                        "parameters" TEXT,
                        "value" TEXT,
-                       "last_modified" BIGINT DEFAULT round(extract(epoch from now())),
+                       "last_accessed" BIGINT DEFAULT round(extract(epoch from now())),
+                       "dirty_since" BIGINT DEFAULT 0,
                        PRIMARY KEY ("tables", "statement", "parameters")
                    )"#
             }

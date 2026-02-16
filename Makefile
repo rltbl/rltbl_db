@@ -10,6 +10,12 @@ SHELL := bash
 
 test: test_default test_libsql
 
+ad_hoc:
+	rm -f mike_temp_test.db
+	cargo test test_temp_view_caching -- --no-capture
+	sqlite3 -header mike_temp_test.db "select * from cache"
+	sqlitebrowser mike_temp_test.db
+
 test_default:
 	@echo "Running unit tests using default features."
 	cargo test -- --no-capture

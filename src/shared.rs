@@ -23,9 +23,10 @@ impl Display for EditType {
 
 // Generate a SQL UPDATE statement for the given table and columns using the given clauses
 // and the given value lines.
-fn generate_update_statement(
+pub(crate) fn generate_update_statement(
     table: &str,
     columns: &[&str],
+    // TODO: Why is this a Vec?
     primary_keys: &Vec<String>,
     returning_clause: &str,
     value_lines: &Vec<String>,
@@ -65,7 +66,7 @@ WHERE {where_clause}{returning_clause}"#,
 
 // Generate a SQL INSERT statement for the given table and columns using the given clauses
 // and the given value lines.
-fn generate_insert_statement(
+pub(crate) fn generate_insert_statement(
     table: &str,
     columns: &[&str],
     returning_clause: &str,
@@ -88,9 +89,10 @@ VALUES
 
 // Generate SQL statement of the form:
 // INSERT INTO <table> VALUES <tuples> ON CONFLICT (<primary key constraint>) DO UPDATE ...
-fn generate_upsert_statement(
+pub(crate) fn generate_upsert_statement(
     table: &str,
     columns: &[&str],
+    // TODO: Why is this a Vec?
     primary_keys: &Vec<String>,
     returning_clause: &str,
     value_lines: &Vec<String>,
