@@ -255,8 +255,6 @@ impl DbKind {
 
     /// Generate the SQL needed to create the cache table.
     pub fn create_cache_table_sql(&self) -> String {
-        // The generated SQL is currently identical for SQLite and PostgreSQL but they could
-        // come apart in the future.
         let sql = match self {
             DbKind::SQLite => {
                 r#"CREATE TABLE IF NOT EXISTS "cache" (
@@ -270,7 +268,6 @@ impl DbKind {
                    )"#
             }
             DbKind::PostgreSQL => {
-                // TODO: Use  to get current timestamp.
                 r#"CREATE TABLE IF NOT EXISTS "cache" (
                        "tables" TEXT,
                        "statement" TEXT,

@@ -314,252 +314,6 @@ mod tests {
     };
 
     #[tokio::test]
-    async fn test_temp_view_caching() {
-        #[cfg(feature = "rusqlite")]
-        temp_view_caching("mike_temp_test.db").await;
-        #[cfg(feature = "libsql")]
-        temp_view_caching("mike_temp_test.db").await;
-        //#[cfg(feature = "tokio-postgres")]
-        //temp_view_caching("postgresql:///rltbl_db").await;
-    }
-
-    async fn temp_view_caching(url: &str) {
-        let mut pool = AnyPool::connect(url).await.unwrap();
-        pool.execute_batch(
-            "DROP VIEW IF EXISTS test_view_caching_view; \
-             DROP TABLE IF EXISTS test_view_caching_table_1; \
-             DROP TABLE IF EXISTS test_view_caching_table_2; \
-             CREATE TABLE test_view_caching_table_1 ( \
-               foo BIGINT, \
-               bar BIGINT, \
-               PRIMARY KEY (foo) \
-             ); \
-             CREATE TABLE test_view_caching_table_2 ( \
-               foo BIGINT, \
-               car TEXT, \
-               PRIMARY KEY (foo) \
-             ); \
-             INSERT INTO test_view_caching_table_1 VALUES (1, 1000); \
-             INSERT INTO test_view_caching_table_2 VALUES (1, 'Fiat'); \
-             CREATE VIEW test_view_caching_view AS \
-             SELECT t1.bar, t2.car \
-             FROM test_view_caching_table_1 t1, test_view_caching_table_2 t2 \
-             WHERE t1.foo = t2.foo",
-        )
-        .await
-        .unwrap();
-
-        pool.set_caching_strategy(&CachingStrategy::Truncate);
-        pool.set_cache_aware_query(true);
-
-        println!("************* TEST BEGINS *************");
-        // A trivial query which ensures that the cache table is created:
-        let _: Vec<DbRow> = pool.cache(&[], "SELECT 1", ()).await.unwrap();
-
-        let _: Vec<DbRow> = pool
-            .cache(
-                &["test_view_caching_view"],
-                "SELECT * FROM test_view_caching_view",
-                (),
-            )
-            .await
-            .unwrap();
-
-        let _: Vec<DbRow> = pool
-            .cache(
-                &["test_view_caching_view"],
-                "SELECT * FROM test_view_caching_view",
-                (),
-            )
-            .await
-            .unwrap();
-
-        println!("----- INSERTING TO test_view_caching_table_1");
-        pool.insert(
-            "test_view_caching_table_1",
-            &["foo", "bar"],
-            &[&db_row! {
-                "bar".into() => ParamValue::from(1_u64),
-                "car".into() => ParamValue::from("val"),
-            }],
-        )
-        .await
-        .unwrap();
-
-        println!("----- INSERTED!");
-
-        let _: Vec<DbRow> = pool
-            .cache(
-                &["test_view_caching_view"],
-                "SELECT * FROM test_view_caching_view",
-                (),
-            )
-            .await
-            .unwrap();
-
-        // if 1 == 1 {
-        //     todo!()
-        // }
-    }
-
-    #[tokio::test]
-    async fn test_sql_parsing() {
-        #[cfg(feature = "rusqlite")]
-        sql_parsing(":memory:").await;
-        #[cfg(feature = "libsql")]
-        sql_parsing(":memory:").await;
-        #[cfg(feature = "tokio-postgres")]
-        sql_parsing("postgresql:///rltbl_db").await;
-    }
-
-    async fn sql_parsing(url: &str) {
-        let pool = AnyPool::connect(url).await.unwrap();
-
-        // Single statements, possibly with parameters:
-        let (edited_tables, dropped_tables) = pool
-            .get_affected_tables(&format!(r#"INSERT INTO "alpha" VALUES ($1, $2, $3)"#))
-            .await
-            .unwrap();
-        let edited_tables: Vec<_> = edited_tables.into_iter().collect();
-        assert_eq!(edited_tables, ["alpha"]);
-        assert_eq!(dropped_tables, [].into());
-
-        let (edited_tables, dropped_tables) = pool
-            .get_affected_tables(
-                r#"WITH bar AS (SELECT * FROM alpha),
-                        mar AS (SELECT * FROM beta)
-                   INSERT INTO gamma
-                   SELECT alpha.*
-                   FROM alpha, beta
-                   WHERE alpha.value = beta.value"#,
-            )
-            .await
-            .unwrap();
-        let edited_tables: Vec<_> = edited_tables.into_iter().collect();
-        assert_eq!(edited_tables, ["gamma"]);
-        assert_eq!(dropped_tables, [].into());
-
-        let (edited_tables, dropped_tables) = pool
-            .get_affected_tables(&format!(r#"UPDATE "delta" set bar = $1 WHERE bar = $2"#))
-            .await
-            .unwrap();
-        let edited_tables: Vec<_> = edited_tables.into_iter().collect();
-        assert_eq!(edited_tables, ["delta"]);
-        assert_eq!(dropped_tables, [].into());
-
-        let (edited_tables, dropped_tables) = pool
-            .get_affected_tables(&format!(
-                r#"WITH bar AS (SELECT * FROM test),
-                        mar AS (SELECT * FROM test)
-                   UPDATE delta
-                   SET value = bar.value
-                   FROM bar, mar
-                   WHERE bar.value = $1 AND bar.value = mar.value"#,
-            ))
-            .await
-            .unwrap();
-        let edited_tables: Vec<_> = edited_tables.into_iter().collect();
-        assert_eq!(edited_tables, ["delta"]);
-        assert_eq!(dropped_tables, [].into());
-
-        let (edited_tables, dropped_tables) = pool
-            .get_affected_tables(&format!(r#"DELETE FROM "epsilon" WHERE bar >= $1"#))
-            .await
-            .unwrap();
-        let edited_tables: Vec<_> = edited_tables.into_iter().collect();
-        assert_eq!(edited_tables, ["epsilon"]);
-        assert_eq!(dropped_tables, [].into());
-
-        let (edited_tables, dropped_tables) = pool
-            .get_affected_tables(
-                r#"WITH bar AS (SELECT * FROM test),
-                        mar AS (SELECT * FROM test)
-                   DELETE FROM lambda WHERE value IN (SELECT value FROM bar)"#,
-            )
-            .await
-            .unwrap();
-        let edited_tables: Vec<_> = edited_tables.into_iter().collect();
-        assert_eq!(edited_tables, ["lambda"]);
-        assert_eq!(dropped_tables, [].into());
-
-        let (edited_tables, dropped_tables) = pool
-            .get_affected_tables(r#"DROP TABLE "rho""#)
-            .await
-            .unwrap();
-        let dropped_tables: Vec<_> = dropped_tables.into_iter().collect();
-        assert_eq!(dropped_tables, ["rho"]);
-        assert_eq!(edited_tables, [].into());
-
-        let (edited_tables, dropped_tables) = pool
-            .get_affected_tables(r#"DROP TABLE IF EXISTS "phi" CASCADE"#)
-            .await
-            .unwrap();
-        let dropped_tables: Vec<_> = dropped_tables.into_iter().collect();
-        assert_eq!(dropped_tables, ["phi"]);
-        assert_eq!(edited_tables, [].into());
-
-        let (edited_tables, dropped_tables) = pool
-            .get_affected_tables("TRUNCATE TABLE mu, nu CASCADE")
-            .await
-            .unwrap();
-        let mut edited_tables: Vec<_> = edited_tables.into_iter().collect();
-        edited_tables.sort();
-        assert_eq!(edited_tables, ["mu", "nu"]);
-        assert_eq!(dropped_tables, [].into());
-
-        // Multiple statements, no parameters:
-
-        let sql = r#"
-            INSERT INTO "alpha" VALUES (1, 2, 3), (4, 5, 6);
-
-            INSERT INTO gamma
-            SELECT alpha.*
-            FROM alpha, beta
-            WHERE alpha.value = beta.value;
-
-            WITH t AS (
-              SELECT * from delta_base ORDER BY quality LIMIT 1
-            )
-            UPDATE delta SET price = t.price * 1.05;
-
-            WITH t AS (
-              SELECT * FROM phi_base
-              WHERE
-                "date" >= '2010-10-01' AND
-                "date" < '2010-11-01'
-            )
-            INSERT INTO phi
-            SELECT * FROM t;
-
-            DELETE FROM "psi" WHERE bar >= 10;
-
-            WITH RECURSIVE included_lambda(sub_lambda, lambda) AS (
-                SELECT sub_lambda, lambda FROM lambda WHERE lambda = 'our_product'
-              UNION ALL
-                SELECT p.sub_lambda, p.lambda
-                FROM included_lambda pr, lambda p
-                WHERE p.lambda = pr.sub_lambda
-            )
-            DELETE FROM lambda
-              WHERE lambda IN (SELECT lambda FROM included_lambda);
-
-            DROP TABLE "rho";
-
-            DROP TABLE "sigma" CASCADE"#;
-
-        let (edited_tables, dropped_tables) = pool.get_affected_tables(&sql).await.unwrap();
-        let mut edited_tables: Vec<_> = edited_tables.into_iter().collect();
-        let mut dropped_tables: Vec<_> = dropped_tables.into_iter().collect();
-        edited_tables.sort();
-        dropped_tables.sort();
-        assert_eq!(
-            edited_tables,
-            ["alpha", "delta", "gamma", "lambda", "phi", "psi",]
-        );
-        assert_eq!(dropped_tables, ["rho", "sigma",]);
-    }
-
-    #[tokio::test]
     async fn test_text_column_query() {
         #[cfg(feature = "rusqlite")]
         text_column_query(":memory:").await;
@@ -2052,6 +1806,307 @@ mod tests {
                 db_row! {"value".into() => ParamValue::from("sigma")},
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn test_view_caching() {
+        #[cfg(feature = "rusqlite")]
+        view_caching("mike_temp_test.db").await;
+        #[cfg(feature = "libsql")]
+        view_caching("mike_temp_test.db").await;
+        //#[cfg(feature = "tokio-postgres")]
+        //view_caching("postgresql:///rltbl_db").await;
+    }
+
+    // TODO: Clean this test case up a bit.
+    async fn view_caching(url: &str) {
+        let mut pool = AnyPool::connect(url).await.unwrap();
+        pool.execute_batch(
+            "DROP VIEW IF EXISTS test_view_caching_view; \
+             DROP TABLE IF EXISTS test_view_caching_table_1; \
+             DROP TABLE IF EXISTS test_view_caching_table_2; \
+             CREATE TABLE test_view_caching_table_1 ( \
+               foo BIGINT, \
+               bar BIGINT, \
+               PRIMARY KEY (foo) \
+             ); \
+             CREATE TABLE test_view_caching_table_2 ( \
+               foo BIGINT, \
+               car TEXT, \
+               PRIMARY KEY (foo) \
+             ); \
+             INSERT INTO test_view_caching_table_1 VALUES (1, 1000); \
+             INSERT INTO test_view_caching_table_2 VALUES (1, 'Fiat'); \
+             CREATE VIEW test_view_caching_view AS \
+             SELECT t1.bar, t2.car \
+             FROM test_view_caching_table_1 t1, test_view_caching_table_2 t2 \
+             WHERE t1.foo = t2.foo",
+        )
+        .await
+        .unwrap();
+
+        // TODO: Test using other strategies as well.
+        pool.set_caching_strategy(&CachingStrategy::Truncate);
+        pool.set_cache_aware_query(true);
+
+        let mut last_last_accessed_view = 0;
+        let mut last_dirty_since_view = 0;
+        // We place each subtest within braces to easily distinguish them from one another.
+        {
+            let _: Vec<DbRow> = pool
+                .cache(
+                    &["test_view_caching_view"],
+                    "SELECT * FROM test_view_caching_view",
+                    (),
+                )
+                .await
+                .unwrap();
+            let rows: Vec<DbRow> = pool
+                .query_no_cache("SELECT * FROM cache", ())
+                .await
+                .unwrap();
+            assert_eq!(rows.len(), 1);
+            let row = &rows[0];
+            let last_accessed: u64 = row.get("last_accessed").unwrap().try_into().unwrap();
+            let dirty_since: u64 = row.get("dirty_since").unwrap().try_into().unwrap();
+            assert_eq!(
+                *row.get("tables").unwrap(),
+                ParamValue::from("[test_view_caching_view]")
+            );
+            assert_eq!(
+                *row.get("statement").unwrap(),
+                ParamValue::from("SELECT * FROM test_view_caching_view")
+            );
+            assert_eq!(*row.get("parameters").unwrap(), ParamValue::from("[]"));
+            assert_eq!(
+                *row.get("value").unwrap(),
+                // TODO: Parse JSON.
+                ParamValue::from(r#"[{"bar":1000,"car":"Fiat"}]"#)
+            );
+            assert_ne!(last_accessed, last_last_accessed_view);
+            assert_eq!(dirty_since, last_dirty_since_view);
+
+            last_dirty_since_view = dirty_since;
+        }
+
+        {
+            let _: Vec<DbRow> = pool
+                .cache(
+                    &["test_view_caching_view"],
+                    "SELECT * FROM test_view_caching_view",
+                    (),
+                )
+                .await
+                .unwrap();
+            let rows: Vec<DbRow> = pool
+                .query_no_cache("SELECT * FROM cache", ())
+                .await
+                .unwrap();
+            assert_eq!(rows.len(), 1);
+            let row = &rows[0];
+            let last_accessed: u64 = row.get("last_accessed").unwrap().try_into().unwrap();
+            let dirty_since: u64 = row.get("dirty_since").unwrap().try_into().unwrap();
+            assert_eq!(
+                *row.get("tables").unwrap(),
+                ParamValue::from("[test_view_caching_view]")
+            );
+            assert_eq!(
+                *row.get("statement").unwrap(),
+                ParamValue::from("SELECT * FROM test_view_caching_view")
+            );
+            assert_eq!(*row.get("parameters").unwrap(), ParamValue::from("[]"));
+            assert_eq!(
+                *row.get("value").unwrap(),
+                // TODO: Parse JSON.
+                ParamValue::from(r#"[{"bar":1000,"car":"Fiat"}]"#)
+            );
+            assert_ne!(last_accessed, 0);
+            assert_eq!(dirty_since, last_dirty_since_view);
+
+            last_last_accessed_view = last_accessed;
+            last_dirty_since_view = dirty_since;
+        }
+
+        {
+            pool.insert(
+                "test_view_caching_table_1",
+                &["foo", "bar"],
+                &[&db_row! {
+                    "bar".into() => ParamValue::from(1_u64),
+                    "car".into() => ParamValue::from("val"),
+                }],
+            )
+            .await
+            .unwrap();
+
+            let rows: Vec<DbRow> = pool
+                .query_no_cache("SELECT * FROM cache", ())
+                .await
+                .unwrap();
+            assert_eq!(rows.len(), 2);
+
+            // Check the cache entry for the view:
+            let row1 = &rows[0];
+            let last_accessed_view: u64 = row1.get("last_accessed").unwrap().try_into().unwrap();
+            let dirty_since_view: u64 = row1.get("dirty_since").unwrap().try_into().unwrap();
+            assert_eq!(
+                *row1.get("tables").unwrap(),
+                ParamValue::from("[test_view_caching_view]")
+            );
+            assert_eq!(
+                *row1.get("statement").unwrap(),
+                ParamValue::from("SELECT * FROM test_view_caching_view")
+            );
+            assert_eq!(*row1.get("parameters").unwrap(), ParamValue::from("[]"));
+            assert_eq!(
+                *row1.get("value").unwrap(),
+                // TODO: Parse JSON.
+                ParamValue::from(r#"[{"bar":1000,"car":"Fiat"}]"#)
+            );
+            assert_eq!(last_accessed_view, last_last_accessed_view);
+            assert_eq!(dirty_since_view, last_dirty_since_view);
+
+            // Check the cache entry for the underlying table:
+            let row2 = &rows[1];
+            let last_accessed_table: u64 = row2.get("last_accessed").unwrap().try_into().unwrap();
+            let dirty_since_table: u64 = row2.get("dirty_since").unwrap().try_into().unwrap();
+            assert_eq!(
+                *row2.get("tables").unwrap(),
+                ParamValue::from("[test_view_caching_table_1]")
+            );
+            assert_eq!(*row2.get("statement").unwrap(), ParamValue::from(""));
+            assert_eq!(*row2.get("parameters").unwrap(), ParamValue::from("[]"));
+            assert_eq!(*row2.get("value").unwrap(), ParamValue::Null);
+
+            assert_ne!(last_accessed_table, 0);
+            assert_ne!(dirty_since_table, 0);
+        }
+
+        {
+            let _: Vec<DbRow> = pool
+                .cache(
+                    &["test_view_caching_view"],
+                    "SELECT * FROM test_view_caching_view",
+                    (),
+                )
+                .await
+                .unwrap();
+
+            let rows: Vec<DbRow> = pool
+                .query_no_cache("SELECT * FROM cache", ())
+                .await
+                .unwrap();
+            assert_eq!(rows.len(), 2);
+            let row = &rows[0];
+            let last_accessed: u64 = row.get("last_accessed").unwrap().try_into().unwrap();
+            let dirty_since: u64 = row.get("dirty_since").unwrap().try_into().unwrap();
+            assert_eq!(
+                *row.get("tables").unwrap(),
+                ParamValue::from("[test_view_caching_view]")
+            );
+            assert_eq!(
+                *row.get("statement").unwrap(),
+                ParamValue::from("SELECT * FROM test_view_caching_view")
+            );
+            assert_eq!(*row.get("parameters").unwrap(), ParamValue::from("[]"));
+            assert_eq!(
+                *row.get("value").unwrap(),
+                // TODO: Parse JSON.
+                ParamValue::from(r#"[{"bar":1000,"car":"Fiat"}]"#)
+            );
+            assert_ne!(last_accessed, 0);
+            assert_eq!(dirty_since, 0);
+
+            last_last_accessed_view = last_accessed;
+        }
+
+        {
+            let _: Vec<DbRow> = pool
+                .cache(
+                    &["test_view_caching_table_1"],
+                    "SELECT * FROM test_view_caching_table_1",
+                    (),
+                )
+                .await
+                .unwrap();
+
+            let rows: Vec<DbRow> = pool
+                .query_no_cache("SELECT * FROM cache", ())
+                .await
+                .unwrap();
+            assert_eq!(rows.len(), 3);
+
+            // Check the cache entry for the view:
+            let row1 = &rows[0];
+            let last_accessed_view: u64 = row1.get("last_accessed").unwrap().try_into().unwrap();
+            let dirty_since_view: u64 = row1.get("dirty_since").unwrap().try_into().unwrap();
+            assert_eq!(
+                *row1.get("tables").unwrap(),
+                ParamValue::from("[test_view_caching_view]")
+            );
+            assert_eq!(
+                *row1.get("statement").unwrap(),
+                ParamValue::from("SELECT * FROM test_view_caching_view")
+            );
+            assert_eq!(*row1.get("parameters").unwrap(), ParamValue::from("[]"));
+            assert_eq!(
+                *row1.get("value").unwrap(),
+                // TODO: Parse JSON.
+                ParamValue::from(r#"[{"bar":1000,"car":"Fiat"}]"#)
+            );
+            assert_eq!(last_accessed_view, last_last_accessed_view);
+            assert_eq!(dirty_since_view, 0);
+
+            // Check the cache entry for the underlying table:
+            let row3 = &rows[2];
+            let last_accessed_table: u64 = row3.get("last_accessed").unwrap().try_into().unwrap();
+            let dirty_since_table: u64 = row3.get("dirty_since").unwrap().try_into().unwrap();
+            assert_eq!(
+                *row3.get("tables").unwrap(),
+                ParamValue::from("[test_view_caching_table_1]")
+            );
+            assert_eq!(
+                *row3.get("statement").unwrap(),
+                ParamValue::from("SELECT * FROM test_view_caching_table_1")
+            );
+            assert_eq!(*row3.get("parameters").unwrap(), ParamValue::from("[]"));
+            assert_eq!(
+                *row3.get("value").unwrap(),
+                // TODO: Parse JSON.
+                ParamValue::from(r#"[{"foo":1,"bar":1000},{"foo":null,"bar":1}]"#)
+            );
+
+            assert_ne!(last_accessed_table, 0);
+            assert_eq!(dirty_since_table, 0);
+        }
+
+        {
+            let _: Vec<DbRow> = pool
+                .cache(
+                    &["test_view_caching_table_1"],
+                    "SELECT * FROM test_view_caching_table_1",
+                    (),
+                )
+                .await
+                .unwrap();
+
+            let rows: Vec<DbRow> = pool
+                .query_no_cache("SELECT * FROM cache", ())
+                .await
+                .unwrap();
+            assert_eq!(rows.len(), 3);
+            let row2 = &rows[1];
+            let row3 = &rows[2];
+            let last_accessed2: u64 = row2.get("last_accessed").unwrap().try_into().unwrap();
+            let dirty_since2: u64 = row2.get("dirty_since").unwrap().try_into().unwrap();
+            let last_accessed3: u64 = row3.get("last_accessed").unwrap().try_into().unwrap();
+            let dirty_since3: u64 = row3.get("dirty_since").unwrap().try_into().unwrap();
+            // TODO: explicitly match these against the saved values above.
+            assert_ne!(last_accessed2, 0);
+            assert_ne!(dirty_since2, 0);
+            assert_ne!(last_accessed3, 0);
+            assert_eq!(dirty_since3, 0);
+        }
     }
 
     // This test takes a few minutes to run and is ignored by default.

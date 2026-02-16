@@ -26,10 +26,9 @@ impl Display for EditType {
 pub(crate) fn generate_update_statement(
     table: &str,
     columns: &[&str],
-    // TODO: Why is this a Vec?
-    primary_keys: &Vec<String>,
+    primary_keys: &[&str],
     returning_clause: &str,
-    value_lines: &Vec<String>,
+    value_lines: &[&str],
 ) -> String {
     // Quote the column names to avoid potential clashes with database keywords:
     let quoted_columns = columns
@@ -40,7 +39,7 @@ pub(crate) fn generate_update_statement(
 
     let set_clause = columns
         .iter()
-        .filter(|column| !primary_keys.contains(&column.to_string()))
+        .filter(|column| !primary_keys.contains(&column))
         .map(|column| format!(r#""{column}" = "source"."{column}""#))
         .collect::<Vec<_>>()
         .join(", ");
@@ -70,7 +69,7 @@ pub(crate) fn generate_insert_statement(
     table: &str,
     columns: &[&str],
     returning_clause: &str,
-    value_lines: &Vec<String>,
+    value_lines: &[&str],
 ) -> String {
     // Quote the column names to avoid potential clashes with database keywords:
     let quoted_columns = columns
@@ -92,10 +91,9 @@ VALUES
 pub(crate) fn generate_upsert_statement(
     table: &str,
     columns: &[&str],
-    // TODO: Why is this a Vec?
-    primary_keys: &Vec<String>,
+    primary_keys: &[&str],
     returning_clause: &str,
-    value_lines: &Vec<String>,
+    value_lines: &[&str],
 ) -> String {
     let quoted_columns = columns
         .iter()
@@ -111,7 +109,7 @@ pub(crate) fn generate_upsert_statement(
 
     let set_clause = columns
         .iter()
-        .filter(|column| !primary_keys.contains(&column.to_string()))
+        .filter(|column| !primary_keys.contains(&column))
         .map(|column| format!(r#""{column}" = "excluded"."{column}""#))
         .collect::<Vec<_>>()
         .join(", ");
@@ -215,19 +213,42 @@ pub(crate) async fn edit<T: FromDbRows>(
             EditType::Update => generate_update_statement(
                 &table,
                 columns,
-                &primary_keys,
+                primary_keys
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .as_slice(),
                 &returning_clause,
-                &lines_to_bind,
+                lines_to_bind
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .as_slice(),
             ),
-            EditType::Insert => {
-                generate_insert_statement(&table, columns, &returning_clause, &lines_to_bind)
-            }
+            EditType::Insert => generate_insert_statement(
+                &table,
+                columns,
+                &returning_clause,
+                lines_to_bind
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .as_slice(),
+            ),
             EditType::Upsert => generate_upsert_statement(
                 &table,
                 columns,
-                &primary_keys,
+                primary_keys
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .as_slice(),
                 &returning_clause,
-                &lines_to_bind,
+                lines_to_bind
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .as_slice(),
             ),
         };
         let rows: Vec<DbRow> = pool
