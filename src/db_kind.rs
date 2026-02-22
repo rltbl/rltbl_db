@@ -245,7 +245,7 @@ impl DbKind {
         match self {
             DbKind::SQLite => (
                 r#"SELECT "sql" FROM "sqlite_master"
-                       WHERE "type" = 'view' AND "name" = ?1"#
+                   WHERE "type" = 'view' AND "name" = ?1"#
                     .to_string(),
                 params![view],
             ),
@@ -266,7 +266,6 @@ impl DbKind {
                  "parameters" TEXT,
                  "value" TEXT,
                  "last_accessed" BIGINT DEFAULT {get_epoch_now},
-                 "dirty_since" BIGINT DEFAULT 0,
                  PRIMARY KEY ("tables", "statement", "parameters")
              )"#
         )
