@@ -13,7 +13,7 @@ test: test_default test_libsql
 ad_hoc:
 	rm -f mike_temp_test.db
 	cargo test test_view_caching -- --no-capture
-	sqlite3 -header mike_temp_test.db "select * from cache"
+	sqlite3 -header mike_temp_test.db "select * from rltbl_db_cache"
 
 test_default:
 	@echo "Running unit tests using default features."

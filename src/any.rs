@@ -295,7 +295,8 @@ mod tests {
     use super::*;
     use crate::{
         core::{
-            CachingStrategy, ColumnMap, DbRow, ParamValue, StringRow, get_memory_cache_contents,
+            CachingStrategy, ColumnMap, DbRow, ParamValue, QUERY_CACHE_TABLE, StringRow,
+            get_memory_cache_contents,
         },
         params,
     };
@@ -1594,7 +1595,7 @@ mod tests {
 
     async fn cache_with_strategy(pool: &mut AnyPool, strategy: &CachingStrategy) {
         async fn count_cache_table_rows(pool: &mut AnyPool) -> u64 {
-            pool.query_u64("SELECT COUNT(1) from cache", ())
+            pool.query_u64(&format!("SELECT COUNT(1) from {QUERY_CACHE_TABLE}"), ())
                 .await
                 .unwrap()
         }
@@ -1862,7 +1863,7 @@ mod tests {
                 .await
                 .unwrap();
             let rows: Vec<DbRow> = pool
-                .query_no_cache("SELECT * FROM cache", ())
+                .query_no_cache(&format!("SELECT * FROM {QUERY_CACHE_TABLE}"), ())
                 .await
                 .unwrap();
             assert_eq!(rows.len(), 1);
@@ -1899,7 +1900,7 @@ mod tests {
                 .await
                 .unwrap();
             let rows: Vec<DbRow> = pool
-                .query_no_cache("SELECT * FROM cache", ())
+                .query_no_cache(&format!("SELECT * FROM {QUERY_CACHE_TABLE}"), ())
                 .await
                 .unwrap();
             assert_eq!(rows.len(), 1);
@@ -1940,7 +1941,7 @@ mod tests {
             .unwrap();
 
             let rows: Vec<DbRow> = pool
-                .query_no_cache("SELECT * FROM cache", ())
+                .query_no_cache(&format!("SELECT * FROM {QUERY_CACHE_TABLE}"), ())
                 .await
                 .unwrap();
             assert_eq!(rows.len(), 2);
@@ -1993,7 +1994,7 @@ mod tests {
                 .unwrap();
 
             let rows: Vec<DbRow> = pool
-                .query_no_cache("SELECT * FROM cache", ())
+                .query_no_cache(&format!("SELECT * FROM {QUERY_CACHE_TABLE}"), ())
                 .await
                 .unwrap();
             assert_eq!(rows.len(), 2);
@@ -2031,7 +2032,7 @@ mod tests {
                 .unwrap();
 
             let rows: Vec<DbRow> = pool
-                .query_no_cache("SELECT * FROM cache", ())
+                .query_no_cache(&format!("SELECT * FROM {QUERY_CACHE_TABLE}"), ())
                 .await
                 .unwrap();
             assert_eq!(rows.len(), 3);
@@ -2091,7 +2092,7 @@ mod tests {
                 .unwrap();
 
             let rows: Vec<DbRow> = pool
-                .query_no_cache("SELECT * FROM cache", ())
+                .query_no_cache(&format!("SELECT * FROM {QUERY_CACHE_TABLE}"), ())
                 .await
                 .unwrap();
             assert_eq!(rows.len(), 3);

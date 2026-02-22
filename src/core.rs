@@ -28,6 +28,12 @@ pub type DbRow = IndexMap<String, ParamValue>;
 pub type StringRow = IndexMap<String, String>;
 pub type ColumnMap = IndexMap<String, String>;
 
+/// The name of the cache table
+pub static QUERY_CACHE_TABLE: &str = "rltbl_db_cache";
+
+/// The name of the table table
+pub static TABLE_CACHE_TABLE: &str = "rltbl_db_table";
+
 /// Represents a valid database table name.
 static VALID_TABLE_NAME_MATCH_STR: &str = r"^[A-Za-z_][0-9A-Za-z_]*$";
 
@@ -716,25 +722,13 @@ pub trait DbQuery {
     /// Returns true if the cache_aware_query option is currently on.
     fn get_cache_aware_query(&self) -> bool;
 
-    /// Ensure that the cache table exists
-    async fn ensure_cache_table_exists(&self) -> Result<(), DbError> {
-        let sql = self.kind().create_cache_table_sql();
-        match self.execute_no_cache(&sql, ()).await {
-            Ok(_) => Ok(()),
-            Err(_) => {
-                // Since we are not using transactions, a race condition could occur in
-                // which two or more threads are trying to create the cache at the same
-                // time, triggering a primary key violation in the metadata table. So if
-                // there is an error creating the cache table we just check that it exists
-                // and if it does we assume that all is ok.
-                match self.table_exists("cache").await? {
-                    false => Err(DbError::DatabaseError(
-                        "The cache table could not be created".to_string(),
-                    )),
-                    true => Ok(()),
-                }
-            }
-        }
+    /// Ensure that the cache tables exist
+    async fn ensure_cache_tables_exist(&self) -> Result<(), DbError> {
+        let sql = self.kind().create_query_cache_table_sql();
+        self.execute_no_cache(&sql, ()).await?;
+        let sql = self.kind().create_table_cache_table_sql();
+        self.execute_no_cache(&sql, ()).await?;
+        Ok(())
     }
 
     /// Ensure that caching triggers exist for the given tables. Note that this function calls
@@ -746,7 +740,7 @@ pub trait DbQuery {
             Ok(())
         };
 
-        self.ensure_cache_table_exists().await?;
+        self.ensure_cache_tables_exist().await?;
         for table in tables {
             let table = validate_table_name(table)?;
             let (sql, params) = self.kind().triggers_exist_sql(&table);
@@ -780,7 +774,7 @@ pub trait DbQuery {
     /// entries for those tables in the cache in accordance with the current [CachingStrategy].
     async fn clear_cache_for_affected_tables(&self, sql: &str) -> Result<(), DbError> {
         if self.get_caching_strategy() != CachingStrategy::None {
-            self.ensure_cache_table_exists().await?;
+            self.ensure_cache_tables_exist().await?;
             let (edited_tables, dropped_tables): (Vec<_>, Vec<_>) = {
                 let (edited_tables, dropped_tables) = get_affected_tables(sql)?;
                 (
@@ -846,7 +840,7 @@ pub trait DbQuery {
         // Indicate that any triggers for these tables no longer exist.
         let mut meta_cache = get_meta_cache()?;
         for table in tables {
-            if *table == "cache" {
+            if *table == QUERY_CACHE_TABLE {
                 meta_cache.remove("cache_table");
             } else {
                 meta_cache.remove(&format!("{table}_triggers"));
@@ -968,7 +962,7 @@ pub trait DbQuery {
     /// caching strategy) from the cache table, if it exists. If the given list is empty,
     /// clear the entire cache.
     async fn invalidate_cache_entries(&self, tables: &[&str]) -> Result<(), DbError> {
-        if self.table_exists("cache").await? {
+        if self.table_exists(QUERY_CACHE_TABLE).await? {
             // TODO: Move this to db_kind:
             let get_epoch_now = match self.kind() {
                 DbKind::SQLite => "strftime('%s', 'now')",
@@ -978,20 +972,22 @@ pub trait DbQuery {
 
             if tables.is_empty() {
                 self.execute(
-                    &format!(r#"UPDATE "cache" SET "dirty_since" = {get_epoch_now}"#),
+                    &format!(r#"UPDATE "{QUERY_CACHE_TABLE}" SET "dirty_since" = {get_epoch_now}"#),
                     (),
                 )
                 .await?;
             } else {
                 for table in tables {
-                    let sql =
-                        format!(r#"SELECT 1 FROM "cache" WHERE "tables" LIKE {prefix}1 LIMIT 1"#);
+                    let sql = format!(
+                        r#"SELECT 1 FROM "{QUERY_CACHE_TABLE}"
+                               WHERE "tables" LIKE {prefix}1 LIMIT 1"#
+                    );
                     let table_param = format!(r#"%{table}%"#);
                     let rows: Vec<DbRow> = self.query_no_cache(&sql, &[&table_param]).await?;
                     match rows.len() {
                         0 => {
                             let sql = format!(
-                                r#"INSERT INTO "cache"
+                                r#"INSERT INTO "{QUERY_CACHE_TABLE}"
                                    ("tables", "statement", "parameters")
                                    VALUES ({prefix}1, {prefix}2, {prefix}3)"#
                             );
@@ -1003,7 +999,7 @@ pub trait DbQuery {
 
                     self.execute(
                         &format!(
-                            r#"UPDATE "cache"
+                            r#"UPDATE "{QUERY_CACHE_TABLE}"
                                SET "dirty_since" = {get_epoch_now}
                                WHERE "tables" LIKE {prefix}1"#,
                         ),
@@ -1018,11 +1014,11 @@ pub trait DbQuery {
 
     /// TODO: Add docstring here.
     async fn dirty_since(&self, table: &str) -> Result<u64, DbError> {
-        match self.table_exists("cache").await? {
+        match self.table_exists(QUERY_CACHE_TABLE).await? {
             true => {
                 let sql = format!(
                     r#"SELECT "dirty_since"
-                       FROM "cache"
+                       FROM "{QUERY_CACHE_TABLE}"
                        WHERE "tables" LIKE {p}1
                        ORDER BY "dirty_since""#,
                     p = self.kind().param_prefix(),
@@ -1054,10 +1050,10 @@ pub trait DbQuery {
 
     /// TODO: Add docstring
     async fn last_accessed(&self, tables: &[&str]) -> Result<u64, DbError> {
-        match self.table_exists("cache").await? {
+        match self.table_exists(QUERY_CACHE_TABLE).await? {
             true => {
                 let sql = format!(
-                    r#"SELECT "last_accessed" FROM "cache" WHERE "tables" LIKE {p}1"#,
+                    r#"SELECT "last_accessed" FROM "{QUERY_CACHE_TABLE}" WHERE "tables" LIKE {p}1"#,
                     p = self.kind().param_prefix(),
                 );
                 let tables_param = format!("[{}]", tables.join(", "));
@@ -1083,7 +1079,7 @@ pub trait DbQuery {
         statement: &str,
         params: &str,
     ) -> Result<(), DbError> {
-        match self.table_exists("cache").await? {
+        match self.table_exists(QUERY_CACHE_TABLE).await? {
             true => {
                 // TODO: Move this to db_kind.rs
                 let get_current_timestamp = match self.kind() {
@@ -1092,7 +1088,7 @@ pub trait DbQuery {
                 };
                 self.execute(
                     &format!(
-                        r#"UPDATE "cache"
+                        r#"UPDATE "{QUERY_CACHE_TABLE}"
                            SET "last_accessed" = {get_current_timestamp}, "dirty_since" = 0
                            WHERE "tables" = {p}1
                            AND "statement" = {p}2
@@ -1126,7 +1122,7 @@ pub trait DbQuery {
                 let prefix = self.kind().param_prefix().to_string();
                 let cache_sql = format!(
                     r#"SELECT {prefix}1||rtrim(ltrim("value", '['), ']')||{prefix}2 AS "value"
-                       FROM "cache"
+                       FROM "{QUERY_CACHE_TABLE}"
                        WHERE "tables" = {prefix}3
                        AND "dirty_since" = 0
                        AND "statement" = {prefix}4
@@ -1182,7 +1178,7 @@ pub trait DbQuery {
                         // is_table_in_cache()
                         let cache_sql = format!(
                             r#"SELECT 1
-                               FROM "cache"
+                               FROM "{QUERY_CACHE_TABLE}"
                                WHERE "tables" LIKE {prefix}1
                                AND "statement" LIKE {prefix}2
                                AND "parameters" LIKE {prefix}3
@@ -1194,7 +1190,7 @@ pub trait DbQuery {
                         match rows.len() {
                             0 => {
                                 let insert_sql = format!(
-                                    r#"INSERT INTO "cache"
+                                    r#"INSERT INTO "{QUERY_CACHE_TABLE}"
                                       ("tables", "statement", "parameters", "value")
                                       VALUES ({prefix}1, {prefix}2, {prefix}3, {prefix}4)"#,
                                 );
@@ -1210,7 +1206,7 @@ pub trait DbQuery {
                                     DbKind::PostgreSQL => "round(extract(epoch from now()))",
                                 };
                                 let update_sql = format!(
-                                    r#"UPDATE "cache"
+                                    r#"UPDATE "{QUERY_CACHE_TABLE}"
                                           SET "dirty_since" = 0,
                                               "last_accessed" = {get_current_timestamp},
                                               "value" = {prefix}1
@@ -1293,7 +1289,7 @@ pub trait DbQuery {
                     None => false,
                 };
                 if !cache_table_exists {
-                    self.ensure_cache_table_exists().await?;
+                    self.ensure_cache_tables_exist().await?;
                     let mut cache = get_meta_cache()?;
                     cache.insert("cache_table".to_string());
                 }
@@ -1845,7 +1841,7 @@ fn get_affected_tables(sql: &str) -> Result<(HashSet<String>, HashSet<String>), 
     // (However we do report a drop of the cache table.)
     let edited_db_objects = edited_db_objects
         .into_iter()
-        .filter(|db_object| *db_object != "cache")
+        .filter(|db_object| *db_object != QUERY_CACHE_TABLE)
         .collect::<HashSet<_>>();
 
     Ok((edited_db_objects.clone(), dropped_db_objects.clone()))

@@ -1,5 +1,5 @@
 use crate::{
-    core::{DbError, ParamValue},
+    core::{DbError, ParamValue, QUERY_CACHE_TABLE, TABLE_CACHE_TABLE},
     params,
 };
 use rust_decimal::Decimal;
@@ -254,32 +254,32 @@ impl DbKind {
     }
 
     /// Generate the SQL needed to create the cache table.
-    pub fn create_cache_table_sql(&self) -> String {
-        let sql = match self {
-            DbKind::SQLite => {
-                r#"CREATE TABLE IF NOT EXISTS "cache" (
-                       "tables" TEXT,
-                       "statement" TEXT,
-                       "parameters" TEXT,
-                       "value" TEXT,
-                       "last_accessed" BIGINT DEFAULT (strftime('%s', 'now')),
-                       "dirty_since" BIGINT DEFAULT 0,
-                       PRIMARY KEY ("tables", "statement", "parameters")
-                   )"#
-            }
-            DbKind::PostgreSQL => {
-                r#"CREATE TABLE IF NOT EXISTS "cache" (
-                       "tables" TEXT,
-                       "statement" TEXT,
-                       "parameters" TEXT,
-                       "value" TEXT,
-                       "last_accessed" BIGINT DEFAULT round(extract(epoch from now())),
-                       "dirty_since" BIGINT DEFAULT 0,
-                       PRIMARY KEY ("tables", "statement", "parameters")
-                   )"#
-            }
+    pub fn create_query_cache_table_sql(&self) -> String {
+        let get_epoch_now = match self {
+            DbKind::SQLite => "(strftime('%s', 'now'))",
+            DbKind::PostgreSQL => "round(extract(epoch from now()))",
         };
-        sql.to_string()
+        format!(
+            r#"CREATE TABLE IF NOT EXISTS "{QUERY_CACHE_TABLE}" (
+                 "tables" TEXT,
+                 "statement" TEXT,
+                 "parameters" TEXT,
+                 "value" TEXT,
+                 "last_accessed" BIGINT DEFAULT {get_epoch_now},
+                 "dirty_since" BIGINT DEFAULT 0,
+                 PRIMARY KEY ("tables", "statement", "parameters")
+             )"#
+        )
+    }
+
+    /// Generate the SQL needed to create a table table, which is needed for caching.
+    pub fn create_table_cache_table_sql(&self) -> String {
+        format!(
+            r#"CREATE TABLE IF NOT EXISTS "{TABLE_CACHE_TABLE}" (
+                 "table" TEXT PRIMARY KEY,
+                 "dirty_since" BIGINT DEFAULT 0
+               )"#
+        )
     }
 
     /// Generate the SQL needed to verify whether the caching triggers for the given table exist.
@@ -324,7 +324,7 @@ impl DbKind {
                         r#"CREATE TRIGGER "{table}_cache_after_insert"
                            AFTER INSERT ON "{table}"
                            BEGIN
-                               DELETE FROM "cache" WHERE "tables" LIKE '%{table}%';
+                               DELETE FROM "{QUERY_CACHE_TABLE}" WHERE "tables" LIKE '%{table}%';
                            END"#
                     ),
                     format!(r#"DROP TRIGGER IF EXISTS "{table}_cache_after_update""#),
@@ -332,7 +332,7 @@ impl DbKind {
                         r#"CREATE TRIGGER "{table}_cache_after_update"
                            AFTER UPDATE ON "{table}"
                            BEGIN
-                             DELETE FROM "cache" WHERE "tables" LIKE '%{table}%';
+                             DELETE FROM "{QUERY_CACHE_TABLE}" WHERE "tables" LIKE '%{table}%';
                            END"#
                     ),
                     format!(r#"DROP TRIGGER IF EXISTS "{table}_cache_after_delete""#),
@@ -340,7 +340,7 @@ impl DbKind {
                         r#"CREATE TRIGGER "{table}_cache_after_delete"
                            AFTER DELETE ON "{table}"
                            BEGIN
-                             DELETE FROM "cache" WHERE "tables" LIKE '%{table}%';
+                             DELETE FROM "{QUERY_CACHE_TABLE}" WHERE "tables" LIKE '%{table}%';
                            END"#
                     ),
                 ]
@@ -354,7 +354,7 @@ impl DbKind {
                                AS
                                $$
                                BEGIN
-                                   DELETE FROM "cache" WHERE "tables" LIKE '%{table}%';
+                                   DELETE FROM "{QUERY_CACHE_TABLE}" WHERE "tables" LIKE '%{table}%';
                                    RETURN NEW;
                                END;
                                $$"#
