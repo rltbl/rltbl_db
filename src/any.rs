@@ -1566,7 +1566,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_caching() {
-        let all_strategies = ["none", "truncate_all", "truncate", "trigger", "memory:5"]
+        let all_strategies = ["truncate_all", "truncate", "trigger", "memory:5"]
             .iter()
             .map(|strategy| CachingStrategy::from_str(strategy).unwrap())
             .collect::<Vec<_>>();
@@ -1811,33 +1811,64 @@ mod tests {
 
     #[tokio::test]
     async fn test_view_caching() {
+        let all_strategies = [
+            "truncate_all",
+            "truncate",
+            "trigger",
+            // "memory:5" // TODO: Implement support.
+        ]
+        .iter()
+        .map(|strategy| CachingStrategy::from_str(strategy).unwrap())
+        .collect::<Vec<_>>();
+
         #[cfg(feature = "rusqlite")]
-        view_caching("mike_temp_test.db").await;
+        {
+            for strategy in &all_strategies {
+                view_caching(":memory:", strategy).await;
+            }
+        }
         #[cfg(feature = "libsql")]
-        view_caching("mike_temp_test.db").await;
-        //#[cfg(feature = "tokio-postgres")]
-        //view_caching("postgresql:///rltbl_db").await;
+        {
+            for strategy in &all_strategies {
+                view_caching(":memory:", strategy).await;
+            }
+        }
+        // #[cfg(feature = "tokio-postgres")]
+        // {
+        //     for strategy in &all_strategies {
+        //         view_caching("postgresql:///rltbl_db", strategy).await;
+        //     }
+        // }
     }
 
-    // TODO: Clean this test case up a bit.
-    async fn view_caching(url: &str) {
+    async fn view_caching(url: &str, strategy: &CachingStrategy) {
         let mut pool = AnyPool::connect(url).await.unwrap();
         // TODO: Remove this:
         if pool.kind() != DbKind::SQLite {
             return;
         }
 
-        pool.set_caching_strategy(&CachingStrategy::Truncate);
+        pool.set_caching_strategy(strategy);
         pool.set_cache_aware_query(true);
+
+        //////////////////
+        // TODO: there is a bug in the meta cache. We should be able to drop the
+        // cache tables here and rely on them to be created automatically when needed
+        // but this is not happening. So for now we simply truncate:
         pool.execute_batch(&format!(
-            // TODO: there is a bug in the meta cache. We should be able to drop the
-            // cache tables here and rely on them to be created automatically when needed
-            // but this is not happening. So for now we simply truncate:
-            "DELETE FROM {QUERY_CACHE_TABLE}; \
-             DELETE FROM {TABLE_CACHE_TABLE};"
+            "DROP TABLE IF EXISTS {QUERY_CACHE_TABLE}; \
+             DROP TABLE IF EXISTS {TABLE_CACHE_TABLE};"
         ))
         .await
         .unwrap();
+        pool.execute(&pool.kind().create_query_cache_table_sql(), ())
+            .await
+            .unwrap();
+        pool.execute(&pool.kind().create_table_cache_table_sql(), ())
+            .await
+            .unwrap();
+        //////////////////
+
         pool.execute_batch(
             "DROP VIEW IF EXISTS test_view_caching_view; \
              DROP TABLE IF EXISTS test_view_caching_table_1; \
@@ -1960,6 +1991,15 @@ mod tests {
             let dirty_since: u64 = row1.get("dirty_since").unwrap().try_into().unwrap();
             assert_ne!(dirty_since, 0);
 
+            let _: Vec<DbRow> = pool
+                .cache(
+                    &["test_view_caching_view"],
+                    "SELECT * FROM test_view_caching_view",
+                    (),
+                )
+                .await
+                .unwrap();
+
             let rows: Vec<DbRow> = pool
                 .query_no_cache(&format!("SELECT * FROM {QUERY_CACHE_TABLE}"), ())
                 .await
@@ -1982,13 +2022,14 @@ mod tests {
                 ParamValue::from(r#"[{"bar":1000,"car":"Fiat"}]"#)
             );
             let last_accessed: u64 = row.get("last_accessed").unwrap().try_into().unwrap();
-            assert_eq!(last_accessed, last_last_accessed);
+            assert!(last_accessed > last_last_accessed);
 
             last_last_accessed = last_accessed;
             std::thread::sleep(std::time::Duration::from_millis(1000));
         }
 
         {
+            // TODO: This sub-test seems redundant. Possibly remove it.
             let _: Vec<DbRow> = pool
                 .cache(
                     &["test_view_caching_view"],

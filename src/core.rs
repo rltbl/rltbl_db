@@ -735,8 +735,27 @@ pub trait DbQuery {
     /// [DbQuery::ensure_cache_table_exists()] implicitly.
     async fn ensure_caching_triggers_exist(&self, tables: &[&str]) -> Result<(), DbError> {
         let create_caching_triggers = async |table: &str| -> Result<(), DbError> {
-            let sql = self.kind().create_caching_triggers_sql(&table).join(";\n");
-            self.execute_batch(&sql).await?;
+            if self.table_exists(table).await? {
+                let sql = self
+                    .kind()
+                    .create_table_caching_triggers_sql(&table)
+                    .join(";\n");
+                self.execute_batch(&sql).await?;
+            } else if self.view_exists(table).await? {
+                let view = table;
+                let view_sql: String = self.get_view_sql(view).await?;
+                let view_tables = get_view_tables(&view_sql)?;
+                let view_tables = view_tables.iter().map(|v| v.as_str()).collect::<Vec<_>>();
+                let sql = self
+                    .kind()
+                    .create_view_caching_triggers_sql(&view, &view_tables)?
+                    .join(";\n");
+                self.execute_batch(&sql).await?;
+            } else {
+                return Err(DbError::InputError(format!(
+                    "Unidentified database object: '{table}'"
+                )));
+            }
             Ok(())
         };
 
@@ -814,7 +833,6 @@ pub trait DbQuery {
     /// all just been edited (i.e., truncated, deleted from, inserted to, or updated).
     async fn clear_cache_for_edited_tables(&self, tables: &[&str]) -> Result<(), DbError> {
         match self.get_caching_strategy() {
-            // TODO: Change the SQL trigger to update the dirty_since time.
             CachingStrategy::None | CachingStrategy::Trigger => (),
             CachingStrategy::TruncateAll => {
                 self.mark_table_cache_entries(tables).await?;
@@ -824,7 +842,7 @@ pub trait DbQuery {
                 self.mark_table_cache_entries(tables).await?;
                 self.delete_query_cache_entries(tables).await?
             }
-            // TODO: Change the mem cache to have a dirty_since time as well.
+            // TODO: Handle cached views.
             CachingStrategy::Memory(_) => clear_mem_cache(&tables)?,
         };
         Ok(())
@@ -916,7 +934,6 @@ pub trait DbQuery {
 
     /// TODO: Add docstring
     async fn unmark_table_cache_entries(&self, tables: &[&str]) -> Result<(), DbError> {
-        // TODO: Move this to its own function:
         for table in tables {
             self.execute_no_cache(
                 &format!(
@@ -972,6 +989,29 @@ pub trait DbQuery {
         Ok(())
     }
 
+    /// TODO: Add docstring
+    async fn get_view_sql(&self, target: &str) -> Result<String, DbError> {
+        // Get the code that defines the view in the database:
+        let view_sql = {
+            let rows: Vec<DbRow> = {
+                let (sql, params) = self.kind().view_sql_sql(target);
+                self.query_no_cache(&sql, &params).await?
+            };
+            match rows.first() {
+                Some(row) => row
+                    .get("sql")
+                    .ok_or(DbError::DataError("No column 'sql' in row".to_string()))?
+                    .to_string(),
+                None => {
+                    return Err(DbError::DataError(format!(
+                        "Nothing found for target '{target}'"
+                    )));
+                }
+            }
+        };
+        Ok(view_sql)
+    }
+
     /// Clears the cache for any of the given targets that (a) are views and (b) have source
     /// tables that have been modified more recently than the view.
     async fn update_cached_views(&self, targets: &[&str]) -> Result<(), DbError> {
@@ -982,100 +1022,14 @@ pub trait DbQuery {
                 continue;
             }
 
-            // Get the code that defines the view in the database:
-            let view_sql = {
-                let rows: Vec<DbRow> = {
-                    let (sql, params) = self.kind().view_sql_sql(target);
-                    self.query_no_cache(&sql, &params).await?
-                };
-                match rows.first() {
-                    Some(row) => row
-                        .get("sql")
-                        .ok_or(DbError::DataError("No column 'sql' in row".to_string()))?
-                        .to_string(),
-                    None => {
-                        return Err(DbError::DataError(format!(
-                            "Nothing found for target '{target}'"
-                        )));
-                    }
-                }
-            };
-
-            // Instantiate the parser and try to parse the code::
-            let mut parser = Parser::new();
-            parser.set_language(&SQL_LANGUAGE.into()).map_err(|err| {
-                DbError::ParseError(format!("Error setting language to SQL: {err}"))
-            })?;
-            let tree = match parser.parse(&view_sql, None) {
-                Some(tree) => tree,
-                None => return Err(DbError::ParseError(format!("Could not parse '{view_sql}'"))),
-            };
-
-            // Collect the top-level statements:
-            let statements = {
-                let root_node = tree.root_node();
-                check_for_error(&root_node, &view_sql)?;
-                if root_node.kind().to_lowercase() != "program" {
-                    return Err(DbError::ParseError(format!(
-                        "Unexpected root node kind: {}",
-                        root_node.kind()
-                    )));
-                }
-                root_node
-                    .children(&mut root_node.walk())
-                    .filter(|child| child.kind().to_lowercase() == "statement")
-                    .collect::<Vec<_>>()
-            };
-
-            for statement in &statements {
-                check_for_error(&statement, &view_sql)?;
-                for instruction in statement.children(&mut tree.walk()) {
-                    match instruction.kind().to_lowercase().as_str() {
-                        "create_view" => {
-                            let create_query = instruction
-                                .children(&mut instruction.walk())
-                                .filter(|child| child.kind().to_lowercase() == "create_query")
-                                .collect::<Vec<_>>();
-                            verify_list_len(&create_query, 1)?;
-                            let create_query = create_query[0];
-
-                            let from = create_query
-                                .children(&mut create_query.walk())
-                                .filter(|child| child.kind().to_lowercase() == "from")
-                                .collect::<Vec<_>>();
-                            verify_list_len(&from, 1)?;
-                            let from = from[0];
-
-                            let relations = from
-                                .children(&mut from.walk())
-                                .filter(|child| child.kind().to_lowercase() == "relation")
-                                .collect::<Vec<_>>();
-                            for relation in relations {
-                                let object_ref = relation
-                                    .children(&mut relation.walk())
-                                    .filter(|child| {
-                                        child.kind().to_lowercase() == "object_reference"
-                                    })
-                                    .collect::<Vec<_>>();
-                                verify_list_len(&object_ref, 1)?;
-                                let object_ref = object_ref[0];
-
-                                let source_table = view_sql.to_string()
-                                    [object_ref.start_byte()..object_ref.end_byte()]
-                                    .to_string();
-
-                                // TODO: Try to combine all of these db accesses into one
-                                // access brefore beginning to iterate over the loop.
-                                let dirty_since = self.dirty_since(&source_table).await?;
-                                if dirty_since > 0 && dirty_since >= last_accessed {
-                                    self.delete_query_cache_entries(&[target]).await?;
-                                    break;
-                                }
-                            }
-                            break;
-                        }
-                        _ => (),
-                    }
+            let view_sql = self.get_view_sql(target).await?;
+            let view_tables = get_view_tables(&view_sql)?;
+            // TODO: Use fewer queries to do this (ideally just one):
+            for table in &view_tables {
+                let dirty_since = self.dirty_since(&table).await?;
+                if dirty_since > 0 && dirty_since >= last_accessed {
+                    self.delete_query_cache_entries(&[target]).await?;
+                    break;
                 }
             }
         }
@@ -1268,11 +1222,6 @@ pub trait DbQuery {
             }
         };
 
-        // In case any of the given tables are actually views, call update_cached_views() to
-        // check if their source tables have been edited more recently than the view and clear
-        // the view from the cache if that's the case:
-        self.update_cached_views(tables).await?;
-
         // Now proceed to lookup the given query for the given tables in the cache:
         match self.get_caching_strategy() {
             CachingStrategy::None => {
@@ -1294,6 +1243,7 @@ pub trait DbQuery {
                     cache.insert(QUERY_CACHE_TABLE.to_string());
                     cache.insert(TABLE_CACHE_TABLE.to_string());
                 }
+                self.update_cached_views(tables).await?;
                 let rows: Vec<DbRow> = db_cache(tables, sql, &params.into_params()).await?;
                 Ok(FromDbRows::from(rows))
             }
@@ -1314,6 +1264,7 @@ pub trait DbQuery {
                 Ok(FromDbRows::from(rows))
             }
             CachingStrategy::Memory(cache_size) => {
+                // TODO Handle cached views.
                 let rows = mem_cache(tables, sql, &params.into_params(), cache_size).await?;
                 Ok(FromDbRows::from(rows))
             }
@@ -1661,6 +1612,80 @@ pub fn validate_table_name(table_name: &str) -> Result<String, DbError> {
         true => Ok(table_name.to_string()),
         false => Err(DbError::InputError(error_msg)),
     }
+}
+
+/// TODO: Add docstring
+fn get_view_tables(view_sql: &str) -> Result<Vec<String>, DbError> {
+    // Instantiate the parser and try to parse the code::
+    let mut parser = Parser::new();
+    parser
+        .set_language(&SQL_LANGUAGE.into())
+        .map_err(|err| DbError::ParseError(format!("Error setting language to SQL: {err}")))?;
+    let tree = match parser.parse(&view_sql, None) {
+        Some(tree) => tree,
+        None => return Err(DbError::ParseError(format!("Could not parse '{view_sql}'"))),
+    };
+
+    // Collect the top-level statements:
+    let statements = {
+        let root_node = tree.root_node();
+        check_for_error(&root_node, &view_sql)?;
+        if root_node.kind().to_lowercase() != "program" {
+            return Err(DbError::ParseError(format!(
+                "Unexpected root node kind: {}",
+                root_node.kind()
+            )));
+        }
+        root_node
+            .children(&mut root_node.walk())
+            .filter(|child| child.kind().to_lowercase() == "statement")
+            .collect::<Vec<_>>()
+    };
+
+    let mut view_tables = vec![];
+    for statement in &statements {
+        check_for_error(&statement, &view_sql)?;
+        for instruction in statement.children(&mut tree.walk()) {
+            match instruction.kind().to_lowercase().as_str() {
+                "create_view" => {
+                    let create_query = instruction
+                        .children(&mut instruction.walk())
+                        .filter(|child| child.kind().to_lowercase() == "create_query")
+                        .collect::<Vec<_>>();
+                    verify_list_len(&create_query, 1)?;
+                    let create_query = create_query[0];
+
+                    let from = create_query
+                        .children(&mut create_query.walk())
+                        .filter(|child| child.kind().to_lowercase() == "from")
+                        .collect::<Vec<_>>();
+                    verify_list_len(&from, 1)?;
+                    let from = from[0];
+
+                    let relations = from
+                        .children(&mut from.walk())
+                        .filter(|child| child.kind().to_lowercase() == "relation")
+                        .collect::<Vec<_>>();
+                    for relation in relations {
+                        let object_ref = relation
+                            .children(&mut relation.walk())
+                            .filter(|child| child.kind().to_lowercase() == "object_reference")
+                            .collect::<Vec<_>>();
+                        verify_list_len(&object_ref, 1)?;
+                        let object_ref = object_ref[0];
+
+                        let source_table = view_sql.to_string()
+                            [object_ref.start_byte()..object_ref.end_byte()]
+                            .to_string();
+                        view_tables.push(source_table);
+                    }
+                    break;
+                }
+                _ => (),
+            }
+        }
+    }
+    Ok(view_tables)
 }
 
 /// Parse the given string, representing a series of (semi-colon-separated) SQL commands,

@@ -1,5 +1,5 @@
 use crate::{
-    core::{DbError, ParamValue, QUERY_CACHE_TABLE, TABLE_CACHE_TABLE},
+    core::{DbError, ParamValue, QUERY_CACHE_TABLE, TABLE_CACHE_TABLE, validate_table_name},
     params,
 };
 use rust_decimal::Decimal;
@@ -255,6 +255,7 @@ impl DbKind {
 
     /// Generate the SQL needed to create the cache table.
     pub fn create_query_cache_table_sql(&self) -> String {
+        // TODO: Move this to a separate function:
         let get_epoch_now = match self {
             DbKind::SQLite => "(strftime('%s', 'now'))",
             DbKind::PostgreSQL => "round(extract(epoch from now()))",
@@ -313,8 +314,70 @@ impl DbKind {
         )
     }
 
+    /// TODO: Add docstring
+    pub fn create_view_caching_triggers_sql(
+        &self,
+        view: &str,
+        source_tables: &[&str],
+    ) -> Result<Vec<String>, DbError> {
+        // TODO: Move this to a separate function:
+        let get_epoch_now = match self {
+            DbKind::SQLite => "(strftime('%s', 'now'))",
+            DbKind::PostgreSQL => "round(extract(epoch from now()))",
+        };
+        match self {
+            DbKind::SQLite => {
+                let mut triggers = vec![];
+                for table in source_tables {
+                    let table = validate_table_name(table)?;
+                    let basename = format!("{table}_cache_for_{view}");
+                    triggers.push(format!(
+                        r#"DROP TRIGGER IF EXISTS "{basename}_after_insert""#
+                    ));
+                    triggers.push(format!(
+                        r#"CREATE TRIGGER "{basename}_after_insert"
+                           AFTER INSERT ON "{table}"
+                           BEGIN
+                               DELETE FROM "{QUERY_CACHE_TABLE}" WHERE "tables" LIKE '%{view}%';
+                               INSERT INTO "{TABLE_CACHE_TABLE}"
+                                   VALUES ('{table}', {get_epoch_now});
+                           END"#
+                    ));
+
+                    triggers.push(format!(
+                        r#"DROP TRIGGER IF EXISTS "{basename}_after_update""#
+                    ));
+                    triggers.push(format!(
+                        r#"CREATE TRIGGER "{basename}_after_update"
+                           AFTER UPDATE ON "{table}"
+                           BEGIN
+                               DELETE FROM "{QUERY_CACHE_TABLE}" WHERE "tables" LIKE '%{view}%';
+                               INSERT INTO "{TABLE_CACHE_TABLE}"
+                                   VALUES ('{table}', {get_epoch_now});
+                           END"#
+                    ));
+
+                    triggers.push(format!(
+                        r#"DROP TRIGGER IF EXISTS "{basename}_after_delete""#
+                    ));
+                    triggers.push(format!(
+                        r#"CREATE TRIGGER "{basename}_after_delete"
+                           AFTER DELETE ON "{table}"
+                           BEGIN
+                               DELETE FROM "{QUERY_CACHE_TABLE}" WHERE "tables" LIKE '%{view}%';
+                               INSERT INTO "{TABLE_CACHE_TABLE}"
+                                   VALUES ('{table}', {get_epoch_now});
+                           END"#
+                    ));
+                }
+                Ok(triggers)
+            }
+            DbKind::PostgreSQL => todo!(),
+        }
+    }
+
     /// Generate the SQL statements needed to create the caching triggers for the given table.
-    pub fn create_caching_triggers_sql(&self, table: &str) -> Vec<String> {
+    pub fn create_table_caching_triggers_sql(&self, table: &str) -> Vec<String> {
         match self {
             DbKind::SQLite => {
                 vec![
