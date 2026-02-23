@@ -1610,7 +1610,8 @@ mod tests {
         pool.drop_table("test_table_caching_2").await.unwrap();
         pool.execute_batch(
             "CREATE TABLE test_table_caching_1 (\
-               value TEXT \
+               value TEXT, \
+               number INTEGER \
              );\
              CREATE TABLE test_table_caching_2 (\
                value TEXT \
@@ -1621,13 +1622,15 @@ mod tests {
 
         pool.insert(
             "test_table_caching_1",
-            &["value"],
+            &["value", "number"],
             &[
                 &db_row! {
                     "value".into() => ParamValue::from("alpha"),
+                    "number".into() => ParamValue::from(1_i32),
                 },
                 &db_row! {
                     "value".into() => ParamValue::from("beta"),
+                    "number".into() => ParamValue::from(2_i32),
                 },
             ],
         )
@@ -1651,8 +1654,14 @@ mod tests {
         assert_eq!(
             rows,
             vec![
-                db_row! {"value".into() => ParamValue::from("alpha")},
-                db_row! {"value".into() => ParamValue::from("beta")},
+                db_row! {
+                    "value".into() => ParamValue::from("alpha"),
+                    "number".into() => ParamValue::from(1_i32),
+                },
+                db_row! {
+                    "value".into() => ParamValue::from("beta"),
+                    "number".into() => ParamValue::from(2_i32),
+                },
             ]
         );
 
@@ -1673,8 +1682,14 @@ mod tests {
         assert_eq!(
             rows,
             vec![
-                db_row! {"value".into() => ParamValue::from("alpha")},
-                db_row! {"value".into() => ParamValue::from("beta")},
+                db_row! {
+                    "value".into() => ParamValue::from("alpha"),
+                    "number".into() => ParamValue::from(1_i32),
+                },
+                db_row! {
+                    "value".into() => ParamValue::from("beta"),
+                    "number".into() => ParamValue::from(2_i32),
+                },
             ]
         );
 
@@ -1712,10 +1727,22 @@ mod tests {
         assert_eq!(
             rows,
             vec![
-                db_row! {"value".into() => ParamValue::from("alpha")},
-                db_row! {"value".into() => ParamValue::from("beta")},
-                db_row! {"value".into() => ParamValue::from("gamma")},
-                db_row! {"value".into() => ParamValue::from("delta")},
+                db_row! {
+                    "value".into() => ParamValue::from("alpha"),
+                    "number".into() => ParamValue::from(1_i32),
+                },
+                db_row! {
+                    "value".into() => ParamValue::from("beta"),
+                    "number".into() => ParamValue::from(2_i32),
+                },
+                db_row! {
+                    "value".into() => ParamValue::from("gamma"),
+                    "number".into() => ParamValue::Null,
+                },
+                db_row! {
+                    "value".into() => ParamValue::from("delta"),
+                    "number".into() => ParamValue::Null,
+                },
             ]
         );
 
@@ -1731,10 +1758,22 @@ mod tests {
         assert_eq!(
             rows,
             vec![
-                db_row! {"value".into() => ParamValue::from("alpha")},
-                db_row! {"value".into() => ParamValue::from("beta")},
-                db_row! {"value".into() => ParamValue::from("gamma")},
-                db_row! {"value".into() => ParamValue::from("delta")},
+                db_row! {
+                    "value".into() => ParamValue::from("alpha"),
+                    "number".into() => ParamValue::from(1_i32),
+                },
+                db_row! {
+                    "value".into() => ParamValue::from("beta"),
+                    "number".into() => ParamValue::from(2_i32),
+                },
+                db_row! {
+                    "value".into() => ParamValue::from("gamma"),
+                    "number".into() => ParamValue::Null,
+                },
+                db_row! {
+                    "value".into() => ParamValue::from("delta"),
+                    "number".into() => ParamValue::Null,
+                },
             ]
         );
 
@@ -1798,12 +1837,30 @@ mod tests {
         assert_eq!(
             rows,
             vec![
-                db_row! {"value".into() => ParamValue::from("alpha")},
-                db_row! {"value".into() => ParamValue::from("beta")},
-                db_row! {"value".into() => ParamValue::from("gamma")},
-                db_row! {"value".into() => ParamValue::from("delta")},
-                db_row! {"value".into() => ParamValue::from("rho")},
-                db_row! {"value".into() => ParamValue::from("sigma")},
+                db_row! {
+                    "value".into() => ParamValue::from("alpha"),
+                    "number".into() => ParamValue::from(1_i32),
+                },
+                db_row! {
+                    "value".into() => ParamValue::from("beta"),
+                    "number".into() => ParamValue::from(2_i32),
+                },
+                db_row! {
+                    "value".into() => ParamValue::from("gamma"),
+                    "number".into() => ParamValue::Null,
+                },
+                db_row! {
+                    "value".into() => ParamValue::from("delta"),
+                    "number".into() => ParamValue::Null,
+                },
+                db_row! {
+                    "value".into() => ParamValue::from("rho"),
+                    "number".into() => ParamValue::Null,
+                },
+                db_row! {
+                    "value".into() => ParamValue::from("sigma"),
+                    "number".into() => ParamValue::Null,
+                },
             ]
         );
     }
