@@ -249,7 +249,19 @@ impl DbKind {
                     .to_string(),
                 params![view],
             ),
-            DbKind::PostgreSQL => todo!(),
+            DbKind::PostgreSQL => (
+                format!(
+                    r#"SELECT 'CREATE VIEW "{view}" AS '||"definition" AS "sql"
+                       FROM "pg_views"
+                       WHERE "viewname" = $1
+                       AND "schemaname" IN (
+                         SELECT REGEXP_SPLIT_TO_TABLE("setting", ', ')
+                         FROM "pg_settings"
+                         WHERE "name" = 'search_path'
+                       )"#
+                ),
+                params![view],
+            ),
         }
     }
 
@@ -258,7 +270,7 @@ impl DbKind {
         // TODO: Move this to a separate function:
         let get_epoch_now = match self {
             DbKind::SQLite => "(strftime('%s', 'now'))",
-            DbKind::PostgreSQL => "round(extract(epoch from now()))",
+            DbKind::PostgreSQL => "extract(epoch from now())",
         };
         format!(
             r#"CREATE TABLE IF NOT EXISTS "{QUERY_CACHE_TABLE}" (
@@ -274,10 +286,15 @@ impl DbKind {
 
     /// Generate the SQL needed to create a table table, which is needed for caching.
     pub fn create_table_cache_table_sql(&self) -> String {
+        // TODO: Move this to a separate function:
+        let get_epoch_now = match self {
+            DbKind::SQLite => "(strftime('%s', 'now'))",
+            DbKind::PostgreSQL => "extract(epoch from now())",
+        };
         format!(
             r#"CREATE TABLE IF NOT EXISTS "{TABLE_CACHE_TABLE}" (
                  "table" TEXT PRIMARY KEY,
-                 "dirty_since" BIGINT DEFAULT 0
+                 "last_modified" BIGINT DEFAULT {get_epoch_now}
                )"#
         )
     }
@@ -314,79 +331,50 @@ impl DbKind {
         )
     }
 
-    /// TODO: Add docstring
-    pub fn create_view_caching_triggers_sql(
+    /// Generate the SQL statements needed to create the caching triggers for the given table.
+    pub fn create_table_caching_triggers_sql(
         &self,
-        view: &str,
-        source_tables: &[&str],
+        table: &str,
+        view: Option<&str>,
     ) -> Result<Vec<String>, DbError> {
+        let table = validate_table_name(table)?;
         // TODO: Move this to a separate function:
         let get_epoch_now = match self {
             DbKind::SQLite => "(strftime('%s', 'now'))",
-            DbKind::PostgreSQL => "round(extract(epoch from now()))",
+            DbKind::PostgreSQL => "extract(epoch from now())",
         };
-        match self {
-            DbKind::SQLite => {
-                let mut triggers = vec![];
-                for table in source_tables {
-                    let table = validate_table_name(table)?;
-                    let basename = format!("{table}_cache_for_{view}");
-                    triggers.push(format!(
-                        r#"DROP TRIGGER IF EXISTS "{basename}_after_insert""#
-                    ));
-                    triggers.push(format!(
-                        r#"CREATE TRIGGER "{basename}_after_insert"
-                           AFTER INSERT ON "{table}"
-                           BEGIN
-                               DELETE FROM "{QUERY_CACHE_TABLE}" WHERE "tables" LIKE '%{view}%';
-                               INSERT INTO "{TABLE_CACHE_TABLE}"
-                                   VALUES ('{table}', {get_epoch_now});
-                           END"#
-                    ));
-
-                    triggers.push(format!(
-                        r#"DROP TRIGGER IF EXISTS "{basename}_after_update""#
-                    ));
-                    triggers.push(format!(
-                        r#"CREATE TRIGGER "{basename}_after_update"
-                           AFTER UPDATE ON "{table}"
-                           BEGIN
-                               DELETE FROM "{QUERY_CACHE_TABLE}" WHERE "tables" LIKE '%{view}%';
-                               INSERT INTO "{TABLE_CACHE_TABLE}"
-                                   VALUES ('{table}', {get_epoch_now});
-                           END"#
-                    ));
-
-                    triggers.push(format!(
-                        r#"DROP TRIGGER IF EXISTS "{basename}_after_delete""#
-                    ));
-                    triggers.push(format!(
-                        r#"CREATE TRIGGER "{basename}_after_delete"
-                           AFTER DELETE ON "{table}"
-                           BEGIN
-                               DELETE FROM "{QUERY_CACHE_TABLE}" WHERE "tables" LIKE '%{view}%';
-                               INSERT INTO "{TABLE_CACHE_TABLE}"
-                                   VALUES ('{table}', {get_epoch_now});
-                           END"#
-                    ));
-                }
-                Ok(triggers)
+        let like_for_view = match view {
+            None => "".to_string(),
+            Some(view) => {
+                let view = validate_table_name(view)?;
+                format!(r#" OR "tables" LIKE '%{view}%'"#)
             }
-            DbKind::PostgreSQL => todo!(),
-        }
-    }
+        };
+        let delete_stmt = format!(
+            r#"DELETE FROM "{QUERY_CACHE_TABLE}"
+               WHERE "tables" LIKE '%{table}%'{like_for_view}"#
+        );
+        let insert_stmt = format!(
+            r#"INSERT INTO "{TABLE_CACHE_TABLE}"
+                 ("table", "last_modified")
+                 VALUES ('{table}', {get_epoch_now})
+                 ON CONFLICT ("table")
+                   DO UPDATE SET "last_modified" = {get_epoch_now}"#
+        );
 
-    /// Generate the SQL statements needed to create the caching triggers for the given table.
-    pub fn create_table_caching_triggers_sql(&self, table: &str) -> Vec<String> {
+        // TODO: The DELETE FROM statements need an additional join on the table cache, such
+        // that the last accessed time is less than the last modified time.
+
         match self {
             DbKind::SQLite => {
-                vec![
+                let ddl = vec![
                     format!(r#"DROP TRIGGER IF EXISTS "{table}_cache_after_insert""#),
                     format!(
                         r#"CREATE TRIGGER "{table}_cache_after_insert"
                            AFTER INSERT ON "{table}"
                            BEGIN
-                               DELETE FROM "{QUERY_CACHE_TABLE}" WHERE "tables" LIKE '%{table}%';
+                               {delete_stmt};
+                               {insert_stmt};
                            END"#
                     ),
                     format!(r#"DROP TRIGGER IF EXISTS "{table}_cache_after_update""#),
@@ -394,7 +382,8 @@ impl DbKind {
                         r#"CREATE TRIGGER "{table}_cache_after_update"
                            AFTER UPDATE ON "{table}"
                            BEGIN
-                             DELETE FROM "{QUERY_CACHE_TABLE}" WHERE "tables" LIKE '%{table}%';
+                             {delete_stmt};
+                             {insert_stmt};
                            END"#
                     ),
                     format!(r#"DROP TRIGGER IF EXISTS "{table}_cache_after_delete""#),
@@ -402,13 +391,15 @@ impl DbKind {
                         r#"CREATE TRIGGER "{table}_cache_after_delete"
                            AFTER DELETE ON "{table}"
                            BEGIN
-                             DELETE FROM "{QUERY_CACHE_TABLE}" WHERE "tables" LIKE '%{table}%';
+                             {delete_stmt};
+                             {insert_stmt};
                            END"#
                     ),
-                ]
+                ];
+                Ok(ddl)
             }
             DbKind::PostgreSQL => {
-                vec![
+                let ddl = vec![
                     format!(
                         r#"CREATE OR REPLACE FUNCTION "clean_cache_for_{table}"()
                                RETURNS TRIGGER
@@ -416,7 +407,8 @@ impl DbKind {
                                AS
                                $$
                                BEGIN
-                                   DELETE FROM "{QUERY_CACHE_TABLE}" WHERE "tables" LIKE '%{table}%';
+                                   {delete_stmt};
+                                   {insert_stmt};
                                    RETURN NEW;
                                END;
                                $$"#
@@ -439,7 +431,8 @@ impl DbKind {
                                AFTER DELETE ON "{table}"
                                EXECUTE FUNCTION "clean_cache_for_{table}"()"#
                     ),
-                ]
+                ];
+                Ok(ddl)
             }
         }
     }

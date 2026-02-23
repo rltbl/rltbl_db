@@ -29,10 +29,10 @@ pub type StringRow = IndexMap<String, String>;
 pub type ColumnMap = IndexMap<String, String>;
 
 /// The name of the cache table
-pub static QUERY_CACHE_TABLE: &str = "rltbl_db_cache";
+pub static QUERY_CACHE_TABLE: &str = "rltbl_db_query_cache";
 
 /// The name of the table table
-pub static TABLE_CACHE_TABLE: &str = "rltbl_db_table";
+pub static TABLE_CACHE_TABLE: &str = "rltbl_db_table_cache";
 
 /// Represents a valid database table name.
 static VALID_TABLE_NAME_MATCH_STR: &str = r"^[A-Za-z_][0-9A-Za-z_]*$";
@@ -738,19 +738,19 @@ pub trait DbQuery {
             if self.table_exists(table).await? {
                 let sql = self
                     .kind()
-                    .create_table_caching_triggers_sql(&table)
+                    .create_table_caching_triggers_sql(&table, None)?
                     .join(";\n");
                 self.execute_batch(&sql).await?;
             } else if self.view_exists(table).await? {
                 let view = table;
                 let view_sql: String = self.get_view_sql(view).await?;
-                let view_tables = get_view_tables(&view_sql)?;
-                let view_tables = view_tables.iter().map(|v| v.as_str()).collect::<Vec<_>>();
-                let sql = self
-                    .kind()
-                    .create_view_caching_triggers_sql(&view, &view_tables)?
-                    .join(";\n");
-                self.execute_batch(&sql).await?;
+                for source_table in get_view_tables(&view_sql)?.iter() {
+                    let sql = self
+                        .kind()
+                        .create_table_caching_triggers_sql(source_table, Some(view))?
+                        .join(";\n");
+                    self.execute_batch(&sql).await?;
+                }
             } else {
                 return Err(DbError::InputError(format!(
                     "Unidentified database object: '{table}'"
@@ -852,6 +852,9 @@ pub trait DbQuery {
     /// current [CachingStrategy], under the assumption that the tables in the given list have
     /// all just been dropped.
     async fn clear_cache_for_dropped_tables(&self, tables: &[&str]) -> Result<(), DbError> {
+        // Note that we don't need to worry about whether one of the dropped tables actually
+        // underlies a view, since if it really was dropped then of necessity the view must
+        // also have been dropped.
         match self.get_caching_strategy() {
             CachingStrategy::None => (),
             CachingStrategy::TruncateAll => {
@@ -890,7 +893,7 @@ pub trait DbQuery {
                 // TODO: Move this to db_kind.rs
                 let get_current_timestamp = match self.kind() {
                     DbKind::SQLite => "strftime('%s', 'now')",
-                    DbKind::PostgreSQL => "round(extract(epoch from now()))",
+                    DbKind::PostgreSQL => "extract(epoch from now())",
                 };
                 self.execute(
                     &format!(
@@ -916,35 +919,18 @@ pub trait DbQuery {
             // TODO: Move this to db_kind.rs
             let get_epoch = match self.kind() {
                 DbKind::SQLite => "strftime('%s', 'now')",
-                DbKind::PostgreSQL => "round(extract(epoch from now()))",
+                DbKind::PostgreSQL => "extract(epoch from now())",
             };
             for table in tables {
                 let table = validate_table_name(table)?;
                 let sql = format!(
-                    r#"INSERT INTO "{TABLE_CACHE_TABLE}" ("table", "dirty_since")
+                    r#"INSERT INTO "{TABLE_CACHE_TABLE}" ("table", "last_modified")
                        VALUES ({prefix}1, {get_epoch})
-                       ON CONFLICT ("table") DO UPDATE SET "dirty_since" = {get_epoch}"#,
+                       ON CONFLICT ("table") DO UPDATE SET "last_modified" = {get_epoch}"#,
                     prefix = self.kind().param_prefix()
                 );
                 self.execute_no_cache(&sql, params![table]).await?;
             }
-        }
-        Ok(())
-    }
-
-    /// TODO: Add docstring
-    async fn unmark_table_cache_entries(&self, tables: &[&str]) -> Result<(), DbError> {
-        for table in tables {
-            self.execute_no_cache(
-                &format!(
-                    r#"UPDATE "{TABLE_CACHE_TABLE}"
-                       SET "dirty_since" = 0
-                       WHERE "table" LIKE {p}1"#,
-                    p = self.kind().param_prefix(),
-                ),
-                params![table],
-            )
-            .await?;
         }
         Ok(())
     }
@@ -1009,26 +995,27 @@ pub trait DbQuery {
                 }
             }
         };
+        // println!("VIEW SQL: {view_sql}");
         Ok(view_sql)
     }
 
     /// Clears the cache for any of the given targets that (a) are views and (b) have source
     /// tables that have been modified more recently than the view.
-    async fn update_cached_views(&self, targets: &[&str]) -> Result<(), DbError> {
-        let last_accessed = self.last_accessed(targets).await?;
-        for target in targets {
-            // If the target is not a view just skip to the next one.
-            if !self.view_exists(target).await? {
+    async fn update_cached_views(&self, tables: &[&str]) -> Result<(), DbError> {
+        for view in tables {
+            // If the table is not a view just skip to the next one.
+            if !self.view_exists(view).await? {
                 continue;
             }
 
-            let view_sql = self.get_view_sql(target).await?;
+            let last_accessed = self.last_accessed(view).await?;
+            let view_sql = self.get_view_sql(view).await?;
             let view_tables = get_view_tables(&view_sql)?;
             // TODO: Use fewer queries to do this (ideally just one):
-            for table in &view_tables {
-                let dirty_since = self.dirty_since(&table).await?;
-                if dirty_since > 0 && dirty_since >= last_accessed {
-                    self.delete_query_cache_entries(&[target]).await?;
+            for view_table in &view_tables {
+                let last_modified = self.last_modified(&view_table).await?;
+                if last_modified > 0 && last_modified >= last_accessed {
+                    self.delete_query_cache_entries(&[view]).await?;
                     break;
                 }
             }
@@ -1038,11 +1025,11 @@ pub trait DbQuery {
     }
 
     /// TODO: Add docstring here.
-    async fn dirty_since(&self, table: &str) -> Result<u64, DbError> {
+    async fn last_modified(&self, table: &str) -> Result<u64, DbError> {
         match self.table_exists(TABLE_CACHE_TABLE).await? {
             true => {
                 let sql = format!(
-                    r#"SELECT "dirty_since"
+                    r#"SELECT "last_modified"
                        FROM "{TABLE_CACHE_TABLE}"
                        WHERE "table" LIKE {p}1"#,
                     p = self.kind().param_prefix(),
@@ -1053,10 +1040,10 @@ pub trait DbQuery {
                     0 => Ok(0),
                     1 => {
                         let row = &rows[0];
-                        match row.get("dirty_since") {
-                            Some(dirty_since) => Ok(dirty_since.try_into()?),
+                        match row.get("last_modified") {
+                            Some(last_modified) => Ok(last_modified.try_into()?),
                             None => Err(DbError::DataError(format!(
-                                "No field 'dirty_since' in row {row:?}"
+                                "No field 'last_modified' in row {row:?}"
                             ))),
                         }
                     }
@@ -1070,7 +1057,7 @@ pub trait DbQuery {
     }
 
     /// TODO: Add docstring
-    async fn last_accessed(&self, tables: &[&str]) -> Result<u64, DbError> {
+    async fn last_accessed(&self, table: &str) -> Result<u64, DbError> {
         match self.table_exists(QUERY_CACHE_TABLE).await? {
             true => {
                 let sql = format!(
@@ -1079,8 +1066,8 @@ pub trait DbQuery {
                        WHERE "tables" LIKE {p}1"#,
                     p = self.kind().param_prefix(),
                 );
-                let tables_param = format!("[{}]", tables.join(", "));
-                let rows: Vec<DbRow> = self.query_no_cache(&sql, &[&tables_param]).await?;
+                let table_param = format!(r#"%{table}%"#);
+                let rows: Vec<DbRow> = self.query_no_cache(&sql, &[&table_param]).await?;
                 match rows.first() {
                     Some(row) => match row.get("last_accessed") {
                         Some(value) if *value == ParamValue::Null => Ok(0),
@@ -1155,7 +1142,6 @@ pub trait DbQuery {
                         let db_rows = json_rows.into_db_rows();
                         self.update_last_accessed(tables, sql, &params_param)
                             .await?;
-                        self.unmark_table_cache_entries(tables).await?;
                         Ok(db_rows)
                     }
                     None => {
@@ -1170,7 +1156,6 @@ pub trait DbQuery {
                         );
                         let insert_params = [&tables_param, sql, &params_param, &json_rows_content];
                         self.execute_no_cache(&insert_sql, &insert_params).await?;
-                        self.unmark_table_cache_entries(tables).await?;
                         Ok(db_rows)
                     }
                 }
@@ -1229,14 +1214,17 @@ pub trait DbQuery {
                 Ok(FromDbRows::from(rows))
             }
             CachingStrategy::TruncateAll | CachingStrategy::Truncate => {
-                let query_cache_table_exists = match get_meta_cache()?.get(QUERY_CACHE_TABLE) {
-                    Some(_) => true,
-                    None => false,
-                };
-                let table_cache_table_exists = match get_meta_cache()?.get(QUERY_CACHE_TABLE) {
-                    Some(_) => true,
-                    None => false,
-                };
+                // TODO: Do this properly.
+                // let query_cache_table_exists = match get_meta_cache()?.get(QUERY_CACHE_TABLE) {
+                //     Some(_) => true,
+                //     None => false,
+                // };
+                // let table_cache_table_exists = match get_meta_cache()?.get(QUERY_CACHE_TABLE) {
+                //     Some(_) => true,
+                //     None => false,
+                // };
+                let query_cache_table_exists = false;
+                let table_cache_table_exists = false;
                 if !(query_cache_table_exists && table_cache_table_exists) {
                     self.ensure_cache_tables_exist().await?;
                     let mut cache = get_meta_cache()?;
@@ -1250,10 +1238,14 @@ pub trait DbQuery {
             CachingStrategy::Trigger => {
                 for table in tables {
                     let table_triggers = format!("{table}_triggers");
-                    let table_triggers_exist = match get_meta_cache()?.get(&table_triggers) {
-                        Some(_) => true,
-                        None => false,
-                    };
+
+                    // TODO: Do this properly.
+                    // let table_triggers_exist = match get_meta_cache()?.get(&table_triggers) {
+                    //     Some(_) => true,
+                    //     None => false,
+                    // };
+                    let table_triggers_exist = false;
+
                     if !table_triggers_exist {
                         self.ensure_caching_triggers_exist(&[table]).await?;
                         let mut cache = get_meta_cache()?;
@@ -1616,6 +1608,9 @@ pub fn validate_table_name(table_name: &str) -> Result<String, DbError> {
 
 /// TODO: Add docstring
 fn get_view_tables(view_sql: &str) -> Result<Vec<String>, DbError> {
+    // TODO: This seems to not be working for postgres?
+    // println!("In get_view_tables(). Received SQL: {view_sql}");
+
     // Instantiate the parser and try to parse the code::
     let mut parser = Parser::new();
     parser
@@ -1685,6 +1680,8 @@ fn get_view_tables(view_sql: &str) -> Result<Vec<String>, DbError> {
             }
         }
     }
+
+    // println!("VIEW TABLES: {view_tables:?}");
     Ok(view_tables)
 }
 
