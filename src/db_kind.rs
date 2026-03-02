@@ -43,6 +43,14 @@ impl DbKind {
         }
     }
 
+    /// Get the code needed to retrieve the current epoch time from the database.
+    pub fn get_epoch_time_sql(&self) -> &str {
+        match self {
+            DbKind::SQLite => "strftime('%s', 'now')",
+            DbKind::PostgreSQL => "extract(epoch from now())",
+        }
+    }
+
     /// Given a SQL type for this database and a string, parse the string into the right
     /// ParamValue.
     pub fn parse(&self, sql_type: &str, value: &str) -> Result<ParamValue, DbError> {
@@ -267,18 +275,14 @@ impl DbKind {
 
     /// Generate the SQL needed to create the cache table.
     pub fn create_query_cache_table_sql(&self) -> String {
-        // TODO: Move this to a separate function:
-        let get_epoch_now = match self {
-            DbKind::SQLite => "(strftime('%s', 'now'))",
-            DbKind::PostgreSQL => "extract(epoch from now())",
-        };
+        let get_epoch_now = self.get_epoch_time_sql();
         format!(
             r#"CREATE TABLE IF NOT EXISTS "{QUERY_CACHE_TABLE}" (
                  "tables" TEXT,
                  "statement" TEXT,
                  "parameters" TEXT,
                  "value" TEXT,
-                 "last_accessed" BIGINT DEFAULT {get_epoch_now},
+                 "last_accessed" BIGINT DEFAULT ({get_epoch_now}),
                  PRIMARY KEY ("tables", "statement", "parameters")
              )"#
         )
@@ -286,15 +290,11 @@ impl DbKind {
 
     /// Generate the SQL needed to create a table table, which is needed for caching.
     pub fn create_table_cache_table_sql(&self) -> String {
-        // TODO: Move this to a separate function:
-        let get_epoch_now = match self {
-            DbKind::SQLite => "(strftime('%s', 'now'))",
-            DbKind::PostgreSQL => "extract(epoch from now())",
-        };
+        let get_epoch_now = self.get_epoch_time_sql();
         format!(
             r#"CREATE TABLE IF NOT EXISTS "{TABLE_CACHE_TABLE}" (
                  "table" TEXT PRIMARY KEY,
-                 "last_modified" BIGINT DEFAULT {get_epoch_now}
+                 "last_modified" BIGINT DEFAULT ({get_epoch_now})
                )"#
         )
     }
@@ -324,14 +324,35 @@ impl DbKind {
         (
             sql,
             params![
-                format!("{table}_cache_after_insert"),
-                format!("{table}_cache_after_update"),
-                format!("{table}_cache_after_delete"),
+                format!("{table}_after_insert"),
+                format!("{table}_after_update"),
+                format!("{table}_after_delete"),
             ],
         )
     }
 
-    /// TODO: Add docstring
+    /// Generate the SQL statements needed to create the caching triggers for the given table.
+    pub fn create_table_caching_triggers_for_table_sql(
+        &self,
+        table: &str,
+    ) -> Result<Vec<String>, DbError> {
+        let table = validate_table_name(table)?;
+        let get_epoch_now = self.get_epoch_time_sql();
+        let trigger_basename = format!("{table}");
+        let trigger_content = format!(
+            r#"INSERT INTO "{TABLE_CACHE_TABLE}"
+               ("table", "last_modified")
+               VALUES ('{table}', {get_epoch_now})
+               ON CONFLICT ("table")
+                 DO UPDATE SET "last_modified" = {get_epoch_now};
+               DELETE FROM "{QUERY_CACHE_TABLE}"
+               WHERE "tables" LIKE '%{table}%';"#
+        );
+        self.wrap_trigger_content(&table, &trigger_basename, &trigger_content)
+    }
+
+    /// Generate the SQL statements needed to create caching triggers for the given table which
+    /// is a source table for the given view.
     pub fn create_table_caching_triggers_for_view_sql(
         &self,
         table: &str,
@@ -339,15 +360,8 @@ impl DbKind {
     ) -> Result<Vec<String>, DbError> {
         let table = validate_table_name(table)?;
         let view = validate_table_name(view)?;
-
-        // TODO: Move this to a separate function:
-        let get_epoch_now = match self {
-            DbKind::SQLite => "(strftime('%s', 'now'))",
-            DbKind::PostgreSQL => "extract(epoch from now())",
-        };
-
+        let get_epoch_now = self.get_epoch_time_sql();
         let trigger_basename = format!("{table}_{view}");
-        let function_name = format!("clean_{table}_{view}");
         let trigger_content = format!(
             r#"INSERT INTO "{TABLE_CACHE_TABLE}"
                ("table", "last_modified")
@@ -363,43 +377,18 @@ impl DbKind {
                    AND t."last_modified" >= "{QUERY_CACHE_TABLE}"."last_accessed"
                );"#
         );
-        self.wrap_trigger_content(&table, &trigger_basename, &function_name, &trigger_content)
+        self.wrap_trigger_content(&table, &trigger_basename, &trigger_content)
     }
 
-    /// Generate the SQL statements needed to create the caching triggers for the given table.
-    pub fn create_table_caching_triggers_for_table_sql(
-        &self,
-        table: &str,
-    ) -> Result<Vec<String>, DbError> {
-        let table = validate_table_name(table)?;
-
-        // TODO: Move this to a separate function:
-        let get_epoch_now = match self {
-            DbKind::SQLite => "(strftime('%s', 'now'))",
-            DbKind::PostgreSQL => "extract(epoch from now())",
-        };
-        let trigger_basename = format!("{table}");
-        let function_name = format!("clean_{table}");
-        let trigger_content = format!(
-            r#"INSERT INTO "{TABLE_CACHE_TABLE}"
-               ("table", "last_modified")
-               VALUES ('{table}', {get_epoch_now})
-               ON CONFLICT ("table")
-                 DO UPDATE SET "last_modified" = {get_epoch_now};
-               DELETE FROM "{QUERY_CACHE_TABLE}"
-               WHERE "tables" LIKE '%{table}%';"#
-        );
-        self.wrap_trigger_content(&table, &trigger_basename, &function_name, &trigger_content)
-    }
-
-    /// TODO: Add docstring
+    /// Generate the SQL statements to create a caching function and triggers with the given
+    /// trigger content for the given table using the given trigger and function name.
     fn wrap_trigger_content(
         &self,
         table: &str,
         trigger_basename: &str,
-        function_name: &str,
         trigger_content: &str,
     ) -> Result<Vec<String>, DbError> {
+        let function_name = format!("clean_{trigger_basename}");
         match self {
             DbKind::SQLite => {
                 let ddl = vec![

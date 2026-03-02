@@ -28,10 +28,10 @@ pub type DbRow = IndexMap<String, ParamValue>;
 pub type StringRow = IndexMap<String, String>;
 pub type ColumnMap = IndexMap<String, String>;
 
-/// The name of the cache table
+/// The name of the query cache table.
 pub static QUERY_CACHE_TABLE: &str = "rltbl_db_query_cache";
 
-/// The name of the table table
+/// The name of the table cache table.
 pub static TABLE_CACHE_TABLE: &str = "rltbl_db_table_cache";
 
 /// Represents a valid database table name.
@@ -722,12 +722,33 @@ pub trait DbQuery {
     /// Returns true if the cache_aware_query option is currently on.
     fn get_cache_aware_query(&self) -> bool;
 
-    /// Ensure that the cache tables exist
+    /// Ensure that the query cache table and the table cache table exist.
     async fn ensure_cache_tables_exist(&self) -> Result<(), DbError> {
-        let sql = self.kind().create_query_cache_table_sql();
-        self.execute_no_cache(&sql, ()).await?;
-        let sql = self.kind().create_table_cache_table_sql();
-        self.execute_no_cache(&sql, ()).await?;
+        for table in [QUERY_CACHE_TABLE, TABLE_CACHE_TABLE] {
+            let sql = match table {
+                table if table == QUERY_CACHE_TABLE => self.kind().create_query_cache_table_sql(),
+                table if table == TABLE_CACHE_TABLE => self.kind().create_table_cache_table_sql(),
+                _ => unreachable!(),
+            };
+            match self.execute_no_cache(&sql, ()).await {
+                Ok(_) => (),
+                Err(_) => {
+                    // Since we are not using transactions, a race condition could occur in
+                    // which two or more threads are trying to create the cache at the same
+                    // time, triggering a primary key violation in the metadata table. So if
+                    // there is an error creating the cache table we just check that it exists
+                    // and if it does we assume that all is ok.
+                    match self.table_exists(table).await? {
+                        false => {
+                            return Err(DbError::DatabaseError(
+                                "The cache table could not be created".to_string(),
+                            ));
+                        }
+                        true => (),
+                    }
+                }
+            };
+        }
         Ok(())
     }
 
@@ -735,6 +756,8 @@ pub trait DbQuery {
     /// [DbQuery::ensure_cache_table_exists()] implicitly.
     async fn ensure_caching_triggers_exist(&self, tables: &[&str]) -> Result<(), DbError> {
         let create_caching_triggers = async |table: &str| -> Result<(), DbError> {
+            // If `table` is a table, add the caching triggers to it, otherwise if `table` is
+            // a view, add caching triggers to each of its source tables:
             if self.table_exists(table).await? {
                 let sql = self
                     .kind()
@@ -743,13 +766,16 @@ pub trait DbQuery {
                 self.execute_batch(&sql).await?;
             } else if self.view_exists(table).await? {
                 let view = table;
-                let view_sql: String = self.get_view_sql(view).await?;
+                let view_sql = self.get_view_sql(view).await?;
                 for source_table in get_view_tables(&view_sql)?.iter() {
+                    // Add a trigger to clean entries from the cache for this particular table:
                     let sql = self
                         .kind()
                         .create_table_caching_triggers_for_table_sql(source_table)?
                         .join(";\n");
                     self.execute_batch(&sql).await?;
+                    // Add a trigger to clean entries from the cache for this table's associated
+                    // view:
                     let sql = self
                         .kind()
                         .create_table_caching_triggers_for_view_sql(source_table, view)?
@@ -758,7 +784,7 @@ pub trait DbQuery {
                 }
             } else {
                 return Err(DbError::InputError(format!(
-                    "Unidentified database object: '{table}'"
+                    "Database object: '{table}' is neither a table nor a view."
                 )));
             }
             Ok(())
@@ -798,7 +824,6 @@ pub trait DbQuery {
     /// entries for those tables in the cache in accordance with the current [CachingStrategy].
     async fn clear_cache_for_affected_tables(&self, sql: &str) -> Result<(), DbError> {
         if self.get_caching_strategy() != CachingStrategy::None {
-            self.ensure_cache_tables_exist().await?;
             let (edited_tables, dropped_tables): (Vec<_>, Vec<_>) = {
                 let (edited_tables, dropped_tables) = get_affected_tables(sql)?;
                 (
@@ -840,15 +865,17 @@ pub trait DbQuery {
         match self.get_caching_strategy() {
             CachingStrategy::None | CachingStrategy::Trigger => (),
             CachingStrategy::TruncateAll => {
-                self.mark_table_cache_entries(tables).await?;
+                self.update_last_modified_times(tables).await?;
                 self.delete_query_cache_entries(&[]).await?
             }
             CachingStrategy::Truncate => {
-                self.mark_table_cache_entries(tables).await?;
+                self.update_last_modified_times(tables).await?;
                 self.delete_query_cache_entries(tables).await?
             }
-            // TODO: Handle cached views.
-            CachingStrategy::Memory(_) => clear_mem_cache(&tables)?,
+            CachingStrategy::Memory(_) => {
+                // TODO: update last modified times
+                clear_mem_cache(&tables)?
+            }
         };
         Ok(())
     }
@@ -862,12 +889,8 @@ pub trait DbQuery {
         // also have been dropped.
         match self.get_caching_strategy() {
             CachingStrategy::None => (),
-            CachingStrategy::TruncateAll => {
-                self.delete_table_cache_entries(tables).await?;
-                self.delete_query_cache_entries(&[]).await?
-            }
+            CachingStrategy::TruncateAll => self.delete_query_cache_entries(&[]).await?,
             CachingStrategy::Trigger | CachingStrategy::Truncate => {
-                self.delete_table_cache_entries(tables).await?;
                 self.delete_query_cache_entries(tables).await?
             }
             CachingStrategy::Memory(_) => clear_mem_cache(&tables)?,
@@ -876,8 +899,9 @@ pub trait DbQuery {
         // Indicate that any triggers for these tables no longer exist.
         let mut meta_cache = get_meta_cache()?;
         for table in tables {
-            if *table == QUERY_CACHE_TABLE || *table == TABLE_CACHE_TABLE {
+            if *table == QUERY_CACHE_TABLE {
                 meta_cache.remove(QUERY_CACHE_TABLE);
+            } else if *table == TABLE_CACHE_TABLE {
                 meta_cache.remove(TABLE_CACHE_TABLE);
             } else {
                 meta_cache.remove(&format!("{table}_triggers"));
@@ -886,7 +910,8 @@ pub trait DbQuery {
         Ok(())
     }
 
-    /// TODO: Add docstring.
+    /// Update the last accessed time of the query cache entry identified by the triple:
+    /// (tables, statement, params).
     async fn update_last_accessed(
         &self,
         tables: &[&str],
@@ -895,19 +920,15 @@ pub trait DbQuery {
     ) -> Result<(), DbError> {
         match self.table_exists(QUERY_CACHE_TABLE).await? {
             true => {
-                // TODO: Move this to db_kind.rs
-                let get_current_timestamp = match self.kind() {
-                    DbKind::SQLite => "strftime('%s', 'now')",
-                    DbKind::PostgreSQL => "extract(epoch from now())",
-                };
                 self.execute(
                     &format!(
                         r#"UPDATE "{QUERY_CACHE_TABLE}"
-                           SET "last_accessed" = {get_current_timestamp}
+                           SET "last_accessed" = {ts}
                            WHERE "tables" = {p}1
                            AND "statement" = {p}2
                            AND "parameters" = {p}3"#,
                         p = self.kind().param_prefix(),
+                        ts = self.kind().get_epoch_time_sql(),
                     ),
                     &[&format!("[{}]", tables.join(", ")), statement, params],
                 )
@@ -918,21 +939,16 @@ pub trait DbQuery {
         Ok(())
     }
 
-    /// TODO: Add docstring
-    async fn mark_table_cache_entries(&self, tables: &[&str]) -> Result<(), DbError> {
+    /// Update the last modified times of each of the given tables in the table cache.
+    async fn update_last_modified_times(&self, tables: &[&str]) -> Result<(), DbError> {
         if self.table_exists(TABLE_CACHE_TABLE).await? {
-            // TODO: Move this to db_kind.rs
-            let get_epoch = match self.kind() {
-                DbKind::SQLite => "strftime('%s', 'now')",
-                DbKind::PostgreSQL => "extract(epoch from now())",
-            };
             for table in tables {
-                let table = validate_table_name(table)?;
                 let sql = format!(
                     r#"INSERT INTO "{TABLE_CACHE_TABLE}" ("table", "last_modified")
-                       VALUES ({prefix}1, {get_epoch})
-                       ON CONFLICT ("table") DO UPDATE SET "last_modified" = {get_epoch}"#,
-                    prefix = self.kind().param_prefix()
+                       VALUES ({prefix}1, {ts})
+                       ON CONFLICT ("table") DO UPDATE SET "last_modified" = {ts}"#,
+                    prefix = self.kind().param_prefix(),
+                    ts = self.kind().get_epoch_time_sql(),
                 );
                 self.execute_no_cache(&sql, params![table]).await?;
             }
@@ -940,22 +956,7 @@ pub trait DbQuery {
         Ok(())
     }
 
-    /// TODO: Add docstring
-    async fn delete_table_cache_entries(&self, tables: &[&str]) -> Result<(), DbError> {
-        if self.table_exists(TABLE_CACHE_TABLE).await? {
-            for table in tables {
-                let table = validate_table_name(table)?;
-                let sql = format!(
-                    r#"DELETE FROM "{TABLE_CACHE_TABLE}" WHERE "table" LIKE {prefix}1"#,
-                    prefix = self.kind().param_prefix()
-                );
-                self.execute_no_cache(&sql, params![table]).await?;
-            }
-        }
-        Ok(())
-    }
-
-    /// Delete the entries for the db_objects in the given list (independently of the current
+    /// Delete the entries for the tables in the given list (independently of the current
     /// caching strategy) from the cache table, if it exists. If the given list is empty,
     /// clear the entire cache.
     async fn delete_query_cache_entries(&self, tables: &[&str]) -> Result<(), DbError> {
@@ -980,12 +981,11 @@ pub trait DbQuery {
         Ok(())
     }
 
-    /// TODO: Add docstring
-    async fn get_view_sql(&self, target: &str) -> Result<String, DbError> {
-        // Get the code that defines the view in the database:
+    /// Get the SQL code that is used to define the given view.
+    async fn get_view_sql(&self, view: &str) -> Result<String, DbError> {
         let view_sql = {
             let rows: Vec<DbRow> = {
-                let (sql, params) = self.kind().view_sql_sql(target);
+                let (sql, params) = self.kind().view_sql_sql(view);
                 self.query_no_cache(&sql, &params).await?
             };
             match rows.first() {
@@ -995,16 +995,15 @@ pub trait DbQuery {
                     .to_string(),
                 None => {
                     return Err(DbError::DataError(format!(
-                        "Nothing found for target '{target}'"
+                        "No view definition found for '{view}'"
                     )));
                 }
             }
         };
-        // println!("VIEW SQL: {view_sql}");
         Ok(view_sql)
     }
 
-    /// Clears the cache for any of the given targets that (a) are views and (b) have source
+    /// Clears the cache for any of the given tables that (a) are views and (b) have source
     /// tables that have been modified more recently than the view.
     async fn update_cached_views(&self, tables: &[&str]) -> Result<(), DbError> {
         for view in tables {
@@ -1012,7 +1011,6 @@ pub trait DbQuery {
             if !self.view_exists(view).await? {
                 continue;
             }
-
             let last_accessed = self.last_accessed(view).await?;
             let view_sql = self.get_view_sql(view).await?;
             let view_tables = get_view_tables(&view_sql)?;
@@ -1029,7 +1027,9 @@ pub trait DbQuery {
         Ok(())
     }
 
-    /// TODO: Add docstring here.
+    /// Gets the last time the given table was modified, as read from the table cache table.
+    /// If there is no entry for the table in the table cache, or if the table cache does not
+    /// exist, returns 0.
     async fn last_modified(&self, table: &str) -> Result<u64, DbError> {
         match self.table_exists(TABLE_CACHE_TABLE).await? {
             true => {
@@ -1039,7 +1039,6 @@ pub trait DbQuery {
                        WHERE "table" LIKE {p}1"#,
                     p = self.kind().param_prefix(),
                 );
-                let table = validate_table_name(table)?;
                 let rows: Vec<DbRow> = self.query_no_cache(&sql, params![table]).await?;
                 match rows.len() {
                     0 => Ok(0),
@@ -1061,7 +1060,9 @@ pub trait DbQuery {
         }
     }
 
-    /// TODO: Add docstring
+    /// Gets the last time that the given table was accessed, as read from the query cache table.
+    /// If there is no entry involving the given table in the query cache, or if the query cache
+    /// table doesn't exist, returns 0.
     async fn last_accessed(&self, table: &str) -> Result<u64, DbError> {
         match self.table_exists(QUERY_CACHE_TABLE).await? {
             true => {
@@ -1186,6 +1187,7 @@ pub trait DbQuery {
             };
             match cached_rows {
                 Some(json_rows) => {
+                    // TODO: Update last_accessed field.
                     let db_rows = json_rows.into_db_rows();
                     Ok(db_rows)
                 }
@@ -1241,10 +1243,10 @@ pub trait DbQuery {
                 for table in tables {
                     let table_triggers = format!("{table}_triggers");
                     // TODO: Do this properly.
-                    //let table_triggers_exist = match get_meta_cache()?.get(&table_triggers) {
-                    //    Some(_) => true,
-                    //    None => false,
-                    //};
+                    // let table_triggers_exist = match get_meta_cache()?.get(&table_triggers) {
+                    //     Some(_) => true,
+                    //     None => false,
+                    // };
                     let table_triggers_exist = false;
 
                     if !table_triggers_exist {
@@ -1607,12 +1609,10 @@ pub fn validate_table_name(table_name: &str) -> Result<String, DbError> {
     }
 }
 
-/// TODO: Add docstring
+/// Given `view_sql`, which is the SQL code that will result in the creation of a view, parse
+/// this code, determine what the view's source tables are, and return the list.
 fn get_view_tables(view_sql: &str) -> Result<Vec<String>, DbError> {
-    // TODO: This seems to not be working for postgres?
-    // println!("In get_view_tables(). Received SQL: {view_sql}");
-
-    // Instantiate the parser and try to parse the code::
+    // Instantiate the parser and try to parse the code:
     let mut parser = Parser::new();
     parser
         .set_language(&SQL_LANGUAGE.into())
@@ -1642,6 +1642,7 @@ fn get_view_tables(view_sql: &str) -> Result<Vec<String>, DbError> {
     for statement in &statements {
         check_for_error(&statement, &view_sql)?;
         for instruction in statement.children(&mut tree.walk()) {
+            check_for_error(&instruction, &view_sql)?;
             match instruction.kind().to_lowercase().as_str() {
                 "create_view" => {
                     let create_query = instruction
@@ -1650,6 +1651,7 @@ fn get_view_tables(view_sql: &str) -> Result<Vec<String>, DbError> {
                         .collect::<Vec<_>>();
                     verify_list_len(&create_query, 1)?;
                     let create_query = create_query[0];
+                    check_for_error(&create_query, &view_sql)?;
 
                     let from = create_query
                         .children(&mut create_query.walk())
@@ -1657,18 +1659,21 @@ fn get_view_tables(view_sql: &str) -> Result<Vec<String>, DbError> {
                         .collect::<Vec<_>>();
                     verify_list_len(&from, 1)?;
                     let from = from[0];
+                    check_for_error(&from, &view_sql)?;
 
                     let relations = from
                         .children(&mut from.walk())
                         .filter(|child| child.kind().to_lowercase() == "relation")
                         .collect::<Vec<_>>();
                     for relation in relations {
+                        check_for_error(&relation, &view_sql)?;
                         let object_ref = relation
                             .children(&mut relation.walk())
                             .filter(|child| child.kind().to_lowercase() == "object_reference")
                             .collect::<Vec<_>>();
                         verify_list_len(&object_ref, 1)?;
                         let object_ref = object_ref[0];
+                        check_for_error(&object_ref, &view_sql)?;
 
                         let source_table = view_sql.to_string()
                             [object_ref.start_byte()..object_ref.end_byte()]
@@ -1681,8 +1686,6 @@ fn get_view_tables(view_sql: &str) -> Result<Vec<String>, DbError> {
             }
         }
     }
-
-    // println!("VIEW TABLES: {view_tables:?}");
     Ok(view_tables)
 }
 
@@ -1723,16 +1726,16 @@ fn get_affected_tables(sql: &str) -> Result<(HashSet<String>, HashSet<String>), 
             .collect::<Vec<_>>()
     };
 
-    // Determine the db_objects that will be modified:
-    let mut edited_db_objects = HashSet::new();
-    let mut dropped_db_objects = HashSet::new();
+    // Determine the tables that will be modified:
+    let mut edited_tables = HashSet::new();
+    let mut dropped_tables = HashSet::new();
     for statement in &statements {
         check_for_error(&statement, sql)?;
         for instruction in statement.children(&mut tree.walk()) {
             check_for_error(&instruction, sql)?;
             match instruction.kind().to_lowercase().as_str() {
                 "insert" => {
-                    let db_object_name = {
+                    let table_name = {
                         let object_ref = instruction
                             .children(&mut instruction.walk())
                             .filter(|child| child.kind().to_lowercase() == "object_reference")
@@ -1751,10 +1754,10 @@ fn get_affected_tables(sql: &str) -> Result<(HashSet<String>, HashSet<String>), 
                             &sql.to_string()[identifier.start_byte()..identifier.end_byte()],
                         )?
                     };
-                    edited_db_objects.insert(db_object_name);
+                    edited_tables.insert(table_name);
                 }
                 "update" => {
-                    let db_object_name = {
+                    let table_name = {
                         let relation = instruction
                             .children(&mut instruction.walk())
                             .filter(|child| child.kind().to_lowercase() == "relation")
@@ -1780,10 +1783,10 @@ fn get_affected_tables(sql: &str) -> Result<(HashSet<String>, HashSet<String>), 
                             &sql.to_string()[identifier.start_byte()..identifier.end_byte()],
                         )?
                     };
-                    edited_db_objects.insert(db_object_name);
+                    edited_tables.insert(table_name);
                 }
                 "delete" => {
-                    let db_object_name = {
+                    let table_name = {
                         let details =
                             instruction
                                 .next_sibling()
@@ -1809,7 +1812,7 @@ fn get_affected_tables(sql: &str) -> Result<(HashSet<String>, HashSet<String>), 
                             &sql.to_string()[identifier.start_byte()..identifier.end_byte()],
                         )?
                     };
-                    edited_db_objects.insert(db_object_name);
+                    edited_tables.insert(table_name);
                 }
                 "keyword_truncate" => {
                     let mut possible_next_word = instruction.next_sibling();
@@ -1822,10 +1825,10 @@ fn get_affected_tables(sql: &str) -> Result<(HashSet<String>, HashSet<String>), 
                             verify_list_len(&identifier, 1)?;
                             let identifier = identifier[0];
 
-                            let db_object = validate_table_name(
+                            let table = validate_table_name(
                                 &sql.to_string()[identifier.start_byte()..identifier.end_byte()],
                             )?;
-                            edited_db_objects.insert(db_object);
+                            edited_tables.insert(table);
                         }
                         possible_next_word = next_word.next_sibling();
                     }
@@ -1850,11 +1853,30 @@ fn get_affected_tables(sql: &str) -> Result<(HashSet<String>, HashSet<String>), 
                             &sql.to_string()[identifier.start_byte()..identifier.end_byte()],
                         )?
                     };
-                    dropped_db_objects.insert(table_name);
+                    dropped_tables.insert(table_name);
                 }
-                // TODO: drop_view
-                // TODO: alter table
-                // TODO: alter view (note: postgres only)
+                "alter_table" => {
+                    let table_name = {
+                        let object_ref = instruction
+                            .children(&mut instruction.walk())
+                            .filter(|child| child.kind().to_lowercase() == "object_reference")
+                            .collect::<Vec<_>>();
+                        verify_list_len(&object_ref, 1)?;
+                        let object_ref = object_ref[0];
+
+                        let identifier = object_ref
+                            .children(&mut object_ref.walk())
+                            .filter(|child| child.kind().to_lowercase() == "identifier")
+                            .collect::<Vec<_>>();
+                        verify_list_len(&identifier, 1)?;
+                        let identifier = identifier[0];
+
+                        validate_table_name(
+                            &sql.to_string()[identifier.start_byte()..identifier.end_byte()],
+                        )?
+                    };
+                    edited_tables.insert(table_name);
+                }
                 // Silently ignore all other kinds of instructions.
                 _ => (),
             };
@@ -1863,12 +1885,12 @@ fn get_affected_tables(sql: &str) -> Result<(HashSet<String>, HashSet<String>), 
 
     // Edits of the cache tables themeselves are never cached so we do not need to report them.
     // (However we do report a drop of the cache table.)
-    let edited_db_objects = edited_db_objects
+    let edited_tables = edited_tables
         .into_iter()
-        .filter(|db_object| ![QUERY_CACHE_TABLE, TABLE_CACHE_TABLE].contains(&db_object.as_str()))
+        .filter(|table| ![QUERY_CACHE_TABLE, TABLE_CACHE_TABLE].contains(&table.as_str()))
         .collect::<HashSet<_>>();
 
-    Ok((edited_db_objects.clone(), dropped_db_objects.clone()))
+    Ok((edited_tables.clone(), dropped_tables.clone()))
 }
 
 /// Retrieve the in-memory [MEMORY_META_CACHE].
@@ -2100,6 +2122,13 @@ mod tests {
         let mut edited_tables: Vec<_> = edited_tables.into_iter().collect();
         edited_tables.sort();
         assert_eq!(edited_tables, ["mu", "nu"]);
+        assert_eq!(dropped_tables, [].into());
+
+        let (edited_tables, dropped_tables) =
+            get_affected_tables("ALTER TABLE phi ADD COLUMN varphi INT").unwrap();
+        let mut edited_tables: Vec<_> = edited_tables.into_iter().collect();
+        edited_tables.sort();
+        assert_eq!(edited_tables, ["phi"]);
         assert_eq!(dropped_tables, [].into());
 
         // Multiple statements, no parameters:

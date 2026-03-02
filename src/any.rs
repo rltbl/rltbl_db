@@ -1907,7 +1907,6 @@ mod tests {
         assert_eq!(*row.get("parameters").unwrap(), ParamValue::from("[]"));
         assert_eq!(
             *row.get("value").unwrap(),
-            // TODO: Parse JSON.
             ParamValue::from(r#"[{"bar":1000}]"#)
         );
 
@@ -1925,10 +1924,10 @@ mod tests {
         match strategy {
             CachingStrategy::None => unimplemented!(),
             CachingStrategy::Memory(_) => todo!(),
-            // The reason that truncate and trigger give different answers is that the
-            // actual cache cleaning for the view entry is only carried out when the
-            // view entry is accessed on the next select for the truncate option, while for
-            // the trigger and truncate_all options it is cleaned right away.
+            // Truncate and trigger give different answers here because the query cache is cleaned
+            // for views at different times according to each strategy. The query cache is cleaned
+            // immediately after an edit in the case of the trigger option, while when using the
+            // truncate option, the cache is only cleaned at the next view access.
             CachingStrategy::Truncate => assert_eq!(count_query_cache_rows(pool).await, 1),
             _ => assert_eq!(count_query_cache_rows(pool).await, 0),
         };
@@ -1998,10 +1997,13 @@ mod tests {
         match strategy {
             CachingStrategy::None => unimplemented!(),
             CachingStrategy::Memory(_) => todo!(),
-            // The reason that truncate and trigger give different answers is that the
-            // actual cache cleaning for the view entry is only carried out when the
-            // view entry is accessed on the next select for the truncate option, while for
-            // the trigger and truncate_all options it is cleaned right away.
+            // Truncate and trigger give different answers here because the query cache is cleaned
+            // for views at different times according to each strategy. The query cache is cleaned
+            // immediately after an edit in the case of the trigger option, while when using the
+            // truncate option, the cache is only cleaned at the next view access. The reason
+            // there are two rows and not three below is because an edit of a table (as opposed
+            // to a view) triggers a cleaning of cache entries for itself in the query cache
+            // automatically.
             CachingStrategy::Truncate => assert_eq!(count_query_cache_rows(pool).await, 2),
             _ => assert_eq!(count_query_cache_rows(pool).await, 0),
         };
