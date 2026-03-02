@@ -331,68 +331,100 @@ impl DbKind {
         )
     }
 
-    /// Generate the SQL statements needed to create the caching triggers for the given table.
-    pub fn create_table_caching_triggers_sql(
+    /// TODO: Add docstring
+    pub fn create_table_caching_triggers_for_view_sql(
         &self,
         table: &str,
-        view: Option<&str>,
+        view: &str,
     ) -> Result<Vec<String>, DbError> {
         let table = validate_table_name(table)?;
+        let view = validate_table_name(view)?;
+
         // TODO: Move this to a separate function:
         let get_epoch_now = match self {
             DbKind::SQLite => "(strftime('%s', 'now'))",
             DbKind::PostgreSQL => "extract(epoch from now())",
         };
-        let like_for_view = match view {
-            None => "".to_string(),
-            Some(view) => {
-                let view = validate_table_name(view)?;
-                format!(r#" OR "tables" LIKE '%{view}%'"#)
-            }
-        };
-        let delete_stmt = format!(
-            r#"DELETE FROM "{QUERY_CACHE_TABLE}"
-               WHERE "tables" LIKE '%{table}%'{like_for_view}"#
-        );
-        let insert_stmt = format!(
+
+        let trigger_basename = format!("{table}_{view}");
+        let function_name = format!("clean_{table}_{view}");
+        let trigger_content = format!(
             r#"INSERT INTO "{TABLE_CACHE_TABLE}"
-                 ("table", "last_modified")
-                 VALUES ('{table}', {get_epoch_now})
-                 ON CONFLICT ("table")
-                   DO UPDATE SET "last_modified" = {get_epoch_now}"#
+               ("table", "last_modified")
+               VALUES ('{table}', {get_epoch_now})
+               ON CONFLICT ("table")
+                 DO UPDATE SET "last_modified" = {get_epoch_now};
+               DELETE FROM "{QUERY_CACHE_TABLE}"
+               WHERE "tables" LIKE '%{view}%'
+               AND EXISTS (
+                 SELECT 1
+                 FROM "{TABLE_CACHE_TABLE}" t
+                 WHERE t."table" = '{table}'
+                   AND t."last_modified" >= "{QUERY_CACHE_TABLE}"."last_accessed"
+               );"#
         );
+        self.wrap_trigger_content(&table, &trigger_basename, &function_name, &trigger_content)
+    }
 
-        // TODO: The DELETE FROM statements need an additional join on the table cache, such
-        // that the last accessed time is less than the last modified time.
+    /// Generate the SQL statements needed to create the caching triggers for the given table.
+    pub fn create_table_caching_triggers_for_table_sql(
+        &self,
+        table: &str,
+    ) -> Result<Vec<String>, DbError> {
+        let table = validate_table_name(table)?;
 
+        // TODO: Move this to a separate function:
+        let get_epoch_now = match self {
+            DbKind::SQLite => "(strftime('%s', 'now'))",
+            DbKind::PostgreSQL => "extract(epoch from now())",
+        };
+        let trigger_basename = format!("{table}");
+        let function_name = format!("clean_{table}");
+        let trigger_content = format!(
+            r#"INSERT INTO "{TABLE_CACHE_TABLE}"
+               ("table", "last_modified")
+               VALUES ('{table}', {get_epoch_now})
+               ON CONFLICT ("table")
+                 DO UPDATE SET "last_modified" = {get_epoch_now};
+               DELETE FROM "{QUERY_CACHE_TABLE}"
+               WHERE "tables" LIKE '%{table}%';"#
+        );
+        self.wrap_trigger_content(&table, &trigger_basename, &function_name, &trigger_content)
+    }
+
+    /// TODO: Add docstring
+    fn wrap_trigger_content(
+        &self,
+        table: &str,
+        trigger_basename: &str,
+        function_name: &str,
+        trigger_content: &str,
+    ) -> Result<Vec<String>, DbError> {
         match self {
             DbKind::SQLite => {
                 let ddl = vec![
-                    format!(r#"DROP TRIGGER IF EXISTS "{table}_cache_after_insert""#),
+                    format!(r#"DROP TRIGGER IF EXISTS "{trigger_basename}_after_insert""#),
                     format!(
-                        r#"CREATE TRIGGER "{table}_cache_after_insert"
+                        r#"CREATE TRIGGER "{trigger_basename}_after_insert"
                            AFTER INSERT ON "{table}"
                            BEGIN
-                               {delete_stmt};
-                               {insert_stmt};
+                             {trigger_content}
                            END"#
                     ),
-                    format!(r#"DROP TRIGGER IF EXISTS "{table}_cache_after_update""#),
+                    format!(r#"DROP TRIGGER IF EXISTS "{trigger_basename}_after_update""#),
                     format!(
-                        r#"CREATE TRIGGER "{table}_cache_after_update"
+                        r#"CREATE TRIGGER "{trigger_basename}_after_update"
                            AFTER UPDATE ON "{table}"
                            BEGIN
-                             {delete_stmt};
-                             {insert_stmt};
+                             {trigger_content}
                            END"#
                     ),
-                    format!(r#"DROP TRIGGER IF EXISTS "{table}_cache_after_delete""#),
+                    format!(r#"DROP TRIGGER IF EXISTS "{trigger_basename}_after_delete""#),
                     format!(
-                        r#"CREATE TRIGGER "{table}_cache_after_delete"
+                        r#"CREATE TRIGGER "{trigger_basename}_after_delete"
                            AFTER DELETE ON "{table}"
                            BEGIN
-                             {delete_stmt};
-                             {insert_stmt};
+                             {trigger_content}
                            END"#
                     ),
                 ];
@@ -401,35 +433,40 @@ impl DbKind {
             DbKind::PostgreSQL => {
                 let ddl = vec![
                     format!(
-                        r#"CREATE OR REPLACE FUNCTION "clean_cache_for_{table}"()
+                        r#"CREATE OR REPLACE FUNCTION "{function_name}"()
                                RETURNS TRIGGER
                                LANGUAGE PLPGSQL
                                AS
                                $$
                                BEGIN
-                                   {delete_stmt};
-                                   {insert_stmt};
+                                   {trigger_content}
                                    RETURN NEW;
                                END;
                                $$"#
                     ),
-                    format!(r#"DROP TRIGGER IF EXISTS "{table}_cache_after_insert" ON "{table}""#),
                     format!(
-                        r#"CREATE TRIGGER "{table}_cache_after_insert"
+                        r#"DROP TRIGGER IF EXISTS "{trigger_basename}_after_insert" ON "{table}""#
+                    ),
+                    format!(
+                        r#"CREATE TRIGGER "{trigger_basename}_after_insert"
                                AFTER INSERT ON "{table}"
-                               EXECUTE FUNCTION "clean_cache_for_{table}"()"#
+                               EXECUTE FUNCTION "{function_name}"()"#
                     ),
-                    format!(r#"DROP TRIGGER IF EXISTS "{table}_cache_after_update" ON "{table}""#),
                     format!(
-                        r#"CREATE TRIGGER "{table}_cache_after_update"
+                        r#"DROP TRIGGER IF EXISTS "{trigger_basename}_after_update" ON "{table}""#
+                    ),
+                    format!(
+                        r#"CREATE TRIGGER "{trigger_basename}_after_update"
                                AFTER UPDATE ON "{table}"
-                               EXECUTE FUNCTION "clean_cache_for_{table}"()"#
+                               EXECUTE FUNCTION "{function_name}"()"#
                     ),
-                    format!(r#"DROP TRIGGER IF EXISTS "{table}_cache_after_delete" ON "{table}""#),
                     format!(
-                        r#"CREATE TRIGGER "{table}_cache_after_delete"
+                        r#"DROP TRIGGER IF EXISTS "{trigger_basename}_after_delete" ON "{table}""#
+                    ),
+                    format!(
+                        r#"CREATE TRIGGER "{trigger_basename}_after_delete"
                                AFTER DELETE ON "{table}"
-                               EXECUTE FUNCTION "clean_cache_for_{table}"()"#
+                               EXECUTE FUNCTION "{function_name}"()"#
                     ),
                 ];
                 Ok(ddl)

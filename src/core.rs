@@ -738,7 +738,7 @@ pub trait DbQuery {
             if self.table_exists(table).await? {
                 let sql = self
                     .kind()
-                    .create_table_caching_triggers_sql(&table, None)?
+                    .create_table_caching_triggers_for_table_sql(&table)?
                     .join(";\n");
                 self.execute_batch(&sql).await?;
             } else if self.view_exists(table).await? {
@@ -747,7 +747,12 @@ pub trait DbQuery {
                 for source_table in get_view_tables(&view_sql)?.iter() {
                     let sql = self
                         .kind()
-                        .create_table_caching_triggers_sql(source_table, Some(view))?
+                        .create_table_caching_triggers_for_table_sql(source_table)?
+                        .join(";\n");
+                    self.execute_batch(&sql).await?;
+                    let sql = self
+                        .kind()
+                        .create_table_caching_triggers_for_view_sql(source_table, view)?
                         .join(";\n");
                     self.execute_batch(&sql).await?;
                 }
@@ -1014,7 +1019,7 @@ pub trait DbQuery {
             // TODO: Use fewer queries to do this (ideally just one):
             for view_table in &view_tables {
                 let last_modified = self.last_modified(&view_table).await?;
-                if last_modified > 0 && last_modified >= last_accessed {
+                if last_modified >= last_accessed {
                     self.delete_query_cache_entries(&[view]).await?;
                     break;
                 }
@@ -1214,17 +1219,14 @@ pub trait DbQuery {
                 Ok(FromDbRows::from(rows))
             }
             CachingStrategy::TruncateAll | CachingStrategy::Truncate => {
-                // TODO: Do this properly.
-                // let query_cache_table_exists = match get_meta_cache()?.get(QUERY_CACHE_TABLE) {
-                //     Some(_) => true,
-                //     None => false,
-                // };
-                // let table_cache_table_exists = match get_meta_cache()?.get(QUERY_CACHE_TABLE) {
-                //     Some(_) => true,
-                //     None => false,
-                // };
-                let query_cache_table_exists = false;
-                let table_cache_table_exists = false;
+                let query_cache_table_exists = match get_meta_cache()?.get(QUERY_CACHE_TABLE) {
+                    Some(_) => true,
+                    None => false,
+                };
+                let table_cache_table_exists = match get_meta_cache()?.get(QUERY_CACHE_TABLE) {
+                    Some(_) => true,
+                    None => false,
+                };
                 if !(query_cache_table_exists && table_cache_table_exists) {
                     self.ensure_cache_tables_exist().await?;
                     let mut cache = get_meta_cache()?;
@@ -1238,12 +1240,11 @@ pub trait DbQuery {
             CachingStrategy::Trigger => {
                 for table in tables {
                     let table_triggers = format!("{table}_triggers");
-
                     // TODO: Do this properly.
-                    // let table_triggers_exist = match get_meta_cache()?.get(&table_triggers) {
-                    //     Some(_) => true,
-                    //     None => false,
-                    // };
+                    //let table_triggers_exist = match get_meta_cache()?.get(&table_triggers) {
+                    //    Some(_) => true,
+                    //    None => false,
+                    //};
                     let table_triggers_exist = false;
 
                     if !table_triggers_exist {

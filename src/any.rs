@@ -1582,38 +1582,55 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn test_caching() {
-        let all_strategies = ["none", "truncate_all", "truncate", "trigger", "memory:5"]
-            .iter()
-            .map(|strategy| CachingStrategy::from_str(strategy).unwrap())
-            .collect::<Vec<_>>();
+        let all_strategies = [
+            "truncate_all",
+            "truncate",
+            "trigger",
+            //"memory:5"
+        ]
+        .iter()
+        .map(|strategy| CachingStrategy::from_str(strategy).unwrap())
+        .collect::<Vec<_>>();
         #[cfg(feature = "rusqlite")]
         {
             let mut pool = AnyPool::connect(":memory:").await.unwrap();
             for caching_strategy in &all_strategies {
-                cache_with_strategy(&mut pool, &caching_strategy).await;
+                table_caching(&mut pool, &caching_strategy).await;
+            }
+            for strategy in &all_strategies {
+                view_caching(&mut pool, strategy).await;
             }
         }
         #[cfg(feature = "tokio-postgres")]
         {
             let mut pool = AnyPool::connect("postgresql:///rltbl_db").await.unwrap();
             for caching_strategy in &all_strategies {
-                cache_with_strategy(&mut pool, &caching_strategy).await;
+                table_caching(&mut pool, &caching_strategy).await;
+            }
+            for strategy in &all_strategies {
+                view_caching(&mut pool, strategy).await;
             }
         }
         #[cfg(feature = "libsql")]
         {
             let mut pool = AnyPool::connect(":memory:").await.unwrap();
             for caching_strategy in &all_strategies {
-                cache_with_strategy(&mut pool, &caching_strategy).await;
+                table_caching(&mut pool, &caching_strategy).await;
+            }
+            for strategy in &all_strategies {
+                view_caching(&mut pool, strategy).await;
             }
         }
     }
 
-    async fn cache_with_strategy(pool: &mut AnyPool, strategy: &CachingStrategy) {
-        pool.set_caching_strategy(strategy);
-        pool.set_cache_aware_query(true);
+    async fn table_caching(pool: &mut AnyPool, strategy: &CachingStrategy) {
+        pool.drop_table(&format!("{QUERY_CACHE_TABLE}"))
+            .await
+            .unwrap();
+        pool.drop_table(&format!("{TABLE_CACHE_TABLE}"))
+            .await
+            .unwrap();
         pool.drop_table("test_table_caching_1").await.unwrap();
         pool.drop_table("test_table_caching_2").await.unwrap();
         pool.execute_batch(
@@ -1626,6 +1643,9 @@ mod tests {
         )
         .await
         .unwrap();
+
+        pool.set_caching_strategy(strategy);
+        pool.set_cache_aware_query(true);
 
         pool.insert(
             "test_table_caching_1",
@@ -1816,43 +1836,6 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn test_view_caching() {
-        let all_strategies = [
-            //"truncate_all",
-            //"truncate",
-            "trigger",
-            // "memory:5" // TODO: Implement support.
-        ]
-        .iter()
-        .map(|strategy| CachingStrategy::from_str(strategy).unwrap())
-        .collect::<Vec<_>>();
-
-        #[cfg(feature = "rusqlite")]
-        {
-            let mut pool = AnyPool::connect("TEST.db").await.unwrap();
-            for strategy in &all_strategies {
-                view_caching(&mut pool, strategy).await;
-            }
-        }
-        // #[cfg(feature = "tokio-postgres")]
-        // {
-        //     let mut pool = AnyPool::connect("postgresql:///rltbl_db").await.unwrap();
-        //     for strategy in &all_strategies {
-        //         println!("TESTING {strategy} {}", pool.kind());
-        //         view_caching(&mut pool, strategy).await;
-        //     }
-        // }
-        // #[cfg(feature = "libsql")]
-        // {
-        //     let mut pool = AnyPool::connect(":memory:").await.unwrap();
-        //     for strategy in &all_strategies {
-        //         println!("TESTING {strategy} {} (libsql)", pool.kind());
-        //         view_caching(&mut pool, strategy).await;
-        //     }
-        // }
-    }
-
     async fn view_caching(pool: &mut AnyPool, strategy: &CachingStrategy) {
         pool.drop_table(&format!("{QUERY_CACHE_TABLE}"))
             .await
@@ -1860,270 +1843,168 @@ mod tests {
         pool.drop_table(&format!("{TABLE_CACHE_TABLE}"))
             .await
             .unwrap();
-        pool.set_caching_strategy(strategy);
-        pool.set_cache_aware_query(true);
-
-        pool.execute_batch(
-            "DROP VIEW IF EXISTS test_view_caching_view; \
-             DROP TABLE IF EXISTS test_view_caching_table_1; \
-             DROP TABLE IF EXISTS test_view_caching_table_2; \
-             CREATE TABLE test_view_caching_table_1 ( \
+        let cascade = match pool.kind() {
+            DbKind::SQLite => "",
+            DbKind::PostgreSQL => " CASCADE",
+        };
+        pool.execute_batch(&format!(
+            "DROP TABLE IF EXISTS test_view_caching_table{cascade}; \
+             CREATE TABLE test_view_caching_table ( \
                foo BIGINT, \
                bar BIGINT, \
                PRIMARY KEY (foo) \
              ); \
-             CREATE TABLE test_view_caching_table_2 ( \
-               foo BIGINT, \
-               car TEXT, \
-               PRIMARY KEY (foo) \
-             ); \
-             INSERT INTO test_view_caching_table_1 VALUES (1, 1000); \
-             INSERT INTO test_view_caching_table_2 VALUES (1, 'Fiat'); \
-             CREATE VIEW test_view_caching_view AS \
-             SELECT t1.bar, t2.car \
-             FROM test_view_caching_table_1 t1, test_view_caching_table_2 t2 \
-             WHERE t1.foo = t2.foo",
+             INSERT INTO test_view_caching_table VALUES (1, 1000); \
+             DROP VIEW IF EXISTS test_view_caching_view_1{cascade}; \
+             CREATE VIEW test_view_caching_view_1 AS \
+             SELECT bar \
+             FROM test_view_caching_table; \
+             DROP VIEW IF EXISTS test_view_caching_view_2{cascade}; \
+             CREATE VIEW test_view_caching_view_2 AS \
+             SELECT bar \
+             FROM test_view_caching_table",
+        ))
+        .await
+        .unwrap();
+
+        pool.set_caching_strategy(strategy);
+        pool.set_cache_aware_query(true);
+
+        let _: Vec<DbRow> = pool
+            .cache(
+                &["test_view_caching_view_1"],
+                "SELECT * FROM test_view_caching_view_1",
+                (),
+            )
+            .await
+            .unwrap();
+        match strategy {
+            CachingStrategy::None => unimplemented!(),
+            CachingStrategy::Memory(_) => todo!(),
+            _ => assert_eq!(count_query_cache_rows(pool).await, 1),
+        };
+        match strategy {
+            CachingStrategy::None => unimplemented!(),
+            CachingStrategy::Memory(_) => todo!(),
+            _ => assert_eq!(count_table_cache_rows(pool).await, 0),
+        };
+        let rows: Vec<DbRow> = pool
+            .query_no_cache(&format!("SELECT * FROM {QUERY_CACHE_TABLE}"), ())
+            .await
+            .unwrap();
+        let row = &rows[0];
+
+        let last_accessed: u64 = row.get("last_accessed").unwrap().try_into().unwrap();
+        assert_ne!(last_accessed, 0);
+        assert_eq!(
+            *row.get("tables").unwrap(),
+            ParamValue::from("[test_view_caching_view_1]")
+        );
+        assert_eq!(
+            *row.get("statement").unwrap(),
+            ParamValue::from("SELECT * FROM test_view_caching_view_1")
+        );
+        assert_eq!(*row.get("parameters").unwrap(), ParamValue::from("[]"));
+        assert_eq!(
+            *row.get("value").unwrap(),
+            // TODO: Parse JSON.
+            ParamValue::from(r#"[{"bar":1000}]"#)
+        );
+
+        pool.insert(
+            "test_view_caching_table",
+            &["foo", "bar"],
+            &[&db_row! {
+                "foo".into() => ParamValue::from(2_u64),
+                "bar".into() => ParamValue::from(2_u64),
+            }],
         )
         .await
         .unwrap();
 
-        let mut last_last_accessed = 0;
-        // We place each subtest within braces to easily distinguish them from one another.
-        {
-            let _: Vec<DbRow> = pool
-                .cache(
-                    &["test_view_caching_view"],
-                    "SELECT * FROM test_view_caching_view",
-                    (),
-                )
-                .await
-                .unwrap();
-            match strategy {
-                CachingStrategy::None => unimplemented!(),
-                CachingStrategy::Memory(_) => todo!(),
-                _ => assert_eq!(count_query_cache_rows(pool).await, 1),
-            };
-            let rows: Vec<DbRow> = pool
-                .query_no_cache(&format!("SELECT * FROM {QUERY_CACHE_TABLE}"), ())
-                .await
-                .unwrap();
-            let row = &rows[0];
+        match strategy {
+            CachingStrategy::None => unimplemented!(),
+            CachingStrategy::Memory(_) => todo!(),
+            // The reason that truncate and trigger give different answers is that the
+            // actual cache cleaning for the view entry is only carried out when the
+            // view entry is accessed on the next select for the truncate option, while for
+            // the trigger and truncate_all options it is cleaned right away.
+            CachingStrategy::Truncate => assert_eq!(count_query_cache_rows(pool).await, 1),
+            _ => assert_eq!(count_query_cache_rows(pool).await, 0),
+        };
 
-            let last_accessed: u64 = row.get("last_accessed").unwrap().try_into().unwrap();
-            assert_ne!(last_accessed, last_last_accessed);
-            assert_eq!(
-                *row.get("tables").unwrap(),
-                ParamValue::from("[test_view_caching_view]")
-            );
-            assert_eq!(
-                *row.get("statement").unwrap(),
-                ParamValue::from("SELECT * FROM test_view_caching_view")
-            );
-            assert_eq!(*row.get("parameters").unwrap(), ParamValue::from("[]"));
-            assert_eq!(
-                *row.get("value").unwrap(),
-                // TODO: Parse JSON.
-                ParamValue::from(r#"[{"bar":1000,"car":"Fiat"}]"#)
-            );
+        match strategy {
+            CachingStrategy::None => unimplemented!(),
+            CachingStrategy::Memory(_) => todo!(),
+            _ => assert_eq!(count_table_cache_rows(pool).await, 1),
+        };
 
-            last_last_accessed = last_accessed;
-            std::thread::sleep(std::time::Duration::from_millis(1000));
-        }
-
-        {
-            let _: Vec<DbRow> = pool
-                .cache(
-                    &["test_view_caching_view"],
-                    "SELECT * FROM test_view_caching_view",
-                    (),
-                )
-                .await
-                .unwrap();
-            match strategy {
-                CachingStrategy::None => unimplemented!(),
-                CachingStrategy::Memory(_) => todo!(),
-                _ => assert_eq!(count_query_cache_rows(pool).await, 1),
-            };
-            let rows: Vec<DbRow> = pool
-                .query_no_cache(&format!("SELECT * FROM {QUERY_CACHE_TABLE}"), ())
-                .await
-                .unwrap();
-            let row = &rows[0];
-
-            assert_eq!(
-                *row.get("tables").unwrap(),
-                ParamValue::from("[test_view_caching_view]")
-            );
-            assert_eq!(
-                *row.get("statement").unwrap(),
-                ParamValue::from("SELECT * FROM test_view_caching_view")
-            );
-            assert_eq!(*row.get("parameters").unwrap(), ParamValue::from("[]"));
-            assert_eq!(
-                *row.get("value").unwrap(),
-                // TODO: Parse JSON.
-                ParamValue::from(r#"[{"bar":1000,"car":"Fiat"}]"#)
-            );
-            let last_accessed: u64 = row.get("last_accessed").unwrap().try_into().unwrap();
-            assert!(last_accessed > last_last_accessed);
-
-            last_last_accessed = last_accessed;
-            std::thread::sleep(std::time::Duration::from_millis(1000));
-        }
-
-        {
-            match strategy {
-                CachingStrategy::None => unimplemented!(),
-                CachingStrategy::Memory(_) => todo!(),
-                _ => assert_eq!(count_query_cache_rows(pool).await, 1),
-            };
-
-            match strategy {
-                CachingStrategy::None => unimplemented!(),
-                CachingStrategy::Memory(_) => todo!(),
-                _ => assert_eq!(count_table_cache_rows(pool).await, 0),
-            };
-
-            pool.insert(
-                "test_view_caching_table_1",
-                &["foo", "bar"],
-                &[&db_row! {
-                    "foo".into() => ParamValue::from(2_u64),
-                    "bar".into() => ParamValue::from(2_u64),
-                }],
+        let _: Vec<DbRow> = pool
+            .cache(
+                &["test_view_caching_view_1"],
+                "SELECT * FROM test_view_caching_view_1",
+                (),
             )
             .await
             .unwrap();
 
-            match strategy {
-                CachingStrategy::None => unimplemented!(),
-                CachingStrategy::Memory(_) => todo!(),
-                CachingStrategy::TruncateAll => assert_eq!(count_query_cache_rows(pool).await, 0),
-                _ => assert_eq!(count_query_cache_rows(pool).await, 1),
-            };
+        match strategy {
+            CachingStrategy::None => unimplemented!(),
+            CachingStrategy::Memory(_) => todo!(),
+            _ => assert_eq!(count_query_cache_rows(pool).await, 1),
+        };
 
-            match strategy {
-                CachingStrategy::None => unimplemented!(),
-                CachingStrategy::Memory(_) => todo!(),
-                _ => assert_eq!(count_table_cache_rows(pool).await, 1),
-            };
+        let _: Vec<DbRow> = pool
+            .cache(
+                &["test_view_caching_view_2"],
+                "SELECT * FROM test_view_caching_view_2",
+                (),
+            )
+            .await
+            .unwrap();
 
-            let rows: Vec<DbRow> = pool
-                .query_no_cache(&format!("SELECT * FROM {TABLE_CACHE_TABLE}"), ())
-                .await
-                .unwrap();
-            let row1 = &rows[0];
-            let last_modified: u64 = row1.get("last_modified").unwrap().try_into().unwrap();
-            assert_ne!(last_modified, 0);
+        match strategy {
+            CachingStrategy::None => unimplemented!(),
+            CachingStrategy::Memory(_) => todo!(),
+            _ => assert_eq!(count_query_cache_rows(pool).await, 2),
+        };
 
-            let _: Vec<DbRow> = pool
-                .cache(
-                    &["test_view_caching_view"],
-                    "SELECT * FROM test_view_caching_view",
-                    (),
-                )
-                .await
-                .unwrap();
+        let _: Vec<DbRow> = pool
+            .cache(
+                &["test_view_caching_table"],
+                "SELECT * FROM test_view_caching_table",
+                (),
+            )
+            .await
+            .unwrap();
 
-            match strategy {
-                CachingStrategy::None => unimplemented!(),
-                CachingStrategy::Memory(_) => todo!(),
-                _ => assert_eq!(count_query_cache_rows(pool).await, 1),
-            };
-            let rows: Vec<DbRow> = pool
-                .query_no_cache(&format!("SELECT * FROM {QUERY_CACHE_TABLE}"), ())
-                .await
-                .unwrap();
-            let row = &rows[0];
+        match strategy {
+            CachingStrategy::None => unimplemented!(),
+            CachingStrategy::Memory(_) => todo!(),
+            _ => assert_eq!(count_query_cache_rows(pool).await, 3),
+        };
 
-            assert_eq!(
-                *row.get("tables").unwrap(),
-                ParamValue::from("[test_view_caching_view]")
-            );
-            assert_eq!(
-                *row.get("statement").unwrap(),
-                ParamValue::from("SELECT * FROM test_view_caching_view")
-            );
-            assert_eq!(*row.get("parameters").unwrap(), ParamValue::from("[]"));
-            assert_eq!(
-                *row.get("value").unwrap(),
-                // TODO: Parse JSON.
-                ParamValue::from(r#"[{"bar":1000,"car":"Fiat"}]"#)
-            );
-            let last_accessed: u64 = row.get("last_accessed").unwrap().try_into().unwrap();
-            assert!(last_accessed > last_last_accessed);
+        pool.insert(
+            "test_view_caching_table",
+            &["foo", "bar"],
+            &[&db_row! {
+                "foo".into() => ParamValue::from(27_u64),
+                "bar".into() => ParamValue::from(27_u64),
+            }],
+        )
+        .await
+        .unwrap();
 
-            last_last_accessed = last_accessed;
-            std::thread::sleep(std::time::Duration::from_millis(1000));
-        }
-
-        {
-            let _: Vec<DbRow> = pool
-                .cache(
-                    &["test_view_caching_table_1"],
-                    "SELECT * FROM test_view_caching_table_1",
-                    (),
-                )
-                .await
-                .unwrap();
-
-            match strategy {
-                CachingStrategy::None => unimplemented!(),
-                CachingStrategy::Memory(_) => todo!(),
-                _ => assert_eq!(count_query_cache_rows(pool).await, 2),
-            };
-            let rows: Vec<DbRow> = pool
-                .query_no_cache(
-                    &format!("SELECT * FROM {QUERY_CACHE_TABLE} ORDER BY last_accessed"),
-                    (),
-                )
-                .await
-                .unwrap();
-            let view_row = &rows[0];
-
-            assert_eq!(
-                *view_row.get("tables").unwrap(),
-                ParamValue::from("[test_view_caching_view]")
-            );
-            assert_eq!(
-                *view_row.get("statement").unwrap(),
-                ParamValue::from("SELECT * FROM test_view_caching_view")
-            );
-            assert_eq!(*view_row.get("parameters").unwrap(), ParamValue::from("[]"));
-            assert_eq!(
-                *view_row.get("value").unwrap(),
-                // TODO: Parse JSON.
-                ParamValue::from(r#"[{"bar":1000,"car":"Fiat"}]"#)
-            );
-            let last_accessed_view: u64 =
-                view_row.get("last_accessed").unwrap().try_into().unwrap();
-            std::thread::sleep(std::time::Duration::from_millis(1000));
-
-            let table_row = &rows[1];
-            let last_accessed_table: u64 =
-                table_row.get("last_accessed").unwrap().try_into().unwrap();
-            assert_eq!(
-                *table_row.get("tables").unwrap(),
-                ParamValue::from("[test_view_caching_table_1]")
-            );
-            assert_eq!(
-                *table_row.get("statement").unwrap(),
-                ParamValue::from("SELECT * FROM test_view_caching_table_1")
-            );
-            assert_eq!(
-                *table_row.get("parameters").unwrap(),
-                ParamValue::from("[]")
-            );
-            assert_eq!(
-                *table_row.get("value").unwrap(),
-                // TODO: Parse JSON.
-                ParamValue::from(r#"[{"foo":1,"bar":1000},{"foo":2,"bar":2}]"#)
-            );
-
-            assert_eq!(last_accessed_view, last_last_accessed);
-            assert!(last_accessed_table > last_accessed_view);
-            std::thread::sleep(std::time::Duration::from_millis(1000));
-        }
+        match strategy {
+            CachingStrategy::None => unimplemented!(),
+            CachingStrategy::Memory(_) => todo!(),
+            // The reason that truncate and trigger give different answers is that the
+            // actual cache cleaning for the view entry is only carried out when the
+            // view entry is accessed on the next select for the truncate option, while for
+            // the trigger and truncate_all options it is cleaned right away.
+            CachingStrategy::Truncate => assert_eq!(count_query_cache_rows(pool).await, 2),
+            _ => assert_eq!(count_query_cache_rows(pool).await, 0),
+        };
     }
 
     // This test takes a few minutes to run and is ignored by default.
