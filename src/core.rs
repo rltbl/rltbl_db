@@ -724,97 +724,109 @@ pub trait DbQuery {
 
     /// Ensure that the query cache table and the table cache table exist.
     async fn ensure_cache_tables_exist(&self) -> Result<(), DbError> {
-        for table in [QUERY_CACHE_TABLE, TABLE_CACHE_TABLE] {
-            let sql = match table {
-                table if table == QUERY_CACHE_TABLE => self.kind().create_query_cache_table_sql(),
-                table if table == TABLE_CACHE_TABLE => self.kind().create_table_cache_table_sql(),
-                _ => unreachable!(),
-            };
-            match self.execute_no_cache(&sql, ()).await {
-                Ok(_) => (),
-                Err(_) => {
-                    // Since we are not using transactions, a race condition could occur in
-                    // which two or more threads are trying to create the cache at the same
-                    // time, triggering a primary key violation in the metadata table. So if
-                    // there is an error creating the cache table we just check that it exists
-                    // and if it does we assume that all is ok.
-                    match self.table_exists(table).await? {
-                        false => {
-                            return Err(DbError::DatabaseError(
-                                "The cache table could not be created".to_string(),
-                            ));
-                        }
-                        true => (),
+        let query_cache_table_exists = match get_meta_cache()?.get(QUERY_CACHE_TABLE) {
+            Some(_) => true,
+            None => false,
+        };
+        let table_cache_table_exists = match get_meta_cache()?.get(QUERY_CACHE_TABLE) {
+            Some(_) => true,
+            None => false,
+        };
+        if !(query_cache_table_exists && table_cache_table_exists) {
+            for table in [QUERY_CACHE_TABLE, TABLE_CACHE_TABLE] {
+                let sql = match table {
+                    table if table == QUERY_CACHE_TABLE => {
+                        self.kind().create_query_cache_table_sql()
                     }
-                }
-            };
+                    table if table == TABLE_CACHE_TABLE => {
+                        self.kind().create_table_cache_table_sql()
+                    }
+                    _ => unreachable!(),
+                };
+                match self.execute_no_cache(&sql, ()).await {
+                    Ok(_) => (),
+                    Err(_) => {
+                        // Since we are not using transactions, a race condition could occur in
+                        // which two or more threads are trying to create the cache at the same
+                        // time, triggering a primary key violation in the metadata table. So if
+                        // there is an error creating the cache table we just check that it exists
+                        // and if it does we assume that all is ok.
+                        match self.table_exists(table).await? {
+                            false => {
+                                return Err(DbError::DatabaseError(
+                                    "The cache table could not be created".to_string(),
+                                ));
+                            }
+                            true => (),
+                        }
+                    }
+                };
+                let mut cache = get_meta_cache()?;
+                cache.insert(table.to_string());
+            }
         }
         Ok(())
     }
 
-    /// Ensure that caching triggers exist for the given tables. Note that this function calls
-    /// [DbQuery::ensure_cache_table_exists()] implicitly.
-    async fn ensure_caching_triggers_exist(&self, tables: &[&str]) -> Result<(), DbError> {
-        let create_caching_triggers = async |table: &str| -> Result<(), DbError> {
-            // If `table` is a table, add the caching triggers to it, otherwise if `table` is
-            // a view, add caching triggers to each of its source tables:
-            if self.table_exists(table).await? {
+    /// Ensure that caching triggers exist for the given table. Note that this function calls
+    /// [DbQuery::ensure_cache_tables_exist()] implicitly.
+    async fn ensure_caching_triggers_exist_for_table(&self, table: &str) -> Result<(), DbError> {
+        let table_triggers_name = format!("{table}_triggers");
+        let table_triggers_exist = match get_meta_cache()?.get(&table_triggers_name) {
+            Some(_) => true,
+            None => false,
+        };
+        if !table_triggers_exist {
+            let table = validate_table_name(table)?;
+            self.ensure_cache_tables_exist().await?;
+            let sql = self
+                .kind()
+                .create_table_caching_triggers_for_table_sql(&table)?
+                .join(";\n");
+            self.execute_batch(&sql).await?;
+
+            // Indicate that triggers exist for `table`:
+            let mut cache = get_meta_cache()?;
+            cache.insert(table_triggers_name);
+        }
+
+        Ok(())
+    }
+
+    /// Ensure that caching triggers exist for the source tables of the given view. Note that
+    /// this function calls [DbQuery::ensure_cache_tables_exist()] implicitly.
+    async fn ensure_caching_triggers_exist_for_view(&self, view: &str) -> Result<(), DbError> {
+        let view_triggers_name = format!("{view}_triggers");
+        let view_triggers_exist = match get_meta_cache()?.get(&view_triggers_name) {
+            Some(_) => true,
+            None => false,
+        };
+        if !view_triggers_exist {
+            let view = validate_table_name(view)?;
+            self.ensure_cache_tables_exist().await?;
+            let view_sql = self.get_view_sql(&view).await?;
+            let source_tables = get_view_tables(&view_sql)?;
+            for source_table in source_tables.iter() {
+                let source_table = validate_table_name(source_table)?;
+                // Add a trigger to clean entries from the cache for the source table itself:
                 let sql = self
                     .kind()
-                    .create_table_caching_triggers_for_table_sql(&table)?
+                    .create_table_caching_triggers_for_table_sql(&source_table)?
                     .join(";\n");
                 self.execute_batch(&sql).await?;
-            } else if self.view_exists(table).await? {
-                let view = table;
-                let view_sql = self.get_view_sql(view).await?;
-                for source_table in get_view_tables(&view_sql)?.iter() {
-                    // Add a trigger to clean entries from the cache for this particular table:
-                    let sql = self
-                        .kind()
-                        .create_table_caching_triggers_for_table_sql(source_table)?
-                        .join(";\n");
-                    self.execute_batch(&sql).await?;
-                    // Add a trigger to clean entries from the cache for this table's associated
-                    // view:
-                    let sql = self
-                        .kind()
-                        .create_table_caching_triggers_for_view_sql(source_table, view)?
-                        .join(";\n");
-                    self.execute_batch(&sql).await?;
-                }
-            } else {
-                return Err(DbError::InputError(format!(
-                    "Database object: '{table}' is neither a table nor a view."
-                )));
+                // Add a trigger to clean entries from the cache for the view:
+                let sql = self
+                    .kind()
+                    .create_table_caching_triggers_for_view_sql(&source_table, &view)?
+                    .join(";\n");
+                self.execute_batch(&sql).await?;
+                // Add an entry for the source table to the metacache. If there is another
+                // entry for this source table it will be overwritten, which is desirable in
+                // case it was not previously known if the table was the source table for a view.
+                let mut cache = get_meta_cache()?;
+                let source_triggers_name = format!("{source_table}_triggers");
+                cache.insert(source_triggers_name);
             }
-            Ok(())
-        };
-
-        self.ensure_cache_tables_exist().await?;
-        for table in tables {
-            let table = validate_table_name(table)?;
-            let (sql, params) = self.kind().triggers_exist_sql(&table);
-            let rows: Vec<DbRow> = self.query_no_cache(&sql, &params).await?;
-            match rows.iter().next().and_then(|row| row.get("triggers_exist")) {
-                Some(ParamValue::Boolean(triggers_exist)) => {
-                    if !triggers_exist {
-                        create_caching_triggers(&table).await?;
-                    }
-                }
-                // If the database and/or db driver do not support boolean values, then we
-                // need to interpret the integer value as a bool:
-                Some(triggers_exist) => {
-                    let triggers_exist = TryInto::<u64>::try_into(triggers_exist)? == 1;
-                    if !triggers_exist {
-                        create_caching_triggers(&table).await?;
-                    }
-                }
-                None => {
-                    return Err(DbError::DataError(format!(
-                        "Unable to determine whether caching triggers exist for table '{table}'"
-                    )));
-                }
-            };
         }
         Ok(())
     }
@@ -873,7 +885,7 @@ pub trait DbQuery {
                 self.delete_query_cache_entries(tables).await?
             }
             CachingStrategy::Memory(_) => {
-                // TODO: update last modified times
+                // TODO: update last modified times for mem cache
                 clear_mem_cache(&tables)?
             }
         };
@@ -1006,40 +1018,44 @@ pub trait DbQuery {
     /// Clears the cache for any of the given tables that (a) are views and (b) have source
     /// tables that have been modified more recently than the view.
     async fn update_cached_views(&self, tables: &[&str]) -> Result<(), DbError> {
-        for view in tables {
-            // If the table is not a view just skip to the next one.
-            if !self.view_exists(view).await? {
-                continue;
-            }
-            let last_accessed = self.last_accessed(view).await?;
-            let view_sql = self.get_view_sql(view).await?;
+        for view in self.which_are_views(tables).await? {
+            let last_accessed = self.last_accessed(&view).await?;
+            let view_sql = self.get_view_sql(&view).await?;
             let view_tables = get_view_tables(&view_sql)?;
-            // TODO: Use fewer queries to do this (ideally just one):
-            for view_table in &view_tables {
-                let last_modified = self.last_modified(&view_table).await?;
-                if last_modified >= last_accessed {
-                    self.delete_query_cache_entries(&[view]).await?;
-                    break;
-                }
+            let last_modified = self
+                .get_latest_last_modified(
+                    &view_tables.iter().map(|t| t.as_str()).collect::<Vec<_>>(),
+                )
+                .await?;
+            if last_modified >= last_accessed {
+                self.delete_query_cache_entries(&[&view]).await?;
             }
         }
-
         Ok(())
     }
 
-    /// Gets the last time the given table was modified, as read from the table cache table.
-    /// If there is no entry for the table in the table cache, or if the table cache does not
-    /// exist, returns 0.
-    async fn last_modified(&self, table: &str) -> Result<u64, DbError> {
+    /// Returns the latest of the last modified times of the given tables in the table cache.
+    async fn get_latest_last_modified(&self, tables: &[&str]) -> Result<u64, DbError> {
         match self.table_exists(TABLE_CACHE_TABLE).await? {
             true => {
+                let prefix = self.kind().param_prefix().to_string();
+                let mut placeholders = vec![];
+                let mut parameters = vec![];
+                for (i, table) in tables.iter().enumerate() {
+                    let i = i + 1;
+                    placeholders.push(format!("{prefix}{i}"));
+                    parameters.push(ParamValue::from(*table));
+                }
+                let placeholders = placeholders.join(",");
+
                 let sql = format!(
                     r#"SELECT "last_modified"
                        FROM "{TABLE_CACHE_TABLE}"
-                       WHERE "table" LIKE {p}1"#,
-                    p = self.kind().param_prefix(),
+                       WHERE "table" IN ({placeholders})
+                       ORDER BY "last_modified" DESC
+                       LIMIT 1"#,
                 );
-                let rows: Vec<DbRow> = self.query_no_cache(&sql, params![table]).await?;
+                let rows: Vec<DbRow> = self.query_no_cache(&sql, parameters).await?;
                 match rows.len() {
                     0 => Ok(0),
                     1 => {
@@ -1058,6 +1074,13 @@ pub trait DbQuery {
             }
             false => Ok(0),
         }
+    }
+
+    /// Gets the last time the given table was modified, as read from the table cache table.
+    /// If there is no entry for the table in the table cache, or if the table cache does not
+    /// exist, returns 0.
+    async fn last_modified(&self, table: &str) -> Result<u64, DbError> {
+        self.get_latest_last_modified(&[table]).await
     }
 
     /// Gets the last time that the given table was accessed, as read from the query cache table.
@@ -1146,8 +1169,10 @@ pub trait DbQuery {
                             }
                         };
                         let db_rows = json_rows.into_db_rows();
-                        self.update_last_accessed(tables, sql, &params_param)
-                            .await?;
+                        if self.which_are_views(tables).await?.len() > 0 {
+                            self.update_last_accessed(tables, sql, &params_param)
+                                .await?;
+                        }
                         Ok(db_rows)
                     }
                     None => {
@@ -1187,7 +1212,7 @@ pub trait DbQuery {
             };
             match cached_rows {
                 Some(json_rows) => {
-                    // TODO: Update last_accessed field.
+                    // TODO: Update last_accessed field for memory cache.
                     let db_rows = json_rows.into_db_rows();
                     Ok(db_rows)
                 }
@@ -1221,45 +1246,34 @@ pub trait DbQuery {
                 Ok(FromDbRows::from(rows))
             }
             CachingStrategy::TruncateAll | CachingStrategy::Truncate => {
-                let query_cache_table_exists = match get_meta_cache()?.get(QUERY_CACHE_TABLE) {
-                    Some(_) => true,
-                    None => false,
-                };
-                let table_cache_table_exists = match get_meta_cache()?.get(QUERY_CACHE_TABLE) {
-                    Some(_) => true,
-                    None => false,
-                };
-                if !(query_cache_table_exists && table_cache_table_exists) {
-                    self.ensure_cache_tables_exist().await?;
-                    let mut cache = get_meta_cache()?;
-                    cache.insert(QUERY_CACHE_TABLE.to_string());
-                    cache.insert(TABLE_CACHE_TABLE.to_string());
-                }
+                self.ensure_cache_tables_exist().await?;
                 self.update_cached_views(tables).await?;
                 let rows: Vec<DbRow> = db_cache(tables, sql, &params.into_params()).await?;
                 Ok(FromDbRows::from(rows))
             }
             CachingStrategy::Trigger => {
-                for table in tables {
-                    let table_triggers = format!("{table}_triggers");
-                    // TODO: Do this properly.
-                    // let table_triggers_exist = match get_meta_cache()?.get(&table_triggers) {
-                    //     Some(_) => true,
-                    //     None => false,
-                    // };
-                    let table_triggers_exist = false;
-
-                    if !table_triggers_exist {
-                        self.ensure_caching_triggers_exist(&[table]).await?;
-                        let mut cache = get_meta_cache()?;
-                        cache.insert(table_triggers);
-                    }
+                let views = self
+                    .which_are_views(tables)
+                    .await?
+                    .into_iter()
+                    .collect::<HashSet<_>>();
+                for table in tables
+                    .into_iter()
+                    .cloned()
+                    .collect::<HashSet<_>>()
+                    .difference(&views.iter().map(|v| v.as_str()).collect::<HashSet<_>>())
+                    .collect::<Vec<_>>()
+                {
+                    self.ensure_caching_triggers_exist_for_table(&table).await?;
                 }
-                let rows: Vec<DbRow> = db_cache(tables, sql, &params.into_params()).await?;
+                for view in &views {
+                    self.ensure_caching_triggers_exist_for_view(view).await?;
+                }
+                let rows: Vec<DbRow> = db_cache(&tables, sql, &params.into_params()).await?;
                 Ok(FromDbRows::from(rows))
             }
             CachingStrategy::Memory(cache_size) => {
-                // TODO Handle cached views.
+                // TODO Handle cached views for memory cache
                 let rows = mem_cache(tables, sql, &params.into_params(), cache_size).await?;
                 Ok(FromDbRows::from(rows))
             }
@@ -1536,12 +1550,60 @@ pub trait DbQuery {
 
     /// Check whether the given view exists in the database.
     async fn view_exists(&self, view: &str) -> Result<bool, DbError> {
-        let (sql, params) = self.kind().view_exists_sql(view);
-        let rows: Vec<DbRow> = self.query_no_cache(&sql, params).await?;
-        match rows.first() {
-            None => Ok(false),
-            Some(_) => Ok(true),
+        Ok(self.which_are_views(&[view]).await?.len() == 1)
+    }
+
+    /// Return a list of the objects from the given list that are views.
+    async fn which_are_views(&self, objects: &[&str]) -> Result<Vec<String>, DbError> {
+        let mut views = vec![];
+        let mut unknowns = vec![];
+        for object in objects {
+            let object_is_view = match get_meta_cache()?.get(&format!("{object}_VIEW")) {
+                Some(_) => true,
+                None => false,
+            };
+            if object_is_view {
+                views.push(object.to_string());
+                let mut cache = get_meta_cache()?;
+                cache.insert(format!("{object}_VIEW"));
+            } else {
+                let object_is_table = match get_meta_cache()?.get(&format!("{object}_TABLE")) {
+                    Some(_) => true,
+                    None => false,
+                };
+                if object_is_table {
+                    let mut cache = get_meta_cache()?;
+                    cache.insert(format!("{object}_TABLE"));
+                } else {
+                    unknowns.push(object.to_string());
+                }
+            }
         }
+
+        // Query the database for the status of any unknowns:
+        if !unknowns.is_empty() {
+            let (sql, params) = self
+                .kind()
+                .which_are_views_sql(&unknowns.iter().map(|s| s.as_str()).collect::<Vec<_>>());
+            let rows: Vec<DbRow> = self.query_no_cache(&sql, params).await?;
+            for row in &rows {
+                let view = row.get("view_name").unwrap().to_string();
+                let mut cache = get_meta_cache()?;
+                cache.insert(format!("{view}_VIEW"));
+                views.push(view);
+            }
+
+            let (sql, params) = self
+                .kind()
+                .which_are_tables_sql(&unknowns.iter().map(|s| s.as_str()).collect::<Vec<_>>());
+            let rows: Vec<DbRow> = self.query_no_cache(&sql, params).await?;
+            for row in &rows {
+                let table = row.get("table_name").unwrap().to_string();
+                let mut cache = get_meta_cache()?;
+                cache.insert(format!("{table}_TABLE"));
+            }
+        }
+        Ok(views)
     }
 
     /// Drop the given table from the database. Note that for PostgreSQL (see

@@ -222,29 +222,80 @@ impl DbKind {
         }
     }
 
-    /// Generate the SQL and parameters needed to determine whether the given view exists.
-    pub fn view_exists_sql(self, view: &str) -> (String, [ParamValue; 1]) {
-        match self {
+    /// Generate the SQL and parameters needed to determine which of the given list of
+    /// database names correspond to views in the database.
+    pub fn which_are_views_sql(self, objects: &[&str]) -> (String, Vec<ParamValue>) {
+        let prefix = self.param_prefix().to_string();
+        let mut placeholders = vec![];
+        let mut parameters = vec![];
+        for (i, object) in objects.iter().enumerate() {
+            let i = i + 1;
+            placeholders.push(format!("{prefix}{i}"));
+            parameters.push(ParamValue::from(object.to_string()));
+        }
+        let placeholders = placeholders.join(",");
+        let (sql, params) = match self {
             DbKind::SQLite => (
-                r#"SELECT 1 FROM "sqlite_master"
-                   WHERE "type" = 'view' AND "name" = ?1"#
-                    .to_string(),
-                params![view],
+                format!(
+                    r#"SELECT "name" AS "view_name" FROM "sqlite_master"
+                       WHERE "type" = 'view' AND "name" IN ({placeholders})"#,
+                ),
+                parameters.clone(),
             ),
             DbKind::PostgreSQL => (
-                r#"SELECT 1
-                   FROM "information_schema"."tables"
-                   WHERE "table_type" LIKE '%VIEW'
-                   AND "table_name" = $1
-                   AND "table_schema" IN (
-                     SELECT REGEXP_SPLIT_TO_TABLE("setting", ', ')
-                     FROM "pg_settings"
-                     WHERE "name" = 'search_path'
-                   )"#
-                .to_string(),
-                params![view],
+                format!(
+                    r#"SELECT "table_name" AS "view_name"
+                       FROM "information_schema"."tables"
+                       WHERE "table_type" LIKE '%VIEW'
+                       AND "table_name" IN ({placeholders})
+                       AND "table_schema" IN (
+                         SELECT REGEXP_SPLIT_TO_TABLE("setting", ', ')
+                         FROM "pg_settings"
+                         WHERE "name" = 'search_path'
+                       )"#
+                ),
+                parameters.clone(),
             ),
+        };
+        (sql, params)
+    }
+
+    /// Generate the SQL and parameters needed to determine which of the given list of
+    /// database names correspond to tables in the database.
+    pub fn which_are_tables_sql(self, objects: &[&str]) -> (String, Vec<ParamValue>) {
+        let prefix = self.param_prefix().to_string();
+        let mut placeholders = vec![];
+        let mut parameters = vec![];
+        for (i, object) in objects.iter().enumerate() {
+            let i = i + 1;
+            placeholders.push(format!("{prefix}{i}"));
+            parameters.push(ParamValue::from(object.to_string()));
         }
+        let placeholders = placeholders.join(",");
+        let (sql, params) = match self {
+            DbKind::SQLite => (
+                format!(
+                    r#"SELECT "name" AS "table_name" FROM "sqlite_master"
+                       WHERE "type" = 'table' AND "name" IN ({placeholders})"#,
+                ),
+                parameters.clone(),
+            ),
+            DbKind::PostgreSQL => (
+                format!(
+                    r#"SELECT "table_name"
+                       FROM "information_schema"."tables"
+                       WHERE "table_type" LIKE '%TABLE'
+                       AND "table_name" IN ({placeholders})
+                       AND "table_schema" IN (
+                         SELECT REGEXP_SPLIT_TO_TABLE("setting", ', ')
+                         FROM "pg_settings"
+                         WHERE "name" = 'search_path'
+                       )"#
+                ),
+                parameters.clone(),
+            ),
+        };
+        (sql, params)
     }
 
     /// Generate the SQL and parameters needed to retrieve the underlying SQL code for the
@@ -299,53 +350,15 @@ impl DbKind {
         )
     }
 
-    /// Generate the SQL needed to verify whether the caching triggers for the given table exist.
-    pub fn triggers_exist_sql(&self, table: &str) -> (String, [ParamValue; 3]) {
-        let sql = match self {
-            DbKind::SQLite => {
-                let sql = r#"SELECT (COUNT(1) = 3) AS triggers_exist
-                             FROM sqlite_master
-                             WHERE type = 'trigger'
-                               AND name IN (?1, ?2, ?3)"#;
-                sql.to_string()
-            }
-            DbKind::PostgreSQL => {
-                let sql = r#"SELECT (COUNT(1) = 3) AS triggers_exist
-                             FROM information_schema.triggers
-                             WHERE trigger_name IN ($1, $2, $3)
-                             AND "trigger_schema" IN (
-                               SELECT REGEXP_SPLIT_TO_TABLE("setting", ', ')
-                               FROM "pg_settings"
-                               WHERE "name" = 'search_path'
-                             )"#;
-                sql.to_string()
-            }
-        };
-        (
-            sql,
-            params![
-                format!("{table}_after_insert"),
-                format!("{table}_after_update"),
-                format!("{table}_after_delete"),
-            ],
-        )
-    }
-
     /// Generate the SQL statements needed to create the caching triggers for the given table.
     pub fn create_table_caching_triggers_for_table_sql(
         &self,
         table: &str,
     ) -> Result<Vec<String>, DbError> {
         let table = validate_table_name(table)?;
-        let get_epoch_now = self.get_epoch_time_sql();
         let trigger_basename = format!("{table}");
         let trigger_content = format!(
-            r#"INSERT INTO "{TABLE_CACHE_TABLE}"
-               ("table", "last_modified")
-               VALUES ('{table}', {get_epoch_now})
-               ON CONFLICT ("table")
-                 DO UPDATE SET "last_modified" = {get_epoch_now};
-               DELETE FROM "{QUERY_CACHE_TABLE}"
+            r#"DELETE FROM "{QUERY_CACHE_TABLE}"
                WHERE "tables" LIKE '%{table}%';"#
         );
         self.wrap_trigger_content(&table, &trigger_basename, &trigger_content)

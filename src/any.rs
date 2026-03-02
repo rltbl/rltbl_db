@@ -1848,21 +1848,21 @@ mod tests {
             DbKind::PostgreSQL => " CASCADE",
         };
         pool.execute_batch(&format!(
-            "DROP TABLE IF EXISTS test_view_caching_table{cascade}; \
-             CREATE TABLE test_view_caching_table ( \
+            "DROP TABLE IF EXISTS test_vcaching_table{cascade}; \
+             CREATE TABLE test_vcaching_table ( \
                foo BIGINT, \
                bar BIGINT, \
                PRIMARY KEY (foo) \
              ); \
-             INSERT INTO test_view_caching_table VALUES (1, 1000); \
-             DROP VIEW IF EXISTS test_view_caching_view_1{cascade}; \
-             CREATE VIEW test_view_caching_view_1 AS \
+             INSERT INTO test_vcaching_table VALUES (1, 1000); \
+             DROP VIEW IF EXISTS test_vcaching_view_1{cascade}; \
+             CREATE VIEW test_vcaching_view_1 AS \
              SELECT bar \
-             FROM test_view_caching_table; \
-             DROP VIEW IF EXISTS test_view_caching_view_2{cascade}; \
-             CREATE VIEW test_view_caching_view_2 AS \
+             FROM test_vcaching_table; \
+             DROP VIEW IF EXISTS test_vcaching_view_2{cascade}; \
+             CREATE VIEW test_vcaching_view_2 AS \
              SELECT bar \
-             FROM test_view_caching_table",
+             FROM test_vcaching_table",
         ))
         .await
         .unwrap();
@@ -1872,12 +1872,13 @@ mod tests {
 
         let _: Vec<DbRow> = pool
             .cache(
-                &["test_view_caching_view_1"],
-                "SELECT * FROM test_view_caching_view_1",
+                &["test_vcaching_view_1"],
+                "SELECT * FROM test_vcaching_view_1",
                 (),
             )
             .await
             .unwrap();
+
         match strategy {
             CachingStrategy::None => unimplemented!(),
             CachingStrategy::Memory(_) => todo!(),
@@ -1898,11 +1899,11 @@ mod tests {
         assert_ne!(last_accessed, 0);
         assert_eq!(
             *row.get("tables").unwrap(),
-            ParamValue::from("[test_view_caching_view_1]")
+            ParamValue::from("[test_vcaching_view_1]")
         );
         assert_eq!(
             *row.get("statement").unwrap(),
-            ParamValue::from("SELECT * FROM test_view_caching_view_1")
+            ParamValue::from("SELECT * FROM test_vcaching_view_1")
         );
         assert_eq!(*row.get("parameters").unwrap(), ParamValue::from("[]"));
         assert_eq!(
@@ -1911,7 +1912,7 @@ mod tests {
         );
 
         pool.insert(
-            "test_view_caching_table",
+            "test_vcaching_table",
             &["foo", "bar"],
             &[&db_row! {
                 "foo".into() => ParamValue::from(2_u64),
@@ -1940,8 +1941,8 @@ mod tests {
 
         let _: Vec<DbRow> = pool
             .cache(
-                &["test_view_caching_view_1"],
-                "SELECT * FROM test_view_caching_view_1",
+                &["test_vcaching_view_1"],
+                "SELECT * FROM test_vcaching_view_1",
                 (),
             )
             .await
@@ -1955,8 +1956,8 @@ mod tests {
 
         let _: Vec<DbRow> = pool
             .cache(
-                &["test_view_caching_view_2"],
-                "SELECT * FROM test_view_caching_view_2",
+                &["test_vcaching_view_2"],
+                "SELECT * FROM test_vcaching_view_2",
                 (),
             )
             .await
@@ -1970,8 +1971,8 @@ mod tests {
 
         let _: Vec<DbRow> = pool
             .cache(
-                &["test_view_caching_table"],
-                "SELECT * FROM test_view_caching_table",
+                &["test_vcaching_table"],
+                "SELECT * FROM test_vcaching_table",
                 (),
             )
             .await
@@ -1984,7 +1985,7 @@ mod tests {
         };
 
         pool.insert(
-            "test_view_caching_table",
+            "test_vcaching_table",
             &["foo", "bar"],
             &[&db_row! {
                 "foo".into() => ParamValue::from(27_u64),
