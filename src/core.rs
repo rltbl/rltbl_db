@@ -17,7 +17,7 @@ use std::{
     str::FromStr,
     sync::{Mutex, MutexGuard},
     thread,
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tree_sitter::{Node, Parser};
 use tree_sitter_sequel::LANGUAGE as SQL_LANGUAGE;
@@ -45,8 +45,11 @@ lazy_static! {
     static ref VALID_TABLE_NAME_REGEX: Regex = Regex::new(VALID_TABLE_NAME_MATCH_STR).unwrap();
 
     /// The in-memory query cache, used by [CachingStrategy::Memory].
-    static ref MEMORY_CACHE: Mutex<HashMap<MemoryCacheKey, Vec<JsonRow>>>
+    static ref MEMORY_QUERY_CACHE: Mutex<HashMap<MemoryQueryCacheKey, MemoryQueryCacheValue>>
         = Mutex::new(HashMap::new());
+
+    /// The in-memory table cache, used by [CachingStrategy::Memory].
+    static ref MEMORY_TABLE_CACHE: Mutex<HashMap<String, u128>> = Mutex::new(HashMap::new());
 
     /// The in-memory meta cache. It holds a set of things known to exist.
     static ref MEMORY_META_CACHE: Mutex<HashSet<String>>
@@ -644,12 +647,19 @@ pub enum CachingStrategy {
     Memory(usize),
 }
 
-/// The structure used to look up query results in the in-memory cache:
+/// The structure used to look up query results in the in-memory cache.
 #[derive(Clone, Eq, PartialEq, Hash)]
-pub struct MemoryCacheKey {
+pub struct MemoryQueryCacheKey {
     pub tables: String,
     pub statement: String,
     pub parameters: String,
+}
+
+/// Represents the value of an entry in the in-memory cache.
+#[derive(Clone)]
+pub struct MemoryQueryCacheValue {
+    pub content: Vec<JsonRow>,
+    pub last_accessed: u128,
 }
 
 impl FromStr for CachingStrategy {
@@ -885,8 +895,8 @@ pub trait DbQuery {
                 self.delete_query_cache_entries(tables).await?
             }
             CachingStrategy::Memory(_) => {
-                // TODO: update last modified times for mem cache
-                clear_mem_cache(&tables)?
+                update_memory_table_cache_last_modified_times(tables)?;
+                clear_memory_query_cache(tables)?;
             }
         };
         Ok(())
@@ -905,7 +915,7 @@ pub trait DbQuery {
             CachingStrategy::Trigger | CachingStrategy::Truncate => {
                 self.delete_query_cache_entries(tables).await?
             }
-            CachingStrategy::Memory(_) => clear_mem_cache(&tables)?,
+            CachingStrategy::Memory(_) => clear_memory_query_cache(&tables)?,
         };
 
         // Indicate that any triggers for these tables no longer exist.
@@ -1017,7 +1027,7 @@ pub trait DbQuery {
         Ok(view_sql)
     }
 
-    /// Clears the cache for any of the given tables that (a) are views and (b) have source
+    /// Clears the query cache for any of the given tables that (a) are views and (b) have source
     /// tables that have been modified more recently than the view.
     async fn update_cached_views(&self, tables: &[&str]) -> Result<(), DbError> {
         for view in self.which_are_views(tables).await? {
@@ -1031,6 +1041,41 @@ pub trait DbQuery {
                 .await?;
             if last_modified >= last_accessed {
                 self.delete_query_cache_entries(&[&view]).await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Clears the in-memory query cache for any of the given tables that (a) are views and (b)
+    /// have source tables that have been modified more recently than the view.
+    async fn update_memory_query_cache_cached_views(&self, tables: &[&str]) -> Result<(), DbError> {
+        let views = self.which_are_views(tables).await?;
+        for view in &views {
+            let last_accessed = {
+                let mut last_accessed = 0;
+                for (key, value) in get_memory_query_cache()?.iter() {
+                    if key.tables.contains(view) && value.last_accessed > last_accessed {
+                        last_accessed = value.last_accessed;
+                    }
+                }
+                last_accessed
+            };
+            let view_sql = self.get_view_sql(&view).await?;
+            let view_tables = get_view_tables(&view_sql)?;
+            let last_modified = {
+                let mut latest_last_modified = 0;
+                for view_table in &view_tables {
+                    match get_memory_table_cache()?.get(view_table) {
+                        Some(lm) if *lm > latest_last_modified => {
+                            latest_last_modified = *lm;
+                        }
+                        _ => (),
+                    };
+                }
+                latest_last_modified
+            };
+            if last_modified >= last_accessed {
+                clear_memory_query_cache(&[view])?;
             }
         }
         Ok(())
@@ -1171,6 +1216,8 @@ pub trait DbQuery {
                             }
                         };
                         let db_rows = json_rows.into_db_rows();
+                        // It is harmless but time consuming to update the last accessed time
+                        // when there are no views so we skip it in that case.
                         if self.which_are_views(tables).await?.len() > 0 {
                             self.update_last_accessed(tables, sql, &params_param)
                                 .await?;
@@ -1200,28 +1247,28 @@ pub trait DbQuery {
                                cache_size: usize|
                -> Result<Vec<DbRow>, DbError> {
             let params = &params.into_params();
-            let mem_key = MemoryCacheKey {
+            let mem_key = MemoryQueryCacheKey {
                 tables: tables.join(", ").to_string(),
                 statement: sql.to_string(),
                 parameters: format!("{params:?}"),
             };
             let cached_rows = {
-                let cache = get_memory_cache()?;
+                let cache = get_memory_query_cache()?;
                 match cache.get(&mem_key) {
-                    Some(json_rows) => Some(json_rows.to_vec()),
+                    Some(mem_value) => Some(mem_value.content.to_vec()),
                     None => None,
                 }
             };
             match cached_rows {
                 Some(json_rows) => {
-                    // TODO: Update last_accessed field for memory cache.
+                    update_memory_query_cache_last_accessed(&mem_key)?;
                     let db_rows = json_rows.into_db_rows();
                     Ok(db_rows)
                 }
                 None => {
                     let db_rows: Vec<DbRow> = self.query_no_cache(sql, params).await?;
                     let json_rows: Vec<JsonRow> = FromDbRows::from(db_rows.clone());
-                    let mut cache = get_memory_cache()?;
+                    let mut cache = get_memory_query_cache()?;
                     let mut keys = cache.keys().map(|key| key.clone()).collect::<Vec<_>>();
                     // If the number of keys exceeds the allowed cache size, remove any extra keys
                     // at random.
@@ -1235,7 +1282,18 @@ pub trait DbQuery {
                             }
                         }
                     }
-                    cache.insert(mem_key, json_rows.to_vec());
+                    cache.insert(
+                        mem_key,
+                        MemoryQueryCacheValue {
+                            content: json_rows.to_vec(),
+                            last_accessed: SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
+                                .map_err(|err| {
+                                    DbError::DataError(format!("Error getting epoch time: {err}"))
+                                })?
+                                .as_millis(),
+                        },
+                    );
                     Ok(db_rows)
                 }
             }
@@ -1275,7 +1333,7 @@ pub trait DbQuery {
                 Ok(FromDbRows::from(rows))
             }
             CachingStrategy::Memory(cache_size) => {
-                // TODO Handle cached views for memory cache
+                self.update_memory_query_cache_cached_views(tables).await?;
                 let rows = mem_cache(tables, sql, &params.into_params(), cache_size).await?;
                 Ok(FromDbRows::from(rows))
             }
@@ -2022,14 +2080,14 @@ fn get_meta_cache<'a>() -> Result<MutexGuard<'a, HashSet<String>>, DbError> {
     Ok(meta_cache)
 }
 
-/// Retrieve the in-memory [MEMORY_CACHE].
-fn get_memory_cache<'a>() -> Result<MutexGuard<'a, HashMap<MemoryCacheKey, Vec<JsonRow>>>, DbError>
-{
+/// Retrieve the in-memory query cache (see [MEMORY_QUERY_CACHE]).
+fn get_memory_query_cache<'a>()
+-> Result<MutexGuard<'a, HashMap<MemoryQueryCacheKey, MemoryQueryCacheValue>>, DbError> {
     let max_attempts = 20;
     let mut remaining_attempts = max_attempts;
-    let mut memory_cache = MEMORY_CACHE.try_lock();
+    let mut memory_cache = MEMORY_QUERY_CACHE.try_lock();
     while let Err(err) = memory_cache {
-        memory_cache = MEMORY_CACHE.try_lock();
+        memory_cache = MEMORY_QUERY_CACHE.try_lock();
         if let Ok(_) = memory_cache {
             break;
         }
@@ -2046,15 +2104,55 @@ fn get_memory_cache<'a>() -> Result<MutexGuard<'a, HashMap<MemoryCacheKey, Vec<J
     Ok(memory_cache)
 }
 
-/// Retrieve a copy of the contents of the memory cache.
-pub fn get_memory_cache_contents() -> Result<HashMap<MemoryCacheKey, Vec<JsonRow>>, DbError> {
-    let cache = get_memory_cache()?;
+/// Retrieve the in-memory table cache (see [MEMORY_TABLE_CACHE]).
+fn get_memory_table_cache<'a>() -> Result<MutexGuard<'a, HashMap<String, u128>>, DbError> {
+    let max_attempts = 20;
+    let mut remaining_attempts = max_attempts;
+    let mut memory_cache = MEMORY_TABLE_CACHE.try_lock();
+    while let Err(err) = memory_cache {
+        memory_cache = MEMORY_TABLE_CACHE.try_lock();
+        if let Ok(_) = memory_cache {
+            break;
+        }
+        remaining_attempts -= 1;
+        if remaining_attempts == 0 {
+            return Err(DbError::ConnectError(format!(
+                "Error locking cache: {err} (retried {max_attempts} times)"
+            )));
+        } else {
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
+    let memory_cache = memory_cache.unwrap();
+    Ok(memory_cache)
+}
+
+/// Retrieve a copy of the contents of the memory query cache.
+pub fn get_memory_query_cache_contents()
+-> Result<HashMap<MemoryQueryCacheKey, MemoryQueryCacheValue>, DbError> {
+    let cache = get_memory_query_cache()?;
     Ok(cache.clone())
 }
 
-/// Clear the memory cache.
-pub fn clear_mem_cache(tables: &[&str]) -> Result<(), DbError> {
-    let mut cache = get_memory_cache()?;
+/// Retrieve a copy of the contents of the memory table cache.
+pub fn get_memory_table_cache_contents() -> Result<HashMap<String, u128>, DbError> {
+    let cache = get_memory_table_cache()?;
+    Ok(cache.clone())
+}
+
+/// Clear the meta cache
+pub fn clear_meta_cache() -> Result<(), DbError> {
+    let mut cache = get_meta_cache()?;
+    cache.clear();
+    Ok(())
+}
+
+/// Clear the memory query cache.
+pub fn clear_memory_query_cache(tables: &[&str]) -> Result<(), DbError> {
+    let mut cache = get_memory_query_cache()?;
+    if tables.is_empty() {
+        cache.clear();
+    }
     let keys = cache
         .keys()
         .map(|k| k)
@@ -2069,6 +2167,43 @@ pub fn clear_mem_cache(tables: &[&str]) -> Result<(), DbError> {
             }
         }
     }
+    Ok(())
+}
+
+/// Clear the memory table cache.
+pub fn clear_memory_table_cache(tables: &[&str]) -> Result<(), DbError> {
+    let mut cache = get_memory_table_cache()?;
+    if tables.is_empty() {
+        cache.clear();
+    }
+    for table in tables {
+        cache.remove(&table.to_string());
+    }
+    Ok(())
+}
+
+/// Update the last modified times in the in-memory table cache for all of the given tables.
+pub fn update_memory_table_cache_last_modified_times(tables: &[&str]) -> Result<(), DbError> {
+    let mut cache = get_memory_table_cache()?;
+    let epoch_now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|err| DbError::DataError(format!("Error getting epoch time: {err}")))?;
+    for table in tables {
+        cache.insert(table.to_string(), epoch_now.as_millis());
+    }
+    Ok(())
+}
+
+/// Update the last accessed time in the in-memory query cache for the given key.
+pub fn update_memory_query_cache_last_accessed(key: &MemoryQueryCacheKey) -> Result<(), DbError> {
+    let mut cache = get_memory_query_cache()?;
+    let epoch_now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|err| DbError::DataError(format!("Error getting epoch time: {err}")))?;
+    match cache.get_mut(key) {
+        Some(value) => value.last_accessed = epoch_now.as_millis(),
+        None => (),
+    };
     Ok(())
 }
 

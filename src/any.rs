@@ -296,7 +296,8 @@ mod tests {
     use crate::{
         core::{
             CachingStrategy, ColumnMap, DbRow, ParamValue, QUERY_CACHE_TABLE, StringRow,
-            TABLE_CACHE_TABLE, get_memory_cache_contents,
+            TABLE_CACHE_TABLE, clear_memory_query_cache, clear_memory_table_cache,
+            clear_meta_cache, get_memory_query_cache_contents, get_memory_table_cache_contents,
         },
         params,
     };
@@ -1576,22 +1577,22 @@ mod tests {
             .unwrap()
     }
 
-    fn count_memory_cache_rows() -> u64 {
-        let cache = get_memory_cache_contents().unwrap();
+    fn count_memory_query_cache_rows() -> u64 {
+        let cache = get_memory_query_cache_contents().unwrap();
+        cache.keys().len().try_into().unwrap()
+    }
+
+    fn count_memory_table_cache_rows() -> u64 {
+        let cache = get_memory_table_cache_contents().unwrap();
         cache.keys().len().try_into().unwrap()
     }
 
     #[tokio::test]
     async fn test_caching() {
-        let all_strategies = [
-            "truncate_all",
-            "truncate",
-            "trigger",
-            //"memory:5"
-        ]
-        .iter()
-        .map(|strategy| CachingStrategy::from_str(strategy).unwrap())
-        .collect::<Vec<_>>();
+        let all_strategies = ["truncate_all", "truncate", "trigger", "memory:5"]
+            .iter()
+            .map(|strategy| CachingStrategy::from_str(strategy).unwrap())
+            .collect::<Vec<_>>();
         #[cfg(feature = "rusqlite")]
         {
             let mut pool = AnyPool::connect(":memory:").await.unwrap();
@@ -1625,6 +1626,9 @@ mod tests {
     }
 
     async fn table_caching(pool: &mut AnyPool, strategy: &CachingStrategy) {
+        clear_meta_cache().unwrap();
+        clear_memory_table_cache(&[]).unwrap();
+        clear_memory_query_cache(&[]).unwrap();
         pool.drop_table(&format!("{QUERY_CACHE_TABLE}"))
             .await
             .unwrap();
@@ -1673,7 +1677,7 @@ mod tests {
 
         match strategy {
             CachingStrategy::None => (),
-            CachingStrategy::Memory(_) => assert_eq!(count_memory_cache_rows(), 1),
+            CachingStrategy::Memory(_) => assert_eq!(count_memory_query_cache_rows(), 1),
             _ => assert_eq!(count_query_cache_rows(pool).await, 1),
         };
         assert_eq!(
@@ -1695,7 +1699,7 @@ mod tests {
 
         match strategy {
             CachingStrategy::None => (),
-            CachingStrategy::Memory(_) => assert_eq!(count_memory_cache_rows(), 1),
+            CachingStrategy::Memory(_) => assert_eq!(count_memory_query_cache_rows(), 1),
             _ => assert_eq!(count_query_cache_rows(pool).await, 1),
         };
         assert_eq!(
@@ -1719,7 +1723,7 @@ mod tests {
 
         match strategy {
             CachingStrategy::None => (),
-            CachingStrategy::Memory(_) => assert_eq!(count_memory_cache_rows(), 0),
+            CachingStrategy::Memory(_) => assert_eq!(count_memory_query_cache_rows(), 0),
             _ => assert_eq!(count_query_cache_rows(pool).await, 0),
         };
 
@@ -1734,7 +1738,7 @@ mod tests {
 
         match strategy {
             CachingStrategy::None => (),
-            CachingStrategy::Memory(_) => assert_eq!(count_memory_cache_rows(), 1),
+            CachingStrategy::Memory(_) => assert_eq!(count_memory_query_cache_rows(), 1),
             _ => assert_eq!(count_query_cache_rows(pool).await, 1),
         };
         assert_eq!(
@@ -1786,7 +1790,7 @@ mod tests {
 
         match strategy {
             CachingStrategy::None => (),
-            CachingStrategy::Memory(_) => assert_eq!(count_memory_cache_rows(), 3),
+            CachingStrategy::Memory(_) => assert_eq!(count_memory_query_cache_rows(), 3),
             _ => assert_eq!(count_query_cache_rows(pool).await, 3),
         };
 
@@ -1799,7 +1803,7 @@ mod tests {
 
         match strategy {
             CachingStrategy::None => (),
-            CachingStrategy::Memory(_) => assert_eq!(count_memory_cache_rows(), 1),
+            CachingStrategy::Memory(_) => assert_eq!(count_memory_query_cache_rows(), 1),
             CachingStrategy::Truncate | CachingStrategy::Trigger => {
                 assert_eq!(count_query_cache_rows(pool).await, 1)
             }
@@ -1817,7 +1821,7 @@ mod tests {
 
         match strategy {
             CachingStrategy::None => (),
-            CachingStrategy::Memory(_) => assert_eq!(count_memory_cache_rows(), 2),
+            CachingStrategy::Memory(_) => assert_eq!(count_memory_query_cache_rows(), 2),
             CachingStrategy::Truncate | CachingStrategy::Trigger => {
                 assert_eq!(count_query_cache_rows(pool).await, 2)
             }
@@ -1836,17 +1840,14 @@ mod tests {
         );
 
         // Cleanup:
-        pool.drop_table(&format!("{QUERY_CACHE_TABLE}"))
-            .await
-            .unwrap();
-        pool.drop_table(&format!("{TABLE_CACHE_TABLE}"))
-            .await
-            .unwrap();
         pool.drop_table("test_table_caching_1").await.unwrap();
         pool.drop_table("test_table_caching_2").await.unwrap();
     }
 
     async fn view_caching(pool: &mut AnyPool, strategy: &CachingStrategy) {
+        clear_meta_cache().unwrap();
+        clear_memory_table_cache(&[]).unwrap();
+        clear_memory_query_cache(&[]).unwrap();
         pool.drop_table(&format!("{QUERY_CACHE_TABLE}"))
             .await
             .unwrap();
@@ -1863,20 +1864,34 @@ mod tests {
             .await
             .unwrap();
 
-        pool.execute_batch(&format!(
+        pool.execute_no_cache(
             "CREATE TABLE test_vcaching_table ( \
                foo BIGINT, \
                bar BIGINT, \
                PRIMARY KEY (foo) \
-             ); \
-             INSERT INTO test_vcaching_table VALUES (1, 1000); \
-             CREATE VIEW test_vcaching_view_1 AS \
-             SELECT bar \
-             FROM test_vcaching_table; \
-             CREATE VIEW test_vcaching_view_2 AS \
+             )",
+            (),
+        )
+        .await
+        .unwrap();
+        pool.execute_no_cache("INSERT INTO test_vcaching_table VALUES (1, 1000)", ())
+            .await
+            .unwrap();
+        pool.execute_no_cache(
+            "CREATE VIEW test_vcaching_view_1 AS \
              SELECT bar \
              FROM test_vcaching_table",
-        ))
+            (),
+        )
+        .await
+        .unwrap();
+
+        pool.execute_no_cache(
+            "CREATE VIEW test_vcaching_view_2 AS \
+             SELECT bar \
+             FROM test_vcaching_table",
+            (),
+        )
         .await
         .unwrap();
 
@@ -1894,35 +1909,14 @@ mod tests {
 
         match strategy {
             CachingStrategy::None => unimplemented!(),
-            CachingStrategy::Memory(_) => todo!(),
+            CachingStrategy::Memory(_) => assert_eq!(count_memory_query_cache_rows(), 1),
             _ => assert_eq!(count_query_cache_rows(pool).await, 1),
         };
         match strategy {
             CachingStrategy::None => unimplemented!(),
-            CachingStrategy::Memory(_) => todo!(),
+            CachingStrategy::Memory(_) => assert_eq!(count_memory_table_cache_rows(), 0),
             _ => assert_eq!(count_table_cache_rows(pool).await, 0),
         };
-        let rows: Vec<DbRow> = pool
-            .query_no_cache(&format!("SELECT * FROM {QUERY_CACHE_TABLE}"), ())
-            .await
-            .unwrap();
-        let row = &rows[0];
-
-        let last_accessed: u64 = row.get("last_accessed").unwrap().try_into().unwrap();
-        assert_ne!(last_accessed, 0);
-        assert_eq!(
-            *row.get("tables").unwrap(),
-            ParamValue::from("[test_vcaching_view_1]")
-        );
-        assert_eq!(
-            *row.get("statement").unwrap(),
-            ParamValue::from("SELECT * FROM test_vcaching_view_1")
-        );
-        assert_eq!(*row.get("parameters").unwrap(), ParamValue::from("[]"));
-        assert_eq!(
-            *row.get("value").unwrap(),
-            ParamValue::from(r#"[{"bar":1000}]"#)
-        );
 
         pool.insert(
             "test_vcaching_table",
@@ -1937,7 +1931,7 @@ mod tests {
 
         match strategy {
             CachingStrategy::None => unimplemented!(),
-            CachingStrategy::Memory(_) => todo!(),
+            CachingStrategy::Memory(_) => assert_eq!(count_memory_query_cache_rows(), 1),
             // Truncate and trigger give different answers here because the query cache is cleaned
             // for views at different times according to each strategy. The query cache is cleaned
             // immediately after an edit in the case of the trigger option, while when using the
@@ -1948,7 +1942,7 @@ mod tests {
 
         match strategy {
             CachingStrategy::None => unimplemented!(),
-            CachingStrategy::Memory(_) => todo!(),
+            CachingStrategy::Memory(_) => assert_eq!(count_memory_query_cache_rows(), 1),
             _ => assert_eq!(count_table_cache_rows(pool).await, 1),
         };
 
@@ -1963,7 +1957,7 @@ mod tests {
 
         match strategy {
             CachingStrategy::None => unimplemented!(),
-            CachingStrategy::Memory(_) => todo!(),
+            CachingStrategy::Memory(_) => assert_eq!(count_memory_query_cache_rows(), 1),
             _ => assert_eq!(count_query_cache_rows(pool).await, 1),
         };
 
@@ -1978,7 +1972,7 @@ mod tests {
 
         match strategy {
             CachingStrategy::None => unimplemented!(),
-            CachingStrategy::Memory(_) => todo!(),
+            CachingStrategy::Memory(_) => assert_eq!(count_memory_query_cache_rows(), 2),
             _ => assert_eq!(count_query_cache_rows(pool).await, 2),
         };
 
@@ -1993,7 +1987,7 @@ mod tests {
 
         match strategy {
             CachingStrategy::None => unimplemented!(),
-            CachingStrategy::Memory(_) => todo!(),
+            CachingStrategy::Memory(_) => assert_eq!(count_memory_query_cache_rows(), 3),
             _ => assert_eq!(count_query_cache_rows(pool).await, 3),
         };
 
@@ -2010,7 +2004,7 @@ mod tests {
 
         match strategy {
             CachingStrategy::None => unimplemented!(),
-            CachingStrategy::Memory(_) => todo!(),
+            CachingStrategy::Memory(_) => assert_eq!(count_memory_query_cache_rows(), 2),
             // Truncate and trigger give different answers here because the query cache is cleaned
             // for views at different times according to each strategy. The query cache is cleaned
             // immediately after an edit in the case of the trigger option, while when using the
@@ -2023,12 +2017,6 @@ mod tests {
         };
 
         // Cleanup:
-        pool.drop_table(&format!("{QUERY_CACHE_TABLE}"))
-            .await
-            .unwrap();
-        pool.drop_table(&format!("{TABLE_CACHE_TABLE}"))
-            .await
-            .unwrap();
         pool.drop_table(&format!("test_vcaching_table"))
             .await
             .unwrap();
@@ -2069,6 +2057,9 @@ mod tests {
             .map(|strategy| CachingStrategy::from_str(strategy).unwrap())
             .collect::<Vec<_>>();
 
+        clear_meta_cache().unwrap();
+        clear_memory_table_cache(&[]).unwrap();
+        clear_memory_query_cache(&[]).unwrap();
         pool.set_cache_aware_query(true);
         let this_test = "Caching Performance Test -";
         println!(
