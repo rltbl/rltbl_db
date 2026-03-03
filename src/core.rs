@@ -659,7 +659,7 @@ pub struct MemoryQueryCacheKey {
 #[derive(Clone)]
 pub struct MemoryQueryCacheValue {
     pub content: Vec<JsonRow>,
-    pub last_accessed: u128,
+    pub last_verified: u128,
 }
 
 impl FromStr for CachingStrategy {
@@ -936,7 +936,7 @@ pub trait DbQuery {
 
     /// Update the last accessed time of the query cache entry identified by the triple:
     /// (tables, statement, params).
-    async fn update_last_accessed(
+    async fn update_last_verified(
         &self,
         tables: &[&str],
         statement: &str,
@@ -947,7 +947,7 @@ pub trait DbQuery {
                 self.execute(
                     &format!(
                         r#"UPDATE "{QUERY_CACHE_TABLE}"
-                           SET "last_accessed" = {ts}
+                           SET "last_verified" = {ts}
                            WHERE "tables" = {p}1
                            AND "statement" = {p}2
                            AND "parameters" = {p}3"#,
@@ -1031,7 +1031,7 @@ pub trait DbQuery {
     /// tables that have been modified more recently than the view.
     async fn update_cached_views(&self, tables: &[&str]) -> Result<(), DbError> {
         for view in self.which_are_views(tables).await? {
-            let last_accessed = self.last_accessed(&view).await?;
+            let last_verified = self.last_verified(&view).await?;
             let view_sql = self.get_view_sql(&view).await?;
             let view_tables = get_view_tables(&view_sql)?;
             let last_modified = self
@@ -1039,7 +1039,7 @@ pub trait DbQuery {
                     &view_tables.iter().map(|t| t.as_str()).collect::<Vec<_>>(),
                 )
                 .await?;
-            if last_modified >= last_accessed {
+            if last_modified >= last_verified {
                 self.delete_query_cache_entries(&[&view]).await?;
             }
         }
@@ -1051,14 +1051,14 @@ pub trait DbQuery {
     async fn update_memory_query_cache_cached_views(&self, tables: &[&str]) -> Result<(), DbError> {
         let views = self.which_are_views(tables).await?;
         for view in &views {
-            let last_accessed = {
-                let mut last_accessed = 0;
+            let last_verified = {
+                let mut last_verified = 0;
                 for (key, value) in get_memory_query_cache()?.iter() {
-                    if key.tables.contains(view) && value.last_accessed > last_accessed {
-                        last_accessed = value.last_accessed;
+                    if key.tables.contains(view) && value.last_verified > last_verified {
+                        last_verified = value.last_verified;
                     }
                 }
-                last_accessed
+                last_verified
             };
             let view_sql = self.get_view_sql(&view).await?;
             let view_tables = get_view_tables(&view_sql)?;
@@ -1074,7 +1074,7 @@ pub trait DbQuery {
                 }
                 latest_last_modified
             };
-            if last_modified >= last_accessed {
+            if last_modified >= last_verified {
                 clear_memory_query_cache(&[view])?;
             }
         }
@@ -1133,11 +1133,11 @@ pub trait DbQuery {
     /// Gets the last time that the given table was accessed, as read from the query cache table.
     /// If there is no entry involving the given table in the query cache, or if the query cache
     /// table doesn't exist, returns 0.
-    async fn last_accessed(&self, table: &str) -> Result<u64, DbError> {
+    async fn last_verified(&self, table: &str) -> Result<u64, DbError> {
         match self.table_exists(QUERY_CACHE_TABLE).await? {
             true => {
                 let sql = format!(
-                    r#"SELECT MAX("last_accessed") AS "last_accessed"
+                    r#"SELECT MAX("last_verified") AS "last_verified"
                        FROM "{QUERY_CACHE_TABLE}"
                        WHERE "tables" LIKE {p}1"#,
                     p = self.kind().param_prefix(),
@@ -1145,11 +1145,11 @@ pub trait DbQuery {
                 let table_param = format!(r#"%{table}%"#);
                 let rows: Vec<DbRow> = self.query_no_cache(&sql, &[&table_param]).await?;
                 match rows.first() {
-                    Some(row) => match row.get("last_accessed") {
+                    Some(row) => match row.get("last_verified") {
                         Some(value) if *value == ParamValue::Null => Ok(0),
                         Some(value) => Ok(value.try_into()?),
                         None => Err(DbError::DataError(format!(
-                            "No 'last_accessed' found in row: {row:?}"
+                            "No 'last_verified' found in row: {row:?}"
                         ))),
                     },
                     None => Ok(0),
@@ -1216,10 +1216,10 @@ pub trait DbQuery {
                             }
                         };
                         let db_rows = json_rows.into_db_rows();
-                        // It is harmless but time consuming to update the last accessed time
-                        // when there are no views so we skip it in that case.
+                        // Only views need to be verified every time they are accessed. Tables
+                        // do not because they do not have any dependencies.
                         if self.which_are_views(tables).await?.len() > 0 {
-                            self.update_last_accessed(tables, sql, &params_param)
+                            self.update_last_verified(tables, sql, &params_param)
                                 .await?;
                         }
                         Ok(db_rows)
@@ -1261,7 +1261,7 @@ pub trait DbQuery {
             };
             match cached_rows {
                 Some(json_rows) => {
-                    update_memory_query_cache_last_accessed(&mem_key)?;
+                    update_memory_query_cache_last_verified(&mem_key)?;
                     let db_rows = json_rows.into_db_rows();
                     Ok(db_rows)
                 }
@@ -1286,7 +1286,7 @@ pub trait DbQuery {
                         mem_key,
                         MemoryQueryCacheValue {
                             content: json_rows.to_vec(),
-                            last_accessed: SystemTime::now()
+                            last_verified: SystemTime::now()
                                 .duration_since(UNIX_EPOCH)
                                 .map_err(|err| {
                                     DbError::DataError(format!("Error getting epoch time: {err}"))
@@ -2195,13 +2195,13 @@ pub fn update_memory_table_cache_last_modified_times(tables: &[&str]) -> Result<
 }
 
 /// Update the last accessed time in the in-memory query cache for the given key.
-pub fn update_memory_query_cache_last_accessed(key: &MemoryQueryCacheKey) -> Result<(), DbError> {
+pub fn update_memory_query_cache_last_verified(key: &MemoryQueryCacheKey) -> Result<(), DbError> {
     let mut cache = get_memory_query_cache()?;
     let epoch_now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_err(|err| DbError::DataError(format!("Error getting epoch time: {err}")))?;
     match cache.get_mut(key) {
-        Some(value) => value.last_accessed = epoch_now.as_millis(),
+        Some(value) => value.last_verified = epoch_now.as_millis(),
         None => (),
     };
     Ok(())

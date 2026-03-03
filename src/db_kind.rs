@@ -333,7 +333,7 @@ impl DbKind {
                  "statement" TEXT,
                  "parameters" TEXT,
                  "value" TEXT,
-                 "last_accessed" BIGINT DEFAULT ({get_epoch_now}),
+                 "last_verified" BIGINT DEFAULT ({get_epoch_now}),
                  PRIMARY KEY ("tables", "statement", "parameters")
              )"#
         )
@@ -387,7 +387,7 @@ impl DbKind {
                  SELECT 1
                  FROM "{TABLE_CACHE_TABLE}" t
                  WHERE t."table" = '{table}'
-                   AND t."last_modified" >= "{QUERY_CACHE_TABLE}"."last_accessed"
+                   AND t."last_modified" >= "{QUERY_CACHE_TABLE}"."last_verified"
                );"#
         );
         self.wrap_trigger_content(&table, &trigger_basename, &trigger_content)
