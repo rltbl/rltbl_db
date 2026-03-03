@@ -326,6 +326,7 @@ mod tests {
     }
 
     async fn text_column_query(url: &str) {
+        clear_meta_cache().unwrap();
         let pool = AnyPool::connect(url).await.unwrap();
         let p = pool.kind().param_prefix().to_string();
         pool.execute_batch(&format!(
@@ -391,6 +392,7 @@ mod tests {
     }
 
     async fn integer_column_query(url: &str) {
+        clear_meta_cache().unwrap();
         let pool = AnyPool::connect(url).await.unwrap();
         let p = pool.kind().param_prefix().to_string();
         pool.execute_batch(&format!(
@@ -457,6 +459,7 @@ mod tests {
     }
 
     async fn float_column_query(url: &str) {
+        clear_meta_cache().unwrap();
         let pool = AnyPool::connect(url).await.unwrap();
         let p = pool.kind().param_prefix().to_string();
 
@@ -534,6 +537,7 @@ mod tests {
     }
 
     async fn mixed_column_query(url: &str) {
+        clear_meta_cache().unwrap();
         let pool = AnyPool::connect(url).await.unwrap();
         let p = pool.kind().param_prefix().to_string();
         pool.execute_batch(&format!(
@@ -660,6 +664,7 @@ mod tests {
     }
 
     async fn input_params(url: &str) {
+        clear_meta_cache().unwrap();
         let pool = AnyPool::connect(url).await.unwrap();
         let p = pool.kind().param_prefix().to_string();
         let cascade = match pool.kind() {
@@ -784,6 +789,7 @@ mod tests {
     }
 
     async fn insert(url: &str) {
+        clear_meta_cache().unwrap();
         let pool = AnyPool::connect(url).await.unwrap();
         let cascade = match pool.kind() {
             DbKind::PostgreSQL => " CASCADE",
@@ -863,6 +869,7 @@ mod tests {
     }
 
     async fn insert_returning(url: &str) {
+        clear_meta_cache().unwrap();
         let pool = AnyPool::connect(url).await.unwrap();
         let cascade = match pool.kind() {
             DbKind::PostgreSQL => " CASCADE",
@@ -965,6 +972,7 @@ mod tests {
     }
 
     async fn drop_table(url: &str) {
+        clear_meta_cache().unwrap();
         let pool = AnyPool::connect(url).await.unwrap();
         let cascade = match pool.kind() {
             DbKind::PostgreSQL => " CASCADE",
@@ -1012,6 +1020,7 @@ mod tests {
     }
 
     async fn primary_keys(url: &str) {
+        clear_meta_cache().unwrap();
         let pool = AnyPool::connect(url).await.unwrap();
         let cascade = match pool.kind() {
             DbKind::PostgreSQL => " CASCADE",
@@ -1058,6 +1067,7 @@ mod tests {
     }
 
     async fn update(url: &str) {
+        clear_meta_cache().unwrap();
         let pool = AnyPool::connect(url).await.unwrap();
         let cascade = match pool.kind() {
             DbKind::PostgreSQL => " CASCADE",
@@ -1161,6 +1171,7 @@ mod tests {
     }
 
     async fn update_returning(url: &str) {
+        clear_meta_cache().unwrap();
         let pool = AnyPool::connect(url).await.unwrap();
         let cascade = match pool.kind() {
             DbKind::PostgreSQL => " CASCADE",
@@ -1366,6 +1377,7 @@ mod tests {
     }
 
     async fn upsert(url: &str) {
+        clear_meta_cache().unwrap();
         let pool = AnyPool::connect(url).await.unwrap();
         let cascade = match pool.kind() {
             DbKind::PostgreSQL => " CASCADE",
@@ -1469,6 +1481,7 @@ mod tests {
     }
 
     async fn upsert_returning(url: &str) {
+        clear_meta_cache().unwrap();
         let pool = AnyPool::connect(url).await.unwrap();
         let cascade = match pool.kind() {
             DbKind::PostgreSQL => " CASCADE",
@@ -2051,15 +2064,13 @@ mod tests {
     // for the given number of runs for each of the supported caching strategies. The running
     // time for each strategy is then summarized and reported via STDOUT.
     async fn perform_caching(url: &str, runs: usize, edit_rate: usize, fail_after: usize) {
+        clear_meta_cache().unwrap();
         let mut pool = AnyPool::connect(url).await.unwrap();
         let all_strategies = ["none", "truncate_all", "truncate", "trigger", "memory:1000"]
             .iter()
             .map(|strategy| CachingStrategy::from_str(strategy).unwrap())
             .collect::<Vec<_>>();
 
-        clear_meta_cache().unwrap();
-        clear_memory_table_cache(&[]).unwrap();
-        clear_memory_query_cache(&[]).unwrap();
         pool.set_cache_aware_query(true);
         let this_test = "Caching Performance Test -";
         println!(
