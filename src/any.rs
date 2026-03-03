@@ -1834,6 +1834,16 @@ mod tests {
                 db_row! {"value".into() => ParamValue::from("sigma")},
             ]
         );
+
+        // Cleanup:
+        pool.drop_table(&format!("{QUERY_CACHE_TABLE}"))
+            .await
+            .unwrap();
+        pool.drop_table(&format!("{TABLE_CACHE_TABLE}"))
+            .await
+            .unwrap();
+        pool.drop_table("test_table_caching_1").await.unwrap();
+        pool.drop_table("test_table_caching_2").await.unwrap();
     }
 
     async fn view_caching(pool: &mut AnyPool, strategy: &CachingStrategy) {
@@ -1843,23 +1853,26 @@ mod tests {
         pool.drop_table(&format!("{TABLE_CACHE_TABLE}"))
             .await
             .unwrap();
-        let cascade = match pool.kind() {
-            DbKind::SQLite => "",
-            DbKind::PostgreSQL => " CASCADE",
-        };
+        pool.drop_table(&format!("test_vcaching_table"))
+            .await
+            .unwrap();
+        pool.drop_view(&format!("test_vcaching_view_1"))
+            .await
+            .unwrap();
+        pool.drop_view(&format!("test_vcaching_view_2"))
+            .await
+            .unwrap();
+
         pool.execute_batch(&format!(
-            "DROP TABLE IF EXISTS test_vcaching_table{cascade}; \
-             CREATE TABLE test_vcaching_table ( \
+            "CREATE TABLE test_vcaching_table ( \
                foo BIGINT, \
                bar BIGINT, \
                PRIMARY KEY (foo) \
              ); \
              INSERT INTO test_vcaching_table VALUES (1, 1000); \
-             DROP VIEW IF EXISTS test_vcaching_view_1{cascade}; \
              CREATE VIEW test_vcaching_view_1 AS \
              SELECT bar \
              FROM test_vcaching_table; \
-             DROP VIEW IF EXISTS test_vcaching_view_2{cascade}; \
              CREATE VIEW test_vcaching_view_2 AS \
              SELECT bar \
              FROM test_vcaching_table",
@@ -2008,6 +2021,23 @@ mod tests {
             CachingStrategy::Truncate => assert_eq!(count_query_cache_rows(pool).await, 2),
             _ => assert_eq!(count_query_cache_rows(pool).await, 0),
         };
+
+        // Cleanup:
+        pool.drop_table(&format!("{QUERY_CACHE_TABLE}"))
+            .await
+            .unwrap();
+        pool.drop_table(&format!("{TABLE_CACHE_TABLE}"))
+            .await
+            .unwrap();
+        pool.drop_table(&format!("test_vcaching_table"))
+            .await
+            .unwrap();
+        pool.drop_view(&format!("test_vcaching_view_1"))
+            .await
+            .unwrap();
+        pool.drop_view(&format!("test_vcaching_view_2"))
+            .await
+            .unwrap();
     }
 
     // This test takes a few minutes to run and is ignored by default.

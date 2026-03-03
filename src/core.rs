@@ -733,8 +733,8 @@ pub trait DbQuery {
             None => false,
         };
         if !(query_cache_table_exists && table_cache_table_exists) {
-            for table in [QUERY_CACHE_TABLE, TABLE_CACHE_TABLE] {
-                let sql = match table {
+            for special_table in [QUERY_CACHE_TABLE, TABLE_CACHE_TABLE] {
+                let sql = match special_table {
                     table if table == QUERY_CACHE_TABLE => {
                         self.kind().create_query_cache_table_sql()
                     }
@@ -751,18 +751,18 @@ pub trait DbQuery {
                         // time, triggering a primary key violation in the metadata table. So if
                         // there is an error creating the cache table we just check that it exists
                         // and if it does we assume that all is ok.
-                        match self.table_exists(table).await? {
+                        match self.table_exists(special_table).await? {
                             false => {
-                                return Err(DbError::DatabaseError(
-                                    "The cache table could not be created".to_string(),
-                                ));
+                                return Err(DbError::DatabaseError(format!(
+                                    "The cache table '{special_table}' could not be created"
+                                )));
                             }
                             true => (),
                         }
                     }
                 };
                 let mut cache = get_meta_cache()?;
-                cache.insert(table.to_string());
+                cache.insert(special_table.to_string());
             }
         }
         Ok(())
@@ -917,6 +917,8 @@ pub trait DbQuery {
                 meta_cache.remove(TABLE_CACHE_TABLE);
             } else {
                 meta_cache.remove(&format!("{table}_triggers"));
+                meta_cache.remove(&format!("{table}_VIEW"));
+                meta_cache.remove(&format!("{table}_TABLE"));
             }
         }
         Ok(())
@@ -1628,6 +1630,26 @@ pub trait DbQuery {
         self.clear_cache_for_dropped_tables(&[&table]).await?;
         Ok(())
     }
+
+    /// Drop the given view from the database.
+    async fn drop_view(&self, view: &str) -> Result<(), DbError> {
+        let view = validate_table_name(view)?;
+        // Drop the view:
+        match self.kind() {
+            DbKind::PostgreSQL => {
+                self.execute_no_cache(&format!(r#"DROP VIEW IF EXISTS "{view}" CASCADE"#), ())
+                    .await?
+            }
+            DbKind::SQLite => {
+                self.execute_no_cache(&format!(r#"DROP VIEW IF EXISTS "{view}""#), ())
+                    .await?
+            }
+        };
+
+        // Delete dirty entries from the cache in accordance with our caching strategy:
+        self.clear_cache_for_dropped_tables(&[&view]).await?;
+        Ok(())
+    }
 }
 
 // -------- Free functions ----------
@@ -1917,6 +1939,28 @@ fn get_affected_tables(sql: &str) -> Result<(HashSet<String>, HashSet<String>), 
                     };
                     dropped_tables.insert(table_name);
                 }
+                "drop_view" => {
+                    let view_name = {
+                        let object_ref = instruction
+                            .children(&mut instruction.walk())
+                            .filter(|child| child.kind().to_lowercase() == "object_reference")
+                            .collect::<Vec<_>>();
+                        verify_list_len(&object_ref, 1)?;
+                        let object_ref = object_ref[0];
+
+                        let identifier = object_ref
+                            .children(&mut object_ref.walk())
+                            .filter(|child| child.kind().to_lowercase() == "identifier")
+                            .collect::<Vec<_>>();
+                        verify_list_len(&identifier, 1)?;
+                        let identifier = identifier[0];
+
+                        validate_table_name(
+                            &sql.to_string()[identifier.start_byte()..identifier.end_byte()],
+                        )?
+                    };
+                    dropped_tables.insert(view_name);
+                }
                 "alter_table" => {
                     let table_name = {
                         let object_ref = instruction
@@ -2192,6 +2236,12 @@ mod tests {
         edited_tables.sort();
         assert_eq!(edited_tables, ["phi"]);
         assert_eq!(dropped_tables, [].into());
+
+        let (edited_tables, dropped_tables) = get_affected_tables("DROP VIEW theta").unwrap();
+        let mut dropped_tables: Vec<_> = dropped_tables.into_iter().collect();
+        dropped_tables.sort();
+        assert_eq!(edited_tables, [].into());
+        assert_eq!(dropped_tables, ["theta"]);
 
         // Multiple statements, no parameters:
 
