@@ -892,7 +892,7 @@ pub trait DbQuery {
                 self.delete_query_cache_entries(tables).await?
             }
             CachingStrategy::Memory(_) => {
-                update_memory_table_cache_last_modified_times(tables)?;
+                self.update_last_modified_times(tables).await?;
                 clear_memory_query_cache(tables)?;
             }
         };
@@ -937,51 +937,96 @@ pub trait DbQuery {
         &self,
         tables: &[&str],
         statement: &str,
-        params: &str,
+        params: &Params,
     ) -> Result<(), DbError> {
-        match self.table_exists(QUERY_CACHE_TABLE).await? {
-            true => {
-                let tables_param = format!(
-                    "[{}]",
-                    tables
-                        .iter()
-                        .map(|table| format!("\"{table}\""))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                );
-                self.execute(
-                    &format!(
-                        r#"UPDATE "{QUERY_CACHE_TABLE}"
-                           SET "last_verified" = {ts}
-                           WHERE "tables" = {p}1
-                           AND "statement" = {p}2
-                           AND "parameters" = {p}3"#,
-                        p = self.kind().param_prefix(),
-                        ts = self.kind().get_epoch_time_sql(),
+        match self.get_caching_strategy() {
+            CachingStrategy::Memory(_) => {
+                let mut cache = get_memory_query_cache()?;
+                let epoch_now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map_err(|err| {
+                        DbError::DataError(format!("Error getting epoch time: {err}"))
+                    })?;
+                let mem_key = MemoryQueryCacheKey {
+                    tables: format!(
+                        "[{}]",
+                        tables
+                            .iter()
+                            .map(|table| format!("\"{table}\""))
+                            .collect::<Vec<_>>()
+                            .join(", ")
                     ),
-                    &[&format!("[{tables_param}]"), statement, params],
-                )
-                .await?;
+                    statement: statement.to_string(),
+                    parameters: format!("{params:?}"),
+                };
+                match cache.get_mut(&mem_key) {
+                    Some(value) => value.last_verified = epoch_now.as_millis(),
+                    None => (),
+                };
             }
-            false => (),
+            _ => match self.table_exists(QUERY_CACHE_TABLE).await? {
+                true => {
+                    let tables_param = format!(
+                        "[{}]",
+                        tables
+                            .iter()
+                            .map(|table| format!("\"{table}\""))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
+                    self.execute(
+                        &format!(
+                            r#"UPDATE "{QUERY_CACHE_TABLE}"
+                               SET "last_verified" = {ts}
+                               WHERE "tables" = {p}1
+                               AND "statement" = {p}2
+                               AND "parameters" = {p}3"#,
+                            p = self.kind().param_prefix(),
+                            ts = self.kind().get_epoch_time_sql(),
+                        ),
+                        &[
+                            &format!("[{tables_param}]"),
+                            statement,
+                            &format!("{params:?}"),
+                        ],
+                    )
+                    .await?;
+                }
+                false => (),
+            },
         };
         Ok(())
     }
 
     /// Update the last modified times of each of the given tables in the table cache.
     async fn update_last_modified_times(&self, tables: &[&str]) -> Result<(), DbError> {
-        if self.table_exists(TABLE_CACHE_TABLE).await? {
-            for table in tables {
-                let sql = format!(
-                    r#"INSERT INTO "{TABLE_CACHE_TABLE}" ("table", "last_modified")
-                       VALUES ({prefix}1, {ts})
-                       ON CONFLICT ("table") DO UPDATE SET "last_modified" = {ts}"#,
-                    prefix = self.kind().param_prefix(),
-                    ts = self.kind().get_epoch_time_sql(),
-                );
-                self.execute_no_cache(&sql, params![table]).await?;
+        match self.get_caching_strategy() {
+            CachingStrategy::Memory(_) => {
+                let mut cache = get_memory_table_cache()?;
+                let epoch_now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map_err(|err| {
+                        DbError::DataError(format!("Error getting epoch time: {err}"))
+                    })?;
+                for table in tables {
+                    cache.insert(table.to_string(), epoch_now.as_millis());
+                }
             }
-        }
+            _ => {
+                if self.table_exists(TABLE_CACHE_TABLE).await? {
+                    for table in tables {
+                        let sql = format!(
+                            r#"INSERT INTO "{TABLE_CACHE_TABLE}" ("table", "last_modified")
+                               VALUES ({prefix}1, {ts})
+                               ON CONFLICT ("table") DO UPDATE SET "last_modified" = {ts}"#,
+                            prefix = self.kind().param_prefix(),
+                            ts = self.kind().get_epoch_time_sql(),
+                        );
+                        self.execute_no_cache(&sql, params![table]).await?;
+                    }
+                }
+            }
+        };
         Ok(())
     }
 
@@ -1232,8 +1277,7 @@ pub trait DbQuery {
                         // Only views need to be verified every time they are accessed. Tables
                         // do not because they do not have any dependencies.
                         if self.which_are_views(tables).await?.len() > 0 {
-                            self.update_last_verified(tables, sql, &params_param)
-                                .await?;
+                            self.update_last_verified(tables, sql, &params).await?;
                         }
                         Ok(db_rows)
                     }
@@ -1284,7 +1328,7 @@ pub trait DbQuery {
                     // Only views need to be verified every time they are accessed. Tables
                     // do not because they do not have any dependencies.
                     if self.which_are_views(tables).await?.len() > 0 {
-                        update_memory_query_cache_last_verified(&mem_key)?;
+                        self.update_last_verified(tables, sql, &params).await?;
                     }
                     let db_rows = json_rows.into_db_rows();
                     Ok(db_rows)
@@ -2209,31 +2253,6 @@ pub fn clear_memory_table_cache(tables: &[&str]) -> Result<(), DbError> {
     for table in tables {
         cache.remove(&table.to_string());
     }
-    Ok(())
-}
-
-/// Update the last modified times in the in-memory table cache for all of the given tables.
-pub fn update_memory_table_cache_last_modified_times(tables: &[&str]) -> Result<(), DbError> {
-    let mut cache = get_memory_table_cache()?;
-    let epoch_now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|err| DbError::DataError(format!("Error getting epoch time: {err}")))?;
-    for table in tables {
-        cache.insert(table.to_string(), epoch_now.as_millis());
-    }
-    Ok(())
-}
-
-/// Update the last verified time in the in-memory query cache for the given key.
-pub fn update_memory_query_cache_last_verified(key: &MemoryQueryCacheKey) -> Result<(), DbError> {
-    let mut cache = get_memory_query_cache()?;
-    let epoch_now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|err| DbError::DataError(format!("Error getting epoch time: {err}")))?;
-    match cache.get_mut(key) {
-        Some(value) => value.last_verified = epoch_now.as_millis(),
-        None => (),
-    };
     Ok(())
 }
 
