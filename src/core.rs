@@ -903,16 +903,20 @@ pub trait DbQuery {
     /// current [CachingStrategy], under the assumption that the tables in the given list have
     /// all just been dropped.
     async fn clear_cache_for_dropped_tables(&self, tables: &[&str]) -> Result<(), DbError> {
-        // Note that we don't need to worry about whether one of the dropped tables actually
-        // underlies a view, since if it really was dropped then of necessity the view must
-        // also have been dropped.
         match self.get_caching_strategy() {
             CachingStrategy::None => (),
-            CachingStrategy::TruncateAll => self.delete_query_cache_entries(&[]).await?,
+            CachingStrategy::TruncateAll => {
+                self.update_last_modified_times(tables).await?;
+                self.delete_query_cache_entries(&[]).await?
+            }
             CachingStrategy::Trigger | CachingStrategy::Truncate => {
+                self.update_last_modified_times(tables).await?;
                 self.delete_query_cache_entries(tables).await?
             }
-            CachingStrategy::Memory(_) => clear_memory_query_cache(&tables)?,
+            CachingStrategy::Memory(_) => {
+                self.update_last_modified_times(tables).await?;
+                clear_memory_query_cache(&tables)?
+            }
         };
 
         // Indicate that any triggers for these tables no longer exist.
