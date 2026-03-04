@@ -1852,6 +1852,44 @@ mod tests {
             ]
         );
 
+        let rows: Vec<DbRow> = pool
+            .cache(
+                &["test_table_caching_1", "test_table_caching_2"],
+                "SELECT * FROM test_table_caching_1 t1, test_table_caching_2 t2 \
+                 WHERE t1.value = t2.value",
+                (),
+            )
+            .await
+            .unwrap();
+        match strategy {
+            CachingStrategy::None => (),
+            CachingStrategy::Memory(_) => assert_eq!(count_memory_query_cache_rows(), 3),
+            CachingStrategy::Truncate | CachingStrategy::Trigger => {
+                assert_eq!(count_query_cache_rows(pool).await, 3)
+            }
+            CachingStrategy::TruncateAll => assert_eq!(count_query_cache_rows(pool).await, 2),
+        };
+        assert_eq!(rows.len(), 0);
+
+        let rows: Vec<DbRow> = pool
+            .cache(
+                &["test_table_caching_1", "test_table_caching_2"],
+                "SELECT * FROM test_table_caching_1 t1, test_table_caching_2 t2 \
+                 WHERE t1.value = t2.value",
+                (),
+            )
+            .await
+            .unwrap();
+        match strategy {
+            CachingStrategy::None => (),
+            CachingStrategy::Memory(_) => assert_eq!(count_memory_query_cache_rows(), 3),
+            CachingStrategy::Truncate | CachingStrategy::Trigger => {
+                assert_eq!(count_query_cache_rows(pool).await, 3)
+            }
+            CachingStrategy::TruncateAll => assert_eq!(count_query_cache_rows(pool).await, 2),
+        };
+        assert_eq!(rows.len(), 0);
+
         // Cleanup:
         pool.drop_table("test_table_caching_1").await.unwrap();
         pool.drop_table("test_table_caching_2").await.unwrap();
@@ -1955,7 +1993,7 @@ mod tests {
 
         match strategy {
             CachingStrategy::None => unimplemented!(),
-            CachingStrategy::Memory(_) => assert_eq!(count_memory_query_cache_rows(), 1),
+            CachingStrategy::Memory(_) => assert_eq!(count_memory_table_cache_rows(), 1),
             _ => assert_eq!(count_table_cache_rows(pool).await, 1),
         };
 

@@ -787,7 +787,6 @@ pub trait DbQuery {
             None => false,
         };
         if !table_triggers_exist {
-            let table = validate_table_name(table)?;
             self.ensure_cache_tables_exist().await?;
             let sql = self
                 .kind()
@@ -812,12 +811,10 @@ pub trait DbQuery {
             None => false,
         };
         if !view_triggers_exist {
-            let view = validate_table_name(view)?;
             self.ensure_cache_tables_exist().await?;
             let view_sql = self.get_view_sql(&view).await?;
             let source_tables = get_view_tables(&view_sql)?;
             for source_table in source_tables.iter() {
-                let source_table = validate_table_name(source_table)?;
                 // Add a trigger to clean entries from the cache for the source table itself:
                 let sql = self
                     .kind()
@@ -830,7 +827,7 @@ pub trait DbQuery {
                     .create_table_caching_triggers_for_view_sql(&source_table, &view)?
                     .join(";\n");
                 self.execute_batch(&sql).await?;
-                // Add an entry for the source table to the metacache. If there is another
+                // Add an entry for the source table triggers to the metacache. If there is another
                 // entry for this source table it will be overwritten, which is desirable in
                 // case it was not previously known if the table was the source table for a view.
                 let mut cache = get_meta_cache()?;
@@ -934,7 +931,7 @@ pub trait DbQuery {
         Ok(())
     }
 
-    /// Update the last accessed time of the query cache entry identified by the triple:
+    /// Update the last verified time of the query cache entry identified by the triple:
     /// (tables, statement, params).
     async fn update_last_verified(
         &self,
@@ -1027,57 +1024,58 @@ pub trait DbQuery {
         Ok(view_sql)
     }
 
-    /// Clears the query cache for any of the given tables that (a) are views and (b) have source
-    /// tables that have been modified more recently than the view.
+    /// Uses the current caching strategy to clear the query cache for any of the given tables
+    /// that (a) are views and (b) have source tables that have been modified more recently than
+    /// the view. This function works both with database and memory cache strategies.
     async fn update_cached_views(&self, tables: &[&str]) -> Result<(), DbError> {
-        for view in self.which_are_views(tables).await? {
-            let last_verified = self.last_verified(&view).await?;
-            let view_sql = self.get_view_sql(&view).await?;
-            let view_tables = get_view_tables(&view_sql)?;
-            let last_modified = self
-                .get_latest_last_modified(
-                    &view_tables.iter().map(|t| t.as_str()).collect::<Vec<_>>(),
-                )
-                .await?;
-            if last_modified >= last_verified {
-                self.delete_query_cache_entries(&[&view]).await?;
-            }
-        }
-        Ok(())
-    }
-
-    /// Clears the in-memory query cache for any of the given tables that (a) are views and (b)
-    /// have source tables that have been modified more recently than the view.
-    async fn update_memory_query_cache_cached_views(&self, tables: &[&str]) -> Result<(), DbError> {
         let views = self.which_are_views(tables).await?;
-        for view in &views {
-            let last_verified = {
-                let mut last_verified = 0;
-                for (key, value) in get_memory_query_cache()?.iter() {
-                    if key.tables.contains(view) && value.last_verified > last_verified {
-                        last_verified = value.last_verified;
+        match self.get_caching_strategy() {
+            CachingStrategy::Memory(_) => {
+                for view in &views {
+                    let last_verified = {
+                        let mut last_verified = 0;
+                        for (key, value) in get_memory_query_cache()?.iter() {
+                            if key.tables.contains(view) && value.last_verified > last_verified {
+                                last_verified = value.last_verified;
+                            }
+                        }
+                        last_verified
+                    };
+                    let view_sql = self.get_view_sql(&view).await?;
+                    let view_tables = get_view_tables(&view_sql)?;
+                    let last_modified = {
+                        let mut latest_last_modified = 0;
+                        for view_table in &view_tables {
+                            match get_memory_table_cache()?.get(view_table) {
+                                Some(lm) if *lm > latest_last_modified => {
+                                    latest_last_modified = *lm;
+                                }
+                                _ => (),
+                            };
+                        }
+                        latest_last_modified
+                    };
+                    if last_modified >= last_verified {
+                        clear_memory_query_cache(&[view])?;
                     }
                 }
-                last_verified
-            };
-            let view_sql = self.get_view_sql(&view).await?;
-            let view_tables = get_view_tables(&view_sql)?;
-            let last_modified = {
-                let mut latest_last_modified = 0;
-                for view_table in &view_tables {
-                    match get_memory_table_cache()?.get(view_table) {
-                        Some(lm) if *lm > latest_last_modified => {
-                            latest_last_modified = *lm;
-                        }
-                        _ => (),
-                    };
-                }
-                latest_last_modified
-            };
-            if last_modified >= last_verified {
-                clear_memory_query_cache(&[view])?;
             }
-        }
+            _ => {
+                for view in &views {
+                    let last_verified = self.last_verified(&view).await?;
+                    let view_sql = self.get_view_sql(&view).await?;
+                    let view_tables = get_view_tables(&view_sql)?;
+                    let last_modified = self
+                        .get_latest_last_modified(
+                            &view_tables.iter().map(|t| t.as_str()).collect::<Vec<_>>(),
+                        )
+                        .await?;
+                    if last_modified >= last_verified {
+                        self.delete_query_cache_entries(&[&view]).await?;
+                    }
+                }
+            }
+        };
         Ok(())
     }
 
@@ -1351,7 +1349,7 @@ pub trait DbQuery {
                 Ok(FromDbRows::from(rows))
             }
             CachingStrategy::Memory(cache_size) => {
-                self.update_memory_query_cache_cached_views(tables).await?;
+                self.update_cached_views(tables).await?;
                 let rows = mem_cache(tables, sql, &params.into_params(), cache_size).await?;
                 Ok(FromDbRows::from(rows))
             }
@@ -1665,7 +1663,10 @@ pub trait DbQuery {
                 .which_are_views_sql(&unknowns.iter().map(|s| s.as_str()).collect::<Vec<_>>());
             let rows: Vec<DbRow> = self.query_no_cache(&sql, params).await?;
             for row in &rows {
-                let view = row.get("view_name").unwrap().to_string();
+                let view = row
+                    .get("view_name")
+                    .ok_or(DbError::DataError("No view_name found in row".to_string()))?
+                    .to_string();
                 let mut cache = get_meta_cache()?;
                 cache.insert(format!("{view}_VIEW"));
                 views.push(view);
@@ -1676,7 +1677,10 @@ pub trait DbQuery {
                 .which_are_tables_sql(&unknowns.iter().map(|s| s.as_str()).collect::<Vec<_>>());
             let rows: Vec<DbRow> = self.query_no_cache(&sql, params).await?;
             for row in &rows {
-                let table = row.get("table_name").unwrap().to_string();
+                let table = row
+                    .get("table_name")
+                    .ok_or(DbError::DataError("No table_name found in row".to_string()))?
+                    .to_string();
                 let mut cache = get_meta_cache()?;
                 cache.insert(format!("{table}_TABLE"));
             }
@@ -2212,7 +2216,7 @@ pub fn update_memory_table_cache_last_modified_times(tables: &[&str]) -> Result<
     Ok(())
 }
 
-/// Update the last accessed time in the in-memory query cache for the given key.
+/// Update the last verified time in the in-memory query cache for the given key.
 pub fn update_memory_query_cache_last_verified(key: &MemoryQueryCacheKey) -> Result<(), DbError> {
     let mut cache = get_memory_query_cache()?;
     let epoch_now = SystemTime::now()
