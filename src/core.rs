@@ -903,6 +903,14 @@ pub trait DbQuery {
     /// current [CachingStrategy], under the assumption that the tables in the given list have
     /// all just been dropped.
     async fn clear_cache_for_dropped_tables(&self, tables: &[&str]) -> Result<(), DbError> {
+        // Do not do anything if the dropped tables include the cache tables themselves:
+        if tables
+            .iter()
+            .any(|table| [QUERY_CACHE_TABLE, TABLE_CACHE_TABLE].contains(table))
+        {
+            return Ok(());
+        }
+
         match self.get_caching_strategy() {
             CachingStrategy::None => (),
             CachingStrategy::TruncateAll => {
@@ -1672,17 +1680,66 @@ pub trait DbQuery {
 
     /// Check whether the given table exists in the database.
     async fn table_exists(&self, table: &str) -> Result<bool, DbError> {
-        let (sql, params) = self.kind().table_exists_sql(table);
-        let rows: Vec<DbRow> = self.query_no_cache(&sql, params).await?;
-        match rows.first() {
-            None => Ok(false),
-            Some(_) => Ok(true),
-        }
+        Ok(self.which_are_tables(&[table]).await?.len() == 1)
     }
 
     /// Check whether the given view exists in the database.
     async fn view_exists(&self, view: &str) -> Result<bool, DbError> {
         Ok(self.which_are_views(&[view]).await?.len() == 1)
+    }
+
+    /// Return a list of the objects from the given list that are tables.
+    async fn which_are_tables(&self, objects: &[&str]) -> Result<Vec<String>, DbError> {
+        let mut tables = vec![];
+        let mut unknowns = vec![];
+        for object in objects {
+            let object_is_table = match get_meta_cache()?.get(&format!("{object}_TABLE")) {
+                Some(_) => true,
+                None => false,
+            };
+            if object_is_table {
+                tables.push(object.to_string());
+            } else {
+                let object_is_view = match get_meta_cache()?.get(&format!("{object}_VIEW")) {
+                    Some(_) => true,
+                    None => false,
+                };
+                if !object_is_view {
+                    unknowns.push(object.to_string());
+                }
+            }
+        }
+
+        // Query the database for the status of any unknowns:
+        if !unknowns.is_empty() {
+            let (sql, params) = self
+                .kind()
+                .which_are_tables_sql(&unknowns.iter().map(|s| s.as_str()).collect::<Vec<_>>());
+            let rows: Vec<DbRow> = self.query_no_cache(&sql, params).await?;
+            for row in &rows {
+                let table = row
+                    .get("table_name")
+                    .ok_or(DbError::DataError("No table_name found in row".to_string()))?
+                    .to_string();
+                let mut cache = get_meta_cache()?;
+                cache.insert(format!("{table}_TABLE"));
+                tables.push(table);
+            }
+
+            let (sql, params) = self
+                .kind()
+                .which_are_views_sql(&unknowns.iter().map(|s| s.as_str()).collect::<Vec<_>>());
+            let rows: Vec<DbRow> = self.query_no_cache(&sql, params).await?;
+            for row in &rows {
+                let view = row
+                    .get("view_name")
+                    .ok_or(DbError::DataError("No view_name found in row".to_string()))?
+                    .to_string();
+                let mut cache = get_meta_cache()?;
+                cache.insert(format!("{view}_VIEW"));
+            }
+        }
+        Ok(tables)
     }
 
     /// Return a list of the objects from the given list that are views.
@@ -1696,17 +1753,12 @@ pub trait DbQuery {
             };
             if object_is_view {
                 views.push(object.to_string());
-                let mut cache = get_meta_cache()?;
-                cache.insert(format!("{object}_VIEW"));
             } else {
                 let object_is_table = match get_meta_cache()?.get(&format!("{object}_TABLE")) {
                     Some(_) => true,
                     None => false,
                 };
-                if object_is_table {
-                    let mut cache = get_meta_cache()?;
-                    cache.insert(format!("{object}_TABLE"));
-                } else {
+                if !object_is_table {
                     unknowns.push(object.to_string());
                 }
             }

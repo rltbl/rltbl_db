@@ -197,31 +197,6 @@ impl DbKind {
         }
     }
 
-    /// Generate the SQL and parameters needed to determine whether the given table exists.
-    pub fn table_exists_sql(self, table: &str) -> (String, [ParamValue; 1]) {
-        match self {
-            DbKind::SQLite => (
-                r#"SELECT 1 FROM "sqlite_master"
-                   WHERE "type" = 'table' AND "name" = ?1"#
-                    .to_string(),
-                params![table],
-            ),
-            DbKind::PostgreSQL => (
-                r#"SELECT 1
-                   FROM "information_schema"."tables"
-                   WHERE "table_type" LIKE '%TABLE'
-                   AND "table_name" = $1
-                   AND "table_schema" IN (
-                     SELECT REGEXP_SPLIT_TO_TABLE("setting", ', ')
-                     FROM "pg_settings"
-                     WHERE "name" = 'search_path'
-                   )"#
-                .to_string(),
-                params![table],
-            ),
-        }
-    }
-
     /// Generate the SQL and parameters needed to determine which of the given list of
     /// database names correspond to views in the database.
     pub fn which_are_views_sql(self, objects: &[&str]) -> (String, Vec<ParamValue>) {
