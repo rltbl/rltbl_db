@@ -941,6 +941,14 @@ pub trait DbQuery {
     ) -> Result<(), DbError> {
         match self.table_exists(QUERY_CACHE_TABLE).await? {
             true => {
+                let tables_param = format!(
+                    "[{}]",
+                    tables
+                        .iter()
+                        .map(|table| format!("\"{table}\""))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
                 self.execute(
                     &format!(
                         r#"UPDATE "{QUERY_CACHE_TABLE}"
@@ -951,7 +959,7 @@ pub trait DbQuery {
                         p = self.kind().param_prefix(),
                         ts = self.kind().get_epoch_time_sql(),
                     ),
-                    &[&format!("[{}]", tables.join(", ")), statement, params],
+                    &[&format!("[{tables_param}]"), statement, params],
                 )
                 .await?;
             }
