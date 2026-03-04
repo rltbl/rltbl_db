@@ -359,7 +359,7 @@ impl DbKind {
         let trigger_basename = format!("{table}");
         let trigger_content = format!(
             r#"DELETE FROM "{QUERY_CACHE_TABLE}"
-               WHERE "tables" LIKE '%{table}%';"#
+               WHERE "tables" LIKE '%"{table}"%';"#
         );
         self.wrap_trigger_content(&table, &trigger_basename, &trigger_content)
     }
@@ -382,7 +382,7 @@ impl DbKind {
                ON CONFLICT ("table")
                  DO UPDATE SET "last_modified" = {get_epoch_now};
                DELETE FROM "{QUERY_CACHE_TABLE}"
-               WHERE "tables" LIKE '%{view}%'
+               WHERE "tables" LIKE '%"{view}"%'
                AND EXISTS (
                  SELECT 1
                  FROM "{TABLE_CACHE_TABLE}" t

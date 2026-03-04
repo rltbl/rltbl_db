@@ -648,7 +648,7 @@ pub enum CachingStrategy {
 }
 
 /// The structure used to look up query results in the in-memory cache.
-#[derive(Clone, Eq, PartialEq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct MemoryQueryCacheKey {
     pub tables: String,
     pub statement: String,
@@ -656,7 +656,7 @@ pub struct MemoryQueryCacheKey {
 }
 
 /// Represents the value of an entry in the in-memory cache.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct MemoryQueryCacheValue {
     pub content: Vec<JsonRow>,
     pub last_verified: u128,
@@ -990,7 +990,7 @@ pub trait DbQuery {
                     .await?;
             } else {
                 for table in tables {
-                    let table_param = format!(r#"%{table}%"#);
+                    let table_param = format!(r#"%"{table}"%"#);
                     self.execute(
                         &format!(
                             r#"DELETE FROM "{QUERY_CACHE_TABLE}" WHERE "tables" LIKE {}1"#,
@@ -1130,7 +1130,7 @@ pub trait DbQuery {
         self.get_latest_last_modified(&[table]).await
     }
 
-    /// Gets the last time that the given table was accessed, as read from the query cache table.
+    /// Gets the last time that the given table was verified, as read from the query cache table.
     /// If there is no entry involving the given table in the query cache, or if the query cache
     /// table doesn't exist, returns 0.
     async fn last_verified(&self, table: &str) -> Result<u64, DbError> {
@@ -1142,7 +1142,7 @@ pub trait DbQuery {
                        WHERE "tables" LIKE {p}1"#,
                     p = self.kind().param_prefix(),
                 );
-                let table_param = format!(r#"%{table}%"#);
+                let table_param = format!(r#"%"{table}"%"#);
                 let rows: Vec<DbRow> = self.query_no_cache(&sql, &[&table_param]).await?;
                 match rows.first() {
                     Some(row) => match row.get("last_verified") {
@@ -1183,7 +1183,14 @@ pub trait DbQuery {
                        AND "parameters" = {prefix}5
                        LIMIT 1"#,
                 );
-                let tables_param = format!("[{}]", tables.join(", "));
+                let tables_param = format!(
+                    "[{}]",
+                    tables
+                        .iter()
+                        .map(|table| format!("\"{table}\""))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
                 let params_param = match params {
                     Params::None => "[]".to_string(),
                     Params::Positional(params) => {
@@ -1248,7 +1255,14 @@ pub trait DbQuery {
                -> Result<Vec<DbRow>, DbError> {
             let params = &params.into_params();
             let mem_key = MemoryQueryCacheKey {
-                tables: tables.join(", ").to_string(),
+                tables: format!(
+                    "[{}]",
+                    tables
+                        .iter()
+                        .map(|table| format!("\"{table}\""))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
                 statement: sql.to_string(),
                 parameters: format!("{params:?}"),
             };
@@ -1261,7 +1275,11 @@ pub trait DbQuery {
             };
             match cached_rows {
                 Some(json_rows) => {
-                    update_memory_query_cache_last_verified(&mem_key)?;
+                    // Only views need to be verified every time they are accessed. Tables
+                    // do not because they do not have any dependencies.
+                    if self.which_are_views(tables).await?.len() > 0 {
+                        update_memory_query_cache_last_verified(&mem_key)?;
+                    }
                     let db_rows = json_rows.into_db_rows();
                     Ok(db_rows)
                 }
