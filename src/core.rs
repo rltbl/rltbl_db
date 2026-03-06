@@ -733,15 +733,7 @@ pub trait DbQuery {
 
     /// Ensure that the query cache table and the table cache table exist.
     async fn ensure_cache_tables_exist(&self) -> Result<(), DbError> {
-        let query_cache_table_exists = match get_meta_cache()?.get(QUERY_CACHE_TABLE) {
-            Some(_) => true,
-            None => false,
-        };
-        let table_cache_table_exists = match get_meta_cache()?.get(QUERY_CACHE_TABLE) {
-            Some(_) => true,
-            None => false,
-        };
-        if !(query_cache_table_exists && table_cache_table_exists) {
+        if !exists_in_meta_cache(QUERY_CACHE_TABLE)? || !exists_in_meta_cache(TABLE_CACHE_TABLE)? {
             for special_table in [QUERY_CACHE_TABLE, TABLE_CACHE_TABLE] {
                 let sql = match special_table {
                     table if table == QUERY_CACHE_TABLE => {
@@ -781,11 +773,7 @@ pub trait DbQuery {
     /// [DbQuery::ensure_cache_tables_exist()] implicitly.
     async fn ensure_caching_triggers_exist_for_table(&self, table: &str) -> Result<(), DbError> {
         let table_triggers_name = format!("{table}_triggers");
-        let table_triggers_exist = match get_meta_cache()?.get(&table_triggers_name) {
-            Some(_) => true,
-            None => false,
-        };
-        if !table_triggers_exist {
+        if !exists_in_meta_cache(&table_triggers_name)? {
             self.ensure_cache_tables_exist().await?;
             let sql = self
                 .kind()
@@ -805,11 +793,7 @@ pub trait DbQuery {
     /// this function calls [DbQuery::ensure_cache_tables_exist()] implicitly.
     async fn ensure_caching_triggers_exist_for_view(&self, view: &str) -> Result<(), DbError> {
         let view_triggers_name = format!("{view}_triggers");
-        let view_triggers_exist = match get_meta_cache()?.get(&view_triggers_name) {
-            Some(_) => true,
-            None => false,
-        };
-        if !view_triggers_exist {
+        if !exists_in_meta_cache(&view_triggers_name)? {
             self.ensure_cache_tables_exist().await?;
             let view_sql = self.get_view_sql(&view).await?;
             let source_tables = get_view_tables(&view_sql)?;
@@ -1687,20 +1671,10 @@ pub trait DbQuery {
         let mut tables = vec![];
         let mut unknowns = vec![];
         for object in objects {
-            let object_is_table = match get_meta_cache()?.get(&format!("{object}_TABLE")) {
-                Some(_) => true,
-                None => false,
-            };
-            if object_is_table {
+            if exists_in_meta_cache(&format!("{object}_TABLE"))? {
                 tables.push(object.to_string());
-            } else {
-                let object_is_view = match get_meta_cache()?.get(&format!("{object}_VIEW")) {
-                    Some(_) => true,
-                    None => false,
-                };
-                if !object_is_view {
-                    unknowns.push(object.to_string());
-                }
+            } else if !exists_in_meta_cache(&format!("{object}_VIEW"))? {
+                unknowns.push(object.to_string());
             }
         }
 
@@ -1741,20 +1715,10 @@ pub trait DbQuery {
         let mut views = vec![];
         let mut unknowns = vec![];
         for object in objects {
-            let object_is_view = match get_meta_cache()?.get(&format!("{object}_VIEW")) {
-                Some(_) => true,
-                None => false,
-            };
-            if object_is_view {
+            if exists_in_meta_cache(&format!("{object}_VIEW"))? {
                 views.push(object.to_string());
-            } else {
-                let object_is_table = match get_meta_cache()?.get(&format!("{object}_TABLE")) {
-                    Some(_) => true,
-                    None => false,
-                };
-                if !object_is_table {
-                    unknowns.push(object.to_string());
-                }
+            } else if !exists_in_meta_cache(&format!("{object}_TABLE"))? {
+                unknowns.push(object.to_string());
             }
         }
 
@@ -2181,7 +2145,7 @@ fn get_affected_tables(sql: &str) -> Result<(HashSet<String>, HashSet<String>), 
     Ok((edited_tables.clone(), dropped_tables.clone()))
 }
 
-/// Retrieve the in-memory [MEMORY_META_CACHE].
+/// Retrieve the in-memory meta-cache [MEMORY_META_CACHE].
 fn get_meta_cache<'a>() -> Result<MutexGuard<'a, HashSet<String>>, DbError> {
     let max_attempts = 20;
     let mut remaining_attempts = max_attempts;
@@ -2202,6 +2166,21 @@ fn get_meta_cache<'a>() -> Result<MutexGuard<'a, HashSet<String>>, DbError> {
     }
     let meta_cache = meta_cache.unwrap();
     Ok(meta_cache)
+}
+
+/// Clear the meta cache.
+pub fn clear_meta_cache() -> Result<(), DbError> {
+    let mut cache = get_meta_cache()?;
+    cache.clear();
+    Ok(())
+}
+
+/// Returns true if the given object exists in the meta-cache.
+pub fn exists_in_meta_cache(object: &str) -> Result<bool, DbError> {
+    match get_meta_cache()?.get(object) {
+        Some(_) => Ok(true),
+        None => Ok(false),
+    }
 }
 
 /// Retrieve the in-memory query cache (see [MEMORY_QUERY_CACHE]).
@@ -2262,13 +2241,6 @@ pub fn get_memory_query_cache_contents()
 pub fn get_memory_table_cache_contents() -> Result<HashMap<String, u128>, DbError> {
     let cache = get_memory_table_cache()?;
     Ok(cache.clone())
-}
-
-/// Clear the meta cache
-pub fn clear_meta_cache() -> Result<(), DbError> {
-    let mut cache = get_meta_cache()?;
-    cache.clear();
-    Ok(())
 }
 
 /// Clear the memory query cache.
