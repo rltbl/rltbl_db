@@ -296,8 +296,11 @@ mod tests {
     use crate::{
         core::{
             CachingStrategy, ColumnMap, DbRow, ParamValue, QUERY_CACHE_TABLE, StringRow,
-            TABLE_CACHE_TABLE, clear_memory_query_cache, clear_memory_table_cache,
-            clear_meta_cache, get_memory_query_cache_contents, get_memory_table_cache_contents,
+            TABLE_CACHE_TABLE,
+        },
+        memory::{
+            clear_memory_query_cache, clear_memory_table_cache, clear_meta_cache,
+            get_memory_query_cache_contents, get_memory_table_cache_contents,
         },
         params,
     };
