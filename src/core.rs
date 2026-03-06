@@ -1950,10 +1950,22 @@ fn get_affected_tables(sql: &str) -> Result<(HashSet<String>, HashSet<String>), 
                 root_node.kind()
             )));
         }
-        root_node
+        let children = root_node
             .children(&mut root_node.walk())
-            .filter(|child| child.kind().to_lowercase() == "statement")
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>();
+        if children.len() > 0 && children.first().unwrap().kind().to_lowercase() == "transaction" {
+            children
+                .first()
+                .unwrap()
+                .children(&mut root_node.walk())
+                .filter(|child| child.kind().to_lowercase() == "statement")
+                .collect::<Vec<_>>()
+        } else {
+            root_node
+                .children(&mut root_node.walk())
+                .filter(|child| child.kind().to_lowercase() == "statement")
+                .collect::<Vec<_>>()
+        }
     };
 
     // Determine the tables that will be modified:
@@ -2452,6 +2464,8 @@ mod tests {
         // Multiple statements, no parameters:
 
         let sql = r#"
+            BEGIN TRANSACTION;
+
             INSERT INTO "alpha" VALUES (1, 2, 3), (4, 5, 6);
 
             INSERT INTO gamma
@@ -2487,7 +2501,9 @@ mod tests {
 
             DROP TABLE "rho";
 
-            DROP TABLE "sigma" CASCADE"#;
+            DROP TABLE "sigma" CASCADE;
+
+            COMMIT"#;
 
         let (edited_tables, dropped_tables) = get_affected_tables(&sql).unwrap();
         let mut edited_tables: Vec<_> = edited_tables.into_iter().collect();
