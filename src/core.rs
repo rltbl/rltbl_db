@@ -886,31 +886,29 @@ pub trait DbQuery {
     /// current [CachingStrategy], under the assumption that the tables in the given list have
     /// all just been dropped.
     async fn clear_cache_for_dropped_tables(&self, tables: &[&str]) -> Result<(), DbError> {
-        // Do not do anything if the dropped tables include the cache tables themselves:
-        if tables
+        // Do not clear the cache if the dropped tables include the cache tables themselves:
+        if !tables
             .iter()
             .any(|table| [QUERY_CACHE_TABLE, TABLE_CACHE_TABLE].contains(table))
         {
-            return Ok(());
+            match self.get_caching_strategy() {
+                CachingStrategy::None => (),
+                CachingStrategy::TruncateAll => {
+                    self.update_last_modified_times(tables).await?;
+                    self.delete_query_cache_entries(&[]).await?
+                }
+                CachingStrategy::Trigger | CachingStrategy::Truncate => {
+                    self.update_last_modified_times(tables).await?;
+                    self.delete_query_cache_entries(tables).await?
+                }
+                CachingStrategy::Memory(_) => {
+                    self.update_last_modified_times(tables).await?;
+                    clear_memory_query_cache(&tables)?
+                }
+            };
         }
 
-        match self.get_caching_strategy() {
-            CachingStrategy::None => (),
-            CachingStrategy::TruncateAll => {
-                self.update_last_modified_times(tables).await?;
-                self.delete_query_cache_entries(&[]).await?
-            }
-            CachingStrategy::Trigger | CachingStrategy::Truncate => {
-                self.update_last_modified_times(tables).await?;
-                self.delete_query_cache_entries(tables).await?
-            }
-            CachingStrategy::Memory(_) => {
-                self.update_last_modified_times(tables).await?;
-                clear_memory_query_cache(&tables)?
-            }
-        };
-
-        // Indicate that any triggers for these tables no longer exist.
+        // Update the meta-cache:
         let mut meta_cache = get_meta_cache()?;
         for table in tables {
             if *table == QUERY_CACHE_TABLE {
