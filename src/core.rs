@@ -5,7 +5,6 @@ use crate::db_kind::DbKind;
 use async_trait::async_trait;
 use indexmap::IndexMap;
 use lazy_static::lazy_static;
-use rand::seq::SliceRandom;
 use regex::Regex;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -45,8 +44,8 @@ lazy_static! {
     static ref VALID_TABLE_NAME_REGEX: Regex = Regex::new(VALID_TABLE_NAME_MATCH_STR).unwrap();
 
     /// The in-memory query cache, used by [CachingStrategy::Memory].
-    static ref MEMORY_QUERY_CACHE: Mutex<HashMap<MemoryQueryCacheKey, MemoryQueryCacheValue>>
-        = Mutex::new(HashMap::new());
+    static ref MEMORY_QUERY_CACHE: Mutex<IndexMap<MemoryQueryCacheKey, MemoryQueryCacheValue>>
+        = Mutex::new(IndexMap::new());
 
     /// The in-memory table cache, used by [CachingStrategy::Memory].
     static ref MEMORY_TABLE_CACHE: Mutex<HashMap<String, u128>> = Mutex::new(HashMap::new());
@@ -1349,18 +1348,13 @@ pub trait DbQuery {
                     let db_rows: Vec<DbRow> = self.query_no_cache(sql, params).await?;
                     let json_rows: Vec<JsonRow> = FromDbRows::from(db_rows.clone());
                     let mut cache = get_memory_query_cache()?;
-                    let mut keys = cache.keys().map(|key| key.clone()).collect::<Vec<_>>();
-                    // If the number of keys exceeds the allowed cache size, remove any extra keys
-                    // at random.
-                    if keys.len() >= cache_size {
-                        keys.shuffle(&mut rand::rng());
-                        for (i, key) in keys.iter().enumerate().rev() {
-                            if i >= (cache_size - 1) {
-                                cache.remove(&key);
-                            } else {
-                                break;
-                            }
-                        }
+                    // If the number of entries exceeds the allowed cache size, remove the oldest
+                    // keys first.
+                    // TODO: We may want to do something smarter here. E.g., we could record the
+                    // length of time a query takes and/or the number of times it was requested
+                    // in order to determine which entries to delete.
+                    while cache.len() > cache_size {
+                        cache.shift_remove_index(0);
                     }
                     cache.insert(
                         mem_key,
@@ -2212,7 +2206,7 @@ fn get_meta_cache<'a>() -> Result<MutexGuard<'a, HashSet<String>>, DbError> {
 
 /// Retrieve the in-memory query cache (see [MEMORY_QUERY_CACHE]).
 fn get_memory_query_cache<'a>()
--> Result<MutexGuard<'a, HashMap<MemoryQueryCacheKey, MemoryQueryCacheValue>>, DbError> {
+-> Result<MutexGuard<'a, IndexMap<MemoryQueryCacheKey, MemoryQueryCacheValue>>, DbError> {
     let max_attempts = 20;
     let mut remaining_attempts = max_attempts;
     let mut memory_cache = MEMORY_QUERY_CACHE.try_lock();
@@ -2259,7 +2253,7 @@ fn get_memory_table_cache<'a>() -> Result<MutexGuard<'a, HashMap<String, u128>>,
 
 /// Retrieve a copy of the contents of the memory query cache.
 pub fn get_memory_query_cache_contents()
--> Result<HashMap<MemoryQueryCacheKey, MemoryQueryCacheValue>, DbError> {
+-> Result<IndexMap<MemoryQueryCacheKey, MemoryQueryCacheValue>, DbError> {
     let cache = get_memory_query_cache()?;
     Ok(cache.clone())
 }
@@ -2293,7 +2287,7 @@ pub fn clear_memory_query_cache(tables: &[&str]) -> Result<(), DbError> {
     for table in tables {
         for key in keys.iter() {
             if key.tables.contains(table) {
-                cache.remove(key);
+                cache.shift_remove(key);
             }
         }
     }
