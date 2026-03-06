@@ -2461,6 +2461,21 @@ mod tests {
         assert_eq!(edited_tables, [].into());
         assert_eq!(dropped_tables, ["theta"]);
 
+        let (edited_tables, dropped_tables) = get_affected_tables(
+            r#"UPDATE epsilon
+               SET alpha = new_beta
+               FROM (
+                 SELECT 9 AS new_alpha, 3 AS new_beta, 2 AS new_gamma, 1 AS new_delta
+                 UNION ALL
+                 SELECT 4 AS new_alpha, 3 as new_beta, 2 AS new_gamma, 1 AS new_delta
+               ) foo_alias
+               WHERE alpha = new_alpha"#,
+        )
+        .unwrap();
+        let edited_tables: Vec<_> = edited_tables.into_iter().collect();
+        assert_eq!(edited_tables, ["epsilon"]);
+        assert_eq!(dropped_tables, [].into());
+
         // Multiple statements, no parameters:
 
         let sql = r#"
