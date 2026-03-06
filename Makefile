@@ -34,7 +34,7 @@ test_libsql_ignored:
 
 crate_docs:
 	@echo "Testing documentation comments."
-	RUSTDOCFLAGS="-D warnings" cargo doc
+	RUSTDOCFLAGS="-D warnings" cargo doc --features libsql
 	@echo "Documentation comments are ok."
 
 build:

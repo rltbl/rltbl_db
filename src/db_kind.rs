@@ -1,5 +1,5 @@
 use crate::{
-    core::{DbError, ParamValue},
+    core::{DbError, ParamValue, QUERY_CACHE_TABLE, TABLE_CACHE_TABLE, validate_table_name},
     params,
 };
 use rust_decimal::Decimal;
@@ -40,6 +40,14 @@ impl DbKind {
         match self {
             DbKind::SQLite => "?",
             DbKind::PostgreSQL => "$",
+        }
+    }
+
+    /// Get the code needed to retrieve the current epoch time from the database.
+    pub fn get_epoch_time_sql(&self) -> &str {
+        match self {
+            DbKind::SQLite => "strftime('%s', 'now')",
+            DbKind::PostgreSQL => "extract(epoch from now())",
         }
     }
 
@@ -189,146 +197,256 @@ impl DbKind {
         }
     }
 
-    /// Generate the SQL and parameters needed to determine whether the given table exists.
-    pub fn table_exists_sql(self, table: &str) -> (String, [ParamValue; 1]) {
-        match self {
+    /// Generate the SQL and parameters needed to determine which of the given list of
+    /// database names correspond to views in the database.
+    pub fn which_are_views_sql(self, objects: &[&str]) -> (String, Vec<ParamValue>) {
+        let prefix = self.param_prefix().to_string();
+        let mut placeholders = vec![];
+        let mut parameters = vec![];
+        for (i, object) in objects.iter().enumerate() {
+            let i = i + 1;
+            placeholders.push(format!("{prefix}{i}"));
+            parameters.push(ParamValue::from(object.to_string()));
+        }
+        let placeholders = placeholders.join(",");
+        let (sql, params) = match self {
             DbKind::SQLite => (
-                r#"SELECT 1 FROM "sqlite_master"
-                   WHERE "type" = 'table' AND "name" = ?1"#
-                    .to_string(),
-                params![table],
+                format!(
+                    r#"SELECT "name" AS "view_name" FROM "sqlite_master"
+                       WHERE "type" = 'view' AND "name" IN ({placeholders})"#,
+                ),
+                parameters.clone(),
             ),
             DbKind::PostgreSQL => (
-                r#"SELECT 1
-                   FROM "information_schema"."tables"
-                   WHERE "table_type" LIKE '%TABLE'
-                   AND "table_name" = $1
-                   AND "table_schema" IN (
-                     SELECT REGEXP_SPLIT_TO_TABLE("setting", ', ')
-                     FROM "pg_settings"
-                     WHERE "name" = 'search_path'
-                   )"#
-                .to_string(),
-                params![table],
+                format!(
+                    r#"SELECT "table_name" AS "view_name"
+                       FROM "information_schema"."tables"
+                       WHERE "table_type" LIKE '%VIEW'
+                       AND "table_name" IN ({placeholders})
+                       AND "table_schema" IN (
+                         SELECT REGEXP_SPLIT_TO_TABLE("setting", ', ')
+                         FROM "pg_settings"
+                         WHERE "name" = 'search_path'
+                       )"#
+                ),
+                parameters.clone(),
+            ),
+        };
+        (sql, params)
+    }
+
+    /// Generate the SQL and parameters needed to determine which of the given list of
+    /// database names correspond to tables in the database.
+    pub fn which_are_tables_sql(self, objects: &[&str]) -> (String, Vec<ParamValue>) {
+        let prefix = self.param_prefix().to_string();
+        let mut placeholders = vec![];
+        let mut parameters = vec![];
+        for (i, object) in objects.iter().enumerate() {
+            let i = i + 1;
+            placeholders.push(format!("{prefix}{i}"));
+            parameters.push(ParamValue::from(object.to_string()));
+        }
+        let placeholders = placeholders.join(",");
+        let (sql, params) = match self {
+            DbKind::SQLite => (
+                format!(
+                    r#"SELECT "name" AS "table_name" FROM "sqlite_master"
+                       WHERE "type" = 'table' AND "name" IN ({placeholders})"#,
+                ),
+                parameters.clone(),
+            ),
+            DbKind::PostgreSQL => (
+                format!(
+                    r#"SELECT "table_name"
+                       FROM "information_schema"."tables"
+                       WHERE "table_type" LIKE '%TABLE'
+                       AND "table_name" IN ({placeholders})
+                       AND "table_schema" IN (
+                         SELECT REGEXP_SPLIT_TO_TABLE("setting", ', ')
+                         FROM "pg_settings"
+                         WHERE "name" = 'search_path'
+                       )"#
+                ),
+                parameters.clone(),
+            ),
+        };
+        (sql, params)
+    }
+
+    /// Generate the SQL and parameters needed to retrieve the underlying SQL code for the
+    /// given view.
+    pub fn view_sql_sql(self, view: &str) -> (String, [ParamValue; 1]) {
+        match self {
+            DbKind::SQLite => (
+                r#"SELECT "sql" FROM "sqlite_master"
+                   WHERE "type" = 'view' AND "name" = ?1"#
+                    .to_string(),
+                params![view],
+            ),
+            DbKind::PostgreSQL => (
+                format!(
+                    r#"SELECT 'CREATE VIEW "{view}" AS '||"definition" AS "sql"
+                       FROM "pg_views"
+                       WHERE "viewname" = $1
+                       AND "schemaname" IN (
+                         SELECT REGEXP_SPLIT_TO_TABLE("setting", ', ')
+                         FROM "pg_settings"
+                         WHERE "name" = 'search_path'
+                       )"#
+                ),
+                params![view],
             ),
         }
     }
 
     /// Generate the SQL needed to create the cache table.
-    pub fn create_cache_table_sql(&self) -> String {
-        // The generated SQL is currently identical for SQLite and PostgreSQL but they could
-        // come apart in the future.
-        match self {
-            DbKind::SQLite | DbKind::PostgreSQL => {
-                let sql = r#"CREATE TABLE IF NOT EXISTS "cache" (
-                                "tables" TEXT,
-                                "statement" TEXT,
-                                "parameters" TEXT,
-                                "value" TEXT,
-                                PRIMARY KEY ("tables", "statement", "parameters")
-                             )"#
-                .to_string();
-                sql
-            }
-        }
+    pub fn create_query_cache_table_sql(&self) -> String {
+        let get_epoch_now = self.get_epoch_time_sql();
+        format!(
+            r#"CREATE TABLE IF NOT EXISTS "{QUERY_CACHE_TABLE}" (
+                 "tables" TEXT,
+                 "statement" TEXT,
+                 "parameters" TEXT,
+                 "value" TEXT,
+                 "last_verified" BIGINT DEFAULT ({get_epoch_now}),
+                 PRIMARY KEY ("tables", "statement", "parameters")
+             )"#
+        )
     }
 
-    /// Generate the SQL needed to verify whether the caching triggers for the given table exist.
-    pub fn triggers_exist_sql(&self, table: &str) -> (String, [ParamValue; 3]) {
-        let sql = match self {
-            DbKind::SQLite => {
-                let sql = r#"SELECT (COUNT(1) = 3) AS triggers_exist
-                             FROM sqlite_master
-                             WHERE type = 'trigger'
-                               AND name IN (?1, ?2, ?3)"#;
-                sql.to_string()
-            }
-            DbKind::PostgreSQL => {
-                let sql = r#"SELECT (COUNT(1) = 3) AS triggers_exist
-                             FROM information_schema.triggers
-                             WHERE trigger_name IN ($1, $2, $3)
-                             AND "trigger_schema" IN (
-                               SELECT REGEXP_SPLIT_TO_TABLE("setting", ', ')
-                               FROM "pg_settings"
-                               WHERE "name" = 'search_path'
-                             )"#;
-                sql.to_string()
-            }
-        };
-        (
-            sql,
-            params![
-                format!("{table}_cache_after_insert"),
-                format!("{table}_cache_after_update"),
-                format!("{table}_cache_after_delete"),
-            ],
+    /// Generate the SQL needed to create a table table, which is needed for caching.
+    pub fn create_table_cache_table_sql(&self) -> String {
+        let get_epoch_now = self.get_epoch_time_sql();
+        format!(
+            r#"CREATE TABLE IF NOT EXISTS "{TABLE_CACHE_TABLE}" (
+                 "table" TEXT PRIMARY KEY,
+                 "last_modified" BIGINT DEFAULT ({get_epoch_now})
+               )"#
         )
     }
 
     /// Generate the SQL statements needed to create the caching triggers for the given table.
-    pub fn create_caching_triggers_sql(&self, table: &str) -> Vec<String> {
+    pub fn create_table_caching_triggers_for_table_sql(
+        &self,
+        table: &str,
+    ) -> Result<Vec<String>, DbError> {
+        let table = validate_table_name(table)?;
+        let trigger_basename = format!("{table}");
+        let trigger_content = format!(
+            r#"DELETE FROM "{QUERY_CACHE_TABLE}"
+               WHERE "tables" LIKE '%"{table}"%';"#
+        );
+        self.wrap_trigger_content(&table, &trigger_basename, &trigger_content)
+    }
+
+    /// Generate the SQL statements needed to create caching triggers for the given table which
+    /// is a source table for the given view.
+    pub fn create_table_caching_triggers_for_view_sql(
+        &self,
+        table: &str,
+        view: &str,
+    ) -> Result<Vec<String>, DbError> {
+        let table = validate_table_name(table)?;
+        let view = validate_table_name(view)?;
+        let get_epoch_now = self.get_epoch_time_sql();
+        let trigger_basename = format!("{table}_{view}");
+        let trigger_content = format!(
+            r#"INSERT INTO "{TABLE_CACHE_TABLE}"
+               ("table", "last_modified")
+               VALUES ('{table}', {get_epoch_now})
+               ON CONFLICT ("table")
+                 DO UPDATE SET "last_modified" = {get_epoch_now};
+               DELETE FROM "{QUERY_CACHE_TABLE}"
+               WHERE "tables" LIKE '%"{view}"%'
+               AND EXISTS (
+                 SELECT 1
+                 FROM "{TABLE_CACHE_TABLE}" t
+                 WHERE t."table" = '{table}'
+                   AND t."last_modified" >= "{QUERY_CACHE_TABLE}"."last_verified"
+               );"#
+        );
+        self.wrap_trigger_content(&table, &trigger_basename, &trigger_content)
+    }
+
+    /// Generate the SQL statements to create a caching function and triggers with the given
+    /// trigger content for the given table using the given trigger and function name.
+    fn wrap_trigger_content(
+        &self,
+        table: &str,
+        trigger_basename: &str,
+        trigger_content: &str,
+    ) -> Result<Vec<String>, DbError> {
+        let function_name = format!("clean_{trigger_basename}");
         match self {
             DbKind::SQLite => {
-                vec![
-                    format!(r#"DROP TRIGGER IF EXISTS "{table}_cache_after_insert""#),
+                let ddl = vec![
+                    format!(r#"DROP TRIGGER IF EXISTS "{trigger_basename}_after_insert""#),
                     format!(
-                        r#"CREATE TRIGGER "{table}_cache_after_insert"
+                        r#"CREATE TRIGGER "{trigger_basename}_after_insert"
                            AFTER INSERT ON "{table}"
                            BEGIN
-                               DELETE FROM "cache" WHERE "tables" LIKE '%{table}%';
+                             {trigger_content}
                            END"#
                     ),
-                    format!(r#"DROP TRIGGER IF EXISTS "{table}_cache_after_update""#),
+                    format!(r#"DROP TRIGGER IF EXISTS "{trigger_basename}_after_update""#),
                     format!(
-                        r#"CREATE TRIGGER "{table}_cache_after_update"
+                        r#"CREATE TRIGGER "{trigger_basename}_after_update"
                            AFTER UPDATE ON "{table}"
                            BEGIN
-                             DELETE FROM "cache" WHERE "tables" LIKE '%{table}%';
+                             {trigger_content}
                            END"#
                     ),
-                    format!(r#"DROP TRIGGER IF EXISTS "{table}_cache_after_delete""#),
+                    format!(r#"DROP TRIGGER IF EXISTS "{trigger_basename}_after_delete""#),
                     format!(
-                        r#"CREATE TRIGGER "{table}_cache_after_delete"
+                        r#"CREATE TRIGGER "{trigger_basename}_after_delete"
                            AFTER DELETE ON "{table}"
                            BEGIN
-                             DELETE FROM "cache" WHERE "tables" LIKE '%{table}%';
+                             {trigger_content}
                            END"#
                     ),
-                ]
+                ];
+                Ok(ddl)
             }
             DbKind::PostgreSQL => {
-                vec![
+                let ddl = vec![
                     format!(
-                        r#"CREATE OR REPLACE FUNCTION "clean_cache_for_{table}"()
+                        r#"CREATE OR REPLACE FUNCTION "{function_name}"()
                                RETURNS TRIGGER
                                LANGUAGE PLPGSQL
                                AS
                                $$
                                BEGIN
-                                   DELETE FROM "cache" WHERE "tables" LIKE '%{table}%';
+                                   {trigger_content}
                                    RETURN NEW;
                                END;
                                $$"#
                     ),
-                    format!(r#"DROP TRIGGER IF EXISTS "{table}_cache_after_insert" ON "{table}""#),
                     format!(
-                        r#"CREATE TRIGGER "{table}_cache_after_insert"
+                        r#"DROP TRIGGER IF EXISTS "{trigger_basename}_after_insert" ON "{table}""#
+                    ),
+                    format!(
+                        r#"CREATE TRIGGER "{trigger_basename}_after_insert"
                                AFTER INSERT ON "{table}"
-                               EXECUTE FUNCTION "clean_cache_for_{table}"()"#
+                               EXECUTE FUNCTION "{function_name}"()"#
                     ),
-                    format!(r#"DROP TRIGGER IF EXISTS "{table}_cache_after_update" ON "{table}""#),
                     format!(
-                        r#"CREATE TRIGGER "{table}_cache_after_update"
+                        r#"DROP TRIGGER IF EXISTS "{trigger_basename}_after_update" ON "{table}""#
+                    ),
+                    format!(
+                        r#"CREATE TRIGGER "{trigger_basename}_after_update"
                                AFTER UPDATE ON "{table}"
-                               EXECUTE FUNCTION "clean_cache_for_{table}"()"#
+                               EXECUTE FUNCTION "{function_name}"()"#
                     ),
-                    format!(r#"DROP TRIGGER IF EXISTS "{table}_cache_after_delete" ON "{table}""#),
                     format!(
-                        r#"CREATE TRIGGER "{table}_cache_after_delete"
-                               AFTER DELETE ON "{table}"
-                               EXECUTE FUNCTION "clean_cache_for_{table}"()"#
+                        r#"DROP TRIGGER IF EXISTS "{trigger_basename}_after_delete" ON "{table}""#
                     ),
-                ]
+                    format!(
+                        r#"CREATE TRIGGER "{trigger_basename}_after_delete"
+                               AFTER DELETE ON "{table}"
+                               EXECUTE FUNCTION "{function_name}"()"#
+                    ),
+                ];
+                Ok(ddl)
             }
         }
     }
