@@ -2087,14 +2087,15 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_caching_performance() {
-        let runs = 5000;
+        let runs = 2500;
         let edit_rate = 25;
+        let timeout = 37;
         #[cfg(feature = "rusqlite")]
-        perform_caching(":memory:", runs, edit_rate, 75).await;
+        perform_caching(":memory:", runs, edit_rate, timeout).await;
         #[cfg(feature = "tokio-postgres")]
-        perform_caching("postgresql:///rltbl_db", runs, edit_rate, 75).await;
+        perform_caching("postgresql:///rltbl_db", runs, edit_rate, timeout).await;
         #[cfg(feature = "libsql")]
-        perform_caching(":memory:", runs, edit_rate, 75).await;
+        perform_caching(":memory:", runs, edit_rate, timeout).await;
     }
 
     // Performs the caching performance test on the database located at the given url, using
@@ -2124,11 +2125,21 @@ mod tests {
             }
         );
         let mut times = BTreeMap::new();
+        let mut elapsed_none: u64 = 0;
         for strategy in &all_strategies {
             println!("{this_test} Using strategy: {strategy}.");
             pool.set_caching_strategy(&strategy);
-            let elapsed = perform_caching_detail(&pool, runs, fail_after, edit_rate).await;
+            let elapsed: u64 = perform_caching_detail(&pool, runs, fail_after, edit_rate).await;
             times.insert(format!("{strategy}"), elapsed);
+            if *strategy == CachingStrategy::None {
+                elapsed_none = elapsed;
+            } else {
+                // The elapsed time for strategy 'none' should always be greater than for the
+                // other caching strategies. Note that it is assumed that the None strategy
+                // is always tested before any of the other strategies (otherwise this assertion
+                // is certain to fail).
+                assert!(elapsed_none > elapsed);
+            }
         }
 
         println!("{this_test} Elapsed times for {} (summary):", pool.kind());
@@ -2166,11 +2177,13 @@ mod tests {
 
         let tables_to_choose_from = vec!["alpha", "beta", "gamma", "delta"];
         for table in tables_to_choose_from.iter() {
-            pool.execute(&format!("DROP TABLE IF EXISTS {table}"), ())
+            pool.drop_table(table).await.unwrap();
+            pool.drop_view(&format!("{table}_view")).await.unwrap();
+            pool.execute(&format!("CREATE TABLE {table} ( foo INT, bar INT )"), ())
                 .await
                 .unwrap();
             pool.execute(
-                &format!("CREATE TABLE IF NOT EXISTS {table} ( foo INT, bar INT )"),
+                &format!("CREATE VIEW {table}_view AS SELECT * FROM {table}"),
                 (),
             )
             .await
@@ -2201,7 +2214,9 @@ mod tests {
             let _: Vec<DbRow> = pool
                 .cache(
                     &[select_table],
-                    &format!("SELECT foo, SUM(bar) FROM {select_table} GROUP BY foo ORDER BY foo"),
+                    &format!(
+                        "SELECT foo, SUM(bar) FROM {select_table}_view GROUP BY foo ORDER BY foo"
+                    ),
                     (),
                 )
                 .await
@@ -2232,9 +2247,7 @@ mod tests {
             pool.get_caching_strategy()
         );
         for table in tables_to_choose_from.iter() {
-            pool.execute(&format!("DROP TABLE IF EXISTS {table}"), ())
-                .await
-                .unwrap();
+            pool.drop_table(table).await.unwrap();
         }
         elapsed
     }

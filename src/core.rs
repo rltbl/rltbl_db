@@ -3,7 +3,7 @@
 use crate::{
     db_kind::DbKind,
     memory::{
-        DEFAULT_MEMORY_CACHE_SIZE, MemoryQueryCacheKey, MemoryQueryCacheValue,
+        DEFAULT_MEMORY_QUERY_CACHE_SIZE, MemoryQueryCacheKey, MemoryQueryCacheValue,
         clear_memory_query_cache, exists_in_meta_cache, get_memory_query_cache,
         get_memory_table_cache, get_meta_cache,
     },
@@ -639,11 +639,11 @@ impl FromStr for CachingStrategy {
                 let elems = strategy.split(":").collect::<Vec<_>>();
                 let cache_size = {
                     if elems.len() < 2 {
-                        DEFAULT_MEMORY_CACHE_SIZE
+                        DEFAULT_MEMORY_QUERY_CACHE_SIZE
                     } else {
                         let cache_size = elems[1];
                         match cache_size.parse::<usize>() {
-                            Ok(0) => DEFAULT_MEMORY_CACHE_SIZE,
+                            Ok(0) => DEFAULT_MEMORY_QUERY_CACHE_SIZE,
                             Ok(size) => size,
                             Err(err) => return Err(DbError::InputError(format!(
                                 "Error parsing memory cache size specification: '{cache_size}': \

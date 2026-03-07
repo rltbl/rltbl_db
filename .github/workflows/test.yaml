@@ -1,0 +1,32 @@
+name: Test
+
+on:
+  pull_request:
+    types:
+      - ready_for_review
+  push:
+    branches:
+      - '*'
+env:
+  CARGO_TERM_COLOR: always
+jobs:
+  run-tests:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Install postgresql server and client
+        run: |
+          sudo apt-get update
+          sudo apt-get install postgresql postgresql-contrib postgresql-client build-essential
+      - name: Start the database server
+        run: |
+          sudo systemctl start postgresql.service
+      - name: Create the rltbl_db database
+        run: |
+          sudo su - postgres -c "createuser runner"
+          sudo su - postgres -c "createdb -O runner rltbl_db"
+      - name: Check out repository code
+        uses: actions/checkout@v3
+      - name: Run tests
+        run: |
+          make test
+          make test_ignored

@@ -8,8 +8,8 @@ use std::{
     time::Duration,
 };
 
-/// Default size for the in-memory cache
-pub static DEFAULT_MEMORY_CACHE_SIZE: usize = 1000;
+/// Default size for the in-memory query cache
+pub static DEFAULT_MEMORY_QUERY_CACHE_SIZE: usize = 1000;
 
 lazy_static! {
     /// The in-memory query cache, used by [CachingStrategy::Memory].
