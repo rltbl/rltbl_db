@@ -593,6 +593,18 @@ pub trait FromDbRows {
     fn from(rows: Vec<DbRow>) -> Self;
 }
 
+impl FromDbRows for Vec<StringRow> {
+    fn from(rows: Vec<DbRow>) -> Self {
+        rows.iter()
+            .map(|row| {
+                row.iter()
+                    .map(|(key, value)| (key.clone(), value.into()))
+                    .collect()
+            })
+            .collect()
+    }
+}
+
 impl FromDbRows for Vec<JsonRow> {
     fn from(rows: Vec<DbRow>) -> Self {
         rows.into_iter()
@@ -1178,84 +1190,88 @@ pub trait DbQuery {
         sql: &str,
         params: impl IntoParams + Send + Copy + Sync,
     ) -> Result<T, DbError> {
-        let db_cache =
-            async |tables: &[&str], sql: &str, params: &Params| -> Result<Vec<DbRow>, DbError> {
-                // Look in the cache to see if there is an entry corresponding to the given SQL
-                // string for the given tables and parameters. If so, return the data from the
-                // cache, otherwise execute the given SQL statement on the actualy specified
-                // tables.
-                let prefix = self.kind().param_prefix().to_string();
-                let cache_sql = format!(
-                    r#"SELECT {prefix}1||rtrim(ltrim("value", '['), ']')||{prefix}2 AS "value"
+        let db_cache = async |tables: &[&str],
+                              sql: &str,
+                              params: &Params|
+               -> Result<Vec<DbRow>, DbError> {
+            // Look in the cache to see if there is an entry corresponding to the given SQL
+            // string for the given tables and parameters. If so, return the data from the
+            // cache, otherwise execute the given SQL statement on the actualy specified
+            // tables.
+            let prefix = self.kind().param_prefix().to_string();
+            let cache_sql = format!(
+                r#"SELECT {prefix}1||rtrim(ltrim("value", '['), ']')||{prefix}2 AS "value"
                        FROM "{QUERY_CACHE_TABLE}"
                        WHERE "tables" = {prefix}3
                        AND "statement" = {prefix}4
                        AND "parameters" = {prefix}5
                        LIMIT 1"#,
-                );
-                let tables_param = format!(
-                    "[{}]",
-                    tables
-                        .iter()
-                        .map(|table| format!("\"{table}\""))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                );
-                let params_param = match params {
-                    Params::None => "[]".to_string(),
-                    Params::Positional(params) => {
-                        let params = params.iter().map(|p| p.into()).collect::<Vec<String>>();
-                        format!("[{}]", params.join(", "))
-                    }
-                };
-                let cache_params = &["[", "]", &tables_param, sql, &params_param];
-
-                let strings = {
-                    let rows: Vec<DbRow> = self.query_no_cache(&cache_sql, cache_params).await?;
-                    let strings = rows
-                        .iter()
-                        .map(|row| match row.values().nth(0) {
-                            Some(value) => Ok(value.into()),
-                            None => Err(DbError::DataError("Empty row".to_owned())),
-                        })
-                        .collect::<Vec<_>>();
-                    let strings: Result<Vec<String>, DbError> = strings.into_iter().collect();
-                    strings?
-                };
-                match strings.first() {
-                    Some(values) => {
-                        let json_rows: Vec<JsonRow> = match serde_json::from_str(&values) {
-                            Ok(json_rows) => json_rows,
-                            _ => {
-                                return Err(DbError::DataError(format!(
-                                    "Invalid cache values: {values}"
-                                )));
-                            }
-                        };
-                        let db_rows = json_rows.into_db_rows();
-                        // Only views need to be verified every time they are accessed. Tables
-                        // do not because they do not have any dependencies.
-                        if self.which_are_views(tables).await?.len() > 0 {
-                            self.update_last_verified(tables, sql, &params).await?;
-                        }
-                        Ok(db_rows)
-                    }
-                    None => {
-                        let db_rows: Vec<DbRow> = self.query_no_cache(sql, params).await?;
-                        let json_rows: Vec<JsonRow> = FromDbRows::from(db_rows.clone());
-                        let json_rows_content = json!(json_rows).to_string();
-                        let insert_sql = format!(
-                            r#"INSERT INTO "{QUERY_CACHE_TABLE}"
-                               ("tables", "statement", "parameters", "value")
-                               VALUES ({prefix}1, {prefix}2, {prefix}3, {prefix}4)"#,
-                            prefix = self.kind().param_prefix(),
-                        );
-                        let insert_params = [&tables_param, sql, &params_param, &json_rows_content];
-                        self.execute_no_cache(&insert_sql, &insert_params).await?;
-                        Ok(db_rows)
-                    }
+            );
+            let tables_param = format!(
+                "[{}]",
+                tables
+                    .iter()
+                    .map(|table| format!("\"{table}\""))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            let params_param = match params {
+                Params::None => "[]".to_string(),
+                Params::Positional(params) => {
+                    let params = params.iter().map(|p| p.into()).collect::<Vec<String>>();
+                    format!("[{}]", params.join(", "))
                 }
             };
+            let cache_params = &["[", "]", &tables_param, sql, &params_param];
+
+            let strings = {
+                let rows: Vec<DbRow> = self.query_no_cache(&cache_sql, cache_params).await?;
+                let strings = rows
+                    .iter()
+                    .map(|row| match row.values().nth(0) {
+                        Some(value) => Ok(value.into()),
+                        None => Err(DbError::DataError("Empty row".to_owned())),
+                    })
+                    .collect::<Vec<_>>();
+                let strings: Result<Vec<String>, DbError> = strings.into_iter().collect();
+                strings?
+            };
+            match strings.first() {
+                Some(values) => {
+                    let db_rows: Vec<DbRow> = serde_json::from_str(values).map_err(|err| {
+                        DbError::DataError(format!("Error serializing values '{values}': {err}"))
+                    })?;
+                    // Only views need to be verified every time they are accessed. Tables
+                    // do not because they do not have any dependencies.
+                    if self.which_are_views(tables).await?.len() > 0 {
+                        self.update_last_verified(tables, sql, &params).await?;
+                    }
+                    Ok(db_rows)
+                }
+                None => {
+                    let db_rows: Vec<DbRow> = self.query_no_cache(sql, params).await?;
+                    let rows_as_string = {
+                        let mut rows_as_string = vec![];
+                        for db_row in &db_rows {
+                            let db_row = serde_json::to_string(db_row).map_err(|err| {
+                                DbError::DataError(format!("Invalid data ({err}): {db_row:?}"))
+                            })?;
+                            rows_as_string.push(db_row);
+                        }
+                        format!("[{}]", rows_as_string.join(", "))
+                    };
+                    let insert_sql = format!(
+                        r#"INSERT INTO "{QUERY_CACHE_TABLE}"
+                               ("tables", "statement", "parameters", "value")
+                               VALUES ({prefix}1, {prefix}2, {prefix}3, {prefix}4)"#,
+                        prefix = self.kind().param_prefix(),
+                    );
+                    let insert_params = [&tables_param, sql, &params_param, &rows_as_string];
+                    self.execute_no_cache(&insert_sql, &insert_params).await?;
+                    Ok(db_rows)
+                }
+            }
+        };
 
         let mem_cache = async |tables: &[&str],
                                sql: &str,
@@ -1283,18 +1299,16 @@ pub trait DbQuery {
                 }
             };
             match cached_rows {
-                Some(json_rows) => {
+                Some(db_rows) => {
                     // Only views need to be verified every time they are accessed. Tables
                     // do not because they do not have any dependencies.
                     if self.which_are_views(tables).await?.len() > 0 {
                         self.update_last_verified(tables, sql, &params).await?;
                     }
-                    let db_rows = json_rows.into_db_rows();
                     Ok(db_rows)
                 }
                 None => {
                     let db_rows: Vec<DbRow> = self.query_no_cache(sql, params).await?;
-                    let json_rows: Vec<JsonRow> = FromDbRows::from(db_rows.clone());
                     let mut cache = get_memory_query_cache()?;
                     // If the number of entries exceeds the allowed cache size, remove the oldest
                     // keys first.
@@ -1307,7 +1321,7 @@ pub trait DbQuery {
                     cache.insert(
                         mem_key,
                         MemoryQueryCacheValue {
-                            content: json_rows.to_vec(),
+                            content: db_rows.to_vec(),
                             last_verified: SystemTime::now()
                                 .duration_since(UNIX_EPOCH)
                                 .map_err(|err| {
@@ -1537,7 +1551,7 @@ pub trait DbQuery {
         params: impl IntoParams + Send,
     ) -> Result<Vec<StringRow>, DbError> {
         let rows: Vec<DbRow> = self.query(sql, params).await?;
-        Ok(db_rows_to_string_rows(&rows))
+        Ok(<Vec<StringRow> as FromDbRows>::from(rows))
     }
 
     /// Execute a SQL command, returning a single unsigned integer.
@@ -1760,20 +1774,6 @@ pub trait DbQuery {
         self.clear_cache_for_dropped_tables(&[&view]).await?;
         Ok(())
     }
-}
-
-// -------- Free functions ----------
-
-/// Convert a [DbRow] into a [StringRow]
-pub fn db_row_to_string_row(row: &DbRow) -> StringRow {
-    row.iter()
-        .map(|(key, value)| (key.clone(), value.into()))
-        .collect()
-}
-
-/// Convert a vector of [DbRow]s into a vector of [StringRow]s.
-pub fn db_rows_to_string_rows(rows: &[DbRow]) -> Vec<StringRow> {
-    rows.iter().map(|row| db_row_to_string_row(row)).collect()
 }
 
 #[cfg(test)]

@@ -1,4 +1,4 @@
-use crate::core::{DbError, JsonRow};
+use crate::core::{DbError, DbRow};
 use indexmap::IndexMap;
 use lazy_static::lazy_static;
 use std::sync::{Mutex, MutexGuard};
@@ -35,7 +35,7 @@ pub struct MemoryQueryCacheKey {
 /// Represents the value of an entry in the in-memory cache.
 #[derive(Clone, Debug)]
 pub struct MemoryQueryCacheValue {
-    pub content: Vec<JsonRow>,
+    pub content: Vec<DbRow>,
     pub last_verified: u128,
 }
 
