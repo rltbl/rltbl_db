@@ -19,6 +19,7 @@ use std::{
     collections::HashSet,
     fmt::Display,
     future::Future,
+    hash::{Hash, Hasher},
     str::FromStr,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -89,6 +90,35 @@ pub enum ParamValue {
     Numeric(Decimal),
     /// Use with TEXT and VARCHAR column types or equivalent.
     Text(String),
+}
+
+impl Hash for ParamValue {
+    fn hash<H: Hasher>(&self, h: &mut H) {
+        match self {
+            ParamValue::Null => "NULL".hash(h),
+            ParamValue::Text(txt) if txt.ends_with("NULL") => format!("_{txt}").hash(h),
+            ParamValue::Text(txt) => txt.hash(h),
+            ParamValue::Boolean(num) => num.hash(h),
+            ParamValue::SmallInteger(num) => num.hash(h),
+            ParamValue::Integer(num) => num.hash(h),
+            ParamValue::BigInteger(num) => num.hash(h),
+            ParamValue::Real(num) => {
+                if *num == 0.0f32 {
+                    0.0f32.to_bits().hash(h)
+                } else {
+                    num.to_bits().hash(h)
+                }
+            }
+            ParamValue::BigReal(num) => {
+                if *num == 0.0f64 {
+                    0.0f64.to_bits().hash(h)
+                } else {
+                    num.to_bits().hash(h)
+                }
+            }
+            ParamValue::Numeric(num) => num.hash(h),
+        }
+    }
 }
 
 impl Display for ParamValue {
@@ -1779,6 +1809,8 @@ pub trait DbQuery {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rust_decimal::dec;
+    use std::collections::HashMap;
 
     #[tokio::test]
     async fn test_table_names() {
@@ -1994,5 +2026,28 @@ mod tests {
             ["alpha", "delta", "gamma", "lambda", "phi", "psi",]
         );
         assert_eq!(dropped_tables, ["rho", "sigma",]);
+    }
+
+    #[tokio::test]
+    async fn test_hashing() {
+        let mut test_map = HashMap::new();
+        for (i, value) in [
+            ParamValue::Null,
+            ParamValue::Text("NULL".to_string()),
+            ParamValue::Boolean(true),
+            ParamValue::SmallInteger(1),
+            ParamValue::BigInteger(1),
+            ParamValue::Real(0.0f32),
+            ParamValue::Real(0.456f32),
+            ParamValue::BigReal(0.123f64),
+            ParamValue::BigReal(0.0f64),
+            ParamValue::Numeric(dec!(1)),
+        ]
+        .iter()
+        .enumerate()
+        {
+            test_map.insert(value.clone(), i);
+            assert_eq!(*test_map.get(&value).unwrap(), i);
+        }
     }
 }
