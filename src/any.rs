@@ -15,8 +15,9 @@
 /// }
 /// ```
 use crate::{
-    core::{CachingStrategy, DbError, DbQuery, FromDbRows, IntoDbRows, IntoParams},
+    core::{CachingStrategy, DbError, DbQuery, FromDbRows, IntoDbRows},
     db_kind::DbKind,
+    db_value::IntoParams,
 };
 
 #[cfg(feature = "rusqlite")]
@@ -295,9 +296,9 @@ mod tests {
     use super::*;
     use crate::{
         core::{
-            CachingStrategy, ColumnMap, DbRow, ParamValue, QUERY_CACHE_TABLE, StringRow,
-            TABLE_CACHE_TABLE,
+            CachingStrategy, ColumnMap, DbRow, QUERY_CACHE_TABLE, StringRow, TABLE_CACHE_TABLE,
         },
+        db_value::ParamValue,
         memory::{
             clear_memory_query_cache, clear_memory_table_cache, clear_meta_cache,
             get_memory_query_cache_contents, get_memory_table_cache_contents,

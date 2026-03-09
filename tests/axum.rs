@@ -7,8 +7,9 @@ use axum::{
 use indexmap::indexmap;
 use rltbl_db::{
     any::AnyPool,
-    core::{DbQuery, DbRow, ParamValue},
+    core::{DbQuery, DbRow},
     db_kind::DbKind,
+    db_value::ParamValue,
 };
 use std::{marker::Sync, sync::Arc};
 use tower_service::Service;

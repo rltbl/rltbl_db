@@ -1,11 +1,9 @@
 //! rusqlite implementation for rltbl_db.
 
 use crate::{
-    core::{
-        CachingStrategy, DbError, DbQuery, DbRow, FromDbRows, IntoDbRows, IntoParams, ParamValue,
-        Params,
-    },
+    core::{CachingStrategy, DbError, DbQuery, DbRow, FromDbRows, IntoDbRows},
     db_kind::{DbKind, MAX_PARAMS_SQLITE},
+    db_value::{IntoParams, ParamValue, Params},
     shared::{EditType, edit},
 };
 use deadpool_sqlite::{

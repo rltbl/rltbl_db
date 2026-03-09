@@ -1,5 +1,6 @@
 use crate::{
-    core::{DbError, ParamValue, QUERY_CACHE_TABLE, TABLE_CACHE_TABLE},
+    core::{DbError, QUERY_CACHE_TABLE, TABLE_CACHE_TABLE},
+    db_value::ParamValue,
     params,
     parse::validate_table_name,
 };
