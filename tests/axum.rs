@@ -9,7 +9,7 @@ use rltbl_db::{
     any::AnyPool,
     core::{DbQuery, DbRow},
     db_kind::DbKind,
-    db_value::ParamValue,
+    db_value::DbValue,
 };
 use std::{marker::Sync, sync::Arc};
 use tower_service::Service;
@@ -39,7 +39,7 @@ async fn run_axum(url: &str) {
     pool.insert(
         "test",
         &["value"],
-        &[&indexmap! {"value".into() => ParamValue::from("foo")}],
+        &[&indexmap! {"value".into() => DbValue::from("foo")}],
     )
     .await
     .unwrap();

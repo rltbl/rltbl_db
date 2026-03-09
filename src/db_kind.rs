@@ -1,6 +1,6 @@
 use crate::{
     core::{DbError, QUERY_CACHE_TABLE, TABLE_CACHE_TABLE},
-    db_value::ParamValue,
+    db_value::DbValue,
     params,
     parse::validate_table_name,
 };
@@ -54,28 +54,28 @@ impl DbKind {
     }
 
     /// Given a SQL type for this database and a string, parse the string into the right
-    /// ParamValue.
-    pub fn parse(&self, sql_type: &str, value: &str) -> Result<ParamValue, DbError> {
-        fn parse_sqlite(sql_type: &str, value: &str) -> Result<ParamValue, DbError> {
+    /// DbValue.
+    pub fn parse(&self, sql_type: &str, value: &str) -> Result<DbValue, DbError> {
+        fn parse_sqlite(sql_type: &str, value: &str) -> Result<DbValue, DbError> {
             let err = || {
                 Err(DbError::ParseError(format!(
                     "Could not parse '{sql_type}' from '{value}'"
                 )))
             };
             match sql_type.to_lowercase().as_str() {
-                "text" => Ok(ParamValue::Text(value.to_string())),
+                "text" => Ok(DbValue::Text(value.to_string())),
                 "bool" => match value.to_lowercase().as_str() {
-                    "true" | "1" => Ok(ParamValue::Boolean(true)),
-                    "false" | "0" => Ok(ParamValue::Boolean(false)),
+                    "true" | "1" => Ok(DbValue::Boolean(true)),
+                    "false" | "0" => Ok(DbValue::Boolean(false)),
                     _ => err(),
                 },
                 "int" | "integer" | "int8" | "bigint" => match value.parse::<i64>() {
-                    Ok(int) => Ok(ParamValue::BigInteger(int)),
+                    Ok(int) => Ok(DbValue::BigInteger(int)),
                     Err(_) => err(),
                 },
                 // NOTE: We are treating NUMERIC as an f64 here and for tokio-postgres.
                 "real" | "numeric" => match value.parse::<f64>() {
-                    Ok(float) => Ok(ParamValue::BigReal(float)),
+                    Ok(float) => Ok(DbValue::BigReal(float)),
                     Err(_) => err(),
                 },
                 _ => Err(DbError::DatatypeError(format!(
@@ -84,42 +84,42 @@ impl DbKind {
             }
         }
 
-        fn parse_postgresql(sql_type: &str, value: &str) -> Result<ParamValue, DbError> {
+        fn parse_postgresql(sql_type: &str, value: &str) -> Result<DbValue, DbError> {
             let err = || {
                 Err(DbError::ParseError(format!(
                     "Could not parse '{sql_type}' from '{value}'"
                 )))
             };
             match sql_type.to_lowercase().as_str() {
-                "text" => Ok(ParamValue::Text(value.to_string())),
+                "text" => Ok(DbValue::Text(value.to_string())),
                 "bool" | "boolean" => match value.to_lowercase().as_str() {
                     // TODO: improve this
-                    "true" | "1" => Ok(ParamValue::Boolean(true)),
-                    _ => Ok(ParamValue::Boolean(false)),
+                    "true" | "1" => Ok(DbValue::Boolean(true)),
+                    _ => Ok(DbValue::Boolean(false)),
                 },
                 "smallint" | "smallinteger" => match value.parse::<i16>() {
-                    Ok(int) => Ok(ParamValue::SmallInteger(int)),
+                    Ok(int) => Ok(DbValue::SmallInteger(int)),
                     Err(_) => err(),
                 },
                 "int" | "integer" => match value.parse::<i32>() {
-                    Ok(int) => Ok(ParamValue::Integer(int)),
+                    Ok(int) => Ok(DbValue::Integer(int)),
                     Err(_) => err(),
                 },
                 "bigint" | "biginteger" => match value.parse::<i64>() {
-                    Ok(int) => Ok(ParamValue::BigInteger(int)),
+                    Ok(int) => Ok(DbValue::BigInteger(int)),
                     Err(_) => err(),
                 },
                 "real" => match value.parse::<f32>() {
-                    Ok(float) => Ok(ParamValue::Real(float)),
+                    Ok(float) => Ok(DbValue::Real(float)),
                     Err(_) => err(),
                 },
                 "bigreal" => match value.parse::<f64>() {
-                    Ok(float) => Ok(ParamValue::BigReal(float)),
+                    Ok(float) => Ok(DbValue::BigReal(float)),
                     Err(_) => err(),
                 },
                 // WARN: Treat NUMERIC as an f64.
                 "numeric" => match value.parse::<f64>() {
-                    Ok(float) => Ok(ParamValue::Numeric(
+                    Ok(float) => Ok(DbValue::Numeric(
                         Decimal::from_f64_retain(float).unwrap_or_default(),
                     )),
                     Err(_) => err(),
@@ -138,7 +138,7 @@ impl DbKind {
 
     /// Generate the SQL and parameters needed to query the database's metadata for names and
     /// types of the columns of the given table.
-    pub fn columns_sql(&self, table: &str) -> (String, [ParamValue; 1]) {
+    pub fn columns_sql(&self, table: &str) -> (String, [DbValue; 1]) {
         match self {
             DbKind::SQLite => (
                 r#"SELECT "name" AS "column_name", "type" AS "data_type"
@@ -169,7 +169,7 @@ impl DbKind {
 
     /// Generate the SQL and parameters needed to query the database's metadata for the primary
     /// key columns of the given table.
-    pub fn primary_keys_sql(&self, table: &str) -> (String, [ParamValue; 1]) {
+    pub fn primary_keys_sql(&self, table: &str) -> (String, [DbValue; 1]) {
         match self {
             DbKind::SQLite => (
                 r#"SELECT "name" AS "column_name"
@@ -201,14 +201,14 @@ impl DbKind {
 
     /// Generate the SQL and parameters needed to determine which of the given list of
     /// database names correspond to views in the database.
-    pub fn which_are_views_sql(self, objects: &[&str]) -> (String, Vec<ParamValue>) {
+    pub fn which_are_views_sql(self, objects: &[&str]) -> (String, Vec<DbValue>) {
         let prefix = self.param_prefix().to_string();
         let mut placeholders = vec![];
         let mut parameters = vec![];
         for (i, object) in objects.iter().enumerate() {
             let i = i + 1;
             placeholders.push(format!("{prefix}{i}"));
-            parameters.push(ParamValue::from(object.to_string()));
+            parameters.push(DbValue::from(object.to_string()));
         }
         let placeholders = placeholders.join(",");
         let (sql, params) = match self {
@@ -239,14 +239,14 @@ impl DbKind {
 
     /// Generate the SQL and parameters needed to determine which of the given list of
     /// database names correspond to tables in the database.
-    pub fn which_are_tables_sql(self, objects: &[&str]) -> (String, Vec<ParamValue>) {
+    pub fn which_are_tables_sql(self, objects: &[&str]) -> (String, Vec<DbValue>) {
         let prefix = self.param_prefix().to_string();
         let mut placeholders = vec![];
         let mut parameters = vec![];
         for (i, object) in objects.iter().enumerate() {
             let i = i + 1;
             placeholders.push(format!("{prefix}{i}"));
-            parameters.push(ParamValue::from(object.to_string()));
+            parameters.push(DbValue::from(object.to_string()));
         }
         let placeholders = placeholders.join(",");
         let (sql, params) = match self {
@@ -277,7 +277,7 @@ impl DbKind {
 
     /// Generate the SQL and parameters needed to retrieve the underlying SQL code for the
     /// given view.
-    pub fn view_sql_sql(self, view: &str) -> (String, [ParamValue; 1]) {
+    pub fn view_sql_sql(self, view: &str) -> (String, [DbValue; 1]) {
         match self {
             DbKind::SQLite => (
                 r#"SELECT "sql" FROM "sqlite_master"

@@ -3,7 +3,7 @@
 use crate::{
     core::{CachingStrategy, DbError, DbQuery, DbRow, FromDbRows, IntoDbRows},
     db_kind::{DbKind, MAX_PARAMS_SQLITE},
-    db_value::{IntoParams, ParamValue, Params},
+    db_value::{DbValue, IntoParams, Params},
     shared::{EditType, edit},
 };
 use deadpool_sqlite::{
@@ -27,14 +27,14 @@ fn query_prepared(
         Params::Positional(params) => {
             for (i, param) in params.iter().enumerate() {
                 match param {
-                    ParamValue::Text(text) => {
+                    DbValue::Text(text) => {
                         stmt.raw_bind_parameter(i + 1, text).map_err(|err| {
                             DbError::InputError(format!(
                                 "Error binding parameter '{param:?}': {err}"
                             ))
                         })?;
                     }
-                    ParamValue::SmallInteger(num) => {
+                    DbValue::SmallInteger(num) => {
                         stmt.raw_bind_parameter(i + 1, num.to_string())
                             .map_err(|err| {
                                 DbError::InputError(format!(
@@ -42,7 +42,7 @@ fn query_prepared(
                                 ))
                             })?;
                     }
-                    ParamValue::Integer(num) => {
+                    DbValue::Integer(num) => {
                         stmt.raw_bind_parameter(i + 1, num.to_string())
                             .map_err(|err| {
                                 DbError::InputError(format!(
@@ -50,7 +50,7 @@ fn query_prepared(
                                 ))
                             })?;
                     }
-                    ParamValue::BigInteger(num) => {
+                    DbValue::BigInteger(num) => {
                         stmt.raw_bind_parameter(i + 1, num.to_string())
                             .map_err(|err| {
                                 DbError::InputError(format!(
@@ -58,7 +58,7 @@ fn query_prepared(
                                 ))
                             })?;
                     }
-                    ParamValue::Real(num) => {
+                    DbValue::Real(num) => {
                         stmt.raw_bind_parameter(i + 1, num.to_string())
                             .map_err(|err| {
                                 DbError::InputError(format!(
@@ -66,7 +66,7 @@ fn query_prepared(
                                 ))
                             })?;
                     }
-                    ParamValue::BigReal(num) => {
+                    DbValue::BigReal(num) => {
                         stmt.raw_bind_parameter(i + 1, num.to_string())
                             .map_err(|err| {
                                 DbError::InputError(format!(
@@ -74,7 +74,7 @@ fn query_prepared(
                                 ))
                             })?;
                     }
-                    ParamValue::Numeric(num) => {
+                    DbValue::Numeric(num) => {
                         stmt.raw_bind_parameter(i + 1, num.to_string())
                             .map_err(|err| {
                                 DbError::InputError(format!(
@@ -82,7 +82,7 @@ fn query_prepared(
                                 ))
                             })?;
                     }
-                    ParamValue::Boolean(flag) => {
+                    DbValue::Boolean(flag) => {
                         // Note that SQLite's type affinity means that booleans are actually
                         // implemented as numbers (see https://sqlite.org/datatype3.html).
                         let num = match flag {
@@ -96,7 +96,7 @@ fn query_prepared(
                                 ))
                             })?;
                     }
-                    ParamValue::Null => {
+                    DbValue::Null => {
                         stmt.raw_bind_parameter(i + 1, &Null).map_err(|err| {
                             DbError::InputError(format!(
                                 "Error binding parameter '{param:?}': {err}"
@@ -134,10 +134,10 @@ fn query_prepared(
                 let column_type = &column.datatype;
                 let value = row.get_ref(column_name.as_str())?;
                 let value = match value {
-                    ValueRef::Null => ParamValue::Null,
+                    ValueRef::Null => DbValue::Null,
                     ValueRef::Integer(value) => match column_type {
                         Some(ctype) if ctype.to_lowercase() == "bool" => {
-                            ParamValue::Boolean(value != 0)
+                            DbValue::Boolean(value != 0)
                         }
                         // The remaining cases are (a) the column's datatype is integer, and
                         // (b) the column is an expression. In the latter case it doesn't seem
@@ -145,18 +145,18 @@ fn query_prepared(
                         // So the only thing to do here is just to convert the value
                         // to using the default method, and since we already know that it
                         // is an integer, the result of the conversion will be a number.
-                        _ => ParamValue::from(value),
+                        _ => DbValue::from(value),
                     },
-                    ValueRef::Real(value) => ParamValue::from(value),
+                    ValueRef::Real(value) => DbValue::from(value),
                     ValueRef::Text(value) | ValueRef::Blob(value) => match column_type {
                         Some(ctype) if ctype.to_lowercase() == "numeric" => {
                             let value = from_utf8(value).unwrap_or_default();
                             let value = value.parse::<Decimal>().unwrap();
-                            ParamValue::Numeric(value)
+                            DbValue::Numeric(value)
                         }
                         _ => {
                             let value = from_utf8(value).unwrap_or_default();
-                            ParamValue::Text(value.to_string())
+                            DbValue::Text(value.to_string())
                         }
                     },
                 };
@@ -271,7 +271,7 @@ impl DbQuery for RusqlitePool {
                     .into_iter()
                     .map(|row| {
                         row.into_iter()
-                            .map(|(key, val)| (key, ParamValue::from(val)))
+                            .map(|(key, val)| (key, DbValue::from(val)))
                             .collect()
                     })
                     .collect();
@@ -448,7 +448,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             rows,
-            [db_row! {"MAX(int_value)".into() => ParamValue::from(1_i64)}]
+            [db_row! {"MAX(int_value)".into() => DbValue::from(1_i64)}]
         );
 
         // Test alias:
@@ -461,7 +461,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             rows,
-            [db_row! {"bool_value_alias".into() => ParamValue::from(1_i64)}]
+            [db_row! {"bool_value_alias".into() => DbValue::from(1_i64)}]
         );
 
         // Test aggregate with alias:
@@ -475,7 +475,7 @@ mod tests {
         // Note that the alias is not shown in the results:
         assert_eq!(
             rows,
-            [db_row! {"max_int_value".into() => ParamValue::from(1_i64)}]
+            [db_row! {"max_int_value".into() => DbValue::from(1_i64)}]
         );
 
         // Test non-aggregate function:
@@ -488,7 +488,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             rows,
-            [db_row! {"CAST(int_value AS TEXT)".into() => ParamValue::from("1")}]
+            [db_row! {"CAST(int_value AS TEXT)".into() => DbValue::from("1")}]
         );
 
         // Test non-aggregate function with alias:
@@ -501,7 +501,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             rows,
-            [db_row! {"int_value_cast".into() => ParamValue::from("1")}]
+            [db_row! {"int_value_cast".into() => DbValue::from("1")}]
         );
 
         // Test functions over booleans:
@@ -520,7 +520,7 @@ mod tests {
         // sqlite.
         assert_eq!(
             rows,
-            [db_row! {"MAX(bool_value)".into() => ParamValue::from(1_i64)}]
+            [db_row! {"MAX(bool_value)".into() => DbValue::from(1_i64)}]
         );
     }
 

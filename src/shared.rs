@@ -1,7 +1,7 @@
 use crate::{
     core::{DbError, DbQuery, DbRow, FromDbRows, IntoDbRows},
     db_kind::DbKind,
-    db_value::ParamValue,
+    db_value::DbValue,
     parse::validate_table_name,
 };
 use std::fmt::Display;
@@ -209,7 +209,7 @@ pub(crate) async fn edit<T: FromDbRows>(
     // are cleared, and any rows returned by the query are returned to the caller.
     let execute_batch_edit_and_reset = async |lines_to_bind: &mut Vec<String>,
                                               param_idx: &mut usize,
-                                              params_to_be_bound: &mut Vec<ParamValue>|
+                                              params_to_be_bound: &mut Vec<DbValue>|
            -> Result<Vec<DbRow>, DbError> {
         let sql = match edit_type {
             EditType::Update => generate_update_statement(
@@ -301,7 +301,7 @@ pub(crate) async fn edit<T: FromDbRows>(
             }
             let param = match row.get(*column) {
                 Some(value) => value.clone(),
-                None => ParamValue::Null,
+                None => DbValue::Null,
             };
             params_to_be_bound.push(param);
         }

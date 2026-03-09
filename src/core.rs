@@ -2,7 +2,7 @@
 
 use crate::{
     db_kind::DbKind,
-    db_value::{IntoParams, ParamValue, Params},
+    db_value::{DbValue, IntoParams, Params},
     memory::{
         DEFAULT_MEMORY_QUERY_CACHE_SIZE, MemoryQueryCacheKey, MemoryQueryCacheValue,
         clear_memory_query_cache, exists_in_meta_cache, get_memory_query_cache,
@@ -25,7 +25,7 @@ use std::{
 
 pub type JsonValue = serde_json::Value;
 pub type JsonRow = JsonMap<String, JsonValue>;
-pub type DbRow = IndexMap<String, ParamValue>;
+pub type DbRow = IndexMap<String, DbValue>;
 pub type StringRow = IndexMap<String, String>;
 pub type ColumnMap = IndexMap<String, String>;
 
@@ -115,7 +115,7 @@ impl IntoDbRows for Vec<JsonRow> {
         self.into_iter()
             .map(|row| {
                 row.into_iter()
-                    .map(|(key, val)| (key, ParamValue::from(val)))
+                    .map(|(key, val)| (key, DbValue::from(val)))
                     .collect()
             })
             .collect::<Vec<_>>()
@@ -652,7 +652,7 @@ pub trait DbQuery {
                 for (i, table) in tables.iter().enumerate() {
                     let i = i + 1;
                     placeholders.push(format!("{prefix}{i}"));
-                    parameters.push(ParamValue::from(*table));
+                    parameters.push(DbValue::from(*table));
                 }
                 let placeholders = placeholders.join(",");
 
@@ -707,7 +707,7 @@ pub trait DbQuery {
                 let rows: Vec<DbRow> = self.query_no_cache(&sql, &[&table_param]).await?;
                 match rows.first() {
                     Some(row) => match row.get("last_verified") {
-                        Some(value) if *value == ParamValue::Null => Ok(0),
+                        Some(value) if *value == DbValue::Null => Ok(0),
                         Some(value) => Ok(value.try_into()?),
                         None => Err(DbError::DataError(format!(
                             "No 'last_verified' found in row: {row:?}"
@@ -1032,7 +1032,7 @@ pub trait DbQuery {
         &self,
         sql: &str,
         params: impl IntoParams + Send,
-    ) -> Result<ParamValue, DbError> {
+    ) -> Result<DbValue, DbError> {
         let row = self.query_row(sql, params).await?;
         if row.len() > 1 {
             return Err(DbError::DataError(

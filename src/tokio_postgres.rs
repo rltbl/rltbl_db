@@ -3,7 +3,7 @@
 use crate::{
     core::{CachingStrategy, DbError, DbQuery, DbRow, FromDbRows, IntoDbRows},
     db_kind::{DbKind, MAX_PARAMS_POSTGRES},
-    db_value::{IntoParams, ParamValue, Params},
+    db_value::{DbValue, IntoParams, Params},
     shared::{EditType, edit},
 };
 
@@ -18,7 +18,7 @@ use deadpool_postgres::{
 use rust_decimal::Decimal;
 
 /// Extracts the value at the given index from the given [Row].
-fn extract_value(row: &Row, idx: usize) -> Result<ParamValue, DbError> {
+fn extract_value(row: &Row, idx: usize) -> Result<DbValue, DbError> {
     let column = &row.columns()[idx];
     match *column.type_() {
         Type::TEXT | Type::VARCHAR | Type::NAME => match row
@@ -26,49 +26,49 @@ fn extract_value(row: &Row, idx: usize) -> Result<ParamValue, DbError> {
             .map_err(|err| DbError::DataError(err.to_string()))?
         {
             Some(value) => Ok(value.into()),
-            None => Ok(ParamValue::Null),
+            None => Ok(DbValue::Null),
         },
         Type::INT2 => match row
             .try_get::<usize, Option<i16>>(idx)
             .map_err(|err| DbError::DataError(err.to_string()))?
         {
             Some(value) => Ok(value.into()),
-            None => Ok(ParamValue::Null),
+            None => Ok(DbValue::Null),
         },
         Type::INT4 => match row
             .try_get::<usize, Option<i32>>(idx)
             .map_err(|err| DbError::DataError(err.to_string()))?
         {
             Some(value) => Ok(value.into()),
-            None => Ok(ParamValue::Null),
+            None => Ok(DbValue::Null),
         },
         Type::INT8 => match row
             .try_get::<usize, Option<i64>>(idx)
             .map_err(|err| DbError::DataError(err.to_string()))?
         {
             Some(value) => Ok(value.into()),
-            None => Ok(ParamValue::Null),
+            None => Ok(DbValue::Null),
         },
         Type::BOOL => match row
             .try_get::<usize, Option<bool>>(idx)
             .map_err(|err| DbError::DataError(err.to_string()))?
         {
             Some(value) => Ok(value.into()),
-            None => Ok(ParamValue::Null),
+            None => Ok(DbValue::Null),
         },
         Type::FLOAT4 => match row
             .try_get::<usize, Option<f32>>(idx)
             .map_err(|err| DbError::DataError(err.to_string()))?
         {
             Some(value) => Ok(value.into()),
-            None => Ok(ParamValue::Null),
+            None => Ok(DbValue::Null),
         },
         Type::FLOAT8 => match row
             .try_get::<usize, Option<f64>>(idx)
             .map_err(|err| DbError::DataError(err.to_string()))?
         {
             Some(value) => Ok(value.into()),
-            None => Ok(ParamValue::Null),
+            None => Ok(DbValue::Null),
         },
         // WARN: This downcasts a Postgres NUMERIC to a 64 bit Number.
         Type::NUMERIC => match row
@@ -89,7 +89,7 @@ fn extract_value(row: &Row, idx: usize) -> Result<ParamValue, DbError> {
                     )))
                 }
             }
-            None => Ok(ParamValue::Null),
+            None => Ok(DbValue::Null),
         },
         _ => {
             eprint!("Unimplemented column type: {column:?}");
@@ -197,7 +197,7 @@ impl DbQuery for TokioPostgresPool {
             .to_vec();
 
         let mut params: Vec<Box<dyn ToSql + Sync + Send>> = Vec::new();
-        let gen_err = |param: &ParamValue, sql_type: &str| -> String {
+        let gen_err = |param: &DbValue, sql_type: &str| -> String {
             format!("Param {param:?} is wrong type for {sql_type} in query: {sql}")
         };
         match into_params {
@@ -208,57 +208,57 @@ impl DbQuery for TokioPostgresPool {
                     match pg_type {
                         &Type::TEXT | &Type::VARCHAR | &Type::NAME => {
                             match param {
-                                ParamValue::Null => params.push(Box::new(None::<String>)),
-                                ParamValue::Text(text) => params.push(Box::new(text.to_string())),
+                                DbValue::Null => params.push(Box::new(None::<String>)),
+                                DbValue::Text(text) => params.push(Box::new(text.to_string())),
                                 _ => return Err(DbError::InputError(gen_err(&param, "TEXT"))),
                             };
                         }
                         &Type::INT2 => {
                             match param {
-                                ParamValue::Null => params.push(Box::new(None::<i16>)),
-                                ParamValue::SmallInteger(num) => params.push(Box::new(*num)),
+                                DbValue::Null => params.push(Box::new(None::<i16>)),
+                                DbValue::SmallInteger(num) => params.push(Box::new(*num)),
                                 _ => return Err(DbError::InputError(gen_err(&param, "INT2"))),
                             };
                         }
                         &Type::INT4 => {
                             match param {
-                                ParamValue::Null => params.push(Box::new(None::<i32>)),
-                                ParamValue::Integer(num) => params.push(Box::new(*num)),
+                                DbValue::Null => params.push(Box::new(None::<i32>)),
+                                DbValue::Integer(num) => params.push(Box::new(*num)),
                                 _ => return Err(DbError::InputError(gen_err(&param, "INT4"))),
                             };
                         }
                         &Type::INT8 => {
                             match param {
-                                ParamValue::Null => params.push(Box::new(None::<i64>)),
-                                ParamValue::BigInteger(num) => params.push(Box::new(*num)),
+                                DbValue::Null => params.push(Box::new(None::<i64>)),
+                                DbValue::BigInteger(num) => params.push(Box::new(*num)),
                                 _ => return Err(DbError::InputError(gen_err(&param, "INT8"))),
                             };
                         }
                         &Type::FLOAT4 => {
                             match param {
-                                ParamValue::Null => params.push(Box::new(None::<f32>)),
-                                ParamValue::Real(num) => params.push(Box::new(*num)),
+                                DbValue::Null => params.push(Box::new(None::<f32>)),
+                                DbValue::Real(num) => params.push(Box::new(*num)),
                                 _ => return Err(DbError::InputError(gen_err(&param, "FLOAT4"))),
                             };
                         }
                         &Type::FLOAT8 => {
                             match param {
-                                ParamValue::Null => params.push(Box::new(None::<f64>)),
-                                ParamValue::BigReal(num) => params.push(Box::new(*num)),
+                                DbValue::Null => params.push(Box::new(None::<f64>)),
+                                DbValue::BigReal(num) => params.push(Box::new(*num)),
                                 _ => return Err(DbError::InputError(gen_err(&param, "FLOAT8"))),
                             };
                         }
                         &Type::NUMERIC => {
                             match param {
-                                ParamValue::Null => params.push(Box::new(None::<Decimal>)),
-                                ParamValue::Numeric(num) => params.push(Box::new(*num)),
+                                DbValue::Null => params.push(Box::new(None::<Decimal>)),
+                                DbValue::Numeric(num) => params.push(Box::new(*num)),
                                 _ => return Err(DbError::InputError(gen_err(&param, "NUMERIC"))),
                             };
                         }
                         &Type::BOOL => {
                             match param {
-                                ParamValue::Null => params.push(Box::new(None::<bool>)),
-                                ParamValue::Boolean(flag) => params.push(Box::new(*flag)),
+                                DbValue::Null => params.push(Box::new(None::<bool>)),
+                                DbValue::Boolean(flag) => params.push(Box::new(*flag)),
                                 _ => return Err(DbError::InputError(gen_err(&param, "BOOL"))),
                             };
                         }
@@ -455,7 +455,7 @@ mod tests {
             .query("SELECT MAX(int_value) FROM test_table_indirect", ())
             .await
             .unwrap();
-        assert_eq!(rows, [db_row! {"max".into() => ParamValue::from(1_i64)}]);
+        assert_eq!(rows, [db_row! {"max".into() => DbValue::from(1_i64)}]);
 
         // Test alias:
         let rows: Vec<DbRow> = pool
@@ -467,7 +467,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             rows,
-            [db_row! {"bool_value_alias".into() => ParamValue::from(true)}]
+            [db_row! {"bool_value_alias".into() => DbValue::from(true)}]
         );
 
         // Test aggregate with alias:
@@ -480,7 +480,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             rows,
-            [db_row! {"max_int_value".into() => ParamValue::from(1_i64)}]
+            [db_row! {"max_int_value".into() => DbValue::from(1_i64)}]
         );
 
         // Test non-aggregate function:
@@ -491,10 +491,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(
-            rows,
-            [db_row! {"int_value".into() => ParamValue::from("1")}]
-        );
+        assert_eq!(rows, [db_row! {"int_value".into() => DbValue::from("1")}]);
 
         // Test non-aggregate function with alias:
         let rows: Vec<DbRow> = pool
@@ -506,7 +503,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             rows,
-            [db_row! {"int_value_cast".into() => ParamValue::from("1")}]
+            [db_row! {"int_value_cast".into() => DbValue::from("1")}]
         );
 
         // Clean up.
