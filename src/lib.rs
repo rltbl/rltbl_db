@@ -1,6 +1,8 @@
 pub mod any;
 pub mod core;
 pub mod db_kind;
+pub mod memory;
+pub mod parse;
 pub mod shared;
 
 #[cfg(feature = "rusqlite")]
