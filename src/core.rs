@@ -2,7 +2,9 @@
 
 use crate::{
     db_kind::DbKind,
-    db_value::{DbValue, IntoParams, Params},
+    db_value::{
+        ColumnMap, DbRow, DbValue, FromDbRow, FromDbRows, IntoDbRows, IntoParams, Params, StringRow,
+    },
     memory::{
         DEFAULT_MEMORY_QUERY_CACHE_SIZE, MemoryQueryCacheKey, MemoryQueryCacheValue,
         clear_memory_query_cache, exists_in_meta_cache, get_memory_query_cache,
@@ -13,8 +15,6 @@ use crate::{
 };
 
 use async_trait::async_trait;
-use indexmap::IndexMap;
-use serde_json::Map as JsonMap;
 use std::{
     collections::HashSet,
     fmt::Display,
@@ -22,12 +22,6 @@ use std::{
     str::FromStr,
     time::{SystemTime, UNIX_EPOCH},
 };
-
-pub type JsonValue = serde_json::Value;
-pub type JsonRow = JsonMap<String, JsonValue>;
-pub type DbRow = IndexMap<String, DbValue>;
-pub type StringRow = IndexMap<String, String>;
-pub type ColumnMap = IndexMap<String, String>;
 
 /// The name of the query cache table.
 pub static QUERY_CACHE_TABLE: &str = "rltbl_db_query_cache";
@@ -65,100 +59,6 @@ impl std::fmt::Display for DbError {
             | DbError::DatatypeError(err)
             | DbError::ParseError(err) => write!(f, "{err}"),
         }
-    }
-}
-
-// Traits for converting to and from vectors of DbRows:
-
-pub trait IntoDbRows {
-    fn into_db_rows(self) -> Vec<DbRow>;
-}
-
-impl IntoDbRows for Vec<DbRow> {
-    fn into_db_rows(self) -> Vec<DbRow> {
-        self
-    }
-}
-
-impl IntoDbRows for &Vec<DbRow> {
-    fn into_db_rows(self) -> Vec<DbRow> {
-        self.clone()
-    }
-}
-
-impl IntoDbRows for &[DbRow] {
-    fn into_db_rows(self) -> Vec<DbRow> {
-        self.to_vec()
-    }
-}
-
-impl IntoDbRows for &[&DbRow] {
-    fn into_db_rows(self) -> Vec<DbRow> {
-        self.into_iter()
-            .cloned()
-            .map(|row| row.clone())
-            .collect::<Vec<_>>()
-    }
-}
-
-impl<const N: usize> IntoDbRows for &[&DbRow; N] {
-    fn into_db_rows(self) -> Vec<DbRow> {
-        self.into_iter()
-            .cloned()
-            .map(|row| row.clone())
-            .collect::<Vec<_>>()
-    }
-}
-
-impl IntoDbRows for Vec<JsonRow> {
-    fn into_db_rows(self) -> Vec<DbRow> {
-        self.into_iter()
-            .map(|row| {
-                row.into_iter()
-                    .map(|(key, val)| (key, DbValue::from(val)))
-                    .collect()
-            })
-            .collect::<Vec<_>>()
-    }
-}
-
-impl IntoDbRows for &Vec<JsonRow> {
-    fn into_db_rows(self) -> Vec<DbRow> {
-        self.clone().into_db_rows()
-    }
-}
-
-pub trait FromDbRows {
-    fn from(rows: Vec<DbRow>) -> Self;
-}
-
-impl FromDbRows for Vec<StringRow> {
-    fn from(rows: Vec<DbRow>) -> Self {
-        rows.iter()
-            .map(|row| {
-                row.iter()
-                    .map(|(key, value)| (key.clone(), value.into()))
-                    .collect()
-            })
-            .collect()
-    }
-}
-
-impl FromDbRows for Vec<JsonRow> {
-    fn from(rows: Vec<DbRow>) -> Self {
-        rows.into_iter()
-            .map(|row| {
-                row.into_iter()
-                    .map(|(key, val)| (key, val.into()))
-                    .collect()
-            })
-            .collect::<Vec<_>>()
-    }
-}
-
-impl FromDbRows for Vec<DbRow> {
-    fn from(rows: Vec<DbRow>) -> Self {
-        rows
     }
 }
 
@@ -1014,7 +914,11 @@ pub trait DbQuery {
     ) -> impl Future<Output = Result<T, DbError>> + Send;
 
     /// Execute a SQL command, returning a single row.
-    async fn query_row(&self, sql: &str, params: impl IntoParams + Send) -> Result<DbRow, DbError> {
+    async fn query_row<T: FromDbRow>(
+        &self,
+        sql: &str,
+        params: impl IntoParams + Send,
+    ) -> Result<T, DbError> {
         let rows: Vec<DbRow> = self.query(&sql, params).await?;
         if rows.len() > 1 {
             return Err(DbError::DataError(
@@ -1022,7 +926,7 @@ pub trait DbQuery {
             ));
         }
         match rows.into_iter().next() {
-            Some(row) => Ok(row),
+            Some(row) => Ok(FromDbRow::from(row)),
             None => Err(DbError::DataError("No row found".to_string())),
         }
     }
@@ -1033,7 +937,7 @@ pub trait DbQuery {
         sql: &str,
         params: impl IntoParams + Send,
     ) -> Result<DbValue, DbError> {
-        let row = self.query_row(sql, params).await?;
+        let row: DbRow = self.query_row(sql, params).await?;
         if row.len() > 1 {
             return Err(DbError::DataError(
                 "More than one value returned for query_value()".to_string(),
@@ -1076,7 +980,7 @@ pub trait DbQuery {
         sql: &str,
         params: impl IntoParams + Send,
     ) -> Result<StringRow, DbError> {
-        let row = self.query_row(sql, params).await?;
+        let row: DbRow = self.query_row(sql, params).await?;
         Ok(row
             .iter()
             .map(|(key, value)| (key.clone(), value.into()))

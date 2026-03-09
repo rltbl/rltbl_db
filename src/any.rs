@@ -15,9 +15,9 @@
 /// }
 /// ```
 use crate::{
-    core::{CachingStrategy, DbError, DbQuery, FromDbRows, IntoDbRows},
+    core::{CachingStrategy, DbError, DbQuery},
     db_kind::DbKind,
-    db_value::IntoParams,
+    db_value::{FromDbRows, IntoDbRows, IntoParams},
 };
 
 #[cfg(feature = "rusqlite")]
@@ -295,10 +295,8 @@ impl DbQuery for AnyPool {
 mod tests {
     use super::*;
     use crate::{
-        core::{
-            CachingStrategy, ColumnMap, DbRow, QUERY_CACHE_TABLE, StringRow, TABLE_CACHE_TABLE,
-        },
-        db_value::DbValue,
+        core::{CachingStrategy, QUERY_CACHE_TABLE, TABLE_CACHE_TABLE},
+        db_value::{ColumnMap, DbRow, DbValue, StringRow},
         memory::{
             clear_memory_query_cache, clear_memory_table_cache, clear_meta_cache,
             get_memory_query_cache_contents, get_memory_table_cache_contents,
@@ -375,7 +373,7 @@ mod tests {
             string_rows
         );
 
-        let row = pool.query_row(&select_sql, &["foo"]).await.unwrap();
+        let row: DbRow = pool.query_row(&select_sql, &["foo"]).await.unwrap();
         assert_eq!(row, db_row! {"value".into() => DbValue::from("foo")});
 
         let rows: Vec<DbRow> = pool.query(&select_sql, &["foo"]).await.unwrap();
@@ -498,7 +496,7 @@ mod tests {
         let strings = pool.query_strings(&select_sql, &[1.0_f64]).await.unwrap();
         assert_eq!(vec!["1.05".to_owned()], strings);
 
-        let row = pool.query_row(&select_sql, &[1.0_f64]).await.unwrap();
+        let row: DbRow = pool.query_row(&select_sql, &[1.0_f64]).await.unwrap();
         assert_eq!(row, db_row! {"value".into() => DbValue::from(1.05)});
 
         let rows: Vec<DbRow> = pool.query(&select_sql, &[1.0_f64]).await.unwrap();
@@ -613,7 +611,7 @@ mod tests {
         );
         let params = params!["foo", (), 1.0_f64, 0_i64, true, dec!(0.999)];
 
-        let row = pool.query_row(&select_sql, params.clone()).await.unwrap();
+        let row: DbRow = pool.query_row(&select_sql, params.clone()).await.unwrap();
         assert_eq!(
             row,
             db_row! {

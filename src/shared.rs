@@ -1,7 +1,7 @@
 use crate::{
-    core::{DbError, DbQuery, DbRow, FromDbRows, IntoDbRows},
+    core::{DbError, DbQuery},
     db_kind::DbKind,
-    db_value::DbValue,
+    db_value::{DbRow, DbValue, FromDbRows, IntoDbRows},
     parse::validate_table_name,
 };
 use std::fmt::Display;
