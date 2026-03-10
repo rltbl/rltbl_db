@@ -614,6 +614,14 @@ impl FromDbRow for DbRow {
     }
 }
 
+impl FromDbRow for JsonRow {
+    fn from(row: DbRow) -> Self {
+        row.into_iter()
+            .map(|(key, val)| (key, val.into()))
+            .collect()
+    }
+}
+
 /// Converts a list of assorted types implementing [IntoDbValue] into [Params]
 #[macro_export]
 macro_rules! params {
