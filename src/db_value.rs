@@ -603,6 +603,14 @@ impl IntoDbRow for DbRow {
     }
 }
 
+impl IntoDbRow for JsonRow {
+    fn into_db_row(self) -> DbRow {
+        self.into_iter()
+            .map(|(key, val)| (key, val.into()))
+            .collect()
+    }
+}
+
 /// Enables conversion from a [DbRow] into something.
 pub trait FromDbRow {
     fn from(row: DbRow) -> Self;

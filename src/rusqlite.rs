@@ -570,5 +570,6 @@ mod tests {
         }
         sql.push_str(&values.join(", "));
         pool.execute(&sql, params).await.unwrap();
+        pool.drop_table("text_max_params").await.unwrap();
     }
 }
