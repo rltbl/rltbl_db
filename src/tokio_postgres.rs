@@ -423,6 +423,7 @@ mod tests {
     use crate::params;
     use indexmap::indexmap as db_row;
     use pretty_assertions::assert_eq;
+    use std::str::FromStr;
 
     #[tokio::test]
     async fn test_aliases_and_builtin_functions() {
@@ -557,5 +558,99 @@ mod tests {
         sql.push_str(&values.join(", "));
         pool.execute(&sql, params).await.unwrap();
         pool.drop_table("text_max_params").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_special_floats() {
+        let pool = TokioPostgresPool::connect("postgresql:///rltbl_db")
+            .await
+            .unwrap();
+        pool.drop_table("test_special_floats").await.unwrap();
+        pool.execute(
+            r#"CREATE TABLE test_special_floats (bar FLOAT, pseudo_bar TEXT)"#,
+            (),
+        )
+        .await
+        .unwrap();
+        pool.execute(r#"insert into test_special_floats values (+0, '+0')"#, ())
+            .await
+            .unwrap();
+        pool.execute(r#"insert into test_special_floats values (-0, '-0')"#, ())
+            .await
+            .unwrap();
+        for value in ["Infinity", "-Infinity", "NaN"] {
+            // Without params:
+            let quoted_value = format!("'{value}'");
+            pool.execute(
+                &format!(
+                    r#"insert into test_special_floats values ({quoted_value}, {quoted_value})"#
+                ),
+                (),
+            )
+            .await
+            .unwrap();
+
+            // With params:
+            let float_param = f64::from_str(value).unwrap();
+            pool.execute(
+                r#"insert into test_special_floats values ($1, $2)"#,
+                params![float_param, value],
+            )
+            .await
+            .unwrap();
+        }
+
+        let value = pool
+            .query_value("select max(bar) from test_special_floats", ())
+            .await
+            .unwrap();
+        match value {
+            DbValue::BigReal(num) if num.is_nan() => (),
+            _ => panic!(),
+        };
+
+        let value = pool
+            .query_value("select max(pseudo_bar) from test_special_floats", ())
+            .await
+            .unwrap();
+        match value {
+            DbValue::Text(txt) if txt == "NaN" => (),
+            _ => panic!(),
+        };
+
+        let rows: Vec<DbRow> = pool
+            .query(
+                r#"select bar from test_special_floats where bar = $1"#,
+                params![DbValue::BigReal(f64::NEG_INFINITY)],
+            )
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 2);
+
+        let value = rows[0].get("bar").unwrap();
+        match value {
+            DbValue::BigReal(num) => {
+                assert!(num.is_sign_negative());
+                assert!(num.is_infinite());
+            }
+            _ => panic!(),
+        };
+
+        let rows: Vec<DbRow> = pool
+            .query(
+                r#"select pseudo_bar from test_special_floats where pseudo_bar = $1"#,
+                &["-Infinity"],
+            )
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 2);
+
+        let value = rows[0].get("pseudo_bar").unwrap();
+        match value {
+            DbValue::Text(txt) => assert_eq!(txt, "-Infinity"),
+            _ => panic!(),
+        };
+
+        pool.drop_table("test_special_floats").await.unwrap();
     }
 }
