@@ -2,19 +2,19 @@
 
 use crate::{
     db_kind::DbKind,
+    db_value::{
+        ColumnMap, DbRow, DbValue, FromDbRow, FromDbRows, IntoDbRows, IntoParams, Params, StringRow,
+    },
     memory::{
         DEFAULT_MEMORY_QUERY_CACHE_SIZE, MemoryQueryCacheKey, MemoryQueryCacheValue,
         clear_memory_query_cache, exists_in_meta_cache, get_memory_query_cache,
         get_memory_table_cache, get_meta_cache,
     },
+    params,
     parse::{get_affected_tables, get_view_tables, validate_table_name},
 };
 
 use async_trait::async_trait;
-use indexmap::IndexMap;
-use rust_decimal::Decimal;
-use serde::{Deserialize, Serialize};
-use serde_json::{Map as JsonMap, json};
 use std::{
     collections::HashSet,
     fmt::Display,
@@ -22,12 +22,6 @@ use std::{
     str::FromStr,
     time::{SystemTime, UNIX_EPOCH},
 };
-
-pub type JsonValue = serde_json::Value;
-pub type JsonRow = JsonMap<String, JsonValue>;
-pub type DbRow = IndexMap<String, ParamValue>;
-pub type StringRow = IndexMap<String, String>;
-pub type ColumnMap = IndexMap<String, String>;
 
 /// The name of the query cache table.
 pub static QUERY_CACHE_TABLE: &str = "rltbl_db_query_cache";
@@ -65,561 +59,6 @@ impl std::fmt::Display for DbError {
             | DbError::DatatypeError(err)
             | DbError::ParseError(err) => write!(f, "{err}"),
         }
-    }
-}
-
-/// Value types for [query parameters](Params)
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub enum ParamValue {
-    /// Represents a NULL value. Can be used with any column type.
-    Null,
-    /// Use with BOOL column types or equivalent.
-    Boolean(bool),
-    /// Use with INT2 column types or equivalent.
-    SmallInteger(i16),
-    /// Use with INT4 column types or equivalent.
-    Integer(i32),
-    /// Use with INT8 column types or equivalent.
-    BigInteger(i64),
-    /// Use with FLOAT4 column types or equivalent.
-    Real(f32),
-    /// Use with FLOAT8 column types or equivalent.
-    BigReal(f64),
-    /// Use with NUMERIC column types or equivalent.
-    Numeric(Decimal),
-    /// Use with TEXT and VARCHAR column types or equivalent.
-    Text(String),
-}
-
-impl Display for ParamValue {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let string_value: String = self.into();
-        write!(f, "{}", string_value)
-    }
-}
-
-// Implementations of attempted conversion of ParamValues into various types:
-
-impl Into<JsonValue> for ParamValue {
-    fn into(self) -> JsonValue {
-        match self {
-            ParamValue::Null => JsonValue::Null,
-            ParamValue::Boolean(value) => JsonValue::Bool(value),
-            ParamValue::SmallInteger(value) => JsonValue::Number(value.into()),
-            ParamValue::Integer(value) => JsonValue::Number(value.into()),
-            ParamValue::BigInteger(value) => JsonValue::Number(value.into()),
-            ParamValue::Real(value) => json!(value),
-            ParamValue::BigReal(value) => json!(value),
-            ParamValue::Numeric(value) => json!(value),
-            ParamValue::Text(value) => JsonValue::String(value),
-        }
-    }
-}
-
-impl Into<JsonValue> for &ParamValue {
-    fn into(self) -> JsonValue {
-        self.clone().into()
-    }
-}
-
-impl Into<String> for ParamValue {
-    fn into(self) -> String {
-        match self {
-            ParamValue::Null => String::new(),
-            ParamValue::Boolean(val) => val.to_string(),
-            ParamValue::SmallInteger(number) => number.to_string(),
-            ParamValue::Integer(number) => number.to_string(),
-            ParamValue::BigInteger(number) => number.to_string(),
-            ParamValue::Real(number) => number.to_string(),
-            ParamValue::BigReal(number) => number.to_string(),
-            ParamValue::Numeric(decimal) => decimal.to_string(),
-            ParamValue::Text(string) => string.to_string(),
-        }
-    }
-}
-
-impl Into<String> for &ParamValue {
-    fn into(self) -> String {
-        self.clone().into()
-    }
-}
-
-impl TryInto<u64> for ParamValue {
-    type Error = DbError;
-
-    fn try_into(self) -> Result<u64, DbError> {
-        match self {
-            ParamValue::SmallInteger(number) => {
-                Ok(u64::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
-            }
-            ParamValue::Integer(number) => {
-                Ok(u64::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
-            }
-            ParamValue::BigInteger(number) => {
-                Ok(u64::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
-            }
-            _ => Err(DbError::InputError(format!(
-                "Not an unsigned integer: {self:?}"
-            ))),
-        }
-    }
-}
-
-impl TryInto<u64> for &ParamValue {
-    type Error = DbError;
-
-    fn try_into(self) -> Result<u64, DbError> {
-        self.clone().try_into()
-    }
-}
-
-impl TryInto<i64> for ParamValue {
-    type Error = DbError;
-
-    fn try_into(self) -> Result<i64, DbError> {
-        match self {
-            ParamValue::SmallInteger(number) => {
-                Ok(i64::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
-            }
-            ParamValue::Integer(number) => {
-                Ok(i64::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
-            }
-            ParamValue::BigInteger(number) => {
-                Ok(i64::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
-            }
-            _ => Err(DbError::InputError(format!("Not an integer: {self:?}"))),
-        }
-    }
-}
-
-impl TryInto<i64> for &ParamValue {
-    type Error = DbError;
-
-    fn try_into(self) -> Result<i64, DbError> {
-        self.clone().try_into()
-    }
-}
-
-impl TryInto<f64> for ParamValue {
-    type Error = DbError;
-
-    fn try_into(self) -> Result<f64, DbError> {
-        match self {
-            ParamValue::Real(number) => {
-                Ok(f64::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
-            }
-            ParamValue::BigReal(number) => {
-                Ok(f64::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
-            }
-            ParamValue::Numeric(number) => {
-                Ok(f64::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
-            }
-            _ => Err(DbError::InputError(format!("Not an integer: {self:?}"))),
-        }
-    }
-}
-
-impl TryInto<f64> for &ParamValue {
-    type Error = DbError;
-
-    fn try_into(self) -> Result<f64, DbError> {
-        self.clone().try_into()
-    }
-}
-
-impl TryInto<f32> for ParamValue {
-    type Error = DbError;
-
-    fn try_into(self) -> Result<f32, DbError> {
-        match self {
-            ParamValue::Real(number) => {
-                Ok(f32::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
-            }
-            ParamValue::BigReal(number) => Ok(number as f32),
-            ParamValue::Numeric(number) => {
-                Ok(f32::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
-            }
-            _ => Err(DbError::InputError(format!("Not an integer: {self:?}"))),
-        }
-    }
-}
-
-impl TryInto<f32> for &ParamValue {
-    type Error = DbError;
-
-    fn try_into(self) -> Result<f32, DbError> {
-        self.clone().try_into()
-    }
-}
-
-impl TryInto<bool> for ParamValue {
-    type Error = DbError;
-
-    fn try_into(self) -> Result<bool, DbError> {
-        match self {
-            ParamValue::Boolean(value) => Ok(value),
-            ParamValue::Integer(value) => Ok(value == 1),
-            _ => Err(DbError::InputError(format!("Not a boolean: {self:?}"))),
-        }
-    }
-}
-
-impl TryInto<bool> for &ParamValue {
-    type Error = DbError;
-
-    fn try_into(self) -> Result<bool, DbError> {
-        self.clone().try_into()
-    }
-}
-
-// Implementations of attempted conversions of various types into ParamValues:
-
-impl From<&str> for ParamValue {
-    fn from(item: &str) -> Self {
-        ParamValue::Text(item.to_string())
-    }
-}
-
-impl From<String> for ParamValue {
-    fn from(item: String) -> Self {
-        ParamValue::Text(item)
-    }
-}
-
-impl From<&String> for ParamValue {
-    fn from(item: &String) -> Self {
-        ParamValue::Text(item.clone())
-    }
-}
-
-impl From<i16> for ParamValue {
-    fn from(item: i16) -> Self {
-        ParamValue::SmallInteger(item)
-    }
-}
-
-impl From<i32> for ParamValue {
-    fn from(item: i32) -> Self {
-        ParamValue::Integer(item.into())
-    }
-}
-
-impl From<i64> for ParamValue {
-    fn from(item: i64) -> Self {
-        ParamValue::BigInteger(item)
-    }
-}
-
-impl From<u16> for ParamValue {
-    fn from(item: u16) -> Self {
-        ParamValue::Integer(item.into())
-    }
-}
-
-impl From<u32> for ParamValue {
-    fn from(item: u32) -> Self {
-        if usize::BITS <= 31 {
-            ParamValue::Integer(item as i32)
-        } else {
-            ParamValue::BigInteger(item as i64)
-        }
-    }
-}
-
-impl From<u64> for ParamValue {
-    fn from(item: u64) -> Self {
-        if item <= i64::MAX as u64 {
-            ParamValue::BigInteger(item as i64)
-        } else {
-            ParamValue::Numeric(Decimal::from(item))
-        }
-    }
-}
-
-impl From<isize> for ParamValue {
-    fn from(item: isize) -> Self {
-        if isize::BITS <= 32 {
-            ParamValue::Integer(item as i32)
-        } else if isize::BITS <= 64 {
-            ParamValue::BigInteger(item as i64)
-        } else {
-            ParamValue::Numeric(Decimal::from(item))
-        }
-    }
-}
-
-impl From<usize> for ParamValue {
-    fn from(item: usize) -> Self {
-        if usize::BITS <= 31 {
-            ParamValue::Integer(item as i32)
-        } else if usize::BITS <= 63 {
-            ParamValue::BigInteger(item as i64)
-        } else {
-            ParamValue::Numeric(Decimal::from(item))
-        }
-    }
-}
-
-impl From<f32> for ParamValue {
-    fn from(item: f32) -> Self {
-        ParamValue::Real(item)
-    }
-}
-
-impl From<f64> for ParamValue {
-    fn from(item: f64) -> Self {
-        ParamValue::BigReal(item)
-    }
-}
-
-impl From<Decimal> for ParamValue {
-    fn from(item: Decimal) -> Self {
-        ParamValue::Numeric(item)
-    }
-}
-
-impl From<bool> for ParamValue {
-    fn from(item: bool) -> Self {
-        ParamValue::Boolean(item)
-    }
-}
-
-impl From<JsonValue> for ParamValue {
-    fn from(item: JsonValue) -> Self {
-        match &item {
-            JsonValue::Null => Self::Null,
-            JsonValue::Bool(val) => Self::Boolean(*val),
-            JsonValue::Number(number) => {
-                if number.is_u64() {
-                    Self::from(number.as_u64().unwrap())
-                } else if number.is_i64() {
-                    Self::from(number.as_i64().unwrap())
-                } else if number.is_f64() {
-                    Self::BigReal(number.as_f64().unwrap())
-                } else {
-                    Self::Text(item.to_string())
-                }
-            }
-            JsonValue::String(string) => Self::Text(string.to_string()),
-            JsonValue::Array(_) => Self::Text(item.to_string()),
-            JsonValue::Object(_) => Self::Text(item.to_string()),
-        }
-    }
-}
-
-impl From<()> for ParamValue {
-    fn from(_: ()) -> Self {
-        ParamValue::Null
-    }
-}
-
-// f32 and f64 don't implement PartialEq, so we have to do it ourselves.
-impl PartialEq for ParamValue {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (ParamValue::Null, ParamValue::Null) => true,
-            (ParamValue::Boolean(a), ParamValue::Boolean(b)) => a == b,
-            (ParamValue::SmallInteger(a), ParamValue::SmallInteger(b)) => a == b,
-            (ParamValue::Integer(a), ParamValue::Integer(b)) => a == b,
-            (ParamValue::BigInteger(a), ParamValue::BigInteger(b)) => a == b,
-            (ParamValue::Real(a), ParamValue::Real(b)) => {
-                if a.is_finite() && b.is_finite() {
-                    a == b
-                } else {
-                    false
-                }
-            }
-            (ParamValue::BigReal(a), ParamValue::BigReal(b)) => {
-                if a.is_finite() && b.is_finite() {
-                    a == b
-                } else {
-                    false
-                }
-            }
-            (ParamValue::Numeric(a), ParamValue::Numeric(b)) => a == b,
-            (ParamValue::Text(a), ParamValue::Text(b)) => a == b,
-            _ => false,
-        }
-    }
-}
-
-impl Eq for ParamValue {}
-
-/// Types that implement this trait can be converted into a [ParamValue].
-pub trait IntoParamValue {
-    fn into_param_value(self) -> ParamValue;
-}
-
-/// Implements [IntoParamValue] for types that implement [TryFrom] for [ParamValue].
-impl<T: Into<ParamValue>> IntoParamValue for T {
-    fn into_param_value(self) -> ParamValue {
-        self.into()
-    }
-}
-
-/// Query parameters
-#[derive(Debug, Clone)]
-pub enum Params {
-    None,
-    Positional(Vec<ParamValue>),
-}
-
-/// Types that implement this trait can be converted into [Params]
-pub trait IntoParams {
-    fn into_params(self) -> Params;
-}
-
-/// (Trivially) implements [IntoParams] for [Params]
-impl IntoParams for Params {
-    fn into_params(self) -> Params {
-        self
-    }
-}
-
-/// Implements [IntoParams] for references to [Params]
-impl IntoParams for &Params {
-    fn into_params(self) -> Params {
-        self.clone()
-    }
-}
-
-/// Implements [IntoParams] for an empty tuple. Always returns [Params::None].
-impl IntoParams for () {
-    fn into_params(self) -> Params {
-        Params::None
-    }
-}
-
-/// Implements [IntoParams] for fixed-length arrays of types that implement [IntoParamValue]
-impl<T: IntoParamValue, const N: usize> IntoParams for [T; N] {
-    fn into_params(self) -> Params {
-        self.into_iter().collect::<Vec<_>>().into_params()
-    }
-}
-
-/// Implements [IntoParams] for references to fixed-length arrays of types that implement
-/// [IntoParamValue]
-impl<T: IntoParamValue + Clone, const N: usize> IntoParams for &[T; N] {
-    fn into_params(self) -> Params {
-        self.iter().cloned().collect::<Vec<_>>().into_params()
-    }
-}
-
-/// Implements [IntoParams] for vectors of types that implement [IntoParamValue]
-impl<T: IntoParamValue> IntoParams for Vec<T> {
-    fn into_params(self) -> Params {
-        let values = self
-            .into_iter()
-            .map(|i| i.into_param_value())
-            .collect::<Vec<_>>();
-        Params::Positional(values)
-    }
-}
-
-/// Converts a list of assorted types implementing [IntoParamValue] into [Params]
-#[macro_export]
-macro_rules! params {
-    () => {
-       ()
-    };
-    ($($value:expr),* $(,)?) => {{
-        use $crate::core::IntoParamValue;
-        [$($value.into_param_value()),*]
-
-    }};
-}
-
-// Traits for converting to and from vectors of DbRows:
-
-pub trait IntoDbRows {
-    fn into_db_rows(self) -> Vec<DbRow>;
-}
-
-impl IntoDbRows for Vec<DbRow> {
-    fn into_db_rows(self) -> Vec<DbRow> {
-        self
-    }
-}
-
-impl IntoDbRows for &Vec<DbRow> {
-    fn into_db_rows(self) -> Vec<DbRow> {
-        self.clone()
-    }
-}
-
-impl IntoDbRows for &[DbRow] {
-    fn into_db_rows(self) -> Vec<DbRow> {
-        self.to_vec()
-    }
-}
-
-impl IntoDbRows for &[&DbRow] {
-    fn into_db_rows(self) -> Vec<DbRow> {
-        self.into_iter()
-            .cloned()
-            .map(|row| row.clone())
-            .collect::<Vec<_>>()
-    }
-}
-
-impl<const N: usize> IntoDbRows for &[&DbRow; N] {
-    fn into_db_rows(self) -> Vec<DbRow> {
-        self.into_iter()
-            .cloned()
-            .map(|row| row.clone())
-            .collect::<Vec<_>>()
-    }
-}
-
-impl IntoDbRows for Vec<JsonRow> {
-    fn into_db_rows(self) -> Vec<DbRow> {
-        self.into_iter()
-            .map(|row| {
-                row.into_iter()
-                    .map(|(key, val)| (key, ParamValue::from(val)))
-                    .collect()
-            })
-            .collect::<Vec<_>>()
-    }
-}
-
-impl IntoDbRows for &Vec<JsonRow> {
-    fn into_db_rows(self) -> Vec<DbRow> {
-        self.clone().into_db_rows()
-    }
-}
-
-pub trait FromDbRows {
-    fn from(rows: Vec<DbRow>) -> Self;
-}
-
-impl FromDbRows for Vec<StringRow> {
-    fn from(rows: Vec<DbRow>) -> Self {
-        rows.iter()
-            .map(|row| {
-                row.iter()
-                    .map(|(key, value)| (key.clone(), value.into()))
-                    .collect()
-            })
-            .collect()
-    }
-}
-
-impl FromDbRows for Vec<JsonRow> {
-    fn from(rows: Vec<DbRow>) -> Self {
-        rows.into_iter()
-            .map(|row| {
-                row.into_iter()
-                    .map(|(key, val)| (key, val.into()))
-                    .collect()
-            })
-            .collect::<Vec<_>>()
-    }
-}
-
-impl FromDbRows for Vec<DbRow> {
-    fn from(rows: Vec<DbRow>) -> Self {
-        rows
     }
 }
 
@@ -1113,7 +552,7 @@ pub trait DbQuery {
                 for (i, table) in tables.iter().enumerate() {
                     let i = i + 1;
                     placeholders.push(format!("{prefix}{i}"));
-                    parameters.push(ParamValue::from(*table));
+                    parameters.push(DbValue::from(*table));
                 }
                 let placeholders = placeholders.join(",");
 
@@ -1168,7 +607,7 @@ pub trait DbQuery {
                 let rows: Vec<DbRow> = self.query_no_cache(&sql, &[&table_param]).await?;
                 match rows.first() {
                     Some(row) => match row.get("last_verified") {
-                        Some(value) if *value == ParamValue::Null => Ok(0),
+                        Some(value) if *value == DbValue::Null => Ok(0),
                         Some(value) => Ok(value.try_into()?),
                         None => Err(DbError::DataError(format!(
                             "No 'last_verified' found in row: {row:?}"
@@ -1475,7 +914,11 @@ pub trait DbQuery {
     ) -> impl Future<Output = Result<T, DbError>> + Send;
 
     /// Execute a SQL command, returning a single row.
-    async fn query_row(&self, sql: &str, params: impl IntoParams + Send) -> Result<DbRow, DbError> {
+    async fn query_row<T: FromDbRow>(
+        &self,
+        sql: &str,
+        params: impl IntoParams + Send,
+    ) -> Result<T, DbError> {
         let rows: Vec<DbRow> = self.query(&sql, params).await?;
         if rows.len() > 1 {
             return Err(DbError::DataError(
@@ -1483,7 +926,7 @@ pub trait DbQuery {
             ));
         }
         match rows.into_iter().next() {
-            Some(row) => Ok(row),
+            Some(row) => Ok(FromDbRow::from(row)),
             None => Err(DbError::DataError("No row found".to_string())),
         }
     }
@@ -1493,8 +936,8 @@ pub trait DbQuery {
         &self,
         sql: &str,
         params: impl IntoParams + Send,
-    ) -> Result<ParamValue, DbError> {
-        let row = self.query_row(sql, params).await?;
+    ) -> Result<DbValue, DbError> {
+        let row: DbRow = self.query_row(sql, params).await?;
         if row.len() > 1 {
             return Err(DbError::DataError(
                 "More than one value returned for query_value()".to_string(),
@@ -1537,7 +980,7 @@ pub trait DbQuery {
         sql: &str,
         params: impl IntoParams + Send,
     ) -> Result<StringRow, DbError> {
-        let row = self.query_row(sql, params).await?;
+        let row: DbRow = self.query_row(sql, params).await?;
         Ok(row
             .iter()
             .map(|(key, value)| (key.clone(), value.into()))

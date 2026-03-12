@@ -1,11 +1,9 @@
 //! libsql implementation for rltbl_db.
 
 use crate::{
-    core::{
-        CachingStrategy, DbError, DbQuery, DbRow, FromDbRows, IntoDbRows, IntoParams, ParamValue,
-        Params,
-    },
+    core::{CachingStrategy, DbError, DbQuery},
     db_kind::{DbKind, MAX_PARAMS_SQLITE},
+    db_value::{DbRow, DbValue, FromDbRows, IntoDbRows, IntoParams, Params},
     shared::{EditType, edit},
 };
 use deadpool_libsql::{
@@ -15,7 +13,7 @@ use deadpool_libsql::{
 use rust_decimal::prelude::ToPrimitive;
 use std::str::from_utf8;
 
-impl TryFrom<Value> for ParamValue {
+impl TryFrom<Value> for DbValue {
     type Error = DbError;
 
     fn try_from(item: Value) -> Result<Self, DbError> {
@@ -44,26 +42,22 @@ impl TryFrom<Params> for Vec<Value> {
                 let mut values = vec![];
                 for pvalue in pvalues {
                     match pvalue {
-                        ParamValue::Null => values.push(Value::Null),
+                        DbValue::Null => values.push(Value::Null),
                         // Libsql does not support booleans.
                         // See: https://docs.rs/libsql/0.9.29/libsql/enum.Value.html,
-                        ParamValue::Boolean(pvalue) => values.push(Value::Integer(pvalue.into())),
-                        ParamValue::SmallInteger(pvalue) => {
-                            values.push(Value::Integer(pvalue.into()))
-                        }
-                        ParamValue::Integer(pvalue) => values.push(Value::Integer(pvalue.into())),
-                        ParamValue::BigInteger(pvalue) => {
-                            values.push(Value::Integer(pvalue.into()))
-                        }
-                        ParamValue::Real(pvalue) => values.push(Value::Real(pvalue.into())),
-                        ParamValue::BigReal(pvalue) => values.push(Value::Real(pvalue.into())),
-                        ParamValue::Numeric(pvalue) => {
+                        DbValue::Boolean(pvalue) => values.push(Value::Integer(pvalue.into())),
+                        DbValue::SmallInteger(pvalue) => values.push(Value::Integer(pvalue.into())),
+                        DbValue::Integer(pvalue) => values.push(Value::Integer(pvalue.into())),
+                        DbValue::BigInteger(pvalue) => values.push(Value::Integer(pvalue.into())),
+                        DbValue::Real(pvalue) => values.push(Value::Real(pvalue.into())),
+                        DbValue::BigReal(pvalue) => values.push(Value::Real(pvalue.into())),
+                        DbValue::Numeric(pvalue) => {
                             let pvalue = pvalue.to_f64().ok_or(DbError::DatatypeError(format!(
                                 "Error converting value '{pvalue}' to f64"
                             )))?;
                             values.push(Value::Real(pvalue.into()))
                         }
-                        ParamValue::Text(pvalue) => values.push(Value::Text(pvalue)),
+                        DbValue::Text(pvalue) => values.push(Value::Text(pvalue)),
                     };
                 }
                 Ok(values)
@@ -347,7 +341,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             rows,
-            [db_row! {"MAX(int_value)".into() => ParamValue::from(1_i64)}]
+            [db_row! {"MAX(int_value)".into() => DbValue::from(1_i64)}]
         );
 
         // Test alias:
@@ -360,7 +354,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             rows,
-            [db_row! {"bool_value_alias".into() => ParamValue::from(1_i64)}]
+            [db_row! {"bool_value_alias".into() => DbValue::from(1_i64)}]
         );
 
         // Test aggregate with alias:
@@ -374,7 +368,7 @@ mod tests {
         // Note that the alias is not shown in the results:
         assert_eq!(
             rows,
-            [db_row! {"max_int_value".into() => ParamValue::from(1_i64)}]
+            [db_row! {"max_int_value".into() => DbValue::from(1_i64)}]
         );
 
         // Test non-aggregate function:
@@ -387,7 +381,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             rows,
-            [db_row! {"CAST(int_value AS TEXT)".into() => ParamValue::from("1")}]
+            [db_row! {"CAST(int_value AS TEXT)".into() => DbValue::from("1")}]
         );
 
         // Test non-aggregate function with alias:
@@ -400,7 +394,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             rows,
-            [db_row! {"int_value_cast".into() => ParamValue::from("1")}]
+            [db_row! {"int_value_cast".into() => DbValue::from("1")}]
         );
 
         // Test functions over booleans:
@@ -419,7 +413,7 @@ mod tests {
         // sqlite.
         assert_eq!(
             rows,
-            [db_row! {"MAX(bool_value)".into() => ParamValue::from(1_i64)}]
+            [db_row! {"MAX(bool_value)".into() => DbValue::from(1_i64)}]
         );
     }
 
@@ -469,5 +463,6 @@ mod tests {
         }
         sql.push_str(&values.join(", "));
         pool.execute(&sql, params).await.unwrap();
+        pool.drop_table("text_max_params").await.unwrap();
     }
 }

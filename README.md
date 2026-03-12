@@ -39,3 +39,18 @@ async fn example() -> Result<String, DbError> {
     Ok(value)
 }
 ```
+
+# Differences between PostgreSQL and SQLite
+
+The libsql and rusqlite drivers do not fully support querying special floating point types such as "NaN", "-Infinity", "Infinity", etc. If one tries to query from a column that contains such values the results will be returned as TEXT. It is, possible, however, to insert these special values into a table by hard coding them into the submitted query text (rather than by using dynammic query parameters), by double quoting them. E.g., INSERT INTO foo VALUES ("NaN").
+
+There are no such issues with PostgreSQL. The following will work irrespective of whether the column `bar` is of floating point or text type (postgresql will be able th determine this implicitly): `INSERT INTO foo (bar) VALUES ('-Infinity')`. And it is also possible to use
+special values as parameters, e.g.,
+
+            let float_param = std::f64::from_str("-Infinity").unwrap();
+            pool.execute(
+                r#"INSERT INTO foo (bar) VALUES ($1)"#,
+                params![float_param],
+            )
+            .await
+            .unwrap();

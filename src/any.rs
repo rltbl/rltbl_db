@@ -15,8 +15,9 @@
 /// }
 /// ```
 use crate::{
-    core::{CachingStrategy, DbError, DbQuery, FromDbRows, IntoDbRows, IntoParams},
+    core::{CachingStrategy, DbError, DbQuery},
     db_kind::DbKind,
+    db_value::{FromDbRows, IntoDbRows, IntoParams},
 };
 
 #[cfg(feature = "rusqlite")]
@@ -294,10 +295,8 @@ impl DbQuery for AnyPool {
 mod tests {
     use super::*;
     use crate::{
-        core::{
-            CachingStrategy, ColumnMap, DbRow, ParamValue, QUERY_CACHE_TABLE, StringRow,
-            TABLE_CACHE_TABLE,
-        },
+        core::{CachingStrategy, QUERY_CACHE_TABLE, TABLE_CACHE_TABLE},
+        db_value::{ColumnMap, DbRow, DbValue, StringRow},
         memory::{
             clear_memory_query_cache, clear_memory_table_cache, clear_meta_cache,
             get_memory_query_cache_contents, get_memory_table_cache_contents,
@@ -374,11 +373,11 @@ mod tests {
             string_rows
         );
 
-        let row = pool.query_row(&select_sql, &["foo"]).await.unwrap();
-        assert_eq!(row, db_row! {"value".into() => ParamValue::from("foo")});
+        let row: DbRow = pool.query_row(&select_sql, &["foo"]).await.unwrap();
+        assert_eq!(row, db_row! {"value".into() => DbValue::from("foo")});
 
         let rows: Vec<DbRow> = pool.query(&select_sql, &["foo"]).await.unwrap();
-        assert_eq!(rows, [db_row! {"value".into() => ParamValue::from("foo")}]);
+        assert_eq!(rows, [db_row! {"value".into() => DbValue::from("foo")}]);
 
         // Clean up:
         pool.drop_table("test_table_text").await.unwrap();
@@ -497,11 +496,11 @@ mod tests {
         let strings = pool.query_strings(&select_sql, &[1.0_f64]).await.unwrap();
         assert_eq!(vec!["1.05".to_owned()], strings);
 
-        let row = pool.query_row(&select_sql, &[1.0_f64]).await.unwrap();
-        assert_eq!(row, db_row! {"value".into() => ParamValue::from(1.05)});
+        let row: DbRow = pool.query_row(&select_sql, &[1.0_f64]).await.unwrap();
+        assert_eq!(row, db_row! {"value".into() => DbValue::from(1.05)});
 
         let rows: Vec<DbRow> = pool.query(&select_sql, &[1.0_f64]).await.unwrap();
-        assert_eq!(rows, [db_row! {"value".into() => ParamValue::from(1.05)}]);
+        assert_eq!(rows, [db_row! {"value".into() => DbValue::from(1.05)}]);
 
         // FLOAT4
         pool.execute_batch(&format!(
@@ -612,23 +611,23 @@ mod tests {
         );
         let params = params!["foo", (), 1.0_f64, 0_i64, true, dec!(0.999)];
 
-        let row = pool.query_row(&select_sql, params.clone()).await.unwrap();
+        let row: DbRow = pool.query_row(&select_sql, params.clone()).await.unwrap();
         assert_eq!(
             row,
             db_row! {
-                "text_value".into() => ParamValue::from("foo"),
-                "alt_text_value".into() => ParamValue::Null,
-                "float_value".into() => ParamValue::from(1.05),
-                "alt_float_value".into() => ParamValue::Null,
-                "int_value".into() => ParamValue::from(1_i64),
-                "alt_int_value".into() => ParamValue::Null,
+                "text_value".into() => DbValue::from("foo"),
+                "alt_text_value".into() => DbValue::Null,
+                "float_value".into() => DbValue::from(1.05),
+                "alt_float_value".into() => DbValue::Null,
+                "int_value".into() => DbValue::from(1_i64),
+                "alt_int_value".into() => DbValue::Null,
                 "bool_value".into() => match pool.kind() {
-                    DbKind::SQLite => ParamValue::from(1_i64),
-                    DbKind::PostgreSQL => ParamValue::from(true),
+                    DbKind::SQLite => DbValue::from(1_i64),
+                    DbKind::PostgreSQL => DbValue::from(true),
                 },
-                "alt_bool_value".into() => ParamValue::Null,
-                "numeric_value".into() => ParamValue::from(1_i64),
-                "alt_numeric_value".into() => ParamValue::Null,
+                "alt_bool_value".into() => DbValue::Null,
+                "numeric_value".into() => DbValue::from(1_i64),
+                "alt_numeric_value".into() => DbValue::Null,
             }
         );
 
@@ -636,19 +635,19 @@ mod tests {
         assert_eq!(
             rows,
             [db_row! {
-                "text_value".into() => ParamValue::from("foo"),
-                "alt_text_value".into() => ParamValue::Null,
-                "float_value".into() => ParamValue::from(1.05),
-                "alt_float_value".into() => ParamValue::Null,
-                "int_value".into() => ParamValue::from(1_i64),
-                "alt_int_value".into() => ParamValue::Null,
+                "text_value".into() => DbValue::from("foo"),
+                "alt_text_value".into() => DbValue::Null,
+                "float_value".into() => DbValue::from(1.05),
+                "alt_float_value".into() => DbValue::Null,
+                "int_value".into() => DbValue::from(1_i64),
+                "alt_int_value".into() => DbValue::Null,
                 "bool_value".into() => match pool.kind() {
-                    DbKind::SQLite => ParamValue::from(1_i64),
-                    DbKind::PostgreSQL => ParamValue::from(true),
+                    DbKind::SQLite => DbValue::from(1_i64),
+                    DbKind::PostgreSQL => DbValue::from(true),
                 },
-                "alt_bool_value".into() => ParamValue::Null,
-                "numeric_value".into() => ParamValue::from(1_i64),
-                "alt_numeric_value".into() => ParamValue::Null,
+                "alt_bool_value".into() => DbValue::Null,
+                "numeric_value".into() => DbValue::from(1_i64),
+                "alt_numeric_value".into() => DbValue::Null,
             }]
         );
 
@@ -816,12 +815,12 @@ mod tests {
             "test_insert",
             &["text_value", "int_value", "bool_value"],
             &[
-                &db_row! {"text_value".into() => ParamValue::from("TEXT")},
+                &db_row! {"text_value".into() => DbValue::from("TEXT")},
                 &db_row! {
-                    "int_value".into() => ParamValue::from(1_i64),
+                    "int_value".into() => DbValue::from(1_i64),
                     "bool_value".into() => match pool.kind() {
-                        DbKind::SQLite => ParamValue::from(1_i64),
-                        DbKind::PostgreSQL => ParamValue::from(true),
+                        DbKind::SQLite => DbValue::from(1_i64),
+                        DbKind::PostgreSQL => DbValue::from(true),
                     },
                 },
             ],
@@ -838,20 +837,20 @@ mod tests {
             rows,
             [
                 db_row! {
-                    "text_value".into() => ParamValue::from("TEXT"),
-                    "alt_text_value".into() => ParamValue::Null,
-                    "float_value".into() => ParamValue::Null,
-                    "int_value".into() => ParamValue::Null,
-                    "bool_value".into() => ParamValue::Null,
+                    "text_value".into() => DbValue::from("TEXT"),
+                    "alt_text_value".into() => DbValue::Null,
+                    "float_value".into() => DbValue::Null,
+                    "int_value".into() => DbValue::Null,
+                    "bool_value".into() => DbValue::Null,
                 },
                 db_row! {
-                    "text_value".into() => ParamValue::Null,
-                    "alt_text_value".into() => ParamValue::Null,
-                    "float_value".into() => ParamValue::Null,
-                    "int_value".into() => ParamValue::from(1_i64),
+                    "text_value".into() => DbValue::Null,
+                    "alt_text_value".into() => DbValue::Null,
+                    "float_value".into() => DbValue::Null,
+                    "int_value".into() => DbValue::from(1_i64),
                     "bool_value".into() => match pool.kind() {
-                        DbKind::SQLite => ParamValue::from(1_i64),
-                        DbKind::PostgreSQL => ParamValue::from(true),
+                        DbKind::SQLite => DbValue::from(1_i64),
+                        DbKind::PostgreSQL => DbValue::from(true),
                     },
                 }
             ]
@@ -897,10 +896,10 @@ mod tests {
                 "test_insert_returning",
                 &["text_value", "int_value", "bool_value"],
                 &[
-                    &db_row! {"text_value".into() => ParamValue::from("TEXT")},
+                    &db_row! {"text_value".into() => DbValue::from("TEXT")},
                     &db_row! {
-                        "int_value".into() => ParamValue::from(1_i64),
-                        "bool_value".into() => ParamValue::from(true)
+                        "int_value".into() => DbValue::from(1_i64),
+                        "bool_value".into() => DbValue::from(true)
                     },
                 ],
                 &[],
@@ -911,20 +910,20 @@ mod tests {
             rows,
             [
                 db_row! {
-                    "text_value".into() => ParamValue::from("TEXT"),
-                    "alt_text_value".into() => ParamValue::Null,
-                    "float_value".into() => ParamValue::Null,
-                    "int_value".into() => ParamValue::Null,
-                    "bool_value".into() => ParamValue::Null,
+                    "text_value".into() => DbValue::from("TEXT"),
+                    "alt_text_value".into() => DbValue::Null,
+                    "float_value".into() => DbValue::Null,
+                    "int_value".into() => DbValue::Null,
+                    "bool_value".into() => DbValue::Null,
                 },
                 db_row! {
-                    "text_value".into() => ParamValue::Null,
-                    "alt_text_value".into() => ParamValue::Null,
-                    "float_value".into() => ParamValue::Null,
-                    "int_value".into() => ParamValue::from(1_i64),
+                    "text_value".into() => DbValue::Null,
+                    "alt_text_value".into() => DbValue::Null,
+                    "float_value".into() => DbValue::Null,
+                    "int_value".into() => DbValue::from(1_i64),
                     "bool_value".into() => match pool.kind() {
-                        DbKind::SQLite => ParamValue::from(1_i64),
-                        DbKind::PostgreSQL => ParamValue::from(true),
+                        DbKind::SQLite => DbValue::from(1_i64),
+                        DbKind::PostgreSQL => DbValue::from(true),
                     }
                 }
             ]
@@ -936,10 +935,10 @@ mod tests {
                 "test_insert_returning",
                 &["text_value", "int_value", "bool_value"],
                 &[
-                    &db_row! {"text_value".into() => ParamValue::from("TEXT")},
+                    &db_row! {"text_value".into() => DbValue::from("TEXT")},
                     &db_row! {
-                        "int_value".into() => ParamValue::from(1_i64),
-                        "bool_value".into() => ParamValue::from(true)
+                        "int_value".into() => DbValue::from(1_i64),
+                        "bool_value".into() => DbValue::from(true)
                     },
                 ],
                 &["int_value", "float_value"],
@@ -950,12 +949,12 @@ mod tests {
             rows,
             [
                 db_row! {
-                    "float_value".into() => ParamValue::Null,
-                    "int_value".into() => ParamValue::Null,
+                    "float_value".into() => DbValue::Null,
+                    "int_value".into() => DbValue::Null,
                 },
                 db_row! {
-                    "float_value".into() => ParamValue::Null,
-                    "int_value".into() => ParamValue::from(1_i64),
+                    "float_value".into() => DbValue::Null,
+                    "int_value".into() => DbValue::from(1_i64),
                 }
             ]
         );
@@ -1093,9 +1092,9 @@ mod tests {
             "test_update",
             &["foo"],
             &[
-                &db_row! {"foo".into() => ParamValue::from(1_i64)},
-                &db_row! {"foo".into() => ParamValue::from(2_i64)},
-                &db_row! {"foo".into() => ParamValue::from(3_i64)},
+                &db_row! {"foo".into() => DbValue::from(1_i64)},
+                &db_row! {"foo".into() => DbValue::from(2_i64)},
+                &db_row! {"foo".into() => DbValue::from(3_i64)},
             ],
         )
         .await
@@ -1106,25 +1105,25 @@ mod tests {
             &["foo", "bar", "car", "dar", "ear"],
             &[
                 &db_row! {
-                    "foo".into() => ParamValue::from(1_i64),
-                    "bar".into() => ParamValue::from(10_i64),
-                    "car".into() => ParamValue::from(11_i64),
-                    "dar".into() => ParamValue::from(12_i64),
-                    "ear".into() => ParamValue::from(13_i64),
+                    "foo".into() => DbValue::from(1_i64),
+                    "bar".into() => DbValue::from(10_i64),
+                    "car".into() => DbValue::from(11_i64),
+                    "dar".into() => DbValue::from(12_i64),
+                    "ear".into() => DbValue::from(13_i64),
                 },
                 &db_row! {
-                    "foo".into() => ParamValue::from(2_i64),
-                    "bar".into() => ParamValue::from(14_i64),
-                    "car".into() => ParamValue::from(15_i64),
-                    "dar".into() => ParamValue::from(16_i64),
-                    "ear".into() => ParamValue::from(17_i64),
+                    "foo".into() => DbValue::from(2_i64),
+                    "bar".into() => DbValue::from(14_i64),
+                    "car".into() => DbValue::from(15_i64),
+                    "dar".into() => DbValue::from(16_i64),
+                    "ear".into() => DbValue::from(17_i64),
                 },
                 &db_row! {
-                    "foo".into() => ParamValue::from(3_i64),
-                    "bar".into() => ParamValue::from(18_i64),
-                    "car".into() => ParamValue::from(19_i64),
-                    "dar".into() => ParamValue::from(20_i64),
-                    "ear".into() => ParamValue::from(21_i64),
+                    "foo".into() => DbValue::from(3_i64),
+                    "bar".into() => DbValue::from(18_i64),
+                    "car".into() => DbValue::from(19_i64),
+                    "dar".into() => DbValue::from(20_i64),
+                    "ear".into() => DbValue::from(21_i64),
                 },
             ],
         )
@@ -1136,25 +1135,25 @@ mod tests {
             rows,
             [
                 db_row! {
-                    "foo".into() => ParamValue::from(1_i64),
-                    "bar".into() => ParamValue::from(10_i64),
-                    "car".into() => ParamValue::from(11_i64),
-                    "dar".into() => ParamValue::from(12_i64),
-                    "ear".into() => ParamValue::from(13_i64),
+                    "foo".into() => DbValue::from(1_i64),
+                    "bar".into() => DbValue::from(10_i64),
+                    "car".into() => DbValue::from(11_i64),
+                    "dar".into() => DbValue::from(12_i64),
+                    "ear".into() => DbValue::from(13_i64),
                 },
                 db_row! {
-                    "foo".into() => ParamValue::from(2_i64),
-                    "bar".into() => ParamValue::from(14_i64),
-                    "car".into() => ParamValue::from(15_i64),
-                    "dar".into() => ParamValue::from(16_i64),
-                    "ear".into() => ParamValue::from(17_i64),
+                    "foo".into() => DbValue::from(2_i64),
+                    "bar".into() => DbValue::from(14_i64),
+                    "car".into() => DbValue::from(15_i64),
+                    "dar".into() => DbValue::from(16_i64),
+                    "ear".into() => DbValue::from(17_i64),
                 },
                 db_row! {
-                    "foo".into() => ParamValue::from(3_i64),
-                    "bar".into() => ParamValue::from(18_i64),
-                    "car".into() => ParamValue::from(19_i64),
-                    "dar".into() => ParamValue::from(20_i64),
-                    "ear".into() => ParamValue::from(21_i64),
+                    "foo".into() => DbValue::from(3_i64),
+                    "bar".into() => DbValue::from(18_i64),
+                    "car".into() => DbValue::from(19_i64),
+                    "dar".into() => DbValue::from(20_i64),
+                    "ear".into() => DbValue::from(21_i64),
                 },
             ]
         );
@@ -1199,16 +1198,16 @@ mod tests {
             &["foo", "bar", "car", "dar", "ear"],
             &[
                 &db_row! {
-                    "foo".into() => ParamValue::from(1_i64),
-                    "bar".into() => ParamValue::from(1_i64)
+                    "foo".into() => DbValue::from(1_i64),
+                    "bar".into() => DbValue::from(1_i64)
                 },
                 &db_row! {
-                    "foo".into() => ParamValue::from(2_i64),
-                    "bar".into() => ParamValue::from(2_i64),
+                    "foo".into() => DbValue::from(2_i64),
+                    "bar".into() => DbValue::from(2_i64),
                 },
                 &db_row! {
-                    "foo".into() => ParamValue::from(3_i64),
-                    "bar".into() => ParamValue::from(3_i64),
+                    "foo".into() => DbValue::from(3_i64),
+                    "bar".into() => DbValue::from(3_i64),
                 },
             ],
         )
@@ -1219,19 +1218,19 @@ mod tests {
             assert!(rows.iter().all(|row| {
                 [
                     db_row! {
-                        "car".into() => ParamValue::from(10_i64),
-                        "dar".into() => ParamValue::from(11_i64),
-                        "ear".into() => ParamValue::from(12_i64),
+                        "car".into() => DbValue::from(10_i64),
+                        "dar".into() => DbValue::from(11_i64),
+                        "ear".into() => DbValue::from(12_i64),
                     },
                     db_row! {
-                        "car".into() => ParamValue::from(13_i64),
-                        "dar".into() => ParamValue::from(14_i64),
-                        "ear".into() => ParamValue::from(15_i64),
+                        "car".into() => DbValue::from(13_i64),
+                        "dar".into() => DbValue::from(14_i64),
+                        "ear".into() => DbValue::from(15_i64),
                     },
                     db_row! {
-                        "car".into() => ParamValue::from(16_i64),
-                        "dar".into() => ParamValue::from(17_i64),
-                        "ear".into() => ParamValue::from(18_i64),
+                        "car".into() => DbValue::from(16_i64),
+                        "dar".into() => DbValue::from(17_i64),
+                        "ear".into() => DbValue::from(18_i64),
                     },
                 ]
                 .contains(&row)
@@ -1245,25 +1244,25 @@ mod tests {
                     &["foo", "bar", "car", "dar", "ear"],
                     &[
                         &db_row! {
-                            "foo".into() => ParamValue::from(1_i64),
-                            "bar".into() => ParamValue::from(1_i64),
-                            "car".into() => ParamValue::from(10_i64),
-                            "dar".into() => ParamValue::from(11_i64),
-                            "ear".into() => ParamValue::from(12_i64),
+                            "foo".into() => DbValue::from(1_i64),
+                            "bar".into() => DbValue::from(1_i64),
+                            "car".into() => DbValue::from(10_i64),
+                            "dar".into() => DbValue::from(11_i64),
+                            "ear".into() => DbValue::from(12_i64),
                         },
                         &db_row! {
-                            "foo".into() => ParamValue::from(2_i64),
-                            "bar".into() => ParamValue::from(2_i64),
-                            "car".into() => ParamValue::from(13_i64),
-                            "dar".into() => ParamValue::from(14_i64),
-                            "ear".into() => ParamValue::from(15_i64),
+                            "foo".into() => DbValue::from(2_i64),
+                            "bar".into() => DbValue::from(2_i64),
+                            "car".into() => DbValue::from(13_i64),
+                            "dar".into() => DbValue::from(14_i64),
+                            "ear".into() => DbValue::from(15_i64),
                         },
                         &db_row! {
-                            "foo".into() => ParamValue::from(3_i64),
-                            "bar".into() => ParamValue::from(3_i64),
-                            "car".into() => ParamValue::from(16_i64),
-                            "dar".into() => ParamValue::from(17_i64),
-                            "ear".into() => ParamValue::from(18_i64),
+                            "foo".into() => DbValue::from(3_i64),
+                            "bar".into() => DbValue::from(3_i64),
+                            "car".into() => DbValue::from(16_i64),
+                            "dar".into() => DbValue::from(17_i64),
+                            "ear".into() => DbValue::from(18_i64),
                         },
                     ],
                     &["car", "dar", "ear"],
@@ -1283,16 +1282,16 @@ mod tests {
             &["foo", "bar"],
             &[
                 &db_row! {
-                    "foo".into() => ParamValue::from(1_i64),
-                    "bar".into() => ParamValue::from(1_i64),
+                    "foo".into() => DbValue::from(1_i64),
+                    "bar".into() => DbValue::from(1_i64),
                 },
                 &db_row! {
-                    "foo".into() => ParamValue::from(2_i64),
-                    "bar".into() => ParamValue::from(2_i64),
+                    "foo".into() => DbValue::from(2_i64),
+                    "bar".into() => DbValue::from(2_i64),
                 },
                 &db_row! {
-                    "foo".into() => ParamValue::from(3_i64),
-                    "bar".into() => ParamValue::from(3_i64),
+                    "foo".into() => DbValue::from(3_i64),
+                    "bar".into() => DbValue::from(3_i64),
                 },
             ],
         )
@@ -1306,25 +1305,25 @@ mod tests {
                     &["foo", "bar", "car", "dar", "ear"],
                     &[
                         &db_row! {
-                            "ear".into() => ParamValue::from(15_i64),
-                            "bar".into() => ParamValue::from(2_i64),
-                            "car".into() => ParamValue::from(13_i64),
-                            "dar".into() => ParamValue::from(14_i64),
-                            "foo".into() => ParamValue::from(2_i64),
+                            "ear".into() => DbValue::from(15_i64),
+                            "bar".into() => DbValue::from(2_i64),
+                            "car".into() => DbValue::from(13_i64),
+                            "dar".into() => DbValue::from(14_i64),
+                            "foo".into() => DbValue::from(2_i64),
                         },
                         &db_row! {
-                            "foo".into() => ParamValue::from(1_i64),
-                            "car".into() => ParamValue::from(10_i64),
-                            "bar".into() => ParamValue::from(1_i64),
-                            "ear".into() => ParamValue::from(12_i64),
-                            "dar".into() => ParamValue::from(11_i64),
+                            "foo".into() => DbValue::from(1_i64),
+                            "car".into() => DbValue::from(10_i64),
+                            "bar".into() => DbValue::from(1_i64),
+                            "ear".into() => DbValue::from(12_i64),
+                            "dar".into() => DbValue::from(11_i64),
                         },
                         &db_row! {
-                            "car".into() => ParamValue::from(16_i64),
-                            "dar".into() => ParamValue::from(17_i64),
-                            "ear".into() => ParamValue::from(18_i64),
-                            "bar".into() => ParamValue::from(3_i64),
-                            "foo".into() => ParamValue::from(3_i64),
+                            "car".into() => DbValue::from(16_i64),
+                            "dar".into() => DbValue::from(17_i64),
+                            "ear".into() => DbValue::from(18_i64),
+                            "bar".into() => DbValue::from(3_i64),
+                            "foo".into() => DbValue::from(3_i64),
                         },
                     ],
                     &["car", "dar", "ear"],
@@ -1341,25 +1340,25 @@ mod tests {
         assert!(rows.iter().all(|row| {
             [
                 db_row! {
-                    "foo".into() => ParamValue::from(1_i64),
-                    "bar".into() => ParamValue::from(1_i64),
-                    "car".into() => ParamValue::from(10_i64),
-                    "dar".into() => ParamValue::from(11_i64),
-                    "ear".into() => ParamValue::from(12_i64),
+                    "foo".into() => DbValue::from(1_i64),
+                    "bar".into() => DbValue::from(1_i64),
+                    "car".into() => DbValue::from(10_i64),
+                    "dar".into() => DbValue::from(11_i64),
+                    "ear".into() => DbValue::from(12_i64),
                 },
                 db_row! {
-                    "foo".into() => ParamValue::from(2_i64),
-                    "bar".into() => ParamValue::from(2_i64),
-                    "car".into() => ParamValue::from(13_i64),
-                    "dar".into() => ParamValue::from(14_i64),
-                    "ear".into() => ParamValue::from(15_i64),
+                    "foo".into() => DbValue::from(2_i64),
+                    "bar".into() => DbValue::from(2_i64),
+                    "car".into() => DbValue::from(13_i64),
+                    "dar".into() => DbValue::from(14_i64),
+                    "ear".into() => DbValue::from(15_i64),
                 },
                 db_row! {
-                    "foo".into() => ParamValue::from(3_i64),
-                    "bar".into() => ParamValue::from(3_i64),
-                    "car".into() => ParamValue::from(16_i64),
-                    "dar".into() => ParamValue::from(17_i64),
-                    "ear".into() => ParamValue::from(18_i64),
+                    "foo".into() => DbValue::from(3_i64),
+                    "bar".into() => DbValue::from(3_i64),
+                    "car".into() => DbValue::from(16_i64),
+                    "dar".into() => DbValue::from(17_i64),
+                    "ear".into() => DbValue::from(18_i64),
                 },
             ]
             .contains(&row)
@@ -1403,9 +1402,9 @@ mod tests {
             "test_upsert",
             &["foo"],
             &[
-                &db_row! {"foo".into() => ParamValue::from(1_i64)},
-                &db_row! {"foo".into() => ParamValue::from(2_i64)},
-                &db_row! {"foo".into() => ParamValue::from(3_i64)},
+                &db_row! {"foo".into() => DbValue::from(1_i64)},
+                &db_row! {"foo".into() => DbValue::from(2_i64)},
+                &db_row! {"foo".into() => DbValue::from(3_i64)},
             ],
         )
         .await
@@ -1416,25 +1415,25 @@ mod tests {
             &["foo", "bar", "car", "dar", "ear"],
             &[
                 &db_row! {
-                    "foo".into() => ParamValue::from(1_i64),
-                    "bar".into() => ParamValue::from(10_i64),
-                    "car".into() => ParamValue::from(11_i64),
-                    "dar".into() => ParamValue::from(12_i64),
-                    "ear".into() => ParamValue::from(13_i64),
+                    "foo".into() => DbValue::from(1_i64),
+                    "bar".into() => DbValue::from(10_i64),
+                    "car".into() => DbValue::from(11_i64),
+                    "dar".into() => DbValue::from(12_i64),
+                    "ear".into() => DbValue::from(13_i64),
                 },
                 &db_row! {
-                    "foo".into() => ParamValue::from(2_i64),
-                    "bar".into() => ParamValue::from(14_i64),
-                    "car".into() => ParamValue::from(15_i64),
-                    "dar".into() => ParamValue::from(16_i64),
-                    "ear".into() => ParamValue::from(17_i64),
+                    "foo".into() => DbValue::from(2_i64),
+                    "bar".into() => DbValue::from(14_i64),
+                    "car".into() => DbValue::from(15_i64),
+                    "dar".into() => DbValue::from(16_i64),
+                    "ear".into() => DbValue::from(17_i64),
                 },
                 &db_row! {
-                    "foo".into() => ParamValue::from(3_i64),
-                    "bar".into() => ParamValue::from(18_i64),
-                    "car".into() => ParamValue::from(19_i64),
-                    "dar".into() => ParamValue::from(20_i64),
-                    "ear".into() => ParamValue::from(21_i64),
+                    "foo".into() => DbValue::from(3_i64),
+                    "bar".into() => DbValue::from(18_i64),
+                    "car".into() => DbValue::from(19_i64),
+                    "dar".into() => DbValue::from(20_i64),
+                    "ear".into() => DbValue::from(21_i64),
                 },
             ],
         )
@@ -1446,25 +1445,25 @@ mod tests {
             rows,
             [
                 db_row! {
-                    "foo".into() => ParamValue::from(1_i64),
-                    "bar".into() => ParamValue::from(10_i64),
-                    "car".into() => ParamValue::from(11_i64),
-                    "dar".into() => ParamValue::from(12_i64),
-                    "ear".into() => ParamValue::from(13_i64),
+                    "foo".into() => DbValue::from(1_i64),
+                    "bar".into() => DbValue::from(10_i64),
+                    "car".into() => DbValue::from(11_i64),
+                    "dar".into() => DbValue::from(12_i64),
+                    "ear".into() => DbValue::from(13_i64),
                 },
                 db_row! {
-                    "foo".into() => ParamValue::from(2_i64),
-                    "bar".into() => ParamValue::from(14_i64),
-                    "car".into() => ParamValue::from(15_i64),
-                    "dar".into() => ParamValue::from(16_i64),
-                    "ear".into() => ParamValue::from(17_i64),
+                    "foo".into() => DbValue::from(2_i64),
+                    "bar".into() => DbValue::from(14_i64),
+                    "car".into() => DbValue::from(15_i64),
+                    "dar".into() => DbValue::from(16_i64),
+                    "ear".into() => DbValue::from(17_i64),
                 },
                 db_row! {
-                    "foo".into() => ParamValue::from(3_i64),
-                    "bar".into() => ParamValue::from(18_i64),
-                    "car".into() => ParamValue::from(19_i64),
-                    "dar".into() => ParamValue::from(20_i64),
-                    "ear".into() => ParamValue::from(21_i64),
+                    "foo".into() => DbValue::from(3_i64),
+                    "bar".into() => DbValue::from(18_i64),
+                    "car".into() => DbValue::from(19_i64),
+                    "dar".into() => DbValue::from(20_i64),
+                    "ear".into() => DbValue::from(21_i64),
                 },
             ]
         );
@@ -1509,16 +1508,16 @@ mod tests {
             &["foo", "bar", "car", "dar", "ear"],
             &[
                 &db_row! {
-                    "foo".into() => ParamValue::from(1_i64),
-                    "bar".into() => ParamValue::from(1_i64),
+                    "foo".into() => DbValue::from(1_i64),
+                    "bar".into() => DbValue::from(1_i64),
                 },
                 &db_row! {
-                    "foo".into() => ParamValue::from(2_i64),
-                    "bar".into() => ParamValue::from(2_i64),
+                    "foo".into() => DbValue::from(2_i64),
+                    "bar".into() => DbValue::from(2_i64),
                 },
                 &db_row! {
-                    "foo".into() => ParamValue::from(3_i64),
-                    "bar".into() => ParamValue::from(3_i64),
+                    "foo".into() => DbValue::from(3_i64),
+                    "bar".into() => DbValue::from(3_i64),
                 },
             ],
         )
@@ -1531,25 +1530,25 @@ mod tests {
                 &["foo", "bar", "car", "dar", "ear"],
                 &[
                     &db_row! {
-                        "foo".into() => ParamValue::from(1_i64),
-                        "bar".into() => ParamValue::from(1_i64),
-                        "car".into() => ParamValue::from(10_i64),
-                        "dar".into() => ParamValue::from(11_i64),
-                        "ear".into() => ParamValue::from(12_i64),
+                        "foo".into() => DbValue::from(1_i64),
+                        "bar".into() => DbValue::from(1_i64),
+                        "car".into() => DbValue::from(10_i64),
+                        "dar".into() => DbValue::from(11_i64),
+                        "ear".into() => DbValue::from(12_i64),
                     },
                     &db_row! {
-                        "foo".into() => ParamValue::from(2_i64),
-                        "bar".into() => ParamValue::from(2_i64),
-                        "car".into() => ParamValue::from(13_i64),
-                        "dar".into() => ParamValue::from(14_i64),
-                        "ear".into() => ParamValue::from(15_i64),
+                        "foo".into() => DbValue::from(2_i64),
+                        "bar".into() => DbValue::from(2_i64),
+                        "car".into() => DbValue::from(13_i64),
+                        "dar".into() => DbValue::from(14_i64),
+                        "ear".into() => DbValue::from(15_i64),
                     },
                     &db_row! {
-                        "foo".into() => ParamValue::from(3_i64),
-                        "bar".into() => ParamValue::from(3_i64),
-                        "car".into() => ParamValue::from(16_i64),
-                        "dar".into() => ParamValue::from(17_i64),
-                        "ear".into() => ParamValue::from(18_i64),
+                        "foo".into() => DbValue::from(3_i64),
+                        "bar".into() => DbValue::from(3_i64),
+                        "car".into() => DbValue::from(16_i64),
+                        "dar".into() => DbValue::from(17_i64),
+                        "ear".into() => DbValue::from(18_i64),
                     },
                 ],
                 &["car", "dar", "ear"],
@@ -1559,19 +1558,19 @@ mod tests {
         assert!(rows.iter().all(|row| {
             [
                 db_row! {
-                    "car".into() => ParamValue::from(10_i64),
-                    "dar".into() => ParamValue::from(11_i64),
-                    "ear".into() => ParamValue::from(12_i64),
+                    "car".into() => DbValue::from(10_i64),
+                    "dar".into() => DbValue::from(11_i64),
+                    "ear".into() => DbValue::from(12_i64),
                 },
                 db_row! {
-                    "car".into() => ParamValue::from(13_i64),
-                    "dar".into() => ParamValue::from(14_i64),
-                    "ear".into() => ParamValue::from(15_i64),
+                    "car".into() => DbValue::from(13_i64),
+                    "dar".into() => DbValue::from(14_i64),
+                    "ear".into() => DbValue::from(15_i64),
                 },
                 db_row! {
-                    "car".into() => ParamValue::from(16_i64),
-                    "dar".into() => ParamValue::from(17_i64),
-                    "ear".into() => ParamValue::from(18_i64),
+                    "car".into() => DbValue::from(16_i64),
+                    "dar".into() => DbValue::from(17_i64),
+                    "ear".into() => DbValue::from(18_i64),
                 },
             ]
             .contains(&row)
@@ -1672,10 +1671,10 @@ mod tests {
             &["value"],
             &[
                 &db_row! {
-                    "value".into() => ParamValue::from("alpha"),
+                    "value".into() => DbValue::from("alpha"),
                 },
                 &db_row! {
-                    "value".into() => ParamValue::from("beta"),
+                    "value".into() => DbValue::from("beta"),
                 },
             ],
         )
@@ -1699,8 +1698,8 @@ mod tests {
         assert_eq!(
             rows,
             vec![
-                db_row! {"value".into() => ParamValue::from("alpha")},
-                db_row! {"value".into() => ParamValue::from("beta")},
+                db_row! {"value".into() => DbValue::from("alpha")},
+                db_row! {"value".into() => DbValue::from("beta")},
             ]
         );
 
@@ -1721,8 +1720,8 @@ mod tests {
         assert_eq!(
             rows,
             vec![
-                db_row! {"value".into() => ParamValue::from("alpha")},
-                db_row! {"value".into() => ParamValue::from("beta")},
+                db_row! {"value".into() => DbValue::from("alpha")},
+                db_row! {"value".into() => DbValue::from("beta")},
             ]
         );
 
@@ -1730,8 +1729,8 @@ mod tests {
             "test_table_caching_1",
             &["value"],
             &[
-                &db_row! {"value".into() => ParamValue::from("gamma")},
-                &db_row! {"value".into() => ParamValue::from("delta")},
+                &db_row! {"value".into() => DbValue::from("gamma")},
+                &db_row! {"value".into() => DbValue::from("delta")},
             ],
         )
         .await
@@ -1760,10 +1759,10 @@ mod tests {
         assert_eq!(
             rows,
             vec![
-                db_row! {"value".into() => ParamValue::from("alpha")},
-                db_row! {"value".into() => ParamValue::from("beta")},
-                db_row! {"value".into() => ParamValue::from("gamma")},
-                db_row! {"value".into() => ParamValue::from("delta")},
+                db_row! {"value".into() => DbValue::from("alpha")},
+                db_row! {"value".into() => DbValue::from("beta")},
+                db_row! {"value".into() => DbValue::from("gamma")},
+                db_row! {"value".into() => DbValue::from("delta")},
             ]
         );
 
@@ -1779,10 +1778,10 @@ mod tests {
         assert_eq!(
             rows,
             vec![
-                db_row! {"value".into() => ParamValue::from("alpha")},
-                db_row! {"value".into() => ParamValue::from("beta")},
-                db_row! {"value".into() => ParamValue::from("gamma")},
-                db_row! {"value".into() => ParamValue::from("delta")},
+                db_row! {"value".into() => DbValue::from("alpha")},
+                db_row! {"value".into() => DbValue::from("beta")},
+                db_row! {"value".into() => DbValue::from("gamma")},
+                db_row! {"value".into() => DbValue::from("delta")},
             ]
         );
 
@@ -1846,12 +1845,12 @@ mod tests {
         assert_eq!(
             rows,
             vec![
-                db_row! {"value".into() => ParamValue::from("alpha")},
-                db_row! {"value".into() => ParamValue::from("beta")},
-                db_row! {"value".into() => ParamValue::from("gamma")},
-                db_row! {"value".into() => ParamValue::from("delta")},
-                db_row! {"value".into() => ParamValue::from("rho")},
-                db_row! {"value".into() => ParamValue::from("sigma")},
+                db_row! {"value".into() => DbValue::from("alpha")},
+                db_row! {"value".into() => DbValue::from("beta")},
+                db_row! {"value".into() => DbValue::from("gamma")},
+                db_row! {"value".into() => DbValue::from("delta")},
+                db_row! {"value".into() => DbValue::from("rho")},
+                db_row! {"value".into() => DbValue::from("sigma")},
             ]
         );
 
@@ -1976,8 +1975,8 @@ mod tests {
             "test_vcaching_table",
             &["foo", "bar"],
             &[&db_row! {
-                "foo".into() => ParamValue::from(2_u64),
-                "bar".into() => ParamValue::from(2_u64),
+                "foo".into() => DbValue::from(2_u64),
+                "bar".into() => DbValue::from(2_u64),
             }],
         )
         .await
@@ -2049,8 +2048,8 @@ mod tests {
             "test_vcaching_table",
             &["foo", "bar"],
             &[&db_row! {
-                "foo".into() => ParamValue::from(27_u64),
-                "bar".into() => ParamValue::from(27_u64),
+                "foo".into() => DbValue::from(27_u64),
+                "bar".into() => DbValue::from(27_u64),
             }],
         )
         .await
