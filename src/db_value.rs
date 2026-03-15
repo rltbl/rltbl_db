@@ -270,9 +270,7 @@ impl TryInto<u64> for DbValue {
             DbValue::BigInteger(number) => {
                 Ok(u64::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
             }
-            _ => Err(DbError::InputError(format!(
-                "Not an unsigned integer: {self:?}"
-            ))),
+            _ => Err(DbError::InputError(format!("Not an integer: {self:?}"))),
         }
     }
 }
@@ -299,9 +297,7 @@ impl TryInto<u32> for DbValue {
             DbValue::BigInteger(number) => {
                 Ok(u32::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
             }
-            _ => Err(DbError::InputError(format!(
-                "Not an unsigned integer: {self:?}"
-            ))),
+            _ => Err(DbError::InputError(format!("Not an integer: {self:?}"))),
         }
     }
 }
@@ -328,9 +324,7 @@ impl TryInto<u16> for DbValue {
             DbValue::BigInteger(number) => {
                 Ok(u16::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
             }
-            _ => Err(DbError::InputError(format!(
-                "Not an unsigned integer: {self:?}"
-            ))),
+            _ => Err(DbError::InputError(format!("Not an integer: {self:?}"))),
         }
     }
 }
