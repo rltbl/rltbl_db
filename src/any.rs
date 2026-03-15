@@ -15,9 +15,9 @@
 /// }
 /// ```
 use crate::{
-    core::{CachingStrategy, DbError, DbQuery},
+    core::{CachingStrategy, DbError, DbQuery, IntoParams},
     db_kind::DbKind,
-    db_value::{FromDbRows, IntoDbRows, IntoParams},
+    db_value::{FromDbRows, IntoDbRows},
 };
 
 #[cfg(feature = "rusqlite")]

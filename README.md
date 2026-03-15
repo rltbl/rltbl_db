@@ -42,9 +42,9 @@ async fn example() -> Result<String, DbError> {
 
 # Differences between PostgreSQL and SQLite
 
-The libsql and rusqlite drivers do not fully support querying special floating point types such as "NaN", "-Infinity", "Infinity", etc. If one tries to query from a column that contains such values the results will be returned as TEXT. It is, possible, however, to insert these special values into a table by hard coding them into the submitted query text (rather than by using dynammic query parameters), by double quoting them. E.g., INSERT INTO foo VALUES ("NaN").
+The [libsql](https://crates.io/crates/libsql) and [deadpool-sqlite](https://crates.io/crates/deadpool-sqlite) drivers do not fully support querying special floating point types such as "NaN", "-Infinity", "Infinity", etc. If one tries to query from a column that contains such values the results will be returned as TEXT. It is, possible, however, to insert these special values into a table by hard coding them into the submitted query text (rather than by using dynammic query parameters), by double quoting them. E.g., `INSERT INTO foo VALUES ("NaN")`.
 
-There are no such issues with PostgreSQL. The following will work irrespective of whether the column `bar` is of floating point or text type (postgresql will be able th determine this implicitly): `INSERT INTO foo (bar) VALUES ('-Infinity')`. And it is also possible to use
+There are no such issues with PostgreSQL. The following will work irrespective of whether the column `bar` is of floating point or text type (postgresql will be able to determine this implicitly): `INSERT INTO foo (bar) VALUES ('-Infinity')`. Note that one must use single- rather than double-quotes for postgresql. It is also possible to use these
 special values as parameters, e.g.,
 
             let float_param = std::f64::from_str("-Infinity").unwrap();

@@ -1,9 +1,9 @@
 //! libsql implementation for rltbl_db.
 
 use crate::{
-    core::{CachingStrategy, DbError, DbQuery},
+    core::{CachingStrategy, DbError, DbQuery, IntoParams, Params},
     db_kind::{DbKind, MAX_PARAMS_SQLITE},
-    db_value::{DbRow, DbValue, FromDbRows, IntoDbRows, IntoParams, Params},
+    db_value::{DbRow, DbValue, FromDbRows, IntoDbRows},
     shared::{EditType, edit},
 };
 use deadpool_libsql::{

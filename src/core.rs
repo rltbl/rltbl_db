@@ -3,7 +3,7 @@
 use crate::{
     db_kind::DbKind,
     db_value::{
-        ColumnMap, DbRow, DbValue, FromDbRow, FromDbRows, IntoDbRows, IntoParams, Params, StringRow,
+        ColumnMap, DbRow, DbValue, FromDbRow, FromDbRows, IntoDbRows, IntoDbValue, StringRow,
     },
     memory::{
         DEFAULT_MEMORY_QUERY_CACHE_SIZE, MemoryQueryCacheKey, MemoryQueryCacheValue,
@@ -124,6 +124,65 @@ impl Display for CachingStrategy {
             CachingStrategy::Trigger => write!(f, "trigger"),
             CachingStrategy::Memory(size) => write!(f, "memory:{size}"),
         }
+    }
+}
+
+/// Query parameters
+#[derive(Debug, Clone)]
+pub enum Params {
+    None,
+    Positional(Vec<DbValue>),
+}
+
+/// Types that implement this trait can be converted into [Params]
+pub trait IntoParams {
+    fn into_params(self) -> Params;
+}
+
+/// (Trivially) implements [IntoParams] for [Params]
+impl IntoParams for Params {
+    fn into_params(self) -> Params {
+        self
+    }
+}
+
+/// Implements [IntoParams] for references to [Params]
+impl IntoParams for &Params {
+    fn into_params(self) -> Params {
+        self.clone()
+    }
+}
+
+/// Implements [IntoParams] for an empty tuple. Always returns [Params::None].
+impl IntoParams for () {
+    fn into_params(self) -> Params {
+        Params::None
+    }
+}
+
+/// Implements [IntoParams] for fixed-length arrays of types that implement [IntoDbValue]
+impl<T: IntoDbValue, const N: usize> IntoParams for [T; N] {
+    fn into_params(self) -> Params {
+        self.into_iter().collect::<Vec<_>>().into_params()
+    }
+}
+
+/// Implements [IntoParams] for references to fixed-length arrays of types that implement
+/// [IntoDbValue]
+impl<T: IntoDbValue + Clone, const N: usize> IntoParams for &[T; N] {
+    fn into_params(self) -> Params {
+        self.iter().cloned().collect::<Vec<_>>().into_params()
+    }
+}
+
+/// Implements [IntoParams] for vectors of types that implement [IntoDbValue]
+impl<T: IntoDbValue> IntoParams for Vec<T> {
+    fn into_params(self) -> Params {
+        let values = self
+            .into_iter()
+            .map(|i| i.into_param_value())
+            .collect::<Vec<_>>();
+        Params::Positional(values)
     }
 }
 
