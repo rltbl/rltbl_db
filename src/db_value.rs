@@ -6,15 +6,67 @@ use serde_json::{Map as JsonMap, json};
 use std::{
     fmt::Display,
     hash::{Hash, Hasher},
+    ops::{Deref, DerefMut},
 };
 
 pub type JsonValue = serde_json::Value;
 pub type JsonRow = JsonMap<String, JsonValue>;
-pub type DbRow = IndexMap<String, DbValue>;
 pub type StringRow = IndexMap<String, String>;
 pub type ColumnMap = IndexMap<String, String>;
 
-/// Value types for [query parameters](DbParams)
+#[derive(Debug, Clone, Deserialize, Serialize, Eq, PartialEq)]
+pub struct DbRow {
+    pub map: IndexMap<String, DbValue>,
+}
+
+impl Deref for DbRow {
+    type Target = IndexMap<String, DbValue>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.map
+    }
+}
+
+impl DerefMut for DbRow {
+    fn deref_mut(&mut self) -> &mut IndexMap<String, DbValue> {
+        &mut self.map
+    }
+}
+
+impl DbRow {
+    pub fn new() -> Self {
+        DbRow {
+            map: IndexMap::new(),
+        }
+    }
+
+    pub fn insert(&mut self, key: String, value: DbValue) {
+        self.map.insert(key, value);
+    }
+
+    pub fn get(&self, key: &str) -> Option<DbValue> {
+        self.map.get(key).cloned()
+    }
+}
+
+impl IntoIterator for DbRow {
+    type Item = (String, DbValue);
+    type IntoIter = indexmap::map::IntoIter<String, DbValue>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.map.into_iter()
+    }
+}
+
+impl FromIterator<(String, DbValue)> for DbRow {
+    fn from_iter<I: IntoIterator<Item = (String, DbValue)>>(iter: I) -> Self {
+        DbRow {
+            map: iter.into_iter().collect(),
+        }
+    }
+}
+
+/// Database Value types
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub enum DbValue {
     /// Represents a NULL value. Can be used with any column type.
@@ -905,6 +957,33 @@ macro_rules! params {
         [$($value.into_db_value()),*]
 
     }};
+}
+
+/// Converts a key value pair into a [DbRow]. The syntax of this macro is identical to
+/// [indexmap]. For example: db_row! { key1 -> value1, key2 -> value2, ... }
+/// The code for this function is adapted from the code for indexmap! (see
+/// <https://docs.rs/indexmap/latest/src/indexmap/macros.rs.html#59-73>
+#[macro_export]
+macro_rules! db_row {
+    ($($key:expr => $value:expr,)+) => {
+        DbRow {
+            map: indexmap::indexmap!($($key => $value),+)
+        }
+    };
+    ($($key:expr => $value:expr),*) => {
+        DbRow {
+            map: {
+                // Note: `stringify!($key)` is just here to consume the repetition,
+                // but we throw away that string literal during constant evaluation.
+                const CAP: usize = <[()]>::len(&[$({ stringify!($key); }),*]);
+                let mut map = indexmap::IndexMap::with_capacity(CAP);
+                $(
+                    map.insert($key, $value);
+                )*
+                    map
+            }
+        }
+    };
 }
 
 #[cfg(test)]

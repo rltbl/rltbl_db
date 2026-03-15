@@ -414,8 +414,7 @@ impl DbQuery for RusqlitePool {
 mod tests {
     use super::*;
 
-    use crate::params;
-    use indexmap::indexmap as db_row;
+    use crate::{db_row, params};
 
     #[tokio::test]
     async fn test_aliases_and_builtin_functions() {

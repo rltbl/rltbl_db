@@ -608,7 +608,7 @@ pub trait DbQuery {
                 let rows: Vec<DbRow> = self.query_no_cache(&sql, &[&table_param]).await?;
                 match rows.first() {
                     Some(row) => match row.get("last_verified") {
-                        Some(value) if *value == DbValue::Null => Ok(0),
+                        Some(value) if value == DbValue::Null => Ok(0),
                         Some(value) => Ok(value.try_into()?),
                         None => Err(DbError::DataError(format!(
                             "No 'last_verified' found in row: {row:?}"

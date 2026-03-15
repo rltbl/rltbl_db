@@ -420,8 +420,7 @@ impl DbQuery for TokioPostgresPool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::params;
-    use indexmap::indexmap as db_row;
+    use crate::{db_row, params};
     use pretty_assertions::assert_eq;
     use std::str::FromStr;
 

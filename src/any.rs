@@ -296,6 +296,7 @@ mod tests {
     use super::*;
     use crate::{
         core::{CachingStrategy, QUERY_CACHE_TABLE, TABLE_CACHE_TABLE},
+        db_row,
         db_value::{ColumnMap, DbRow, DbValue, StringRow},
         memory::{
             clear_memory_query_cache, clear_memory_table_cache, clear_meta_cache,
@@ -303,7 +304,6 @@ mod tests {
         },
         params,
     };
-    use indexmap::indexmap as db_row;
     use rand::{
         SeedableRng as _,
         distr::{Distribution as _, Uniform},
