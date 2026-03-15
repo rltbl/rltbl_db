@@ -1,9 +1,9 @@
 //! libsql implementation for rltbl_db.
 
 use crate::{
-    core::{CachingStrategy, DbError, DbQuery, IntoParams, Params},
+    core::{CachingStrategy, DbError, DbQuery},
     db_kind::{DbKind, MAX_PARAMS_SQLITE},
-    db_value::{DbRow, DbValue, FromDbRows, IntoDbRows},
+    db_value::{DbParams, DbRow, DbValue, FromDbRows, IntoDbParams, IntoDbRows},
     shared::{EditType, edit},
 };
 use deadpool_libsql::{
@@ -32,13 +32,13 @@ impl TryFrom<Value> for DbValue {
     }
 }
 
-impl TryFrom<Params> for Vec<Value> {
+impl TryFrom<DbParams> for Vec<Value> {
     type Error = DbError;
 
-    fn try_from(item: Params) -> Result<Self, DbError> {
+    fn try_from(item: DbParams) -> Result<Self, DbError> {
         match item {
-            Params::None => Ok(vec![]),
-            Params::Positional(pvalues) => {
+            DbParams::None => Ok(vec![]),
+            DbParams::Positional(pvalues) => {
                 let mut values = vec![];
                 for pvalue in pvalues {
                     match pvalue {
@@ -140,7 +140,7 @@ impl DbQuery for LibSQLPool {
     async fn query_no_cache<T: FromDbRows>(
         &self,
         sql: &str,
-        params: impl IntoParams + Send,
+        params: impl IntoDbParams + Send,
     ) -> Result<T, DbError> {
         let conn = self
             .pool
@@ -148,7 +148,7 @@ impl DbQuery for LibSQLPool {
             .await
             .map_err(|err| DbError::ConnectError(format!("Error getting from pool: {err}")))?;
 
-        let params: Vec<Value> = params.into_params().try_into()?;
+        let params: Vec<Value> = params.into_db_params().try_into()?;
         let mut rows = conn
             .query(sql, params)
             .await

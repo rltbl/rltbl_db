@@ -1,9 +1,9 @@
 //! rusqlite implementation for rltbl_db.
 
 use crate::{
-    core::{CachingStrategy, DbError, DbQuery, IntoParams, Params},
+    core::{CachingStrategy, DbError, DbQuery},
     db_kind::{DbKind, MAX_PARAMS_SQLITE},
-    db_value::{DbRow, DbValue, FromDbRows, IntoDbRows},
+    db_value::{DbParams, DbRow, DbValue, FromDbRows, IntoDbParams, IntoDbRows},
     shared::{EditType, edit},
 };
 use deadpool_sqlite::{
@@ -20,11 +20,11 @@ use std::str::from_utf8;
 /// Query a database using the given prepared statement and parameters.
 fn query_prepared(
     stmt: &mut Statement<'_>,
-    params: impl IntoParams + Send,
+    params: impl IntoDbParams + Send,
 ) -> Result<Vec<DbRow>, DbError> {
-    match params.into_params() {
-        Params::None => (),
-        Params::Positional(params) => {
+    match params.into_db_params() {
+        DbParams::None => (),
+        DbParams::Positional(params) => {
             for (i, param) in params.iter().enumerate() {
                 match param {
                     DbValue::Text(text) => {
@@ -251,7 +251,7 @@ impl DbQuery for RusqlitePool {
     async fn query_no_cache<T: FromDbRows>(
         &self,
         sql: &str,
-        params: impl IntoParams + Send,
+        params: impl IntoDbParams + Send,
     ) -> Result<T, DbError> {
         let rows = {
             let conn =
@@ -259,7 +259,7 @@ impl DbQuery for RusqlitePool {
                     DbError::ConnectError(format!("Error getting from pool: {err}"))
                 })?;
             let sql_string = sql.to_string();
-            let params: Params = params.into_params();
+            let params: DbParams = params.into_db_params();
             conn.interact(move |conn| {
                 let mut stmt = conn.prepare(&sql_string).map_err(|err| {
                     DbError::DatabaseError(format!("Error preparing statement: {err}"))

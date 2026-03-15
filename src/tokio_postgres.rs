@@ -1,9 +1,9 @@
 //! tokio-postgres implementation for rltbl_db.
 
 use crate::{
-    core::{CachingStrategy, DbError, DbQuery, IntoParams, Params},
+    core::{CachingStrategy, DbError, DbQuery},
     db_kind::{DbKind, MAX_PARAMS_POSTGRES},
-    db_value::{DbRow, DbValue, FromDbRows, IntoDbRows},
+    db_value::{DbParams, DbRow, DbValue, FromDbRows, IntoDbParams, IntoDbRows},
     shared::{EditType, edit},
 };
 
@@ -180,9 +180,9 @@ impl DbQuery for TokioPostgresPool {
     async fn query_no_cache<T: FromDbRows>(
         &self,
         sql: &str,
-        into_params: impl IntoParams + Send,
+        into_db_params: impl IntoDbParams + Send,
     ) -> Result<T, DbError> {
-        let into_params = into_params.into_params();
+        let into_db_params = into_db_params.into_db_params();
         let client =
             self.pool.get().await.map_err(|err| {
                 DbError::ConnectError(format!("Unable to get from pool: {err:?}"))
@@ -198,11 +198,11 @@ impl DbQuery for TokioPostgresPool {
 
         let mut params: Vec<Box<dyn ToSql + Sync + Send>> = Vec::new();
         let gen_err = |param: &DbValue, sql_type: &str| -> String {
-            format!("Param {param:?} is wrong type for {sql_type} in query: {sql}")
+            format!("DbParam {param:?} is wrong type for {sql_type} in query: {sql}")
         };
-        match into_params {
-            Params::None => (),
-            Params::Positional(plist) => {
+        match into_db_params {
+            DbParams::None => (),
+            DbParams::Positional(plist) => {
                 for (i, param) in plist.iter().enumerate() {
                     let pg_type = &param_pg_types[i];
                     match pg_type {

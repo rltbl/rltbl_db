@@ -15,9 +15,9 @@
 /// }
 /// ```
 use crate::{
-    core::{CachingStrategy, DbError, DbQuery, IntoParams},
+    core::{CachingStrategy, DbError, DbQuery},
     db_kind::DbKind,
-    db_value::{FromDbRows, IntoDbRows},
+    db_value::{FromDbRows, IntoDbParams, IntoDbRows},
 };
 
 #[cfg(feature = "rusqlite")]
@@ -173,7 +173,7 @@ impl DbQuery for AnyPool {
     async fn query_no_cache<T: FromDbRows>(
         &self,
         sql: &str,
-        params: impl IntoParams + Send,
+        params: impl IntoDbParams + Send,
     ) -> Result<T, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
