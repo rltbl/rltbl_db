@@ -14,10 +14,11 @@ pub type DbRow = IndexMap<String, DbValue>;
 pub type StringRow = IndexMap<String, String>;
 pub type ColumnMap = IndexMap<String, String>;
 
-/// Value types for [query parameters](DbParams)
-#[derive(Debug, Clone, Deserialize, Serialize)]
+/// Value types for [query parameters](DbParams) and [rows](DbRow)
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub enum DbValue {
     /// Represents a NULL value. Can be used with any column type.
+    #[default]
     Null,
     /// Use with BOOL column types or equivalent.
     Boolean(bool),
