@@ -14,58 +14,6 @@ pub type JsonRow = JsonMap<String, JsonValue>;
 pub type StringRow = IndexMap<String, String>;
 pub type ColumnMap = IndexMap<String, String>;
 
-#[derive(Debug, Clone, Deserialize, Serialize, Eq, PartialEq)]
-pub struct DbRow {
-    pub map: IndexMap<String, DbValue>,
-}
-
-impl Deref for DbRow {
-    type Target = IndexMap<String, DbValue>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.map
-    }
-}
-
-impl DerefMut for DbRow {
-    fn deref_mut(&mut self) -> &mut IndexMap<String, DbValue> {
-        &mut self.map
-    }
-}
-
-impl DbRow {
-    pub fn new() -> Self {
-        DbRow {
-            map: IndexMap::new(),
-        }
-    }
-
-    pub fn insert(&mut self, key: String, value: DbValue) {
-        self.map.insert(key, value);
-    }
-
-    pub fn get(&self, key: &str) -> Option<DbValue> {
-        self.map.get(key).cloned()
-    }
-}
-
-impl IntoIterator for DbRow {
-    type Item = (String, DbValue);
-    type IntoIter = indexmap::map::IntoIter<String, DbValue>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.map.into_iter()
-    }
-}
-
-impl FromIterator<(String, DbValue)> for DbRow {
-    fn from_iter<I: IntoIterator<Item = (String, DbValue)>>(iter: I) -> Self {
-        DbRow {
-            map: iter.into_iter().collect(),
-        }
-    }
-}
-
 /// Database Value types
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub enum DbValue {
@@ -809,6 +757,61 @@ impl<T: IntoDbValue> IntoDbParams for Vec<T> {
             .map(|i| i.into_db_value())
             .collect::<Vec<_>>();
         DbParams::Positional(values)
+    }
+}
+
+// Database rows
+
+/// A row of database values indexed by column name.
+#[derive(Debug, Clone, Deserialize, Serialize, Eq, PartialEq)]
+pub struct DbRow {
+    pub map: IndexMap<String, DbValue>,
+}
+
+impl Deref for DbRow {
+    type Target = IndexMap<String, DbValue>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.map
+    }
+}
+
+impl DerefMut for DbRow {
+    fn deref_mut(&mut self) -> &mut IndexMap<String, DbValue> {
+        &mut self.map
+    }
+}
+
+impl DbRow {
+    pub fn new() -> Self {
+        DbRow {
+            map: IndexMap::new(),
+        }
+    }
+
+    pub fn insert(&mut self, key: String, value: DbValue) {
+        self.map.insert(key, value);
+    }
+
+    pub fn get(&self, key: &str) -> Option<DbValue> {
+        self.map.get(key).cloned()
+    }
+}
+
+impl IntoIterator for DbRow {
+    type Item = (String, DbValue);
+    type IntoIter = indexmap::map::IntoIter<String, DbValue>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.map.into_iter()
+    }
+}
+
+impl FromIterator<(String, DbValue)> for DbRow {
+    fn from_iter<I: IntoIterator<Item = (String, DbValue)>>(iter: I) -> Self {
+        DbRow {
+            map: iter.into_iter().collect(),
+        }
     }
 }
 
