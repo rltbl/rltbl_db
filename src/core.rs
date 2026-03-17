@@ -3,7 +3,8 @@
 use crate::{
     db_kind::DbKind,
     db_value::{
-        ColumnMap, DbRow, DbValue, FromDbRow, FromDbRows, IntoDbRows, IntoParams, Params, StringRow,
+        ColumnMap, DbParams, DbRow, DbValue, FromDbRow, FromDbRows, IntoDbParams, IntoDbRows,
+        StringRow,
     },
     memory::{
         DEFAULT_MEMORY_QUERY_CACHE_SIZE, MemoryQueryCacheKey, MemoryQueryCacheValue,
@@ -347,7 +348,7 @@ pub trait DbQuery {
         &self,
         tables: &[&str],
         statement: &str,
-        params: &Params,
+        params: &DbParams,
     ) -> Result<(), DbError> {
         match self.get_caching_strategy() {
             CachingStrategy::Memory(_) => {
@@ -627,11 +628,11 @@ pub trait DbQuery {
         &self,
         tables: &[&str],
         sql: &str,
-        params: impl IntoParams + Send + Copy + Sync,
+        params: impl IntoDbParams + Send + Copy + Sync,
     ) -> Result<T, DbError> {
         let db_cache = async |tables: &[&str],
                               sql: &str,
-                              params: &Params|
+                              params: &DbParams|
                -> Result<Vec<DbRow>, DbError> {
             // Look in the cache to see if there is an entry corresponding to the given SQL
             // string for the given tables and parameters. If so, return the data from the
@@ -655,8 +656,8 @@ pub trait DbQuery {
                     .join(", ")
             );
             let params_param = match params {
-                Params::None => "[]".to_string(),
-                Params::Positional(params) => {
+                DbParams::None => "[]".to_string(),
+                DbParams::Positional(params) => {
                     let params = params.iter().map(|p| p.into()).collect::<Vec<String>>();
                     format!("[{}]", params.join(", "))
                 }
@@ -714,10 +715,10 @@ pub trait DbQuery {
 
         let mem_cache = async |tables: &[&str],
                                sql: &str,
-                               params: &Params,
+                               params: &DbParams,
                                cache_size: usize|
                -> Result<Vec<DbRow>, DbError> {
-            let params = &params.into_params();
+            let params = &params.into_db_params();
             let mem_key = MemoryQueryCacheKey {
                 tables: format!(
                     "[{}]",
@@ -783,7 +784,7 @@ pub trait DbQuery {
             CachingStrategy::TruncateAll | CachingStrategy::Truncate => {
                 self.ensure_cache_tables_exist().await?;
                 self.update_cached_views(tables).await?;
-                let rows: Vec<DbRow> = db_cache(tables, sql, &params.into_params()).await?;
+                let rows: Vec<DbRow> = db_cache(tables, sql, &params.into_db_params()).await?;
                 Ok(FromDbRows::from(rows))
             }
             CachingStrategy::Trigger => {
@@ -804,12 +805,12 @@ pub trait DbQuery {
                 for view in &views {
                     self.ensure_caching_triggers_exist_for_view(view).await?;
                 }
-                let rows: Vec<DbRow> = db_cache(&tables, sql, &params.into_params()).await?;
+                let rows: Vec<DbRow> = db_cache(&tables, sql, &params.into_db_params()).await?;
                 Ok(FromDbRows::from(rows))
             }
             CachingStrategy::Memory(cache_size) => {
                 self.update_cached_views(tables).await?;
-                let rows = mem_cache(tables, sql, &params.into_params(), cache_size).await?;
+                let rows = mem_cache(tables, sql, &params.into_db_params(), cache_size).await?;
                 Ok(FromDbRows::from(rows))
             }
         }
@@ -864,10 +865,10 @@ pub trait DbQuery {
     }
 
     /// Execute a SQL command, returning nothing.
-    async fn execute(&self, sql: &str, params: impl IntoParams + Send) -> Result<(), DbError> {
-        let params = params.into_params();
+    async fn execute(&self, sql: &str, params: impl IntoDbParams + Send) -> Result<(), DbError> {
+        let params = params.into_db_params();
         let _: Vec<DbRow> = match params {
-            Params::None => self.query(sql, ()).await?,
+            DbParams::None => self.query(sql, ()).await?,
             _ => self.query(sql, params).await?,
         };
         Ok(())
@@ -878,11 +879,11 @@ pub trait DbQuery {
     async fn execute_no_cache(
         &self,
         sql: &str,
-        params: impl IntoParams + Send,
+        params: impl IntoDbParams + Send,
     ) -> Result<(), DbError> {
-        let params = params.into_params();
+        let params = params.into_db_params();
         let _: Vec<DbRow> = match params {
-            Params::None => self.query_no_cache(sql, ()).await?,
+            DbParams::None => self.query_no_cache(sql, ()).await?,
             _ => self.query_no_cache(sql, params).await?,
         };
         Ok(())
@@ -895,7 +896,7 @@ pub trait DbQuery {
     async fn query<T: FromDbRows + Send>(
         &self,
         sql: &str,
-        params: impl IntoParams + Send,
+        params: impl IntoDbParams + Send,
     ) -> Result<T, DbError> {
         let rows = self.query_no_cache(sql, params).await?;
         if self.get_cache_aware_query() {
@@ -910,14 +911,14 @@ pub trait DbQuery {
     fn query_no_cache<T: FromDbRows>(
         &self,
         sql: &str,
-        params: impl IntoParams + Send,
+        params: impl IntoDbParams + Send,
     ) -> impl Future<Output = Result<T, DbError>> + Send;
 
     /// Execute a SQL command, returning a single row.
     async fn query_row<T: FromDbRow>(
         &self,
         sql: &str,
-        params: impl IntoParams + Send,
+        params: impl IntoDbParams + Send,
     ) -> Result<T, DbError> {
         let rows: Vec<DbRow> = self.query(&sql, params).await?;
         if rows.len() > 1 {
@@ -935,7 +936,7 @@ pub trait DbQuery {
     async fn query_value(
         &self,
         sql: &str,
-        params: impl IntoParams + Send,
+        params: impl IntoDbParams + Send,
     ) -> Result<DbValue, DbError> {
         let row: DbRow = self.query_row(sql, params).await?;
         if row.len() > 1 {
@@ -953,7 +954,7 @@ pub trait DbQuery {
     async fn query_string(
         &self,
         sql: &str,
-        params: impl IntoParams + Send,
+        params: impl IntoDbParams + Send,
     ) -> Result<String, DbError> {
         let value = self.query_value(sql, params).await?;
         Ok(value.into())
@@ -963,7 +964,7 @@ pub trait DbQuery {
     async fn query_strings(
         &self,
         sql: &str,
-        params: impl IntoParams + Send,
+        params: impl IntoDbParams + Send,
     ) -> Result<Vec<String>, DbError> {
         let rows: Vec<DbRow> = self.query(sql, params).await?;
         rows.iter()
@@ -978,7 +979,7 @@ pub trait DbQuery {
     async fn query_string_row(
         &self,
         sql: &str,
-        params: impl IntoParams + Send,
+        params: impl IntoDbParams + Send,
     ) -> Result<StringRow, DbError> {
         let row: DbRow = self.query_row(sql, params).await?;
         Ok(row
@@ -991,26 +992,26 @@ pub trait DbQuery {
     async fn query_string_rows(
         &self,
         sql: &str,
-        params: impl IntoParams + Send,
+        params: impl IntoDbParams + Send,
     ) -> Result<Vec<StringRow>, DbError> {
         let rows: Vec<DbRow> = self.query(sql, params).await?;
         Ok(<Vec<StringRow> as FromDbRows>::from(rows))
     }
 
     /// Execute a SQL command, returning a single unsigned integer.
-    async fn query_u64(&self, sql: &str, params: impl IntoParams + Send) -> Result<u64, DbError> {
+    async fn query_u64(&self, sql: &str, params: impl IntoDbParams + Send) -> Result<u64, DbError> {
         let value = self.query_value(sql, params).await?;
         Ok(value.try_into()?)
     }
 
     /// Execute a SQL command, returning a single signed integer.
-    async fn query_i64(&self, sql: &str, params: impl IntoParams + Send) -> Result<i64, DbError> {
+    async fn query_i64(&self, sql: &str, params: impl IntoDbParams + Send) -> Result<i64, DbError> {
         let value = self.query_value(sql, params).await?;
         Ok(value.try_into()?)
     }
 
     /// Execute a SQL command, returning a single float.
-    async fn query_f64(&self, sql: &str, params: impl IntoParams + Send) -> Result<f64, DbError> {
+    async fn query_f64(&self, sql: &str, params: impl IntoDbParams + Send) -> Result<f64, DbError> {
         let value = self.query_value(sql, params).await?;
         Ok(value.try_into()?)
     }

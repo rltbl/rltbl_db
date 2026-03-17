@@ -14,10 +14,11 @@ pub type DbRow = IndexMap<String, DbValue>;
 pub type StringRow = IndexMap<String, String>;
 pub type ColumnMap = IndexMap<String, String>;
 
-/// Value types for [query parameters](Params)
-#[derive(Debug, Clone, Deserialize, Serialize)]
+/// Value types for [query parameters](DbParams) and [rows](DbRow)
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub enum DbValue {
     /// Represents a NULL value. Can be used with any column type.
+    #[default]
     Null,
     /// Use with BOOL column types or equivalent.
     Boolean(bool),
@@ -35,6 +36,98 @@ pub enum DbValue {
     Numeric(Decimal),
     /// Use with TEXT and VARCHAR column types or equivalent.
     Text(String),
+}
+
+impl DbValue {
+    pub fn is_null(&self) -> bool {
+        self.as_null().is_some()
+    }
+
+    pub fn is_bool(&self) -> bool {
+        self.as_bool().is_some()
+    }
+
+    pub fn is_i16(&self) -> bool {
+        self.as_i16().is_some()
+    }
+
+    pub fn is_i32(&self) -> bool {
+        self.as_i32().is_some()
+    }
+
+    pub fn is_i64(&self) -> bool {
+        self.as_i64().is_some()
+    }
+
+    pub fn is_f32(&self) -> bool {
+        self.as_f32().is_some()
+    }
+
+    pub fn is_f64(&self) -> bool {
+        self.as_f64().is_some()
+    }
+
+    pub fn is_decimal(&self) -> bool {
+        self.as_decimal().is_some()
+    }
+
+    pub fn is_string(&self) -> bool {
+        self.as_str().is_some()
+    }
+
+    pub fn as_null(&self) -> Option<()> {
+        self.try_into().ok()
+    }
+
+    pub fn as_bool(&self) -> Option<bool> {
+        self.try_into().ok()
+    }
+
+    pub fn as_i16(&self) -> Option<i16> {
+        self.try_into().ok()
+    }
+
+    pub fn as_i32(&self) -> Option<i32> {
+        self.try_into().ok()
+    }
+
+    pub fn as_i64(&self) -> Option<i64> {
+        self.try_into().ok()
+    }
+
+    pub fn as_f32(&self) -> Option<f32> {
+        self.try_into().ok()
+    }
+
+    pub fn as_f64(&self) -> Option<f64> {
+        self.try_into().ok()
+    }
+
+    pub fn as_decimal(&self) -> Option<Decimal> {
+        self.try_into().ok()
+    }
+
+    /// Note that db_value.as_str() and db_value.to_string() differ in more than just their
+    /// return type. The latter will format db_value as a string regardless of its type.
+    /// This method returns a string slice only if the underlying type is [DbValue::Text].
+    pub fn as_str(&self) -> Option<&str> {
+        match self {
+            DbValue::Text(txt) => Some(txt),
+            _ => None,
+        }
+    }
+
+    pub fn as_u16(&self) -> Option<u16> {
+        self.try_into().ok()
+    }
+
+    pub fn as_u32(&self) -> Option<u32> {
+        self.try_into().ok()
+    }
+
+    pub fn as_u64(&self) -> Option<u64> {
+        self.try_into().ok()
+    }
 }
 
 impl Hash for DbValue {
@@ -124,6 +217,25 @@ impl Into<String> for &DbValue {
     }
 }
 
+impl TryInto<()> for DbValue {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<(), DbError> {
+        match self {
+            DbValue::Null => Ok(()),
+            _ => Err(DbError::InputError(format!("Not a Null: {self:?}"))),
+        }
+    }
+}
+
+impl TryInto<()> for &DbValue {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<(), DbError> {
+        self.clone().try_into()
+    }
+}
+
 impl TryInto<u64> for DbValue {
     type Error = DbError;
 
@@ -138,9 +250,7 @@ impl TryInto<u64> for DbValue {
             DbValue::BigInteger(number) => {
                 Ok(u64::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
             }
-            _ => Err(DbError::InputError(format!(
-                "Not an unsigned integer: {self:?}"
-            ))),
+            _ => Err(DbError::InputError(format!("Not an integer: {self:?}"))),
         }
     }
 }
@@ -149,6 +259,60 @@ impl TryInto<u64> for &DbValue {
     type Error = DbError;
 
     fn try_into(self) -> Result<u64, DbError> {
+        self.clone().try_into()
+    }
+}
+
+impl TryInto<u32> for DbValue {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<u32, DbError> {
+        match self {
+            DbValue::SmallInteger(number) => {
+                Ok(u32::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
+            }
+            DbValue::Integer(number) => {
+                Ok(u32::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
+            }
+            DbValue::BigInteger(number) => {
+                Ok(u32::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
+            }
+            _ => Err(DbError::InputError(format!("Not an integer: {self:?}"))),
+        }
+    }
+}
+
+impl TryInto<u32> for &DbValue {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<u32, DbError> {
+        self.clone().try_into()
+    }
+}
+
+impl TryInto<u16> for DbValue {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<u16, DbError> {
+        match self {
+            DbValue::SmallInteger(number) => {
+                Ok(u16::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
+            }
+            DbValue::Integer(number) => {
+                Ok(u16::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
+            }
+            DbValue::BigInteger(number) => {
+                Ok(u16::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
+            }
+            _ => Err(DbError::InputError(format!("Not an integer: {self:?}"))),
+        }
+    }
+}
+
+impl TryInto<u16> for &DbValue {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<u16, DbError> {
         self.clone().try_into()
     }
 }
@@ -180,6 +344,96 @@ impl TryInto<i64> for &DbValue {
     }
 }
 
+impl TryInto<i32> for DbValue {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<i32, DbError> {
+        match self {
+            DbValue::SmallInteger(number) => {
+                Ok(i32::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
+            }
+            DbValue::Integer(number) => {
+                Ok(i32::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
+            }
+            DbValue::BigInteger(number) => {
+                Ok(i32::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
+            }
+            _ => Err(DbError::InputError(format!("Not an integer: {self:?}"))),
+        }
+    }
+}
+
+impl TryInto<i32> for &DbValue {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<i32, DbError> {
+        self.clone().try_into()
+    }
+}
+
+impl TryInto<i16> for DbValue {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<i16, DbError> {
+        match self {
+            DbValue::SmallInteger(number) => {
+                Ok(i16::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
+            }
+            DbValue::Integer(number) => {
+                Ok(i16::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
+            }
+            DbValue::BigInteger(number) => {
+                Ok(i16::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
+            }
+            _ => Err(DbError::InputError(format!("Not an integer: {self:?}"))),
+        }
+    }
+}
+
+impl TryInto<i16> for &DbValue {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<i16, DbError> {
+        self.clone().try_into()
+    }
+}
+
+impl TryInto<Decimal> for DbValue {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<Decimal, DbError> {
+        match self {
+            DbValue::Real(number) => Ok(
+                Decimal::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?
+            ),
+            DbValue::BigReal(number) => Ok(
+                Decimal::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?
+            ),
+            DbValue::Numeric(number) => Ok(
+                Decimal::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?
+            ),
+            DbValue::SmallInteger(number) => Ok(
+                Decimal::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?
+            ),
+            DbValue::Integer(number) => Ok(
+                Decimal::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?
+            ),
+            DbValue::BigInteger(number) => Ok(
+                Decimal::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?
+            ),
+            _ => Err(DbError::InputError(format!("Not a decimal: {self:?}"))),
+        }
+    }
+}
+
+impl TryInto<Decimal> for &DbValue {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<Decimal, DbError> {
+        self.clone().try_into()
+    }
+}
+
 impl TryInto<f64> for DbValue {
     type Error = DbError;
 
@@ -194,7 +448,13 @@ impl TryInto<f64> for DbValue {
             DbValue::Numeric(number) => {
                 Ok(f64::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
             }
-            _ => Err(DbError::InputError(format!("Not an integer: {self:?}"))),
+            DbValue::SmallInteger(number) => {
+                Ok(f64::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
+            }
+            DbValue::Integer(number) => {
+                Ok(f64::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
+            }
+            _ => Err(DbError::InputError(format!("Not an f64: {self:?}"))),
         }
     }
 }
@@ -219,7 +479,10 @@ impl TryInto<f32> for DbValue {
             DbValue::Numeric(number) => {
                 Ok(f32::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
             }
-            _ => Err(DbError::InputError(format!("Not an integer: {self:?}"))),
+            DbValue::SmallInteger(number) => {
+                Ok(f32::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
+            }
+            _ => Err(DbError::InputError(format!("Not an f32: {self:?}"))),
         }
     }
 }
@@ -238,7 +501,6 @@ impl TryInto<bool> for DbValue {
     fn try_into(self) -> Result<bool, DbError> {
         match self {
             DbValue::Boolean(value) => Ok(value),
-            DbValue::Integer(value) => Ok(value == 1),
             _ => Err(DbError::InputError(format!("Not a boolean: {self:?}"))),
         }
     }
@@ -427,72 +689,72 @@ impl Eq for DbValue {}
 
 /// Types that implement this trait can be converted into a [DbValue].
 pub trait IntoDbValue {
-    fn into_param_value(self) -> DbValue;
+    fn into_db_value(self) -> DbValue;
 }
 
 /// Implements [IntoDbValue] for types that implement [TryFrom] for [DbValue].
 impl<T: Into<DbValue>> IntoDbValue for T {
-    fn into_param_value(self) -> DbValue {
+    fn into_db_value(self) -> DbValue {
         self.into()
     }
 }
 
 /// Query parameters
 #[derive(Debug, Clone)]
-pub enum Params {
+pub enum DbParams {
     None,
     Positional(Vec<DbValue>),
 }
 
-/// Types that implement this trait can be converted into [Params]
-pub trait IntoParams {
-    fn into_params(self) -> Params;
+/// Types that implement this trait can be converted into [DbParams]
+pub trait IntoDbParams {
+    fn into_db_params(self) -> DbParams;
 }
 
-/// (Trivially) implements [IntoParams] for [Params]
-impl IntoParams for Params {
-    fn into_params(self) -> Params {
+/// (Trivially) implements [IntoDbParams] for [DbParams]
+impl IntoDbParams for DbParams {
+    fn into_db_params(self) -> DbParams {
         self
     }
 }
 
-/// Implements [IntoParams] for references to [Params]
-impl IntoParams for &Params {
-    fn into_params(self) -> Params {
+/// Implements [IntoDbParams] for references to [DbParams]
+impl IntoDbParams for &DbParams {
+    fn into_db_params(self) -> DbParams {
         self.clone()
     }
 }
 
-/// Implements [IntoParams] for an empty tuple. Always returns [Params::None].
-impl IntoParams for () {
-    fn into_params(self) -> Params {
-        Params::None
+/// Implements [IntoDbParams] for an empty tuple. Always returns [DbParams::None].
+impl IntoDbParams for () {
+    fn into_db_params(self) -> DbParams {
+        DbParams::None
     }
 }
 
-/// Implements [IntoParams] for fixed-length arrays of types that implement [IntoDbValue]
-impl<T: IntoDbValue, const N: usize> IntoParams for [T; N] {
-    fn into_params(self) -> Params {
-        self.into_iter().collect::<Vec<_>>().into_params()
+/// Implements [IntoDbParams] for fixed-length arrays of types that implement [IntoDbValue]
+impl<T: IntoDbValue, const N: usize> IntoDbParams for [T; N] {
+    fn into_db_params(self) -> DbParams {
+        self.into_iter().collect::<Vec<_>>().into_db_params()
     }
 }
 
-/// Implements [IntoParams] for references to fixed-length arrays of types that implement
+/// Implements [IntoDbParams] for references to fixed-length arrays of types that implement
 /// [IntoDbValue]
-impl<T: IntoDbValue + Clone, const N: usize> IntoParams for &[T; N] {
-    fn into_params(self) -> Params {
-        self.iter().cloned().collect::<Vec<_>>().into_params()
+impl<T: IntoDbValue + Clone, const N: usize> IntoDbParams for &[T; N] {
+    fn into_db_params(self) -> DbParams {
+        self.iter().cloned().collect::<Vec<_>>().into_db_params()
     }
 }
 
-/// Implements [IntoParams] for vectors of types that implement [IntoDbValue]
-impl<T: IntoDbValue> IntoParams for Vec<T> {
-    fn into_params(self) -> Params {
+/// Implements [IntoDbParams] for vectors of types that implement [IntoDbValue]
+impl<T: IntoDbValue> IntoDbParams for Vec<T> {
+    fn into_db_params(self) -> DbParams {
         let values = self
             .into_iter()
-            .map(|i| i.into_param_value())
+            .map(|i| i.into_db_value())
             .collect::<Vec<_>>();
-        Params::Positional(values)
+        DbParams::Positional(values)
     }
 }
 
@@ -630,7 +892,7 @@ impl FromDbRow for JsonRow {
     }
 }
 
-/// Converts a list of assorted types implementing [IntoDbValue] into [Params]
+/// Converts a list of assorted types implementing [IntoDbValue] into [DbParams]
 #[macro_export]
 macro_rules! params {
     () => {
@@ -638,7 +900,7 @@ macro_rules! params {
     };
     ($($value:expr),* $(,)?) => {{
         use $crate::db_value::IntoDbValue;
-        [$($value.into_param_value()),*]
+        [$($value.into_db_value()),*]
 
     }};
 }
