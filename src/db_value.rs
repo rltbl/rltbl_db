@@ -39,66 +39,39 @@ pub enum DbValue {
 
 impl DbValue {
     pub fn is_null(&self) -> bool {
-        match self {
-            DbValue::Null => true,
-            _ => false,
-        }
+        self.as_null().is_some()
     }
 
     pub fn is_bool(&self) -> bool {
-        match self {
-            DbValue::Boolean(_) => true,
-            _ => false,
-        }
+        self.as_bool().is_some()
     }
 
     pub fn is_i16(&self) -> bool {
-        match self {
-            DbValue::SmallInteger(_) => true,
-            _ => false,
-        }
+        self.as_i16().is_some()
     }
 
     pub fn is_i32(&self) -> bool {
-        match self {
-            DbValue::Integer(_) => true,
-            _ => false,
-        }
+        self.as_i32().is_some()
     }
 
     pub fn is_i64(&self) -> bool {
-        match self {
-            DbValue::BigInteger(_) => true,
-            _ => false,
-        }
+        self.as_i64().is_some()
     }
 
     pub fn is_f32(&self) -> bool {
-        match self {
-            DbValue::Real(_) => true,
-            _ => false,
-        }
+        self.as_f32().is_some()
     }
 
     pub fn is_f64(&self) -> bool {
-        match self {
-            DbValue::BigReal(_) => true,
-            _ => false,
-        }
+        self.as_f64().is_some()
     }
 
     pub fn is_decimal(&self) -> bool {
-        match self {
-            DbValue::Numeric(_) => true,
-            _ => false,
-        }
+        self.as_decimal().is_some()
     }
 
-    pub fn is_str(&self) -> bool {
-        match self {
-            DbValue::Text(_) => true,
-            _ => false,
-        }
+    pub fn is_string(&self) -> bool {
+        self.as_str().is_some()
     }
 
     pub fn as_null(&self) -> Option<()> {
@@ -133,8 +106,14 @@ impl DbValue {
         self.try_into().ok()
     }
 
-    pub fn as_string(&self) -> Option<String> {
-        Some(self.into())
+    /// Note that db_value.as_str() and db_value.to_string() differ in more than just their
+    /// return type. The latter will format db_value as a string regardless of its type.
+    /// This method returns a string slice only if the underlying type is [DbValue::Text].
+    pub fn as_str(&self) -> Option<&str> {
+        match self {
+            DbValue::Text(txt) => Some(txt),
+            _ => None,
+        }
     }
 
     pub fn as_u16(&self) -> Option<u16> {
@@ -432,7 +411,16 @@ impl TryInto<Decimal> for DbValue {
             DbValue::Numeric(number) => Ok(
                 Decimal::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?
             ),
-            _ => Err(DbError::InputError(format!("Not an integer: {self:?}"))),
+            DbValue::SmallInteger(number) => Ok(
+                Decimal::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?
+            ),
+            DbValue::Integer(number) => Ok(
+                Decimal::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?
+            ),
+            DbValue::BigInteger(number) => Ok(
+                Decimal::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?
+            ),
+            _ => Err(DbError::InputError(format!("Not a decimal: {self:?}"))),
         }
     }
 }
@@ -459,7 +447,13 @@ impl TryInto<f64> for DbValue {
             DbValue::Numeric(number) => {
                 Ok(f64::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
             }
-            _ => Err(DbError::InputError(format!("Not an integer: {self:?}"))),
+            DbValue::SmallInteger(number) => {
+                Ok(f64::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
+            }
+            DbValue::Integer(number) => {
+                Ok(f64::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
+            }
+            _ => Err(DbError::InputError(format!("Not an f64: {self:?}"))),
         }
     }
 }
@@ -484,7 +478,10 @@ impl TryInto<f32> for DbValue {
             DbValue::Numeric(number) => {
                 Ok(f32::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
             }
-            _ => Err(DbError::InputError(format!("Not an integer: {self:?}"))),
+            DbValue::SmallInteger(number) => {
+                Ok(f32::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
+            }
+            _ => Err(DbError::InputError(format!("Not an f32: {self:?}"))),
         }
     }
 }
