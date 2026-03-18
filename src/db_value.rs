@@ -1,5 +1,5 @@
 use crate::core::DbError;
-use indexmap::IndexMap;
+use indexmap::{self, IndexMap};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, json};
@@ -764,6 +764,7 @@ impl<T: IntoDbValue> IntoDbParams for Vec<T> {
 
 /// A row of database values indexed by column name.
 #[derive(Debug, Clone, Deserialize, Serialize, Eq, PartialEq)]
+#[serde(transparent)] // See https://serde.rs/container-attrs.html#transparent
 pub struct DbRow {
     pub map: IndexMap<String, DbValue>,
 }
@@ -985,6 +986,28 @@ macro_rules! db_row {
                 )*
                     map
             }
+        }
+    };
+}
+
+// TODO: Try this instead:
+/// Converts a set of pairs into a [DbRow]
+#[macro_export]
+macro_rules! db_row_new {
+    (@single $($x:tt)*) => (());
+    (@count $($rest:expr),*) => (<[()]>::len(&[$(indexmap::indexmap!(@single $rest)),*]));
+
+    ($($key:expr => $value:expr,)+) => {
+        indexmap::indexmap!($($key.to_string() => $value.into()),+)
+    };
+    ($($key:expr => $value:expr),*) => {
+        {
+            let cap = indexmap::indexmap!(@count $($key),*);
+            let mut map = indexmap::IndexMap::with_capacity(cap);
+            $(
+                let _ = map.insert($key.to_string(), $value.into());
+            )*
+                map
         }
     };
 }

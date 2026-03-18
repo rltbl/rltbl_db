@@ -16,6 +16,7 @@ use crate::{
 };
 
 use async_trait::async_trait;
+use serde::ser;
 use std::{
     collections::HashSet,
     fmt::Display,
@@ -46,9 +47,20 @@ pub enum DbError {
     DatatypeError(String),
     /// An error that occurred while attempting to parse a SQL string or value.
     ParseError(String),
+    /// TODO: Add docstring
+    SerdeError(String),
 }
 
 impl std::error::Error for DbError {}
+
+impl ser::Error for DbError {
+    fn custom<T>(msg: T) -> Self
+    where
+        T: Display,
+    {
+        DbError::SerdeError(msg.to_string())
+    }
+}
 
 impl std::fmt::Display for DbError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -58,7 +70,8 @@ impl std::fmt::Display for DbError {
             | DbError::InputError(err)
             | DbError::DatabaseError(err)
             | DbError::DatatypeError(err)
-            | DbError::ParseError(err) => write!(f, "{err}"),
+            | DbError::ParseError(err)
+            | DbError::SerdeError(err) => write!(f, "{err}"),
         }
     }
 }
