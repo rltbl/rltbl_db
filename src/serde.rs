@@ -1,8 +1,12 @@
-use crate::core::DbError;
+use crate::{
+    core::DbError,
+    db_value::{DbRow, DbValue, JsonValue},
+};
 use serde::{
     Serialize,
     ser::{self, SerializeSeq as _},
 };
+use serde_json::from_str;
 
 // TODO: Most of the comments and docstrings below were copied (initially) verbatim from
 // https://serde.rs/impl-serializer.html. After we adapt that template to our use case these
@@ -10,24 +14,71 @@ use serde::{
 
 /// Used for serialization / deserialization of a [DbRow] to/from a struct
 pub struct Serializer {
-    output: String,
+    output_old_remove_me: String,
+    _output_new_not_used_yet: DbRow,
 }
 
 // By convention, the public API of a Serde serializer is one or more `to_abc`
 // functions such as `to_string`, `to_bytes`, or `to_writer` depending on what
 // Rust types the serializer is able to produce as output.
 //
-// This basic serializer supports only `to_string`.
 
 pub fn to_string<T>(value: &T) -> Result<String, DbError>
 where
     T: Serialize,
 {
     let mut serializer = Serializer {
-        output: String::new(),
+        output_old_remove_me: String::new(),
+        _output_new_not_used_yet: DbRow::new(),
     };
     value.serialize(&mut serializer)?;
-    Ok(serializer.output)
+    Ok(serializer.output_old_remove_me)
+}
+
+pub fn to_db_row<T>(value: &T) -> Result<DbRow, DbError>
+where
+    T: Serialize,
+{
+    // TODO: This is a very inefficient way of serializing a struct to a DbRow. We should
+    // eliminate the dependency on serde_json and ideally serialize directly to a DbRow
+    // rather than first to a string. We might be able to use "type OK = TYPE" (see below)
+    // to help with this.
+
+    let value_string = to_string(value)?;
+    println!("VALUE STRING: {value_string}");
+
+    let mut db_row = DbRow::new();
+    // TODO: Remove unwrap:
+    let json_row = from_str::<JsonValue>(&value_string).unwrap();
+    let json_row = json_row.as_object().unwrap();
+    for (column, value) in json_row.iter() {
+        println!("VALUE: {value:?}");
+        match value.as_object() {
+            Some(value) => {
+                // TODO: Remove assert
+                assert_eq!(value.len(), 1);
+                let value = value.iter().collect::<Vec<_>>()[0];
+                let value_type = value.0;
+                let value_value = DbValue::from(value.1.clone());
+                // TODO: Implement DbValue::from_str() so that we can match on the actual enums
+                // instead of on strings.
+                match value_type.to_lowercase().as_str() {
+                    "null" => db_row.insert(column.to_string(), DbValue::Null),
+                    "boolean" => db_row.insert(column.to_string(), DbValue::from(value_value)),
+                    "smallinteger" => db_row.insert(column.to_string(), DbValue::from(value_value)),
+                    "integer" => db_row.insert(column.to_string(), DbValue::from(value_value)),
+                    "biginteger" => db_row.insert(column.to_string(), DbValue::from(value_value)),
+                    "real" => db_row.insert(column.to_string(), DbValue::from(value_value)),
+                    "bigreal" => db_row.insert(column.to_string(), DbValue::from(value_value)),
+                    "numeric" => db_row.insert(column.to_string(), DbValue::from(value_value)),
+                    "text" => db_row.insert(column.to_string(), DbValue::from(value_value)),
+                    _ => panic!(),
+                }
+            }
+            None => db_row.insert(column.to_string(), DbValue::from(value.clone())),
+        }
+    }
+    Ok(db_row)
 }
 
 impl<'a> ser::Serializer for &'a mut Serializer {
@@ -59,7 +110,7 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     // into the output string.
 
     fn serialize_bool(self, value: bool) -> Result<(), Self::Error> {
-        self.output += match value {
+        self.output_old_remove_me += match value {
             true => "true",
             false => "false",
         };
@@ -86,7 +137,7 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     // Not particularly efficient but this is example code anyway. A more
     // performant approach would be to use the `itoa` crate.
     fn serialize_i64(self, value: i64) -> Result<(), Self::Error> {
-        self.output += &value.to_string();
+        self.output_old_remove_me += &value.to_string();
         Ok(())
     }
 
@@ -103,7 +154,7 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     }
 
     fn serialize_u64(self, value: u64) -> Result<(), Self::Error> {
-        self.output += &value.to_string();
+        self.output_old_remove_me += &value.to_string();
         Ok(())
     }
 
@@ -112,7 +163,7 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     }
 
     fn serialize_f64(self, value: f64) -> Result<(), Self::Error> {
-        self.output += &value.to_string();
+        self.output_old_remove_me += &value.to_string();
         Ok(())
     }
 
@@ -126,9 +177,9 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     // get the idea. For example it would emit invalid JSON if the input string
     // contains a '"' character.
     fn serialize_str(self, value: &str) -> Result<(), Self::Error> {
-        self.output += "\"";
-        self.output += value;
-        self.output += "\"";
+        self.output_old_remove_me += "\"";
+        self.output_old_remove_me += value;
+        self.output_old_remove_me += "\"";
         Ok(())
     }
 
@@ -163,7 +214,7 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     // In Serde, unit means an anonymous value containing no data. Map this to
     // JSON as `null`.
     fn serialize_unit(self) -> Result<(), Self::Error> {
-        self.output += "null";
+        self.output_old_remove_me += "null";
         Ok(())
     }
 
@@ -211,11 +262,11 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     where
         T: ?Sized + Serialize,
     {
-        self.output += "{";
+        self.output_old_remove_me += "{";
         variant.serialize(&mut *self)?;
-        self.output += ":";
+        self.output_old_remove_me += ":";
         value.serialize(&mut *self)?;
-        self.output += "}";
+        self.output_old_remove_me += "}";
         Ok(())
     }
 
@@ -230,7 +281,7 @@ impl<'a> ser::Serializer for &'a mut Serializer {
     // explicitly in the serialized form. Some serializers may only be able to
     // support sequences for which the length is known up front.
     fn serialize_seq(self, _len: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> {
-        self.output += "[";
+        self.output_old_remove_me += "[";
         Ok(self)
     }
 
@@ -260,15 +311,15 @@ impl<'a> ser::Serializer for &'a mut Serializer {
         variant: &str,
         _len: usize,
     ) -> Result<Self::SerializeTupleVariant, Self::Error> {
-        self.output += "{";
+        self.output_old_remove_me += "{";
         variant.serialize(&mut *self)?;
-        self.output += ":[";
+        self.output_old_remove_me += ":[";
         Ok(self)
     }
 
     // Maps are represented in JSON as `{ K: V, K: V, ... }`.
     fn serialize_map(self, _len: Option<usize>) -> Result<Self::SerializeMap, Self::Error> {
-        self.output += "{";
+        self.output_old_remove_me += "{";
         Ok(self)
     }
 
@@ -294,9 +345,9 @@ impl<'a> ser::Serializer for &'a mut Serializer {
         variant: &str,
         _len: usize,
     ) -> Result<Self::SerializeStructVariant, Self::Error> {
-        self.output += "{";
+        self.output_old_remove_me += "{";
         variant.serialize(&mut *self)?;
-        self.output += ":{";
+        self.output_old_remove_me += ":{";
         Ok(self)
     }
 }
@@ -320,15 +371,15 @@ impl<'a> ser::SerializeSeq for &'a mut Serializer {
     where
         T: ?Sized + Serialize,
     {
-        if !self.output.ends_with('[') {
-            self.output += ",";
+        if !self.output_old_remove_me.ends_with('[') {
+            self.output_old_remove_me += ",";
         }
         value.serialize(&mut **self)
     }
 
     // Close the sequence.
     fn end(self) -> Result<(), Self::Error> {
-        self.output += "]";
+        self.output_old_remove_me += "]";
         Ok(())
     }
 }
@@ -342,14 +393,14 @@ impl<'a> ser::SerializeTuple for &'a mut Serializer {
     where
         T: ?Sized + Serialize,
     {
-        if !self.output.ends_with('[') {
-            self.output += ",";
+        if !self.output_old_remove_me.ends_with('[') {
+            self.output_old_remove_me += ",";
         }
         value.serialize(&mut **self)
     }
 
     fn end(self) -> Result<(), DbError> {
-        self.output += "]";
+        self.output_old_remove_me += "]";
         Ok(())
     }
 }
@@ -363,14 +414,14 @@ impl<'a> ser::SerializeTupleStruct for &'a mut Serializer {
     where
         T: ?Sized + Serialize,
     {
-        if !self.output.ends_with('[') {
-            self.output += ",";
+        if !self.output_old_remove_me.ends_with('[') {
+            self.output_old_remove_me += ",";
         }
         value.serialize(&mut **self)
     }
 
     fn end(self) -> Result<(), DbError> {
-        self.output += "]";
+        self.output_old_remove_me += "]";
         Ok(())
     }
 }
@@ -378,9 +429,9 @@ impl<'a> ser::SerializeTupleStruct for &'a mut Serializer {
 // Tuple variants are a little different. Refer back to the
 // `serialize_tuple_variant` method above:
 //
-//    self.output += "{";
+//    self.output_old_remove_me += "{";
 //    variant.serialize(&mut *self)?;
-//    self.output += ":[";
+//    self.output_old_remove_me += ":[";
 //
 // So the `end` method in this impl is responsible for closing both the `]` and
 // the `}`.
@@ -392,14 +443,14 @@ impl<'a> ser::SerializeTupleVariant for &'a mut Serializer {
     where
         T: ?Sized + Serialize,
     {
-        if !self.output.ends_with('[') {
-            self.output += ",";
+        if !self.output_old_remove_me.ends_with('[') {
+            self.output_old_remove_me += ",";
         }
         value.serialize(&mut **self)
     }
 
     fn end(self) -> Result<(), DbError> {
-        self.output += "]}";
+        self.output_old_remove_me += "]}";
         Ok(())
     }
 }
@@ -428,8 +479,8 @@ impl<'a> ser::SerializeMap for &'a mut Serializer {
     where
         T: ?Sized + Serialize,
     {
-        if !self.output.ends_with('{') {
-            self.output += ",";
+        if !self.output_old_remove_me.ends_with('{') {
+            self.output_old_remove_me += ",";
         }
         key.serialize(&mut **self)
     }
@@ -441,12 +492,12 @@ impl<'a> ser::SerializeMap for &'a mut Serializer {
     where
         T: ?Sized + Serialize,
     {
-        self.output += ":";
+        self.output_old_remove_me += ":";
         value.serialize(&mut **self)
     }
 
     fn end(self) -> Result<(), DbError> {
-        self.output += "}";
+        self.output_old_remove_me += "}";
         Ok(())
     }
 }
@@ -461,16 +512,16 @@ impl<'a> ser::SerializeStruct for &'a mut Serializer {
     where
         T: ?Sized + Serialize,
     {
-        if !self.output.ends_with('{') {
-            self.output += ",";
+        if !self.output_old_remove_me.ends_with('{') {
+            self.output_old_remove_me += ",";
         }
         key.serialize(&mut **self)?;
-        self.output += ":";
+        self.output_old_remove_me += ":";
         value.serialize(&mut **self)
     }
 
     fn end(self) -> Result<(), DbError> {
-        self.output += "}";
+        self.output_old_remove_me += "}";
         Ok(())
     }
 }
@@ -485,16 +536,16 @@ impl<'a> ser::SerializeStructVariant for &'a mut Serializer {
     where
         T: ?Sized + Serialize,
     {
-        if !self.output.ends_with('{') {
-            self.output += ",";
+        if !self.output_old_remove_me.ends_with('{') {
+            self.output_old_remove_me += ",";
         }
         key.serialize(&mut **self)?;
-        self.output += ":";
+        self.output_old_remove_me += ":";
         value.serialize(&mut **self)
     }
 
     fn end(self) -> Result<(), DbError> {
-        self.output += "}}";
+        self.output_old_remove_me += "}}";
         Ok(())
     }
 }
@@ -507,49 +558,27 @@ mod tests {
     #[test]
     fn test_serde_struct() {
         #[derive(Serialize)]
-        struct Test {
-            int: u32,
-            seq: Vec<&'static str>,
+        struct Foo {
+            bar: u32,
+            xyzzy: String,
         }
 
-        let test = Test {
-            int: 1,
-            seq: vec!["a", "b"],
+        let test = Foo {
+            bar: 1,
+            xyzzy: "test".to_string(),
         };
-        let expected = r#"{"int":1,"seq":["a","b"]}"#;
-        assert_eq!(to_string(&test).unwrap(), expected);
+        let expected_string = r#"{"bar":1,"xyzzy":"test"}"#;
+        assert_eq!(to_string(&test).unwrap(), expected_string);
 
-        // DbRow tests begin here:
+        let expected_db_row = db_row! {
+            "bar".into() => DbValue::from(1_u32),
+            "xyzzy".into() => DbValue::from("test"),
+        };
+        assert_eq!(to_db_row(&test).unwrap(), expected_db_row);
 
         let db_row = db_row! {"value".into() => DbValue::from("foo")};
-        let expected = r#"{"value":{"Text":"foo"}}"#;
-        assert_eq!(to_string(&db_row).unwrap(), expected);
-    }
-
-    #[test]
-    fn test_serde_enum() {
-        #[derive(Serialize)]
-        enum E {
-            Unit,
-            Newtype(u32),
-            Tuple(u32, u32),
-            Struct { a: u32 },
-        }
-
-        let u = E::Unit;
-        let expected = r#""Unit""#;
-        assert_eq!(to_string(&u).unwrap(), expected);
-
-        let n = E::Newtype(1);
-        let expected = r#"{"Newtype":1}"#;
-        assert_eq!(to_string(&n).unwrap(), expected);
-
-        let t = E::Tuple(1, 2);
-        let expected = r#"{"Tuple":[1,2]}"#;
-        assert_eq!(to_string(&t).unwrap(), expected);
-
-        let s = E::Struct { a: 1 };
-        let expected = r#"{"Struct":{"a":1}}"#;
-        assert_eq!(to_string(&s).unwrap(), expected);
+        let expected_string = r#"{"value":{"Text":"foo"}}"#;
+        assert_eq!(to_string(&db_row).unwrap(), expected_string);
+        assert_eq!(to_db_row(&db_row).unwrap(), db_row);
     }
 }

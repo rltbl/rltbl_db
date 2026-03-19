@@ -18,7 +18,7 @@ pub mod libsql;
 
 // Macro definitions
 
-/// Converts a list of assorted types implementing [IntoDbValue] into [DbParams]
+/// Converts a list of assorted types implementing [db_value::IntoDbValue] into [db_value::DbParams]
 #[macro_export]
 macro_rules! params {
     () => {
@@ -31,7 +31,7 @@ macro_rules! params {
     }};
 }
 
-/// Converts a key value pair into a [DbRow]. The syntax of this macro is identical to
+/// Converts a key value pair into a [db_value::DbRow]. The syntax of this macro is identical to
 /// [indexmap]. For example: db_row! { key1 -> value1, key2 -> value2, ... }
 /// The code for this function is adapted from the code for indexmap! (see
 /// <https://docs.rs/indexmap/latest/src/indexmap/macros.rs.html#59-73>
@@ -59,7 +59,7 @@ macro_rules! db_row {
 }
 
 // TODO: Try this instead:
-/// Converts a set of pairs into a [DbRow]
+/// Converts a set of pairs into a [db_value::DbRow]
 #[macro_export]
 macro_rules! db_row_new {
     (@single $($x:tt)*) => (());
