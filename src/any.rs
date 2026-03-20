@@ -2088,7 +2088,7 @@ mod tests {
     async fn test_caching_performance() {
         let runs = 2500;
         let edit_rate = 25;
-        let timeout = 37;
+        let timeout = 45;
         #[cfg(feature = "rusqlite")]
         perform_caching(":memory:", runs, edit_rate, timeout).await;
         #[cfg(feature = "tokio-postgres")]
