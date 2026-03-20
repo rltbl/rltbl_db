@@ -2,6 +2,7 @@ use crate::{
     core::DbError,
     db_value::{DbRow, DbValue, JsonRow, JsonValue},
 };
+use rust_decimal::Decimal;
 use serde::{
     Deserialize, Serialize,
     de::{
@@ -10,7 +11,10 @@ use serde::{
     },
     ser::{self, SerializeSeq as _},
 };
-use std::ops::{AddAssign, MulAssign, Neg};
+use std::{
+    ops::{AddAssign, MulAssign, Neg},
+    str::FromStr,
+};
 
 // TODO: Most of the comments and docstrings below were copied (initially) verbatim from
 // https://serde.rs/impl-serializer.html. After we adapt that template to our use case these
@@ -61,17 +65,40 @@ where
                 assert_eq!(value.len(), 1);
                 let value = value.iter().collect::<Vec<_>>()[0];
                 let value_type = value.0;
-                let value_value = DbValue::from(value.1.clone());
                 match value_type.to_lowercase().as_str() {
                     "null" => db_row.insert(column.to_string(), DbValue::Null),
-                    "boolean" => db_row.insert(column.to_string(), DbValue::from(value_value)),
-                    "smallinteger" => db_row.insert(column.to_string(), DbValue::from(value_value)),
-                    "integer" => db_row.insert(column.to_string(), DbValue::from(value_value)),
-                    "biginteger" => db_row.insert(column.to_string(), DbValue::from(value_value)),
-                    "real" => db_row.insert(column.to_string(), DbValue::from(value_value)),
-                    "bigreal" => db_row.insert(column.to_string(), DbValue::from(value_value)),
-                    "numeric" => db_row.insert(column.to_string(), DbValue::from(value_value)),
-                    "text" => db_row.insert(column.to_string(), DbValue::from(value_value)),
+                    "boolean" => db_row.insert(
+                        column.to_string(),
+                        DbValue::Boolean(value.1.as_bool().unwrap()),
+                    ),
+                    "smallinteger" => db_row.insert(
+                        column.to_string(),
+                        DbValue::SmallInteger(value.1.as_i64().unwrap().try_into().unwrap()),
+                    ),
+                    "integer" => db_row.insert(
+                        column.to_string(),
+                        DbValue::Integer(value.1.as_i64().unwrap().try_into().unwrap()),
+                    ),
+                    "biginteger" => db_row.insert(
+                        column.to_string(),
+                        DbValue::BigInteger(value.1.as_i64().unwrap()),
+                    ),
+                    "real" => db_row.insert(
+                        column.to_string(),
+                        DbValue::Real(value.1.as_f64().unwrap() as f32),
+                    ),
+                    "bigreal" => db_row.insert(
+                        column.to_string(),
+                        DbValue::BigReal(value.1.as_f64().unwrap()),
+                    ),
+                    "numeric" => db_row.insert(
+                        column.to_string(),
+                        DbValue::Numeric(Decimal::from_str(&value.1.to_string()).unwrap()),
+                    ),
+                    "text" => db_row.insert(
+                        column.to_string(),
+                        DbValue::Text(value.1.as_str().unwrap().to_string()),
+                    ),
                     _ => panic!(),
                 }
             }
@@ -616,30 +643,14 @@ where
                 let value_value = JsonValue::from(value.1.clone());
                 match value_type.to_lowercase().as_str() {
                     "null" => flat_json_row.insert(column.to_string(), JsonValue::Null),
-                    "boolean" => {
-                        flat_json_row.insert(column.to_string(), JsonValue::from(value_value))
-                    }
-                    "smallinteger" => {
-                        flat_json_row.insert(column.to_string(), JsonValue::from(value_value))
-                    }
-                    "integer" => {
-                        flat_json_row.insert(column.to_string(), JsonValue::from(value_value))
-                    }
-                    "biginteger" => {
-                        flat_json_row.insert(column.to_string(), JsonValue::from(value_value))
-                    }
-                    "real" => {
-                        flat_json_row.insert(column.to_string(), JsonValue::from(value_value))
-                    }
-                    "bigreal" => {
-                        flat_json_row.insert(column.to_string(), JsonValue::from(value_value))
-                    }
-                    "numeric" => {
-                        flat_json_row.insert(column.to_string(), JsonValue::from(value_value))
-                    }
-                    "text" => {
-                        flat_json_row.insert(column.to_string(), JsonValue::from(value_value))
-                    }
+                    "boolean" => flat_json_row.insert(column.to_string(), value_value),
+                    "smallinteger" => flat_json_row.insert(column.to_string(), value_value),
+                    "integer" => flat_json_row.insert(column.to_string(), value_value),
+                    "biginteger" => flat_json_row.insert(column.to_string(), value_value),
+                    "real" => flat_json_row.insert(column.to_string(), value_value),
+                    "bigreal" => flat_json_row.insert(column.to_string(), value_value),
+                    "numeric" => flat_json_row.insert(column.to_string(), value_value),
+                    "text" => flat_json_row.insert(column.to_string(), value_value),
                     _ => panic!(),
                 }
             }
@@ -1304,27 +1315,50 @@ mod tests {
         // Serializing or deserializing a DbRow into a DbRow should yield a DbRow that is
         // identical to the original one:
         let db_row = db_row! {"value".into() => DbValue::from("foo")};
-        assert_eq!(to_db_row(&db_row).unwrap(), db_row);
+        assert_eq!(db_row, to_db_row(&db_row).unwrap());
         // TODO: Not yet working,
-        //assert_eq!(from_db_row::<DbRow>(&db_row).unwrap(), db_row);
+        //assert_eq!(db_row, from_db_row(&db_row).unwrap());
+
+        // TODO: Because we are relying on JSON serialization it is impossible to distinguish
+        // between different types of numbers. So for now we are setting all of the struct's
+        // number fields to i64. Once we remove the serde_json dependency we will need to test
+        // structs that have many types of numbers.
 
         // Serializing and deserializing an arbitrary struct to a DbRow:
         #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
-        struct Foo {
-            bar: u32,
-            xyzzy: String,
+        struct TestStruct {
+            boolean: bool,
+            smallint: i64,    // TODO: i16
+            mediumint: i64,   // TODO: i32
+            bigint: i64,      // TODO: i64
+            smallfloat: i64,  // TODO: f32
+            bigfloat: i64,    // TODO: f64
+            biggerfloat: i64, // TODO: decimal
+            text: String,
         }
 
-        let expected_struct = Foo {
-            bar: 1,
-            xyzzy: "test".to_string(),
+        let expected_struct = TestStruct {
+            boolean: true,
+            smallint: 1,
+            mediumint: 1,
+            bigint: 1,
+            smallfloat: 1,
+            bigfloat: 1,
+            biggerfloat: 1,
+            text: 1.to_string(),
         };
 
         let expected_db_row = db_row! {
-            "bar".into() => DbValue::from(1_u32),
-            "xyzzy".into() => DbValue::from("test"),
+            "boolean".into() => DbValue::from(true),
+            "smallint".into() => DbValue::from(1_i64),
+            "mediumint".into() => DbValue::from(1_i64),
+            "bigint".into() => DbValue::from(1_i64),
+            "smallfloat".into() => DbValue::from(1_i64),
+            "bigfloat".into() => DbValue::from(1_i64),
+            "biggerfloat".into() => DbValue::from(1_i64),
+            "text".into() => DbValue::from("1"),
         };
-        assert_eq!(to_db_row(&expected_struct).unwrap(), expected_db_row);
+        assert_eq!(expected_db_row, to_db_row(&expected_struct).unwrap());
         assert_eq!(expected_struct, from_db_row(&expected_db_row).unwrap());
     }
 }
