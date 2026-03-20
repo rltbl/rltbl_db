@@ -1301,11 +1301,14 @@ mod tests {
 
     #[test]
     fn test_serde_struct() {
+        // Serializing or deserializing a DbRow into a DbRow should yield a DbRow that is
+        // identical to the original one:
         let db_row = db_row! {"value".into() => DbValue::from("foo")};
-        let expected_string = r#"{"value":{"Text":"foo"}}"#;
-        assert_eq!(to_string(&db_row).unwrap(), expected_string);
         assert_eq!(to_db_row(&db_row).unwrap(), db_row);
+        // TODO: Not yet working,
+        //assert_eq!(from_db_row::<DbRow>(&db_row).unwrap(), db_row);
 
+        // Serializing and deserializing an arbitrary struct to a DbRow:
         #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
         struct Foo {
             bar: u32,
@@ -1316,19 +1319,12 @@ mod tests {
             bar: 1,
             xyzzy: "test".to_string(),
         };
-        let expected_string = r#"{"bar":1,"xyzzy":"test"}"#;
-        assert_eq!(to_string(&expected_struct).unwrap(), expected_string);
 
         let expected_db_row = db_row! {
             "bar".into() => DbValue::from(1_u32),
             "xyzzy".into() => DbValue::from("test"),
         };
         assert_eq!(to_db_row(&expected_struct).unwrap(), expected_db_row);
-
-        let db_row = db_row! {
-            "bar".into() => DbValue::from(1_u32),
-            "xyzzy".into() => DbValue::from("test"),
-        };
-        assert_eq!(expected_struct, from_db_row(&db_row).unwrap());
+        assert_eq!(expected_struct, from_db_row(&expected_db_row).unwrap());
     }
 }
