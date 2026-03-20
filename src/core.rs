@@ -16,7 +16,7 @@ use crate::{
 };
 
 use async_trait::async_trait;
-use serde::ser;
+use serde::{de, ser};
 use std::{
     collections::HashSet,
     fmt::Display,
@@ -54,6 +54,15 @@ pub enum DbError {
 impl std::error::Error for DbError {}
 
 impl ser::Error for DbError {
+    fn custom<T>(msg: T) -> Self
+    where
+        T: Display,
+    {
+        DbError::SerdeError(msg.to_string())
+    }
+}
+
+impl de::Error for DbError {
     fn custom<T>(msg: T) -> Self
     where
         T: Display,
