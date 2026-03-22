@@ -649,6 +649,12 @@ impl From<JsonValue> for DbValue {
     }
 }
 
+impl From<&JsonValue> for DbValue {
+    fn from(item: &JsonValue) -> Self {
+        item.into()
+    }
+}
+
 impl From<()> for DbValue {
     fn from(_: ()) -> Self {
         DbValue::Null
@@ -761,7 +767,7 @@ impl<T: IntoDbValue> IntoDbParams for Vec<T> {
 // Database rows
 
 /// A row of database values indexed by column name.
-#[derive(Debug, Clone, Deserialize, Serialize, Eq, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(transparent)] // See https://serde.rs/container-attrs.html#transparent
 pub struct DbRow {
     pub map: IndexMap<String, DbValue>,
