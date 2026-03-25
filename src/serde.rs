@@ -1,15 +1,9 @@
 use crate::{
     core::DbError,
-    db_value::{DbRow, DbValue},
+    db_value::{DbRow, DbValue, JsonRow, JsonValue},
 };
-use serde::{Serialize, ser};
-
-// TODO: Rename this to `Serializer` (or at least give it a better name).
-#[derive(Debug)]
-pub struct MySerializer {
-    keys: Vec<String>,
-    values: Vec<DbValue>,
-}
+use rust_decimal::prelude::ToPrimitive;
+use serde::{Deserialize, Serialize, ser};
 
 pub fn to_db_row<T>(value: &T) -> Result<DbRow, DbError>
 where
@@ -37,6 +31,55 @@ where
         db_row.insert(key.to_string(), values[i].clone());
     }
     Ok(db_row)
+}
+
+pub fn from_db_row<T>(db_row: &DbRow) -> Result<T, DbError>
+where
+    T: for<'a> Deserialize<'a>,
+{
+    // TODO: Can we do this directly without the intermediate step of first converting to JSON?
+    // The method below works and does not throw away information, so (unlike the case of
+    // serialization) we do not *need* to find an alternative method, but this seems inefficient
+    // and it would be better to deserialize directly from a DbRow to a T struct if possible.
+    let mut flat_json_row = JsonRow::new();
+    for (column, value) in db_row.iter() {
+        match value {
+            DbValue::Null => flat_json_row.insert(column.to_string(), JsonValue::Null),
+            DbValue::Boolean(num) => {
+                flat_json_row.insert(column.to_string(), JsonValue::from(*num))
+            }
+            DbValue::SmallInteger(num) => {
+                flat_json_row.insert(column.to_string(), JsonValue::from(*num))
+            }
+            DbValue::Integer(num) => {
+                flat_json_row.insert(column.to_string(), JsonValue::from(*num))
+            }
+            DbValue::BigInteger(num) => {
+                flat_json_row.insert(column.to_string(), JsonValue::from(*num))
+            }
+            DbValue::Real(num) => flat_json_row.insert(column.to_string(), JsonValue::from(*num)),
+            DbValue::BigReal(num) => {
+                flat_json_row.insert(column.to_string(), JsonValue::from(*num))
+            }
+            DbValue::Numeric(num) => {
+                flat_json_row.insert(column.to_string(), JsonValue::from(num.to_f64()))
+            }
+            DbValue::Text(txt) => {
+                flat_json_row.insert(column.to_string(), JsonValue::from(txt.to_string()))
+            }
+        };
+    }
+    let flat_string_row = format!("{}", serde_json::json!(flat_json_row));
+    let t_struct: T = serde_json::from_str(&flat_string_row).unwrap();
+    Ok(t_struct)
+}
+
+// TODO: Maybe this doesn't need to be public.
+// TODO: Rename this to `Serializer` (or at least give it a better name).
+#[derive(Debug)]
+pub struct MySerializer {
+    keys: Vec<String>,
+    values: Vec<DbValue>,
 }
 
 impl<'a> ser::Serializer for &'a mut MySerializer {
@@ -352,12 +395,13 @@ impl<'a> ser::SerializeStructVariant for &'a mut MySerializer {
 mod tests {
     use super::*;
     use crate::{db_row, db_value::DbValue};
+    use serde::Deserialize;
     // use rust_decimal::{Decimal, dec};
 
     #[test]
     fn test_serde_struct() {
         // Serializing and deserializing an arbitrary struct to a DbRow:
-        #[derive(Serialize, PartialEq, Debug, Clone)]
+        #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
         struct TestStruct {
             boolean: bool,
             smallint: i16,
@@ -391,13 +435,12 @@ mod tests {
             "text".into() => DbValue::from("1"),
         };
         assert_eq!(expected_db_row, to_db_row(&expected_struct).unwrap());
-        //assert_eq!(expected_struct, from_db_row(&expected_db_row).unwrap());
+        assert_eq!(expected_struct, from_db_row(&expected_db_row).unwrap());
 
-        // Serializing or deserializing a DbRow into a DbRow should yield a DbRow that is
-        // identical to the original one:
-        //let db_row = db_row! {"value".into() => DbValue::from("foo")};
-        //assert_eq!(db_row, to_db_row(&db_row).unwrap());
-        // TODO: Not yet working,
-        //assert_eq!(db_row, from_db_row(&db_row).unwrap());
+        // // Serializing or deserializing a DbRow into a DbRow should yield a DbRow that is
+        // // identical to the original one. TODO: This is not yet working.
+        // let db_row = db_row! {"value".into() => DbValue::from("foo")};
+        // assert_eq!(db_row, to_db_row(&db_row).unwrap());
+        // assert_eq!(db_row, from_db_row(&db_row).unwrap());
     }
 }
