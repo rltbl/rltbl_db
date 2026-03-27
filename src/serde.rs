@@ -38,46 +38,40 @@ where
     T: for<'a> Deserialize<'a>,
 {
     // TODO: Can we do this directly without the intermediate step of first converting to JSON?
-    // The method below works and does not throw away information, so (unlike the case of
-    // serialization) we do not *need* to find an alternative method, but this seems inefficient
-    // and it would be better to deserialize directly from a DbRow to a T struct if possible.
-    let mut flat_json_row = JsonRow::new();
+    // The method below *works* and, unlike for serialization, where converting from JSON would
+    // necessarily throw away type information, converting to JSON in this case does not throw
+    // any type information away. So we do not *need* to find an alternative method. However this
+    // method (using the intermediate step of deserializing to JSON) seems inefficient
+    // and it would probably be better to deserialize directly from a DbRow to a T struct if
+    // possible.
+    let mut flat_row = JsonRow::new();
     for (column, value) in db_row.iter() {
         match value {
-            DbValue::Null => flat_json_row.insert(column.to_string(), JsonValue::Null),
-            DbValue::Boolean(num) => {
-                flat_json_row.insert(column.to_string(), JsonValue::from(*num))
-            }
+            DbValue::Null => flat_row.insert(column.to_string(), JsonValue::Null),
+            DbValue::Boolean(num) => flat_row.insert(column.to_string(), JsonValue::from(*num)),
             DbValue::SmallInteger(num) => {
-                flat_json_row.insert(column.to_string(), JsonValue::from(*num))
+                flat_row.insert(column.to_string(), JsonValue::from(*num))
             }
-            DbValue::Integer(num) => {
-                flat_json_row.insert(column.to_string(), JsonValue::from(*num))
-            }
-            DbValue::BigInteger(num) => {
-                flat_json_row.insert(column.to_string(), JsonValue::from(*num))
-            }
-            DbValue::Real(num) => flat_json_row.insert(column.to_string(), JsonValue::from(*num)),
-            DbValue::BigReal(num) => {
-                flat_json_row.insert(column.to_string(), JsonValue::from(*num))
-            }
+            DbValue::Integer(num) => flat_row.insert(column.to_string(), JsonValue::from(*num)),
+            DbValue::BigInteger(num) => flat_row.insert(column.to_string(), JsonValue::from(*num)),
+            DbValue::Real(num) => flat_row.insert(column.to_string(), JsonValue::from(*num)),
+            DbValue::BigReal(num) => flat_row.insert(column.to_string(), JsonValue::from(*num)),
             DbValue::Numeric(num) => {
-                flat_json_row.insert(column.to_string(), JsonValue::from(num.to_f64()))
+                flat_row.insert(column.to_string(), JsonValue::from(num.to_f64()))
             }
             DbValue::Text(txt) => {
-                flat_json_row.insert(column.to_string(), JsonValue::from(txt.to_string()))
+                flat_row.insert(column.to_string(), JsonValue::from(txt.to_string()))
             }
         };
     }
-    let flat_string_row = format!("{}", serde_json::json!(flat_json_row));
-    let t_struct: T = serde_json::from_str(&flat_string_row).unwrap();
+    let t_struct: T = serde_json::from_str(&serde_json::json!(flat_row).to_string())
+        .map_err(|err| DbError::SerdeError(err.to_string()))?;
     Ok(t_struct)
 }
 
-// TODO: Maybe this doesn't need to be public.
 // TODO: Rename this to `Serializer` (or at least give it a better name).
 #[derive(Debug)]
-pub struct MySerializer {
+struct MySerializer {
     keys: Vec<String>,
     values: Vec<DbValue>,
 }
@@ -108,7 +102,9 @@ impl<'a> ser::Serializer for &'a mut MySerializer {
     }
 
     fn serialize_i8(self, _value: i8) -> Result<(), Self::Error> {
-        todo!()
+        return Err(DbError::SerdeError(
+            "I don't know how to serialize an i8".to_string(),
+        ));
     }
 
     fn serialize_i16(self, value: i16) -> Result<(), Self::Error> {
@@ -127,7 +123,9 @@ impl<'a> ser::Serializer for &'a mut MySerializer {
     }
 
     fn serialize_u8(self, _value: u8) -> Result<(), Self::Error> {
-        todo!()
+        return Err(DbError::SerdeError(
+            "I don't know how to serialize a u8".to_string(),
+        ));
     }
 
     fn serialize_u16(self, value: u16) -> Result<(), Self::Error> {
@@ -156,7 +154,9 @@ impl<'a> ser::Serializer for &'a mut MySerializer {
     }
 
     fn serialize_char(self, _value: char) -> Result<(), Self::Error> {
-        todo!()
+        return Err(DbError::SerdeError(
+            "I don't know how to serialize a char".to_string(),
+        ));
     }
 
     fn serialize_str(self, value: &str) -> Result<(), Self::Error> {
@@ -165,26 +165,36 @@ impl<'a> ser::Serializer for &'a mut MySerializer {
     }
 
     fn serialize_bytes(self, _values: &[u8]) -> Result<(), Self::Error> {
-        todo!()
+        return Err(DbError::SerdeError(
+            "I don't know how to serialize bytes to a DbValue".to_string(),
+        ));
     }
 
     fn serialize_none(self) -> Result<(), Self::Error> {
-        todo!()
+        return Err(DbError::SerdeError(
+            "I don't know how to serialize None".to_string(),
+        ));
     }
 
     fn serialize_some<T>(self, _value: &T) -> Result<(), Self::Error>
     where
         T: ?Sized + Serialize,
     {
-        todo!()
+        return Err(DbError::SerdeError(
+            "I don't know how to serialize Some".to_string(),
+        ));
     }
 
     fn serialize_unit(self) -> Result<(), Self::Error> {
-        todo!()
+        return Err(DbError::SerdeError(
+            "I don't know how to serialize a unit".to_string(),
+        ));
     }
 
     fn serialize_unit_struct(self, _name: &str) -> Result<(), Self::Error> {
-        todo!()
+        return Err(DbError::SerdeError(
+            "I don't know how to serialize a unit struct".to_string(),
+        ));
     }
 
     fn serialize_unit_variant(
@@ -193,14 +203,18 @@ impl<'a> ser::Serializer for &'a mut MySerializer {
         _variant_index: u32,
         _variant: &str,
     ) -> Result<(), Self::Error> {
-        todo!()
+        return Err(DbError::SerdeError(
+            "I don't know how to serialize a unit variant".to_string(),
+        ));
     }
 
     fn serialize_newtype_struct<T>(self, _name: &str, _value: &T) -> Result<(), Self::Error>
     where
         T: ?Sized + Serialize,
     {
-        todo!()
+        return Err(DbError::SerdeError(
+            "I don't know how to serialize a newtype struct".to_string(),
+        ));
     }
 
     fn serialize_newtype_variant<T>(
@@ -213,15 +227,21 @@ impl<'a> ser::Serializer for &'a mut MySerializer {
     where
         T: ?Sized + Serialize,
     {
-        todo!()
+        return Err(DbError::SerdeError(
+            "I don't know how to serialize a newtype variant".to_string(),
+        ));
     }
 
     fn serialize_seq(self, _len: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> {
-        todo!()
+        return Err(DbError::SerdeError(
+            "I don't know how to serialize a seq".to_string(),
+        ));
     }
 
     fn serialize_tuple(self, _len: usize) -> Result<Self::SerializeTuple, Self::Error> {
-        todo!()
+        return Err(DbError::SerdeError(
+            "I don't know how to serialize a tuple".to_string(),
+        ));
     }
 
     fn serialize_tuple_struct(
@@ -229,7 +249,9 @@ impl<'a> ser::Serializer for &'a mut MySerializer {
         _name: &str,
         _len: usize,
     ) -> Result<Self::SerializeTupleStruct, Self::Error> {
-        todo!()
+        return Err(DbError::SerdeError(
+            "I don't know how to serialize a tuple struct".to_string(),
+        ));
     }
 
     fn serialize_tuple_variant(
@@ -239,7 +261,9 @@ impl<'a> ser::Serializer for &'a mut MySerializer {
         _variant: &str,
         _len: usize,
     ) -> Result<Self::SerializeTupleVariant, Self::Error> {
-        todo!()
+        return Err(DbError::SerdeError(
+            "I don't know how to serialize a tuple variant".to_string(),
+        ));
     }
 
     // Maps are represented in JSON as `{ K: V, K: V, ... }`.
@@ -262,7 +286,9 @@ impl<'a> ser::Serializer for &'a mut MySerializer {
         _variant: &str,
         _len: usize,
     ) -> Result<Self::SerializeStructVariant, Self::Error> {
-        todo!()
+        return Err(DbError::SerdeError(
+            "I don't know how to serialize a struct variant".to_string(),
+        ));
     }
 }
 
@@ -277,12 +303,16 @@ impl<'a> ser::SerializeSeq for &'a mut MySerializer {
     where
         T: ?Sized + Serialize,
     {
-        todo!()
+        return Err(DbError::SerdeError(
+            "I don't know how to implement SerializeSeq for MySerializer".to_string(),
+        ));
     }
 
     // Close the sequence.
     fn end(self) -> Result<(), Self::Error> {
-        todo!()
+        return Err(DbError::SerdeError(
+            "I don't know how to implement SerializeSeq for MySerializer".to_string(),
+        ));
     }
 }
 
@@ -294,11 +324,15 @@ impl<'a> ser::SerializeTuple for &'a mut MySerializer {
     where
         T: ?Sized + Serialize,
     {
-        todo!()
+        return Err(DbError::SerdeError(
+            "I don't know how to implement SerializeTuple for MySerializer".to_string(),
+        ));
     }
 
     fn end(self) -> Result<(), DbError> {
-        todo!()
+        return Err(DbError::SerdeError(
+            "I don't know how to implement SerializeTuple for MySerializer".to_string(),
+        ));
     }
 }
 
@@ -310,11 +344,15 @@ impl<'a> ser::SerializeTupleStruct for &'a mut MySerializer {
     where
         T: ?Sized + Serialize,
     {
-        todo!()
+        return Err(DbError::SerdeError(
+            "I don't know how to implement SerializeTupleStruct for MySerializer".to_string(),
+        ));
     }
 
     fn end(self) -> Result<(), DbError> {
-        todo!()
+        return Err(DbError::SerdeError(
+            "I don't know how to implement SerializeTupleStruct for MySerializer".to_string(),
+        ));
     }
 }
 
@@ -326,11 +364,15 @@ impl<'a> ser::SerializeTupleVariant for &'a mut MySerializer {
     where
         T: ?Sized + Serialize,
     {
-        todo!()
+        return Err(DbError::SerdeError(
+            "I don't know how to implement SerializeTupleVariant for MySerializer".to_string(),
+        ));
     }
 
     fn end(self) -> Result<(), DbError> {
-        todo!()
+        return Err(DbError::SerdeError(
+            "I don't know how to implement SerializeTupleVariant for MySerializer".to_string(),
+        ));
     }
 }
 
@@ -342,18 +384,24 @@ impl<'a> ser::SerializeMap for &'a mut MySerializer {
     where
         T: ?Sized + Serialize,
     {
-        todo!()
+        return Err(DbError::SerdeError(
+            "I don't know how to implement SerializeMap for MySerializer".to_string(),
+        ));
     }
 
     fn serialize_value<T>(&mut self, _value: &T) -> Result<(), DbError>
     where
         T: ?Sized + Serialize,
     {
-        todo!()
+        return Err(DbError::SerdeError(
+            "I don't know how to implement SerializeMap for MySerializer".to_string(),
+        ));
     }
 
     fn end(self) -> Result<(), DbError> {
-        todo!()
+        return Err(DbError::SerdeError(
+            "I don't know how to implement SerializeMap for MySerializer".to_string(),
+        ));
     }
 }
 
@@ -383,11 +431,15 @@ impl<'a> ser::SerializeStructVariant for &'a mut MySerializer {
     where
         T: ?Sized + Serialize,
     {
-        todo!()
+        return Err(DbError::SerdeError(
+            "I don't know how to implement SerializeStructVariant for MySerializer".to_string(),
+        ));
     }
 
     fn end(self) -> Result<(), DbError> {
-        todo!()
+        return Err(DbError::SerdeError(
+            "I don't know how to implement SerializeStructVariant for MySerializer".to_string(),
+        ));
     }
 }
 
