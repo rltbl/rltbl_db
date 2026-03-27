@@ -3,7 +3,11 @@ use crate::{
     db_value::{DbRow, DbValue, JsonRow, JsonValue},
 };
 use rust_decimal::prelude::ToPrimitive;
-use serde::{Deserialize, Serialize, ser};
+use serde::{
+    Deserialize, Serialize,
+    de::{self, Visitor},
+    ser,
+};
 
 pub fn to_db_row<T>(value: &T) -> Result<DbRow, DbError>
 where
@@ -35,15 +39,30 @@ where
 
 pub fn from_db_row<T>(db_row: &DbRow) -> Result<T, DbError>
 where
+    T: for<'de> Deserialize<'de>,
+{
+    let mut deserializer = MyDeserializer::from_db_row(db_row);
+    let t = T::deserialize(&mut deserializer)?;
+    if deserializer.keys.is_empty() && deserializer.values.is_empty() {
+        Ok(t)
+    } else {
+        Err(DbError::SerdeError(
+            "Deserialization error: Leftover input".to_string(),
+        ))
+    }
+}
+
+// TODO: Remove this function before merging this branch. Keeping it around for now for comparison.
+pub fn from_db_row_indirect<T>(db_row: &DbRow) -> Result<T, DbError>
+where
     T: for<'a> Deserialize<'a>,
 {
-    // TODO: Can we do this directly without the intermediate step of first converting to JSON?
     // The method below *works* and, unlike for serialization, where converting from JSON would
     // necessarily throw away type information, converting to JSON in this case does not throw
     // any type information away. So we do not *need* to find an alternative method. However this
     // method (using the intermediate step of deserializing to JSON) seems inefficient
-    // and it would probably be better to deserialize directly from a DbRow to a T struct if
-    // possible.
+    // and it is probably be better to deserialize directly from a DbRow to a T struct, as is done
+    // in from_db_row().
     let mut flat_row = JsonRow::new();
     for (column, value) in db_row.iter() {
         match value {
@@ -103,7 +122,7 @@ impl<'a> ser::Serializer for &'a mut MySerializer {
 
     fn serialize_i8(self, _value: i8) -> Result<(), Self::Error> {
         return Err(DbError::SerdeError(
-            "I don't know how to serialize an i8".to_string(),
+            "Serializing i8 is not supported".to_string(),
         ));
     }
 
@@ -124,7 +143,7 @@ impl<'a> ser::Serializer for &'a mut MySerializer {
 
     fn serialize_u8(self, _value: u8) -> Result<(), Self::Error> {
         return Err(DbError::SerdeError(
-            "I don't know how to serialize a u8".to_string(),
+            "Serializing u8 is not supported".to_string(),
         ));
     }
 
@@ -155,7 +174,7 @@ impl<'a> ser::Serializer for &'a mut MySerializer {
 
     fn serialize_char(self, _value: char) -> Result<(), Self::Error> {
         return Err(DbError::SerdeError(
-            "I don't know how to serialize a char".to_string(),
+            "Serializing char is not supported".to_string(),
         ));
     }
 
@@ -166,13 +185,13 @@ impl<'a> ser::Serializer for &'a mut MySerializer {
 
     fn serialize_bytes(self, _values: &[u8]) -> Result<(), Self::Error> {
         return Err(DbError::SerdeError(
-            "I don't know how to serialize bytes to a DbValue".to_string(),
+            "Serializing bytes is not supported".to_string(),
         ));
     }
 
     fn serialize_none(self) -> Result<(), Self::Error> {
         return Err(DbError::SerdeError(
-            "I don't know how to serialize None".to_string(),
+            "Serializing None is not supported".to_string(),
         ));
     }
 
@@ -181,19 +200,19 @@ impl<'a> ser::Serializer for &'a mut MySerializer {
         T: ?Sized + Serialize,
     {
         return Err(DbError::SerdeError(
-            "I don't know how to serialize Some".to_string(),
+            "Serializing Some is not supported".to_string(),
         ));
     }
 
     fn serialize_unit(self) -> Result<(), Self::Error> {
         return Err(DbError::SerdeError(
-            "I don't know how to serialize a unit".to_string(),
+            "Serializing unit is not supported".to_string(),
         ));
     }
 
     fn serialize_unit_struct(self, _name: &str) -> Result<(), Self::Error> {
         return Err(DbError::SerdeError(
-            "I don't know how to serialize a unit struct".to_string(),
+            "Serializing unit struct is not supported".to_string(),
         ));
     }
 
@@ -204,7 +223,7 @@ impl<'a> ser::Serializer for &'a mut MySerializer {
         _variant: &str,
     ) -> Result<(), Self::Error> {
         return Err(DbError::SerdeError(
-            "I don't know how to serialize a unit variant".to_string(),
+            "Serializing unit variant is not supported".to_string(),
         ));
     }
 
@@ -213,7 +232,7 @@ impl<'a> ser::Serializer for &'a mut MySerializer {
         T: ?Sized + Serialize,
     {
         return Err(DbError::SerdeError(
-            "I don't know how to serialize a newtype struct".to_string(),
+            "Serializing newtype struct is not supported".to_string(),
         ));
     }
 
@@ -228,19 +247,19 @@ impl<'a> ser::Serializer for &'a mut MySerializer {
         T: ?Sized + Serialize,
     {
         return Err(DbError::SerdeError(
-            "I don't know how to serialize a newtype variant".to_string(),
+            "Serializing newtype variant is not supported".to_string(),
         ));
     }
 
     fn serialize_seq(self, _len: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> {
         return Err(DbError::SerdeError(
-            "I don't know how to serialize a seq".to_string(),
+            "Serializing seq is not supported".to_string(),
         ));
     }
 
     fn serialize_tuple(self, _len: usize) -> Result<Self::SerializeTuple, Self::Error> {
         return Err(DbError::SerdeError(
-            "I don't know how to serialize a tuple".to_string(),
+            "Serializing tuple is not supported".to_string(),
         ));
     }
 
@@ -250,7 +269,7 @@ impl<'a> ser::Serializer for &'a mut MySerializer {
         _len: usize,
     ) -> Result<Self::SerializeTupleStruct, Self::Error> {
         return Err(DbError::SerdeError(
-            "I don't know how to serialize a tuple struct".to_string(),
+            "Serializing tuple struct is not supported".to_string(),
         ));
     }
 
@@ -262,7 +281,7 @@ impl<'a> ser::Serializer for &'a mut MySerializer {
         _len: usize,
     ) -> Result<Self::SerializeTupleVariant, Self::Error> {
         return Err(DbError::SerdeError(
-            "I don't know how to serialize a tuple variant".to_string(),
+            "Serializing tuple variant is not supported".to_string(),
         ));
     }
 
@@ -287,7 +306,7 @@ impl<'a> ser::Serializer for &'a mut MySerializer {
         _len: usize,
     ) -> Result<Self::SerializeStructVariant, Self::Error> {
         return Err(DbError::SerdeError(
-            "I don't know how to serialize a struct variant".to_string(),
+            "Serializing struct variant is not supported".to_string(),
         ));
     }
 }
@@ -304,14 +323,14 @@ impl<'a> ser::SerializeSeq for &'a mut MySerializer {
         T: ?Sized + Serialize,
     {
         return Err(DbError::SerdeError(
-            "I don't know how to implement SerializeSeq for MySerializer".to_string(),
+            "SerializeSeq::serialize_element() is not supported for MySerializer".to_string(),
         ));
     }
 
     // Close the sequence.
     fn end(self) -> Result<(), Self::Error> {
         return Err(DbError::SerdeError(
-            "I don't know how to implement SerializeSeq for MySerializer".to_string(),
+            "SerializeSeq::end() is not supported for MySerializer".to_string(),
         ));
     }
 }
@@ -325,13 +344,13 @@ impl<'a> ser::SerializeTuple for &'a mut MySerializer {
         T: ?Sized + Serialize,
     {
         return Err(DbError::SerdeError(
-            "I don't know how to implement SerializeTuple for MySerializer".to_string(),
+            "SerializeTuple::serialize_element() is not supported for MySerializer".to_string(),
         ));
     }
 
     fn end(self) -> Result<(), DbError> {
         return Err(DbError::SerdeError(
-            "I don't know how to implement SerializeTuple for MySerializer".to_string(),
+            "SerializeTuple::end() is not supported for MySerializer".to_string(),
         ));
     }
 }
@@ -345,13 +364,13 @@ impl<'a> ser::SerializeTupleStruct for &'a mut MySerializer {
         T: ?Sized + Serialize,
     {
         return Err(DbError::SerdeError(
-            "I don't know how to implement SerializeTupleStruct for MySerializer".to_string(),
+            "SerializeTupleStruct::serialize_field() is not supported for MySerializer".to_string(),
         ));
     }
 
     fn end(self) -> Result<(), DbError> {
         return Err(DbError::SerdeError(
-            "I don't know how to implement SerializeTupleStruct for MySerializer".to_string(),
+            "SerializeTupleStruct::end() is not supported for MySerializer".to_string(),
         ));
     }
 }
@@ -365,13 +384,14 @@ impl<'a> ser::SerializeTupleVariant for &'a mut MySerializer {
         T: ?Sized + Serialize,
     {
         return Err(DbError::SerdeError(
-            "I don't know how to implement SerializeTupleVariant for MySerializer".to_string(),
+            "SerializeTupleVariant::serialize_field() is not supported for MySerializer"
+                .to_string(),
         ));
     }
 
     fn end(self) -> Result<(), DbError> {
         return Err(DbError::SerdeError(
-            "I don't know how to implement SerializeTupleVariant for MySerializer".to_string(),
+            "SerializeTupleVariant::end() is not supported for MySerializer".to_string(),
         ));
     }
 }
@@ -385,7 +405,7 @@ impl<'a> ser::SerializeMap for &'a mut MySerializer {
         T: ?Sized + Serialize,
     {
         return Err(DbError::SerdeError(
-            "I don't know how to implement SerializeMap for MySerializer".to_string(),
+            "SerializeMap::serialize_key() is not supported for MySerializer".to_string(),
         ));
     }
 
@@ -394,13 +414,13 @@ impl<'a> ser::SerializeMap for &'a mut MySerializer {
         T: ?Sized + Serialize,
     {
         return Err(DbError::SerdeError(
-            "I don't know how to implement SerializeMap for MySerializer".to_string(),
+            "SerializeMap::serialize_value() is not supported for MySerializer".to_string(),
         ));
     }
 
     fn end(self) -> Result<(), DbError> {
         return Err(DbError::SerdeError(
-            "I don't know how to implement SerializeMap for MySerializer".to_string(),
+            "SerializeMap::end() is not supported for MySerializer".to_string(),
         ));
     }
 }
@@ -432,14 +452,332 @@ impl<'a> ser::SerializeStructVariant for &'a mut MySerializer {
         T: ?Sized + Serialize,
     {
         return Err(DbError::SerdeError(
-            "I don't know how to implement SerializeStructVariant for MySerializer".to_string(),
+            "SerializeStructVariant::serialize_field() is not supported for MySerializer"
+                .to_string(),
         ));
     }
 
     fn end(self) -> Result<(), DbError> {
         return Err(DbError::SerdeError(
-            "I don't know how to implement SerializeStructVariant for MySerializer".to_string(),
+            "SerializeStructVariant::end() is not supported for MySerializer".to_string(),
         ));
+    }
+}
+
+#[derive(Debug)]
+pub struct MyDeserializer<'de> {
+    keys: Vec<&'de str>,
+    values: Vec<&'de DbValue>,
+}
+
+impl<'de> MyDeserializer<'de> {
+    pub fn from_db_row(input: &'de DbRow) -> Self {
+        MyDeserializer {
+            keys: input.map.keys().map(|s| s.as_str()).collect::<Vec<_>>(),
+            values: input.map.values().collect::<Vec<_>>(),
+        }
+    }
+
+    pub fn next_key(&mut self) -> Option<&'de str> {
+        self.keys.pop()
+    }
+
+    pub fn next_value(&mut self) -> Option<&'de DbValue> {
+        self.values.pop()
+    }
+}
+
+impl<'de, 'a> de::Deserializer<'de> for &'a mut MyDeserializer<'de> {
+    type Error = DbError;
+
+    fn deserialize_any<V>(self, _visitor: V) -> Result<V::Value, DbError>
+    where
+        V: Visitor<'de>,
+    {
+        // TODO: Change the unimplemented!() calls to actual errors, like we do for
+        // unsupported serializations above.
+        // println!("In deserialize_any()");
+        unimplemented!()
+    }
+
+    fn deserialize_bool<V>(self, visitor: V) -> Result<V::Value, DbError>
+    where
+        V: Visitor<'de>,
+    {
+        // println!("In deserialize_bool()");
+        let value = self.next_value().unwrap().as_bool().unwrap();
+        visitor.visit_bool(value)
+    }
+
+    fn deserialize_i8<V>(self, _visitor: V) -> Result<V::Value, DbError>
+    where
+        V: Visitor<'de>,
+    {
+        // println!("In deserialize_i8()");
+        unimplemented!()
+    }
+
+    fn deserialize_i16<V>(self, visitor: V) -> Result<V::Value, DbError>
+    where
+        V: Visitor<'de>,
+    {
+        // println!("In deserialize_i16()");
+        let value = self.next_value().unwrap().as_i16().unwrap();
+        visitor.visit_i16(value)
+    }
+
+    fn deserialize_i32<V>(self, visitor: V) -> Result<V::Value, DbError>
+    where
+        V: Visitor<'de>,
+    {
+        // println!("In deserialize_i32()");
+        let value = self.next_value().unwrap().as_i32().unwrap();
+        visitor.visit_i32(value)
+    }
+
+    fn deserialize_i64<V>(self, visitor: V) -> Result<V::Value, DbError>
+    where
+        V: Visitor<'de>,
+    {
+        // println!("In deserialize_i64()");
+        let value = self.next_value().unwrap().as_i64().unwrap();
+        visitor.visit_i64(value)
+    }
+
+    fn deserialize_u8<V>(self, _visitor: V) -> Result<V::Value, DbError>
+    where
+        V: Visitor<'de>,
+    {
+        // println!("In deserialize_u8()");
+        unimplemented!()
+    }
+
+    fn deserialize_u16<V>(self, _visitor: V) -> Result<V::Value, DbError>
+    where
+        V: Visitor<'de>,
+    {
+        // println!("In deserialize_u16()");
+        unimplemented!()
+    }
+
+    fn deserialize_u32<V>(self, _visitor: V) -> Result<V::Value, DbError>
+    where
+        V: Visitor<'de>,
+    {
+        // println!("In deserialize_u32()");
+        unimplemented!()
+    }
+
+    fn deserialize_u64<V>(self, _visitor: V) -> Result<V::Value, DbError>
+    where
+        V: Visitor<'de>,
+    {
+        // println!("In deserialize_u64()");
+        unimplemented!()
+    }
+
+    fn deserialize_f32<V>(self, visitor: V) -> Result<V::Value, DbError>
+    where
+        V: Visitor<'de>,
+    {
+        // println!("In deserialize_f32()");
+        let value = self.next_value().unwrap().as_f32().unwrap();
+        visitor.visit_f32(value)
+    }
+
+    fn deserialize_f64<V>(self, visitor: V) -> Result<V::Value, DbError>
+    where
+        V: Visitor<'de>,
+    {
+        // println!("In deserialize_f64()");
+        let value = self.next_value().unwrap().as_f64().unwrap();
+        visitor.visit_f64(value)
+    }
+
+    fn deserialize_char<V>(self, _visitor: V) -> Result<V::Value, DbError>
+    where
+        V: Visitor<'de>,
+    {
+        // println!("In deserialize_char()");
+        unimplemented!()
+    }
+
+    fn deserialize_str<V>(self, _visitor: V) -> Result<V::Value, DbError>
+    where
+        V: Visitor<'de>,
+    {
+        // println!("In deserialize_string()");
+        unimplemented!()
+    }
+
+    fn deserialize_string<V>(self, visitor: V) -> Result<V::Value, DbError>
+    where
+        V: Visitor<'de>,
+    {
+        // println!("In deserialize_string()");
+        let value = self.next_value().unwrap().as_str().unwrap();
+        visitor.visit_borrowed_str(value)
+    }
+
+    fn deserialize_bytes<V>(self, _visitor: V) -> Result<V::Value, DbError>
+    where
+        V: Visitor<'de>,
+    {
+        // println!("In deserialize_bytes()");
+        unimplemented!()
+    }
+
+    fn deserialize_byte_buf<V>(self, _visitor: V) -> Result<V::Value, DbError>
+    where
+        V: Visitor<'de>,
+    {
+        // println!("In deserialize_byte_buf()");
+        unimplemented!()
+    }
+
+    fn deserialize_option<V>(self, _visitor: V) -> Result<V::Value, DbError>
+    where
+        V: Visitor<'de>,
+    {
+        // println!("In deserialize_option()");
+        unimplemented!()
+    }
+
+    fn deserialize_unit<V>(self, _visitor: V) -> Result<V::Value, DbError>
+    where
+        V: Visitor<'de>,
+    {
+        // println!("In deserialize_unit()");
+        unimplemented!()
+    }
+
+    fn deserialize_unit_struct<V>(
+        self,
+        _name: &'static str,
+        _visitor: V,
+    ) -> Result<V::Value, DbError>
+    where
+        V: Visitor<'de>,
+    {
+        // println!("In deserialize_unit_struct()");
+        unimplemented!()
+    }
+
+    fn deserialize_newtype_struct<V>(
+        self,
+        _name: &'static str,
+        _visitor: V,
+    ) -> Result<V::Value, DbError>
+    where
+        V: Visitor<'de>,
+    {
+        // println!("In deserialize_newtype_struct()");
+        unimplemented!()
+    }
+
+    fn deserialize_seq<V>(self, _visitor: V) -> Result<V::Value, DbError>
+    where
+        V: Visitor<'de>,
+    {
+        // println!("In deserialize_seq()");
+        unimplemented!()
+    }
+
+    fn deserialize_tuple<V>(self, _len: usize, _visitor: V) -> Result<V::Value, DbError>
+    where
+        V: Visitor<'de>,
+    {
+        // println!("In deserialize_tuple()");
+        unimplemented!()
+    }
+
+    fn deserialize_tuple_struct<V>(
+        self,
+        _name: &'static str,
+        _len: usize,
+        _visitor: V,
+    ) -> Result<V::Value, DbError>
+    where
+        V: Visitor<'de>,
+    {
+        // println!("In deserialize_tuple_struct()");
+        unimplemented!()
+    }
+
+    fn deserialize_map<V>(self, visitor: V) -> Result<V::Value, DbError>
+    where
+        V: Visitor<'de>,
+    {
+        // println!("In deserialize_map()");
+        let value = visitor.visit_map(self)?;
+        Ok(value)
+    }
+
+    fn deserialize_struct<V>(
+        self,
+        _name: &'static str,
+        _fields: &'static [&'static str],
+        visitor: V,
+    ) -> Result<V::Value, DbError>
+    where
+        V: Visitor<'de>,
+    {
+        // println!("In deserialize_struct()");
+        self.deserialize_map(visitor)
+    }
+
+    fn deserialize_enum<V>(
+        self,
+        _name: &'static str,
+        _variants: &'static [&'static str],
+        _visitor: V,
+    ) -> Result<V::Value, DbError>
+    where
+        V: Visitor<'de>,
+    {
+        // println!("In deserialize_enum()");
+        unimplemented!()
+    }
+
+    fn deserialize_identifier<V>(self, visitor: V) -> Result<V::Value, DbError>
+    where
+        V: Visitor<'de>,
+    {
+        // TODO: Remove unwraps here and elsewhere.
+        // println!("In deserialize_identifier()");
+        let key = self.next_key().unwrap();
+        visitor.visit_borrowed_str(key)
+    }
+
+    fn deserialize_ignored_any<V>(self, _visitor: V) -> Result<V::Value, DbError>
+    where
+        V: Visitor<'de>,
+    {
+        // println!("In deserialize_ignored_any()");
+        unimplemented!()
+    }
+}
+
+impl<'de> de::MapAccess<'de> for MyDeserializer<'de> {
+    type Error = DbError;
+
+    fn next_key_seed<S>(&mut self, seed: S) -> Result<Option<S::Value>, Self::Error>
+    where
+        S: de::DeserializeSeed<'de>,
+    {
+        // println!("In next_key_seed() with SELF: {self:?}");
+        if self.keys.len() == 0 {
+            return Ok(None);
+        }
+        seed.deserialize(&mut *self).map(Some)
+    }
+
+    fn next_value_seed<S>(&mut self, seed: S) -> Result<S::Value, Self::Error>
+    where
+        S: de::DeserializeSeed<'de>,
+    {
+        // println!("In next_value_seed() with SELF: {self:?}");
+        seed.deserialize(&mut *self)
     }
 }
 
@@ -488,11 +826,9 @@ mod tests {
         };
         assert_eq!(expected_db_row, to_db_row(&expected_struct).unwrap());
         assert_eq!(expected_struct, from_db_row(&expected_db_row).unwrap());
-
-        // // Serializing or deserializing a DbRow into a DbRow should yield a DbRow that is
-        // // identical to the original one. TODO: This is not yet working.
-        // let db_row = db_row! {"value".into() => DbValue::from("foo")};
-        // assert_eq!(db_row, to_db_row(&db_row).unwrap());
-        // assert_eq!(db_row, from_db_row(&db_row).unwrap());
+        assert_eq!(
+            expected_struct,
+            from_db_row_indirect(&expected_db_row).unwrap()
+        );
     }
 }
