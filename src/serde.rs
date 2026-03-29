@@ -11,14 +11,16 @@ use serde::{
     ser,
 };
 
-/// Convert the given struct to a [DbRow]. For this to be successful, the struct
+/// Convert the given supported struct to a [DbRow]. For this to be successful, the struct
 /// must be a "normal struct" of the form:
 ///
+/// ```ignore
 /// struct NormalStruct {
-///   field1: type1,
-///   field2: type2,
+///   field1: type1, // or Option<type1>
+///   field2: type2, // or Option<type2>
 ///   ...
 /// }
+/// ```
 ///
 /// where type1, type2, ... are among the primitive types associated with
 /// the different kinds of [DbValue]. Other field types, and other types of
@@ -57,11 +59,13 @@ where
 /// Convert the given [DbRow] to a supported struct. For this to be successful,
 /// the struct must be a "normal struct" of the form:
 ///
+/// ```ignore
 /// struct NormalStruct {
-///   field1: type1,
-///   field2: type2,
+///   field1: type1, // or Option<type1>
+///   field2: type2, // or Option<type2>
 ///   ...
 /// }
+/// ```
 ///
 /// where type1, type2, ... are among the primitive types associated with
 /// the different kinds of [DbValue]. Other field types, and other types of
@@ -79,9 +83,10 @@ where
     if deserializer.keys.is_empty() && deserializer.values.is_empty() {
         Ok(t)
     } else {
-        Err(DbError::SerdeError(
-            "Deserialization error: Leftover input".to_string(),
-        ))
+        Err(DbError::SerdeError(format!(
+            "Deserialization error: Leftover keys: {:?} and values: {:?}",
+            deserializer.keys, deserializer.values
+        )))
     }
 }
 
@@ -155,15 +160,11 @@ impl<'a> ser::Serializer for &'a mut DbRowSerializer {
     type SerializeStruct = Self;
     type SerializeStructVariant = Self;
 
+    // Primitive types
+
     fn serialize_bool(self, value: bool) -> Result<(), Self::Error> {
         self.values.push(DbValue::from(value));
         Ok(())
-    }
-
-    fn serialize_i8(self, _value: i8) -> Result<(), Self::Error> {
-        return Err(DbError::SerdeError(
-            "Serializing i8 is not supported".to_string(),
-        ));
     }
 
     fn serialize_i16(self, value: i16) -> Result<(), Self::Error> {
@@ -179,12 +180,6 @@ impl<'a> ser::Serializer for &'a mut DbRowSerializer {
     fn serialize_i64(self, value: i64) -> Result<(), Self::Error> {
         self.values.push(DbValue::from(value));
         Ok(())
-    }
-
-    fn serialize_u8(self, _value: u8) -> Result<(), Self::Error> {
-        return Err(DbError::SerdeError(
-            "Serializing u8 is not supported".to_string(),
-        ));
     }
 
     fn serialize_u16(self, value: u16) -> Result<(), Self::Error> {
@@ -212,22 +207,12 @@ impl<'a> ser::Serializer for &'a mut DbRowSerializer {
         Ok(())
     }
 
-    fn serialize_char(self, _value: char) -> Result<(), Self::Error> {
-        return Err(DbError::SerdeError(
-            "Serializing char is not supported".to_string(),
-        ));
-    }
-
     fn serialize_str(self, value: &str) -> Result<(), Self::Error> {
         self.values.push(DbValue::from(value));
         Ok(())
     }
 
-    fn serialize_bytes(self, _values: &[u8]) -> Result<(), Self::Error> {
-        return Err(DbError::SerdeError(
-            "Serializing bytes is not supported".to_string(),
-        ));
-    }
+    // Options
 
     fn serialize_none(self) -> Result<(), Self::Error> {
         self.serialize_unit()
@@ -243,6 +228,46 @@ impl<'a> ser::Serializer for &'a mut DbRowSerializer {
     fn serialize_unit(self) -> Result<(), Self::Error> {
         self.values.push(DbValue::Null);
         Ok(())
+    }
+
+    // More complex types:
+
+    fn serialize_struct(
+        self,
+        _name: &str,
+        len: usize,
+    ) -> Result<Self::SerializeStruct, Self::Error> {
+        self.serialize_map(Some(len))
+    }
+
+    fn serialize_map(self, _len: Option<usize>) -> Result<Self::SerializeMap, Self::Error> {
+        Ok(self)
+    }
+
+    // Unsupported types:
+
+    fn serialize_i8(self, _value: i8) -> Result<(), Self::Error> {
+        return Err(DbError::SerdeError(
+            "Serializing i8 is not supported".to_string(),
+        ));
+    }
+
+    fn serialize_u8(self, _value: u8) -> Result<(), Self::Error> {
+        return Err(DbError::SerdeError(
+            "Serializing u8 is not supported".to_string(),
+        ));
+    }
+
+    fn serialize_char(self, _value: char) -> Result<(), Self::Error> {
+        return Err(DbError::SerdeError(
+            "Serializing char is not supported".to_string(),
+        ));
+    }
+
+    fn serialize_bytes(self, _values: &[u8]) -> Result<(), Self::Error> {
+        return Err(DbError::SerdeError(
+            "Serializing bytes is not supported".to_string(),
+        ));
     }
 
     fn serialize_unit_struct(self, _name: &str) -> Result<(), Self::Error> {
@@ -318,18 +343,6 @@ impl<'a> ser::Serializer for &'a mut DbRowSerializer {
         return Err(DbError::SerdeError(
             "Serializing tuple variant is not supported".to_string(),
         ));
-    }
-
-    fn serialize_map(self, _len: Option<usize>) -> Result<Self::SerializeMap, Self::Error> {
-        Ok(self)
-    }
-
-    fn serialize_struct(
-        self,
-        _name: &str,
-        len: usize,
-    ) -> Result<Self::SerializeStruct, Self::Error> {
-        self.serialize_map(Some(len))
     }
 
     fn serialize_struct_variant(
@@ -511,7 +524,7 @@ impl<'a> ser::SerializeTupleVariant for &'a mut DbRowSerializer {
 ////////////////////////////////////////////////////////////////////////////////
 
 #[derive(Debug)]
-pub struct DbRowDeserializer<'de> {
+struct DbRowDeserializer<'de> {
     /// The keys of the input [DbRow].
     keys: Vec<&'de str>,
     /// The values of the input [DbRow].
@@ -519,18 +532,18 @@ pub struct DbRowDeserializer<'de> {
 }
 
 impl<'de> DbRowDeserializer<'de> {
-    pub fn from_db_row(input: &'de DbRow) -> Self {
+    fn from_db_row(input: &'de DbRow) -> Self {
         DbRowDeserializer {
             keys: input.map.keys().map(|s| s.as_str()).collect::<Vec<_>>(),
             values: input.map.values().collect::<Vec<_>>(),
         }
     }
 
-    pub fn pop_key(&mut self) -> Option<&'de str> {
+    fn pop_key(&mut self) -> Option<&'de str> {
         self.keys.pop()
     }
 
-    pub fn pop_value(&mut self) -> Option<&'de DbValue> {
+    fn pop_value(&mut self) -> Option<&'de DbValue> {
         self.values.pop()
     }
 }
@@ -538,14 +551,7 @@ impl<'de> DbRowDeserializer<'de> {
 impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     type Error = DbError;
 
-    fn deserialize_any<V>(self, _visitor: V) -> Result<V::Value, DbError>
-    where
-        V: Visitor<'de>,
-    {
-        return Err(DbError::SerdeError(
-            "Deserializing 'any' is not supported".to_string(),
-        ));
-    }
+    // Primitives:
 
     fn deserialize_bool<V>(self, visitor: V) -> Result<V::Value, DbError>
     where
@@ -559,15 +565,6 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
                 visitor.visit_bool(value)
             }
         }
-    }
-
-    fn deserialize_i8<V>(self, _visitor: V) -> Result<V::Value, DbError>
-    where
-        V: Visitor<'de>,
-    {
-        return Err(DbError::SerdeError(
-            "Deserializing 'i8' is not supported".to_string(),
-        ));
     }
 
     fn deserialize_i16<V>(self, visitor: V) -> Result<V::Value, DbError>
@@ -612,6 +609,112 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
         }
     }
 
+    fn deserialize_f32<V>(self, visitor: V) -> Result<V::Value, DbError>
+    where
+        V: Visitor<'de>,
+    {
+        match self.values.last().unwrap() {
+            DbValue::Null => self.deserialize_unit(visitor),
+            _ => {
+                let value = self.pop_value().unwrap();
+                let value = value.as_f32().unwrap();
+                visitor.visit_f32(value)
+            }
+        }
+    }
+
+    fn deserialize_f64<V>(self, visitor: V) -> Result<V::Value, DbError>
+    where
+        V: Visitor<'de>,
+    {
+        match self.values.last().unwrap() {
+            DbValue::Null => self.deserialize_unit(visitor),
+            _ => {
+                let value = self.pop_value().unwrap();
+                let value = value.as_f64().unwrap();
+                visitor.visit_f64(value)
+            }
+        }
+    }
+
+    fn deserialize_string<V>(self, visitor: V) -> Result<V::Value, DbError>
+    where
+        V: Visitor<'de>,
+    {
+        match self.values.last().unwrap() {
+            DbValue::Null => self.deserialize_unit(visitor),
+            _ => {
+                let value = self.pop_value().unwrap();
+                let value = value.as_str().unwrap();
+                visitor.visit_borrowed_str(value)
+            }
+        }
+    }
+
+    // Options:
+
+    fn deserialize_option<V>(self, visitor: V) -> Result<V::Value, DbError>
+    where
+        V: Visitor<'de>,
+    {
+        let value = self.values.last().unwrap();
+        match value {
+            DbValue::Null => self.deserialize_unit(visitor),
+            _ => visitor.visit_some(self),
+        }
+    }
+
+    fn deserialize_unit<V>(self, visitor: V) -> Result<V::Value, DbError>
+    where
+        V: Visitor<'de>,
+    {
+        let value = self.pop_value().unwrap();
+        // TODO: Remove the assert
+        assert_eq!(*value, DbValue::Null);
+        visitor.visit_unit()
+    }
+
+    // More complex types:
+
+    fn deserialize_struct<V>(
+        self,
+        _name: &'static str,
+        _fields: &'static [&'static str],
+        visitor: V,
+    ) -> Result<V::Value, DbError>
+    where
+        V: Visitor<'de>,
+    {
+        self.deserialize_map(visitor)
+    }
+
+    fn deserialize_map<V>(self, visitor: V) -> Result<V::Value, DbError>
+    where
+        V: Visitor<'de>,
+    {
+        visitor.visit_map(self)
+    }
+
+    fn deserialize_identifier<V>(self, visitor: V) -> Result<V::Value, DbError>
+    where
+        V: Visitor<'de>,
+    {
+        // TODO: Remove unwraps here and elsewhere.
+        let key = self.pop_key().unwrap();
+        visitor.visit_borrowed_str(key)
+    }
+
+    // Unsupported types:
+
+    fn deserialize_i8<V>(self, _visitor: V) -> Result<V::Value, DbError>
+    where
+        V: Visitor<'de>,
+    {
+        return Err(DbError::SerdeError(
+            "Deserializing 'i8' is not supported".to_string(),
+        ));
+    }
+
     fn deserialize_u8<V>(self, _visitor: V) -> Result<V::Value, DbError>
     where
         V: Visitor<'de>,
@@ -648,34 +751,6 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
         ));
     }
 
-    fn deserialize_f32<V>(self, visitor: V) -> Result<V::Value, DbError>
-    where
-        V: Visitor<'de>,
-    {
-        match self.values.last().unwrap() {
-            DbValue::Null => self.deserialize_unit(visitor),
-            _ => {
-                let value = self.pop_value().unwrap();
-                let value = value.as_f32().unwrap();
-                visitor.visit_f32(value)
-            }
-        }
-    }
-
-    fn deserialize_f64<V>(self, visitor: V) -> Result<V::Value, DbError>
-    where
-        V: Visitor<'de>,
-    {
-        match self.values.last().unwrap() {
-            DbValue::Null => self.deserialize_unit(visitor),
-            _ => {
-                let value = self.pop_value().unwrap();
-                let value = value.as_f64().unwrap();
-                visitor.visit_f64(value)
-            }
-        }
-    }
-
     fn deserialize_char<V>(self, _visitor: V) -> Result<V::Value, DbError>
     where
         V: Visitor<'de>,
@@ -694,20 +769,6 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
         ));
     }
 
-    fn deserialize_string<V>(self, visitor: V) -> Result<V::Value, DbError>
-    where
-        V: Visitor<'de>,
-    {
-        match self.values.last().unwrap() {
-            DbValue::Null => self.deserialize_unit(visitor),
-            _ => {
-                let value = self.pop_value().unwrap();
-                let value = value.as_str().unwrap();
-                visitor.visit_borrowed_str(value)
-            }
-        }
-    }
-
     fn deserialize_bytes<V>(self, _visitor: V) -> Result<V::Value, DbError>
     where
         V: Visitor<'de>,
@@ -724,27 +785,6 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
         return Err(DbError::SerdeError(
             "Deserializing 'byte_buf' is not supported".to_string(),
         ));
-    }
-
-    fn deserialize_option<V>(self, visitor: V) -> Result<V::Value, DbError>
-    where
-        V: Visitor<'de>,
-    {
-        let value = self.values.last().unwrap();
-        match value {
-            DbValue::Null => self.deserialize_unit(visitor),
-            _ => visitor.visit_some(self),
-        }
-    }
-
-    fn deserialize_unit<V>(self, visitor: V) -> Result<V::Value, DbError>
-    where
-        V: Visitor<'de>,
-    {
-        let value = self.pop_value().unwrap();
-        // TODO: Remove the assert
-        assert_eq!(*value, DbValue::Null);
-        visitor.visit_unit()
     }
 
     fn deserialize_unit_struct<V>(
@@ -805,25 +845,6 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
         ));
     }
 
-    fn deserialize_map<V>(self, visitor: V) -> Result<V::Value, DbError>
-    where
-        V: Visitor<'de>,
-    {
-        visitor.visit_map(self)
-    }
-
-    fn deserialize_struct<V>(
-        self,
-        _name: &'static str,
-        _fields: &'static [&'static str],
-        visitor: V,
-    ) -> Result<V::Value, DbError>
-    where
-        V: Visitor<'de>,
-    {
-        self.deserialize_map(visitor)
-    }
-
     fn deserialize_enum<V>(
         self,
         _name: &'static str,
@@ -838,21 +859,21 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
         ));
     }
 
-    fn deserialize_identifier<V>(self, visitor: V) -> Result<V::Value, DbError>
-    where
-        V: Visitor<'de>,
-    {
-        // TODO: Remove unwraps here and elsewhere.
-        let key = self.pop_key().unwrap();
-        visitor.visit_borrowed_str(key)
-    }
-
     fn deserialize_ignored_any<V>(self, _visitor: V) -> Result<V::Value, DbError>
     where
         V: Visitor<'de>,
     {
         return Err(DbError::SerdeError(
             "Deserializing 'ignored_any' is not supported".to_string(),
+        ));
+    }
+
+    fn deserialize_any<V>(self, _visitor: V) -> Result<V::Value, DbError>
+    where
+        V: Visitor<'de>,
+    {
+        return Err(DbError::SerdeError(
+            "Deserializing 'any' is not supported".to_string(),
         ));
     }
 }
@@ -944,9 +965,9 @@ mod tests {
         };
         assert_eq!(expected_db_row, to_db_row(&expected_struct).unwrap());
         assert_eq!(expected_struct, from_db_row(&expected_db_row).unwrap());
-        //assert_eq!(
-        //    expected_struct,
-        //    from_db_row_indirect(&expected_db_row).unwrap()
-        //);
+        assert_eq!(
+            expected_struct,
+            from_db_row_indirect(&expected_db_row).unwrap()
+        );
     }
 }
