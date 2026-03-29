@@ -11,10 +11,6 @@ use serde::{
     ser,
 };
 
-////////////////////////////////////////////////////////////////////////////////
-// Serialization
-////////////////////////////////////////////////////////////////////////////////
-
 /// Convert the given struct to a [DbRow]. For this to be successful, the struct
 /// must be a "normal struct" of the form:
 ///
@@ -57,6 +53,79 @@ where
     }
     Ok(db_row)
 }
+
+/// Convert the given [DbRow] to a supported struct. For this to be successful,
+/// the struct must be a "normal struct" of the form:
+///
+/// struct NormalStruct {
+///   field1: type1,
+///   field2: type2,
+///   ...
+/// }
+///
+/// where type1, type2, ... are among the primitive types associated with
+/// the different kinds of [DbValue]. Other field types, and other types of
+/// structs (e.g., tuple structs, unit structs, see
+/// <https://doc.rust-lang.org/book/ch05-01-defining-structs.html>) are not
+/// supported and attempts to deserialize a [DbRow] to them will result in an
+/// error, as will attempts to deserialize a [DbRow] to anything other than a
+/// struct (e.g., an enum).
+pub fn from_db_row<T>(db_row: &DbRow) -> Result<T, DbError>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    let mut deserializer = DbRowDeserializer::from_db_row(db_row);
+    let t = T::deserialize(&mut deserializer)?;
+    if deserializer.keys.is_empty() && deserializer.values.is_empty() {
+        Ok(t)
+    } else {
+        Err(DbError::SerdeError(
+            "Deserialization error: Leftover input".to_string(),
+        ))
+    }
+}
+
+// TODO: Remove this alternative implementation of from_db_row() before merging this branch.
+// Keeping it around for now for comparison with the preferred implementaion.
+pub fn from_db_row_indirect<T>(db_row: &DbRow) -> Result<T, DbError>
+where
+    T: for<'a> Deserialize<'a>,
+{
+    // The method below *works* and, unlike the case of serializing a struct to a DbRow, where
+    // converting to JSON as an intermediate step necessarily throws away the type information
+    // that we need for a successful serialization to DbRow, in the case of deserialization,
+    // converting to JSON as an intermediate step is not lossy in that sense. So we do not
+    // *need* to find an alternative method. However converting to JSON first seems
+    // inefficient and it is probably be better to deserialize directly from a DbRow
+    // to a T struct, as is done in from_db_row() above.
+    let mut flat_row = JsonRow::new();
+    for (column, value) in db_row.iter() {
+        match value {
+            DbValue::Null => flat_row.insert(column.to_string(), JsonValue::Null),
+            DbValue::Boolean(num) => flat_row.insert(column.to_string(), JsonValue::from(*num)),
+            DbValue::SmallInteger(num) => {
+                flat_row.insert(column.to_string(), JsonValue::from(*num))
+            }
+            DbValue::Integer(num) => flat_row.insert(column.to_string(), JsonValue::from(*num)),
+            DbValue::BigInteger(num) => flat_row.insert(column.to_string(), JsonValue::from(*num)),
+            DbValue::Real(num) => flat_row.insert(column.to_string(), JsonValue::from(*num)),
+            DbValue::BigReal(num) => flat_row.insert(column.to_string(), JsonValue::from(*num)),
+            DbValue::Numeric(num) => {
+                flat_row.insert(column.to_string(), JsonValue::from(num.to_f64()))
+            }
+            DbValue::Text(txt) => {
+                flat_row.insert(column.to_string(), JsonValue::from(txt.to_string()))
+            }
+        };
+    }
+    let t_struct: T = serde_json::from_str(&serde_json::json!(flat_row).to_string())
+        .map_err(|err| DbError::SerdeError(err.to_string()))?;
+    Ok(t_struct)
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// Serialization implementations
+////////////////////////////////////////////////////////////////////////////////
 
 #[derive(Debug)]
 struct DbRowSerializer {
@@ -276,6 +345,81 @@ impl<'a> ser::Serializer for &'a mut DbRowSerializer {
     }
 }
 
+impl<'a> ser::SerializeStruct for &'a mut DbRowSerializer {
+    // These need to match the `Ok` and `Error` types of DbRowSerializer:
+    type Ok = ();
+    type Error = DbError;
+
+    fn serialize_field<T>(&mut self, key: &'static str, value: &T) -> Result<(), DbError>
+    where
+        T: ?Sized + Serialize,
+    {
+        self.keys.push(key.to_string());
+        value.serialize(&mut **self)?;
+        Ok(())
+    }
+
+    fn end(self) -> Result<(), DbError> {
+        Ok(())
+    }
+}
+
+impl<'a> ser::SerializeStructVariant for &'a mut DbRowSerializer {
+    // These need to match the `Ok` and `Error` types of DbRowSerializer:
+    type Ok = ();
+    type Error = DbError;
+
+    fn serialize_field<T>(&mut self, _key: &'static str, _value: &T) -> Result<(), DbError>
+    where
+        T: ?Sized + Serialize,
+    {
+        return Err(DbError::SerdeError(
+            "SerializeStructVariant::serialize_field() is not supported for DbRowSerializer"
+                .to_string(),
+        ));
+    }
+
+    fn end(self) -> Result<(), DbError> {
+        return Err(DbError::SerdeError(
+            "SerializeStructVariant::end() is not supported for DbRowSerializer".to_string(),
+        ));
+    }
+}
+
+// Although a [DbRow] is essentially a wrapper around an IndexMap, when one is serialized,
+// the serialization begins with our implementation of SerializeStruct and thus does not require
+// us to explicitly implement actually working code for the implemetation of SerializeMap, because
+// the map is serialized, instead, via the call to value.serialize() (see above).
+impl<'a> ser::SerializeMap for &'a mut DbRowSerializer {
+    // These need to match the `Ok` and `Error` types of DbRowSerializer:
+    type Ok = ();
+    type Error = DbError;
+
+    fn serialize_key<T>(&mut self, _key: &T) -> Result<(), DbError>
+    where
+        T: ?Sized + Serialize,
+    {
+        return Err(DbError::SerdeError(
+            "SerializeMap::serialize_key() is not supported for DbRowSerializer".to_string(),
+        ));
+    }
+
+    fn serialize_value<T>(&mut self, _value: &T) -> Result<(), DbError>
+    where
+        T: ?Sized + Serialize,
+    {
+        return Err(DbError::SerdeError(
+            "SerializeMap::serialize_value() is not supported for DbRowSerializer".to_string(),
+        ));
+    }
+
+    fn end(self) -> Result<(), DbError> {
+        return Err(DbError::SerdeError(
+            "SerializeMap::end() is not supported for DbRowSerializer".to_string(),
+        ));
+    }
+}
+
 impl<'a> ser::SerializeSeq for &'a mut DbRowSerializer {
     // These need to match the `Ok` and `Error` types of DbRowSerializer:
     type Ok = ();
@@ -362,152 +506,9 @@ impl<'a> ser::SerializeTupleVariant for &'a mut DbRowSerializer {
     }
 }
 
-// Although a [DbRow] is essentially a wrapper around an IndexMap, when one is serialized,
-// the serialization begins with our implementation of SerializeStruct and does not require
-// us to explicitly implement working code for SerializeMap.
-impl<'a> ser::SerializeMap for &'a mut DbRowSerializer {
-    // These need to match the `Ok` and `Error` types of DbRowSerializer:
-    type Ok = ();
-    type Error = DbError;
-
-    fn serialize_key<T>(&mut self, _key: &T) -> Result<(), DbError>
-    where
-        T: ?Sized + Serialize,
-    {
-        return Err(DbError::SerdeError(
-            "SerializeMap::serialize_key() is not supported for DbRowSerializer".to_string(),
-        ));
-    }
-
-    fn serialize_value<T>(&mut self, _value: &T) -> Result<(), DbError>
-    where
-        T: ?Sized + Serialize,
-    {
-        return Err(DbError::SerdeError(
-            "SerializeMap::serialize_value() is not supported for DbRowSerializer".to_string(),
-        ));
-    }
-
-    fn end(self) -> Result<(), DbError> {
-        return Err(DbError::SerdeError(
-            "SerializeMap::end() is not supported for DbRowSerializer".to_string(),
-        ));
-    }
-}
-
-impl<'a> ser::SerializeStruct for &'a mut DbRowSerializer {
-    // These need to match the `Ok` and `Error` types of DbRowSerializer:
-    type Ok = ();
-    type Error = DbError;
-
-    fn serialize_field<T>(&mut self, key: &'static str, value: &T) -> Result<(), DbError>
-    where
-        T: ?Sized + Serialize,
-    {
-        self.keys.push(key.to_string());
-        value.serialize(&mut **self)?;
-        Ok(())
-    }
-
-    fn end(self) -> Result<(), DbError> {
-        Ok(())
-    }
-}
-
-impl<'a> ser::SerializeStructVariant for &'a mut DbRowSerializer {
-    // These need to match the `Ok` and `Error` types of DbRowSerializer:
-    type Ok = ();
-    type Error = DbError;
-
-    fn serialize_field<T>(&mut self, _key: &'static str, _value: &T) -> Result<(), DbError>
-    where
-        T: ?Sized + Serialize,
-    {
-        return Err(DbError::SerdeError(
-            "SerializeStructVariant::serialize_field() is not supported for DbRowSerializer"
-                .to_string(),
-        ));
-    }
-
-    fn end(self) -> Result<(), DbError> {
-        return Err(DbError::SerdeError(
-            "SerializeStructVariant::end() is not supported for DbRowSerializer".to_string(),
-        ));
-    }
-}
-
 ////////////////////////////////////////////////////////////////////////////////
-// Deserialization
+// Deserialization implementations
 ////////////////////////////////////////////////////////////////////////////////
-
-/// Convert the given [DbRow] to a supported struct. For this to be successful,
-/// the struct must be a "normal struct" of the form:
-///
-/// struct NormalStruct {
-///   field1: type1,
-///   field2: type2,
-///   ...
-/// }
-///
-/// where type1, type2, ... are among the primitive types associated with
-/// the different kinds of [DbValue]. Other field types, and other types of
-/// structs (e.g., tuple structs, unit structs, see
-/// <https://doc.rust-lang.org/book/ch05-01-defining-structs.html>) are not
-/// supported and attempts to deserialize a [DbRow] to them will result in an
-/// error, as will attempts to deserialize a [DbRow] to anything other than a
-/// struct (e.g., an enum).
-pub fn from_db_row<T>(db_row: &DbRow) -> Result<T, DbError>
-where
-    T: for<'de> Deserialize<'de>,
-{
-    let mut deserializer = DbRowDeserializer::from_db_row(db_row);
-    let t = T::deserialize(&mut deserializer)?;
-    if deserializer.keys.is_empty() && deserializer.values.is_empty() {
-        Ok(t)
-    } else {
-        Err(DbError::SerdeError(
-            "Deserialization error: Leftover input".to_string(),
-        ))
-    }
-}
-
-// TODO: Remove this alternative implementation of from_db_row() before merging this branch.
-// Keeping it around for now for comparison with the preferred implementaion.
-pub fn from_db_row_indirect<T>(db_row: &DbRow) -> Result<T, DbError>
-where
-    T: for<'a> Deserialize<'a>,
-{
-    // The method below *works* and, unlike the case of serializing a struct to a DbRow, where
-    // converting to JSON as an intermediate step necessarily throws away the type information
-    // that we need for a successful serialization to DbRow, in the case of deserialization,
-    // converting to JSON as an intermediate step is not lossy in that sense. So we do not
-    // *need* to find an alternative method. However converting to JSON first seems
-    // inefficient and it is probably be better to deserialize directly from a DbRow
-    // to a T struct, as is done in from_db_row() above.
-    let mut flat_row = JsonRow::new();
-    for (column, value) in db_row.iter() {
-        match value {
-            DbValue::Null => flat_row.insert(column.to_string(), JsonValue::Null),
-            DbValue::Boolean(num) => flat_row.insert(column.to_string(), JsonValue::from(*num)),
-            DbValue::SmallInteger(num) => {
-                flat_row.insert(column.to_string(), JsonValue::from(*num))
-            }
-            DbValue::Integer(num) => flat_row.insert(column.to_string(), JsonValue::from(*num)),
-            DbValue::BigInteger(num) => flat_row.insert(column.to_string(), JsonValue::from(*num)),
-            DbValue::Real(num) => flat_row.insert(column.to_string(), JsonValue::from(*num)),
-            DbValue::BigReal(num) => flat_row.insert(column.to_string(), JsonValue::from(*num)),
-            DbValue::Numeric(num) => {
-                flat_row.insert(column.to_string(), JsonValue::from(num.to_f64()))
-            }
-            DbValue::Text(txt) => {
-                flat_row.insert(column.to_string(), JsonValue::from(txt.to_string()))
-            }
-        };
-    }
-    let t_struct: T = serde_json::from_str(&serde_json::json!(flat_row).to_string())
-        .map_err(|err| DbError::SerdeError(err.to_string()))?;
-    Ok(t_struct)
-}
 
 #[derive(Debug)]
 pub struct DbRowDeserializer<'de> {
@@ -808,8 +809,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        let value = visitor.visit_map(self)?;
-        Ok(value)
+        visitor.visit_map(self)
     }
 
     fn deserialize_struct<V>(
