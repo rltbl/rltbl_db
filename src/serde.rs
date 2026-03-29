@@ -1,3 +1,5 @@
+//! Serialization / deserialization implementations for rltbl_db.
+
 use crate::{
     core::DbError,
     db_value::{DbRow, DbValue, JsonRow, JsonValue},
@@ -9,11 +11,30 @@ use serde::{
     ser,
 };
 
+////////////////////////////////////////////////////////////////////////////////
+// Serialization
+////////////////////////////////////////////////////////////////////////////////
+
+/// Convert the given struct to a [DbRow]. For this to be successful, the struct
+/// must be a "normal struct" of the form:
+///
+/// struct NormalStruct {
+///   field1: type1,
+///   field2: type2,
+///   ...
+/// }
+///
+/// where type1, type2, ... are among the primitive types associated with
+/// the different kinds of [DbValue]. Other field types, and other types of
+/// structs (e.g., tuple structs, unit structs, see
+/// <https://doc.rust-lang.org/book/ch05-01-defining-structs.html>) are not
+/// supported and attempts to serialize them will result in an error, as will
+/// attempts to serialize anything other than a struct (e.g., an enum).
 pub fn to_db_row<T>(value: &T) -> Result<DbRow, DbError>
 where
     T: Serialize,
 {
-    let mut serializer = MySerializer {
+    let mut serializer = DbRowSerializer {
         keys: vec![],
         values: vec![],
     };
@@ -37,66 +58,16 @@ where
     Ok(db_row)
 }
 
-pub fn from_db_row<T>(db_row: &DbRow) -> Result<T, DbError>
-where
-    T: for<'de> Deserialize<'de>,
-{
-    let mut deserializer = MyDeserializer::from_db_row(db_row);
-    let t = T::deserialize(&mut deserializer)?;
-    if deserializer.keys.is_empty() && deserializer.values.is_empty() {
-        Ok(t)
-    } else {
-        Err(DbError::SerdeError(
-            "Deserialization error: Leftover input".to_string(),
-        ))
-    }
-}
-
-// TODO: Remove this function before merging this branch. Keeping it around for now for comparison.
-pub fn from_db_row_indirect<T>(db_row: &DbRow) -> Result<T, DbError>
-where
-    T: for<'a> Deserialize<'a>,
-{
-    // The method below *works* and, unlike for serialization, where converting from JSON would
-    // necessarily throw away type information, converting to JSON in this case does not throw
-    // any type information away. So we do not *need* to find an alternative method. However this
-    // method (using the intermediate step of deserializing to JSON) seems inefficient
-    // and it is probably be better to deserialize directly from a DbRow to a T struct, as is done
-    // in from_db_row().
-    let mut flat_row = JsonRow::new();
-    for (column, value) in db_row.iter() {
-        match value {
-            DbValue::Null => flat_row.insert(column.to_string(), JsonValue::Null),
-            DbValue::Boolean(num) => flat_row.insert(column.to_string(), JsonValue::from(*num)),
-            DbValue::SmallInteger(num) => {
-                flat_row.insert(column.to_string(), JsonValue::from(*num))
-            }
-            DbValue::Integer(num) => flat_row.insert(column.to_string(), JsonValue::from(*num)),
-            DbValue::BigInteger(num) => flat_row.insert(column.to_string(), JsonValue::from(*num)),
-            DbValue::Real(num) => flat_row.insert(column.to_string(), JsonValue::from(*num)),
-            DbValue::BigReal(num) => flat_row.insert(column.to_string(), JsonValue::from(*num)),
-            DbValue::Numeric(num) => {
-                flat_row.insert(column.to_string(), JsonValue::from(num.to_f64()))
-            }
-            DbValue::Text(txt) => {
-                flat_row.insert(column.to_string(), JsonValue::from(txt.to_string()))
-            }
-        };
-    }
-    let t_struct: T = serde_json::from_str(&serde_json::json!(flat_row).to_string())
-        .map_err(|err| DbError::SerdeError(err.to_string()))?;
-    Ok(t_struct)
-}
-
-// TODO: Rename this to `Serializer` (or at least give it a better name).
 #[derive(Debug)]
-struct MySerializer {
+struct DbRowSerializer {
+    /// The keys of the output [DbRow].
     keys: Vec<String>,
+    /// The values of the output [DbRow].
     values: Vec<DbValue>,
 }
 
-impl<'a> ser::Serializer for &'a mut MySerializer {
-    // The output type produced by this `MySerializer` during successful
+impl<'a> ser::Serializer for &'a mut DbRowSerializer {
+    // The output type produced by this `DbRowSerializer` during successful
     // serialization.
     type Ok = ();
 
@@ -106,7 +77,7 @@ impl<'a> ser::Serializer for &'a mut MySerializer {
     // Associated types for keeping track of additional state while serializing
     // compound data structures like sequences and maps. In this case no
     // additional state is required beyond what is already stored in the
-    // MySerializer struct.
+    // DbRowSerializer struct.
     type SerializeSeq = Self;
     type SerializeTuple = Self;
     type SerializeTupleStruct = Self;
@@ -189,12 +160,14 @@ impl<'a> ser::Serializer for &'a mut MySerializer {
         ));
     }
 
+    // TODO: This should be supported.
     fn serialize_none(self) -> Result<(), Self::Error> {
         return Err(DbError::SerdeError(
             "Serializing None is not supported".to_string(),
         ));
     }
 
+    // TODO: This should be supported.
     fn serialize_some<T>(self, _value: &T) -> Result<(), Self::Error>
     where
         T: ?Sized + Serialize,
@@ -285,7 +258,6 @@ impl<'a> ser::Serializer for &'a mut MySerializer {
         ));
     }
 
-    // Maps are represented in JSON as `{ K: V, K: V, ... }`.
     fn serialize_map(self, _len: Option<usize>) -> Result<Self::SerializeMap, Self::Error> {
         Ok(self)
     }
@@ -311,31 +283,29 @@ impl<'a> ser::Serializer for &'a mut MySerializer {
     }
 }
 
-impl<'a> ser::SerializeSeq for &'a mut MySerializer {
-    // Must match the `Ok` type of the serializer.
+impl<'a> ser::SerializeSeq for &'a mut DbRowSerializer {
+    // These need to match the `Ok` and `Error` types of DbRowSerializer:
     type Ok = ();
-    // Must match the `Error` type of the serializer.
     type Error = DbError;
 
-    // Serialize a single element of the sequence.
     fn serialize_element<T>(&mut self, _value: &T) -> Result<(), Self::Error>
     where
         T: ?Sized + Serialize,
     {
         return Err(DbError::SerdeError(
-            "SerializeSeq::serialize_element() is not supported for MySerializer".to_string(),
+            "SerializeSeq::serialize_element() is not supported for DbRowSerializer".to_string(),
         ));
     }
 
-    // Close the sequence.
     fn end(self) -> Result<(), Self::Error> {
         return Err(DbError::SerdeError(
-            "SerializeSeq::end() is not supported for MySerializer".to_string(),
+            "SerializeSeq::end() is not supported for DbRowSerializer".to_string(),
         ));
     }
 }
 
-impl<'a> ser::SerializeTuple for &'a mut MySerializer {
+impl<'a> ser::SerializeTuple for &'a mut DbRowSerializer {
+    // These need to match the `Ok` and `Error` types of DbRowSerializer:
     type Ok = ();
     type Error = DbError;
 
@@ -344,18 +314,19 @@ impl<'a> ser::SerializeTuple for &'a mut MySerializer {
         T: ?Sized + Serialize,
     {
         return Err(DbError::SerdeError(
-            "SerializeTuple::serialize_element() is not supported for MySerializer".to_string(),
+            "SerializeTuple::serialize_element() is not supported for DbRowSerializer".to_string(),
         ));
     }
 
     fn end(self) -> Result<(), DbError> {
         return Err(DbError::SerdeError(
-            "SerializeTuple::end() is not supported for MySerializer".to_string(),
+            "SerializeTuple::end() is not supported for DbRowSerializer".to_string(),
         ));
     }
 }
 
-impl<'a> ser::SerializeTupleStruct for &'a mut MySerializer {
+impl<'a> ser::SerializeTupleStruct for &'a mut DbRowSerializer {
+    // These need to match the `Ok` and `Error` types of DbRowSerializer:
     type Ok = ();
     type Error = DbError;
 
@@ -364,39 +335,45 @@ impl<'a> ser::SerializeTupleStruct for &'a mut MySerializer {
         T: ?Sized + Serialize,
     {
         return Err(DbError::SerdeError(
-            "SerializeTupleStruct::serialize_field() is not supported for MySerializer".to_string(),
-        ));
-    }
-
-    fn end(self) -> Result<(), DbError> {
-        return Err(DbError::SerdeError(
-            "SerializeTupleStruct::end() is not supported for MySerializer".to_string(),
-        ));
-    }
-}
-
-impl<'a> ser::SerializeTupleVariant for &'a mut MySerializer {
-    type Ok = ();
-    type Error = DbError;
-
-    fn serialize_field<T>(&mut self, _value: &T) -> Result<(), DbError>
-    where
-        T: ?Sized + Serialize,
-    {
-        return Err(DbError::SerdeError(
-            "SerializeTupleVariant::serialize_field() is not supported for MySerializer"
+            "SerializeTupleStruct::serialize_field() is not supported for DbRowSerializer"
                 .to_string(),
         ));
     }
 
     fn end(self) -> Result<(), DbError> {
         return Err(DbError::SerdeError(
-            "SerializeTupleVariant::end() is not supported for MySerializer".to_string(),
+            "SerializeTupleStruct::end() is not supported for DbRowSerializer".to_string(),
         ));
     }
 }
 
-impl<'a> ser::SerializeMap for &'a mut MySerializer {
+impl<'a> ser::SerializeTupleVariant for &'a mut DbRowSerializer {
+    // These need to match the `Ok` and `Error` types of DbRowSerializer:
+    type Ok = ();
+    type Error = DbError;
+
+    fn serialize_field<T>(&mut self, _value: &T) -> Result<(), DbError>
+    where
+        T: ?Sized + Serialize,
+    {
+        return Err(DbError::SerdeError(
+            "SerializeTupleVariant::serialize_field() is not supported for DbRowSerializer"
+                .to_string(),
+        ));
+    }
+
+    fn end(self) -> Result<(), DbError> {
+        return Err(DbError::SerdeError(
+            "SerializeTupleVariant::end() is not supported for DbRowSerializer".to_string(),
+        ));
+    }
+}
+
+// Although a [DbRow] is essentially a wrapper around an IndexMap, when one is serialized,
+// the serialization begins with our implementation of SerializeStruct and does not require
+// us to explicitly implement working code for SerializeMap.
+impl<'a> ser::SerializeMap for &'a mut DbRowSerializer {
+    // These need to match the `Ok` and `Error` types of DbRowSerializer:
     type Ok = ();
     type Error = DbError;
 
@@ -405,7 +382,7 @@ impl<'a> ser::SerializeMap for &'a mut MySerializer {
         T: ?Sized + Serialize,
     {
         return Err(DbError::SerdeError(
-            "SerializeMap::serialize_key() is not supported for MySerializer".to_string(),
+            "SerializeMap::serialize_key() is not supported for DbRowSerializer".to_string(),
         ));
     }
 
@@ -414,18 +391,19 @@ impl<'a> ser::SerializeMap for &'a mut MySerializer {
         T: ?Sized + Serialize,
     {
         return Err(DbError::SerdeError(
-            "SerializeMap::serialize_value() is not supported for MySerializer".to_string(),
+            "SerializeMap::serialize_value() is not supported for DbRowSerializer".to_string(),
         ));
     }
 
     fn end(self) -> Result<(), DbError> {
         return Err(DbError::SerdeError(
-            "SerializeMap::end() is not supported for MySerializer".to_string(),
+            "SerializeMap::end() is not supported for DbRowSerializer".to_string(),
         ));
     }
 }
 
-impl<'a> ser::SerializeStruct for &'a mut MySerializer {
+impl<'a> ser::SerializeStruct for &'a mut DbRowSerializer {
+    // These need to match the `Ok` and `Error` types of DbRowSerializer:
     type Ok = ();
     type Error = DbError;
 
@@ -443,7 +421,8 @@ impl<'a> ser::SerializeStruct for &'a mut MySerializer {
     }
 }
 
-impl<'a> ser::SerializeStructVariant for &'a mut MySerializer {
+impl<'a> ser::SerializeStructVariant for &'a mut DbRowSerializer {
+    // These need to match the `Ok` and `Error` types of DbRowSerializer:
     type Ok = ();
     type Error = DbError;
 
@@ -452,60 +431,133 @@ impl<'a> ser::SerializeStructVariant for &'a mut MySerializer {
         T: ?Sized + Serialize,
     {
         return Err(DbError::SerdeError(
-            "SerializeStructVariant::serialize_field() is not supported for MySerializer"
+            "SerializeStructVariant::serialize_field() is not supported for DbRowSerializer"
                 .to_string(),
         ));
     }
 
     fn end(self) -> Result<(), DbError> {
         return Err(DbError::SerdeError(
-            "SerializeStructVariant::end() is not supported for MySerializer".to_string(),
+            "SerializeStructVariant::end() is not supported for DbRowSerializer".to_string(),
         ));
     }
 }
 
+////////////////////////////////////////////////////////////////////////////////
+// Deserialization
+////////////////////////////////////////////////////////////////////////////////
+
+/// Convert the given [DbRow] to a supported struct. For this to be successful,
+/// the struct must be a "normal struct" of the form:
+///
+/// struct NormalStruct {
+///   field1: type1,
+///   field2: type2,
+///   ...
+/// }
+///
+/// where type1, type2, ... are among the primitive types associated with
+/// the different kinds of [DbValue]. Other field types, and other types of
+/// structs (e.g., tuple structs, unit structs, see
+/// <https://doc.rust-lang.org/book/ch05-01-defining-structs.html>) are not
+/// supported and attempts to deserialize a [DbRow] to them will result in an
+/// error, as will attempts to deserialize a [DbRow] to anything other than a
+/// struct (e.g., an enum).
+pub fn from_db_row<T>(db_row: &DbRow) -> Result<T, DbError>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    let mut deserializer = DbRowDeserializer::from_db_row(db_row);
+    let t = T::deserialize(&mut deserializer)?;
+    if deserializer.keys.is_empty() && deserializer.values.is_empty() {
+        Ok(t)
+    } else {
+        Err(DbError::SerdeError(
+            "Deserialization error: Leftover input".to_string(),
+        ))
+    }
+}
+
+// TODO: Remove this alternative implementation of from_db_row() before merging this branch.
+// Keeping it around for now for comparison with the preferred implementaion.
+pub fn from_db_row_indirect<T>(db_row: &DbRow) -> Result<T, DbError>
+where
+    T: for<'a> Deserialize<'a>,
+{
+    // The method below *works* and, unlike the case of serializing a struct to a DbRow, where
+    // converting to JSON as an intermediate step necessarily throws away the type information
+    // that we need for a successful serialization to DbRow, in the case of deserialization,
+    // converting to JSON as an intermediate step is not lossy in that sense. So we do not
+    // *need* to find an alternative method. However converting to JSON first seems
+    // inefficient and it is probably be better to deserialize directly from a DbRow
+    // to a T struct, as is done in from_db_row() above.
+    let mut flat_row = JsonRow::new();
+    for (column, value) in db_row.iter() {
+        match value {
+            DbValue::Null => flat_row.insert(column.to_string(), JsonValue::Null),
+            DbValue::Boolean(num) => flat_row.insert(column.to_string(), JsonValue::from(*num)),
+            DbValue::SmallInteger(num) => {
+                flat_row.insert(column.to_string(), JsonValue::from(*num))
+            }
+            DbValue::Integer(num) => flat_row.insert(column.to_string(), JsonValue::from(*num)),
+            DbValue::BigInteger(num) => flat_row.insert(column.to_string(), JsonValue::from(*num)),
+            DbValue::Real(num) => flat_row.insert(column.to_string(), JsonValue::from(*num)),
+            DbValue::BigReal(num) => flat_row.insert(column.to_string(), JsonValue::from(*num)),
+            DbValue::Numeric(num) => {
+                flat_row.insert(column.to_string(), JsonValue::from(num.to_f64()))
+            }
+            DbValue::Text(txt) => {
+                flat_row.insert(column.to_string(), JsonValue::from(txt.to_string()))
+            }
+        };
+    }
+    let t_struct: T = serde_json::from_str(&serde_json::json!(flat_row).to_string())
+        .map_err(|err| DbError::SerdeError(err.to_string()))?;
+    Ok(t_struct)
+}
+
 #[derive(Debug)]
-pub struct MyDeserializer<'de> {
+pub struct DbRowDeserializer<'de> {
+    /// The keys of the input [DbRow].
     keys: Vec<&'de str>,
+    /// The values of the input [DbRow].
     values: Vec<&'de DbValue>,
 }
 
-impl<'de> MyDeserializer<'de> {
+impl<'de> DbRowDeserializer<'de> {
     pub fn from_db_row(input: &'de DbRow) -> Self {
-        MyDeserializer {
+        DbRowDeserializer {
             keys: input.map.keys().map(|s| s.as_str()).collect::<Vec<_>>(),
             values: input.map.values().collect::<Vec<_>>(),
         }
     }
 
-    pub fn next_key(&mut self) -> Option<&'de str> {
+    pub fn pop_key(&mut self) -> Option<&'de str> {
         self.keys.pop()
     }
 
-    pub fn next_value(&mut self) -> Option<&'de DbValue> {
+    pub fn pop_value(&mut self) -> Option<&'de DbValue> {
         self.values.pop()
     }
 }
 
-impl<'de, 'a> de::Deserializer<'de> for &'a mut MyDeserializer<'de> {
+impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     type Error = DbError;
 
     fn deserialize_any<V>(self, _visitor: V) -> Result<V::Value, DbError>
     where
         V: Visitor<'de>,
     {
-        // TODO: Change the unimplemented!() calls to actual errors, like we do for
-        // unsupported serializations above.
-        // println!("In deserialize_any()");
-        unimplemented!()
+        return Err(DbError::SerdeError(
+            "Deserializing 'any' is not supported".to_string(),
+        ));
     }
 
     fn deserialize_bool<V>(self, visitor: V) -> Result<V::Value, DbError>
     where
         V: Visitor<'de>,
     {
-        // println!("In deserialize_bool()");
-        let value = self.next_value().unwrap().as_bool().unwrap();
+        let value = self.pop_value().unwrap().as_bool().unwrap();
         visitor.visit_bool(value)
     }
 
@@ -513,16 +565,16 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut MyDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        // println!("In deserialize_i8()");
-        unimplemented!()
+        return Err(DbError::SerdeError(
+            "Deserializing 'i8' is not supported".to_string(),
+        ));
     }
 
     fn deserialize_i16<V>(self, visitor: V) -> Result<V::Value, DbError>
     where
         V: Visitor<'de>,
     {
-        // println!("In deserialize_i16()");
-        let value = self.next_value().unwrap().as_i16().unwrap();
+        let value = self.pop_value().unwrap().as_i16().unwrap();
         visitor.visit_i16(value)
     }
 
@@ -530,8 +582,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut MyDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        // println!("In deserialize_i32()");
-        let value = self.next_value().unwrap().as_i32().unwrap();
+        let value = self.pop_value().unwrap().as_i32().unwrap();
         visitor.visit_i32(value)
     }
 
@@ -539,8 +590,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut MyDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        // println!("In deserialize_i64()");
-        let value = self.next_value().unwrap().as_i64().unwrap();
+        let value = self.pop_value().unwrap().as_i64().unwrap();
         visitor.visit_i64(value)
     }
 
@@ -548,40 +598,43 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut MyDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        // println!("In deserialize_u8()");
-        unimplemented!()
+        return Err(DbError::SerdeError(
+            "Deserializing 'u8' is not supported".to_string(),
+        ));
     }
 
     fn deserialize_u16<V>(self, _visitor: V) -> Result<V::Value, DbError>
     where
         V: Visitor<'de>,
     {
-        // println!("In deserialize_u16()");
-        unimplemented!()
+        return Err(DbError::SerdeError(
+            "Deserializing 'u16' is not supported".to_string(),
+        ));
     }
 
     fn deserialize_u32<V>(self, _visitor: V) -> Result<V::Value, DbError>
     where
         V: Visitor<'de>,
     {
-        // println!("In deserialize_u32()");
-        unimplemented!()
+        return Err(DbError::SerdeError(
+            "Deserializing 'u32' is not supported".to_string(),
+        ));
     }
 
     fn deserialize_u64<V>(self, _visitor: V) -> Result<V::Value, DbError>
     where
         V: Visitor<'de>,
     {
-        // println!("In deserialize_u64()");
-        unimplemented!()
+        return Err(DbError::SerdeError(
+            "Deserializing 'u64' is not supported".to_string(),
+        ));
     }
 
     fn deserialize_f32<V>(self, visitor: V) -> Result<V::Value, DbError>
     where
         V: Visitor<'de>,
     {
-        // println!("In deserialize_f32()");
-        let value = self.next_value().unwrap().as_f32().unwrap();
+        let value = self.pop_value().unwrap().as_f32().unwrap();
         visitor.visit_f32(value)
     }
 
@@ -589,8 +642,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut MyDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        // println!("In deserialize_f64()");
-        let value = self.next_value().unwrap().as_f64().unwrap();
+        let value = self.pop_value().unwrap().as_f64().unwrap();
         visitor.visit_f64(value)
     }
 
@@ -598,24 +650,25 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut MyDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        // println!("In deserialize_char()");
-        unimplemented!()
+        return Err(DbError::SerdeError(
+            "Deserializing 'char' is not supported".to_string(),
+        ));
     }
 
     fn deserialize_str<V>(self, _visitor: V) -> Result<V::Value, DbError>
     where
         V: Visitor<'de>,
     {
-        // println!("In deserialize_string()");
-        unimplemented!()
+        return Err(DbError::SerdeError(
+            "Deserializing 'str' is not supported".to_string(),
+        ));
     }
 
     fn deserialize_string<V>(self, visitor: V) -> Result<V::Value, DbError>
     where
         V: Visitor<'de>,
     {
-        // println!("In deserialize_string()");
-        let value = self.next_value().unwrap().as_str().unwrap();
+        let value = self.pop_value().unwrap().as_str().unwrap();
         visitor.visit_borrowed_str(value)
     }
 
@@ -623,18 +676,21 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut MyDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        // println!("In deserialize_bytes()");
-        unimplemented!()
+        return Err(DbError::SerdeError(
+            "Deserializing 'bytes' is not supported".to_string(),
+        ));
     }
 
     fn deserialize_byte_buf<V>(self, _visitor: V) -> Result<V::Value, DbError>
     where
         V: Visitor<'de>,
     {
-        // println!("In deserialize_byte_buf()");
-        unimplemented!()
+        return Err(DbError::SerdeError(
+            "Deserializing 'byte_buf' is not supported".to_string(),
+        ));
     }
 
+    // TODO: We should probably support this.
     fn deserialize_option<V>(self, _visitor: V) -> Result<V::Value, DbError>
     where
         V: Visitor<'de>,
@@ -647,8 +703,9 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut MyDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        // println!("In deserialize_unit()");
-        unimplemented!()
+        return Err(DbError::SerdeError(
+            "Deserializing 'unit' is not supported".to_string(),
+        ));
     }
 
     fn deserialize_unit_struct<V>(
@@ -659,8 +716,9 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut MyDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        // println!("In deserialize_unit_struct()");
-        unimplemented!()
+        return Err(DbError::SerdeError(
+            "Deserializing 'unit_struct' is not supported".to_string(),
+        ));
     }
 
     fn deserialize_newtype_struct<V>(
@@ -671,24 +729,27 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut MyDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        // println!("In deserialize_newtype_struct()");
-        unimplemented!()
+        return Err(DbError::SerdeError(
+            "Deserializing 'newtype_struct' is not supported".to_string(),
+        ));
     }
 
     fn deserialize_seq<V>(self, _visitor: V) -> Result<V::Value, DbError>
     where
         V: Visitor<'de>,
     {
-        // println!("In deserialize_seq()");
-        unimplemented!()
+        return Err(DbError::SerdeError(
+            "Deserializing 'seq' is not supported".to_string(),
+        ));
     }
 
     fn deserialize_tuple<V>(self, _len: usize, _visitor: V) -> Result<V::Value, DbError>
     where
         V: Visitor<'de>,
     {
-        // println!("In deserialize_tuple()");
-        unimplemented!()
+        return Err(DbError::SerdeError(
+            "Deserializing 'tuple' is not supported".to_string(),
+        ));
     }
 
     fn deserialize_tuple_struct<V>(
@@ -700,15 +761,15 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut MyDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        // println!("In deserialize_tuple_struct()");
-        unimplemented!()
+        return Err(DbError::SerdeError(
+            "Deserializing 'tuple_struct' is not supported".to_string(),
+        ));
     }
 
     fn deserialize_map<V>(self, visitor: V) -> Result<V::Value, DbError>
     where
         V: Visitor<'de>,
     {
-        // println!("In deserialize_map()");
         let value = visitor.visit_map(self)?;
         Ok(value)
     }
@@ -722,7 +783,6 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut MyDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        // println!("In deserialize_struct()");
         self.deserialize_map(visitor)
     }
 
@@ -735,8 +795,9 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut MyDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        // println!("In deserialize_enum()");
-        unimplemented!()
+        return Err(DbError::SerdeError(
+            "Deserializing 'enum' is not supported".to_string(),
+        ));
     }
 
     fn deserialize_identifier<V>(self, visitor: V) -> Result<V::Value, DbError>
@@ -744,8 +805,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut MyDeserializer<'de> {
         V: Visitor<'de>,
     {
         // TODO: Remove unwraps here and elsewhere.
-        // println!("In deserialize_identifier()");
-        let key = self.next_key().unwrap();
+        let key = self.pop_key().unwrap();
         visitor.visit_borrowed_str(key)
     }
 
@@ -753,19 +813,19 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut MyDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        // println!("In deserialize_ignored_any()");
-        unimplemented!()
+        return Err(DbError::SerdeError(
+            "Deserializing 'ignored_any' is not supported".to_string(),
+        ));
     }
 }
 
-impl<'de> de::MapAccess<'de> for MyDeserializer<'de> {
+impl<'de> de::MapAccess<'de> for DbRowDeserializer<'de> {
     type Error = DbError;
 
     fn next_key_seed<S>(&mut self, seed: S) -> Result<Option<S::Value>, Self::Error>
     where
         S: de::DeserializeSeed<'de>,
     {
-        // println!("In next_key_seed() with SELF: {self:?}");
         if self.keys.len() == 0 {
             return Ok(None);
         }
@@ -776,7 +836,6 @@ impl<'de> de::MapAccess<'de> for MyDeserializer<'de> {
     where
         S: de::DeserializeSeed<'de>,
     {
-        // println!("In next_value_seed() with SELF: {self:?}");
         seed.deserialize(&mut *self)
     }
 }
