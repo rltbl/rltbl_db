@@ -84,7 +84,7 @@ where
         Ok(t)
     } else {
         Err(DbError::SerdeError(format!(
-            "Deserialization error: Leftover keys: {:?} and values: {:?}",
+            "Deserialization error: Leftover keys: {:?} and/or values: {:?}",
             deserializer.keys, deserializer.values
         )))
     }
@@ -746,6 +746,30 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
         }
     }
 
+    fn deserialize_any<V>(self, visitor: V) -> Result<V::Value, DbError>
+    where
+        V: Visitor<'de>,
+    {
+        match self.values.last().unwrap() {
+            DbValue::Null => self.deserialize_unit(visitor),
+            _ => match self.pop_value().unwrap() {
+                DbValue::Null => unreachable!(),
+                DbValue::Text(value) => visitor.visit_borrowed_str(&value),
+                DbValue::Boolean(value) => visitor.visit_bool(*value),
+                DbValue::SmallInteger(value) => visitor.visit_i16(*value),
+                DbValue::Integer(value) => visitor.visit_i32(*value),
+                DbValue::BigInteger(value) => visitor.visit_i64(*value),
+                DbValue::Real(value) => visitor.visit_f32(*value),
+                DbValue::BigReal(value) => visitor.visit_f64(*value),
+                // Rust's serializer seems to always serialize Decimals as text, so we don't
+                // need to support this match branch (yet):
+                DbValue::Numeric(_) => Err(DbError::SerdeError(
+                    "Deserializing Decimal values is not yet supported".to_string(),
+                )),
+            },
+        }
+    }
+
     // Options:
 
     fn deserialize_option<V>(self, visitor: V) -> Result<V::Value, DbError>
@@ -900,15 +924,6 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
             "Deserializing 'ignored_any' is not supported".to_string(),
         ));
     }
-
-    fn deserialize_any<V>(self, _visitor: V) -> Result<V::Value, DbError>
-    where
-        V: Visitor<'de>,
-    {
-        return Err(DbError::SerdeError(
-            "Deserializing 'any' is not supported".to_string(),
-        ));
-    }
 }
 
 impl<'de> de::MapAccess<'de> for DbRowDeserializer<'de> {
@@ -936,8 +951,8 @@ impl<'de> de::MapAccess<'de> for DbRowDeserializer<'de> {
 mod tests {
     use super::*;
     use crate::{db_row, db_value::DbValue};
+    use rust_decimal::{Decimal, dec};
     use serde::Deserialize;
-    // use rust_decimal::{Decimal, dec};
 
     #[test]
     fn test_serde_struct() {
@@ -962,7 +977,10 @@ mod tests {
             bigfloat_opt: Option<f64>,
             text: String,
             text_opt: Option<String>,
-            // biggerfloat: Decimal,
+            // TODO: Decimals are only sort-of supported for now, i.e., rust's serializer
+            // serializes them to text (see also below). This is not ideal but at least it's
+            // consistent.
+            biggerfloat: Decimal,
         }
 
         let expected_struct = TestStruct {
@@ -984,7 +1002,7 @@ mod tests {
             bigfloat_opt: None,
             text: 1.to_string(),
             text_opt: Some(1.to_string()),
-            // biggerfloat: dec!(1),
+            biggerfloat: dec!(1),
         };
 
         let expected_db_row = db_row! {
@@ -1006,7 +1024,8 @@ mod tests {
             "bigfloat_opt" => DbValue::Null,
             "text" => "1",
             "text_opt" => "1",
-            // "biggerfloat" => 1_i64,
+            // Serde interprets Decimals as text:
+            "biggerfloat" => "1",
         };
         assert_eq!(expected_db_row, to_db_row(&expected_struct).unwrap());
         assert_eq!(expected_struct, from_db_row(&expected_db_row).unwrap());
