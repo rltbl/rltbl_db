@@ -669,8 +669,9 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
         V: Visitor<'de>,
     {
         let value = self.pop_value().unwrap();
-        // TODO: Remove the assert
-        assert_eq!(*value, DbValue::Null);
+        if *value != DbValue::Null {
+            return Err(DbError::SerdeError("Expected NULL".to_string()));
+        }
         visitor.visit_unit()
     }
 
@@ -947,21 +948,21 @@ mod tests {
         };
 
         let expected_db_row = db_row! {
-            "boolean".into() => DbValue::from(true),
-            "boolean_opt".into() => DbValue::from(true),
-            "smallint".into() => DbValue::from(1_i16),
-            "smallint_opt".into() => DbValue::Null,
-            "mediumint".into() => DbValue::from(1_i32),
-            "mediumint_opt".into() => DbValue::from(1_i32),
-            "bigint".into() => DbValue::from(1_i64),
-            "bigint_opt".into() => DbValue::Null,
-            "smallfloat".into() => DbValue::from(1_f32),
-            "smallfloat_opt".into() => DbValue::from(1_f32),
-            "bigfloat".into() => DbValue::from(1_f64),
-            "bigfloat_opt".into() => DbValue::Null,
-            // "biggerfloat".into() => DbValue::from(1_i64),
-            "text".into() => DbValue::from("1"),
-            "text_opt".into() => DbValue::from("1"),
+            "boolean" => true,
+            "boolean_opt" => true,
+            "smallint" => 1_i16,
+            "smallint_opt" => DbValue::Null,
+            "mediumint" => 1_i32,
+            "mediumint_opt" => 1_i32,
+            "bigint" => 1_i64,
+            "bigint_opt" => DbValue::Null,
+            "smallfloat" => 1_f32,
+            "smallfloat_opt" => 1_f32,
+            "bigfloat" => 1_f64,
+            "bigfloat_opt" => DbValue::Null,
+            // "biggerfloat" => 1_i64,
+            "text" => "1",
+            "text_opt" => "1",
         };
         assert_eq!(expected_db_row, to_db_row(&expected_struct).unwrap());
         assert_eq!(expected_struct, from_db_row(&expected_db_row).unwrap());

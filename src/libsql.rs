@@ -340,7 +340,9 @@ mod tests {
             .unwrap();
         assert_eq!(
             rows,
-            [db_row! {"MAX(int_value)".into() => DbValue::from(1_i64)}]
+            [db_row! {
+                "MAX(int_value)" => 1_i64,
+            }]
         );
 
         // Test alias:
@@ -353,7 +355,9 @@ mod tests {
             .unwrap();
         assert_eq!(
             rows,
-            [db_row! {"bool_value_alias".into() => DbValue::from(1_i64)}]
+            [db_row! {
+                "bool_value_alias" => 1_i64,
+            }]
         );
 
         // Test aggregate with alias:
@@ -367,7 +371,9 @@ mod tests {
         // Note that the alias is not shown in the results:
         assert_eq!(
             rows,
-            [db_row! {"max_int_value".into() => DbValue::from(1_i64)}]
+            [db_row! {
+                "max_int_value" => 1_i64,
+            }]
         );
 
         // Test non-aggregate function:
@@ -378,10 +384,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(
-            rows,
-            [db_row! {"CAST(int_value AS TEXT)".into() => DbValue::from("1")}]
-        );
+        assert_eq!(rows, [db_row! {"CAST(int_value AS TEXT)" => "1",}]);
 
         // Test non-aggregate function with alias:
         let rows: Vec<DbRow> = pool
@@ -391,10 +394,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(
-            rows,
-            [db_row! {"int_value_cast".into() => DbValue::from("1")}]
-        );
+        assert_eq!(rows, [db_row! {"int_value_cast" => "1",}]);
 
         // Test functions over booleans:
         let rows: Vec<DbRow> = pool
@@ -410,10 +410,7 @@ mod tests {
         //          name and argument types. You might need to add explicit type casts.
         // So, perhaps, this is tu quoque an argument that the behaviour below is acceptable for
         // sqlite.
-        assert_eq!(
-            rows,
-            [db_row! {"MAX(bool_value)".into() => DbValue::from(1_i64)}]
-        );
+        assert_eq!(rows, [db_row! {"MAX(bool_value)" => 1_i64,}]);
     }
 
     /// This test is resource intensive and therefore ignored by default. It verifies that

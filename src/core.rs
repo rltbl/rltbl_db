@@ -47,7 +47,7 @@ pub enum DbError {
     DatatypeError(String),
     /// An error that occurred while attempting to parse a SQL string or value.
     ParseError(String),
-    /// TODO: Add docstring
+    /// An error that occurred during serialization or deserialization.
     SerdeError(String),
 }
 

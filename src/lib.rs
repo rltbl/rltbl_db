@@ -31,12 +31,14 @@ macro_rules! params {
     }};
 }
 
+
+// TODO: Remove this later.
 /// Converts a key value pair into a [db_value::DbRow]. The syntax of this macro is identical to
 /// [indexmap]. For example: db_row! { key1 -> value1, key2 -> value2, ... }
 /// The code for this function is adapted from the code for indexmap! (see
 /// <https://docs.rs/indexmap/latest/src/indexmap/macros.rs.html#59-73>
 #[macro_export]
-macro_rules! db_row {
+macro_rules! db_row_old {
     ($($key:expr => $value:expr,)+) => {
         $crate::db_value::DbRow {
             map: indexmap::indexmap!($($key => $value),+)
@@ -58,15 +60,20 @@ macro_rules! db_row {
     };
 }
 
-// TODO: Try this instead:
-/// Converts a set of pairs into a [db_value::DbRow]
+/// Converts a set of pairs into a [db_value::DbRow]. Note that all entries must end in a comma,
+/// even the final one. E.g.,
+/// db_row_new! {
+///   "table" => "data",
+/// };
 #[macro_export]
-macro_rules! db_row_new {
-    (@single $($x:tt)*) => (());
-    (@count $($rest:expr),*) => (<[()]>::len(&[$(indexmap::indexmap!(@single $rest)),*]));
+macro_rules! db_row {
+    // TODO: What are these two lines for? This macro (like the one above) seems to be working
+    // without them?
+    // (@single $($x:tt)*) => (());
+    // (@count $($rest:expr),*) => (<[()]>::len(&[$(indexmap::indexmap!(@single $rest)),*]));
 
     ($($key:expr => $value:expr,)+) => {
-        indexmap::indexmap!($($key.to_string() => $value.into()),+)
+        DbRow {map: indexmap::indexmap!($($key.to_string() => $value.into()),+) }
     };
     ($($key:expr => $value:expr),*) => {
         {
@@ -75,7 +82,47 @@ macro_rules! db_row_new {
             $(
                 let _ = map.insert($key.to_string(), $value.into());
             )*
-                map
+                DbRow { map }
         }
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::db_value::{DbRow, DbValue};
+
+    #[test]
+    fn test_macros() {
+        let params = params![1_i32, "foo", 1.1_f64];
+        assert_eq!(
+            params,
+            [
+                DbValue::Integer(1),
+                DbValue::Text("foo".to_string()),
+                DbValue::BigReal(1.1_f64)
+            ]
+        );
+
+        let mut expected_db_row = DbRow::new();
+        expected_db_row
+            .map
+            .insert("foo".to_string(), DbValue::Boolean(true));
+        expected_db_row
+            .map
+            .insert("bar".to_string(), DbValue::BigReal(1_f64));
+
+
+        assert_eq!(
+            expected_db_row,
+            db_row_old! {
+                "foo".into() => DbValue::from(true),
+                "bar".into() => DbValue::from(1_f64),
+            }
+        );
+
+        assert_eq!(
+            expected_db_row,
+            db_row! { "foo" => true, "bar" => 1_f64,}
+        );
+    }
 }

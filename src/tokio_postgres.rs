@@ -455,7 +455,12 @@ mod tests {
             .query("SELECT MAX(int_value) FROM test_table_indirect", ())
             .await
             .unwrap();
-        assert_eq!(rows, [db_row! {"max".into() => DbValue::from(1_i64)}]);
+        assert_eq!(
+            rows,
+            [db_row! {
+                "max" => 1_i64,
+            }]
+        );
 
         // Test alias:
         let rows: Vec<DbRow> = pool
@@ -467,7 +472,9 @@ mod tests {
             .unwrap();
         assert_eq!(
             rows,
-            [db_row! {"bool_value_alias".into() => DbValue::from(true)}]
+            [db_row! {
+                "bool_value_alias" => true,
+            }]
         );
 
         // Test aggregate with alias:
@@ -480,7 +487,9 @@ mod tests {
             .unwrap();
         assert_eq!(
             rows,
-            [db_row! {"max_int_value".into() => DbValue::from(1_i64)}]
+            [db_row! {
+                "max_int_value" => 1_i64,
+            }]
         );
 
         // Test non-aggregate function:
@@ -491,7 +500,12 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(rows, [db_row! {"int_value".into() => DbValue::from("1")}]);
+        assert_eq!(
+            rows,
+            [db_row! {
+                "int_value" => "1",
+            }]
+        );
 
         // Test non-aggregate function with alias:
         let rows: Vec<DbRow> = pool
@@ -503,7 +517,9 @@ mod tests {
             .unwrap();
         assert_eq!(
             rows,
-            [db_row! {"int_value_cast".into() => DbValue::from("1")}]
+            [db_row! {
+                "int_value_cast" => "1",
+            }]
         );
 
         // Clean up.
