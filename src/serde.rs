@@ -572,8 +572,8 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
             DbValue::Null => self.deserialize_unit(visitor),
             _ => {
                 let value = self.pop_value().unwrap();
-                let value = value.as_i16().unwrap();
-                visitor.visit_i16(value)
+                let value = value.as_i8().unwrap();
+                visitor.visit_i8(value)
             }
         }
     }
