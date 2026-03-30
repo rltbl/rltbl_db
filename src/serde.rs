@@ -167,6 +167,11 @@ impl<'a> ser::Serializer for &'a mut DbRowSerializer {
         Ok(())
     }
 
+    fn serialize_i8(self, value: i8) -> Result<(), Self::Error> {
+        self.values.push(DbValue::from(value));
+        Ok(())
+    }
+
     fn serialize_i16(self, value: i16) -> Result<(), Self::Error> {
         self.values.push(DbValue::from(value));
         Ok(())
@@ -178,6 +183,11 @@ impl<'a> ser::Serializer for &'a mut DbRowSerializer {
     }
 
     fn serialize_i64(self, value: i64) -> Result<(), Self::Error> {
+        self.values.push(DbValue::from(value));
+        Ok(())
+    }
+
+    fn serialize_u8(self, value: u8) -> Result<(), Self::Error> {
         self.values.push(DbValue::from(value));
         Ok(())
     }
@@ -209,6 +219,11 @@ impl<'a> ser::Serializer for &'a mut DbRowSerializer {
 
     fn serialize_str(self, value: &str) -> Result<(), Self::Error> {
         self.values.push(DbValue::from(value));
+        Ok(())
+    }
+
+    fn serialize_char(self, value: char) -> Result<(), Self::Error> {
+        self.values.push(DbValue::from(value.to_string()));
         Ok(())
     }
 
@@ -245,24 +260,6 @@ impl<'a> ser::Serializer for &'a mut DbRowSerializer {
     }
 
     // Unsupported types:
-
-    fn serialize_i8(self, _value: i8) -> Result<(), Self::Error> {
-        return Err(DbError::SerdeError(
-            "Serializing i8 is not supported".to_string(),
-        ));
-    }
-
-    fn serialize_u8(self, _value: u8) -> Result<(), Self::Error> {
-        return Err(DbError::SerdeError(
-            "Serializing u8 is not supported".to_string(),
-        ));
-    }
-
-    fn serialize_char(self, _value: char) -> Result<(), Self::Error> {
-        return Err(DbError::SerdeError(
-            "Serializing char is not supported".to_string(),
-        ));
-    }
 
     fn serialize_bytes(self, _values: &[u8]) -> Result<(), Self::Error> {
         return Err(DbError::SerdeError(
@@ -567,6 +564,20 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
         }
     }
 
+    fn deserialize_i8<V>(self, visitor: V) -> Result<V::Value, DbError>
+    where
+        V: Visitor<'de>,
+    {
+        match self.values.last().unwrap() {
+            DbValue::Null => self.deserialize_unit(visitor),
+            _ => {
+                let value = self.pop_value().unwrap();
+                let value = value.as_i16().unwrap();
+                visitor.visit_i16(value)
+            }
+        }
+    }
+
     fn deserialize_i16<V>(self, visitor: V) -> Result<V::Value, DbError>
     where
         V: Visitor<'de>,
@@ -609,6 +620,62 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
         }
     }
 
+    fn deserialize_u8<V>(self, visitor: V) -> Result<V::Value, DbError>
+    where
+        V: Visitor<'de>,
+    {
+        match self.values.last().unwrap() {
+            DbValue::Null => self.deserialize_unit(visitor),
+            _ => {
+                let value = self.pop_value().unwrap();
+                let value = value.as_u8().unwrap();
+                visitor.visit_u8(value)
+            }
+        }
+    }
+
+    fn deserialize_u16<V>(self, visitor: V) -> Result<V::Value, DbError>
+    where
+        V: Visitor<'de>,
+    {
+        match self.values.last().unwrap() {
+            DbValue::Null => self.deserialize_unit(visitor),
+            _ => {
+                let value = self.pop_value().unwrap();
+                let value = value.as_u16().unwrap();
+                visitor.visit_u16(value)
+            }
+        }
+    }
+
+    fn deserialize_u32<V>(self, visitor: V) -> Result<V::Value, DbError>
+    where
+        V: Visitor<'de>,
+    {
+        match self.values.last().unwrap() {
+            DbValue::Null => self.deserialize_unit(visitor),
+            _ => {
+                let value = self.pop_value().unwrap();
+                let value = value.as_u32().unwrap();
+                visitor.visit_u32(value)
+            }
+        }
+    }
+
+    fn deserialize_u64<V>(self, visitor: V) -> Result<V::Value, DbError>
+    where
+        V: Visitor<'de>,
+    {
+        match self.values.last().unwrap() {
+            DbValue::Null => self.deserialize_unit(visitor),
+            _ => {
+                let value = self.pop_value().unwrap();
+                let value = value.as_u64().unwrap();
+                visitor.visit_u64(value)
+            }
+        }
+    }
+
     fn deserialize_f32<V>(self, visitor: V) -> Result<V::Value, DbError>
     where
         V: Visitor<'de>,
@@ -638,6 +705,34 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     }
 
     fn deserialize_string<V>(self, visitor: V) -> Result<V::Value, DbError>
+    where
+        V: Visitor<'de>,
+    {
+        match self.values.last().unwrap() {
+            DbValue::Null => self.deserialize_unit(visitor),
+            _ => {
+                let value = self.pop_value().unwrap();
+                let value = value.as_str().unwrap();
+                visitor.visit_borrowed_str(value)
+            }
+        }
+    }
+
+    fn deserialize_char<V>(self, visitor: V) -> Result<V::Value, DbError>
+    where
+        V: Visitor<'de>,
+    {
+        match self.values.last().unwrap() {
+            DbValue::Null => self.deserialize_unit(visitor),
+            _ => {
+                let value = self.pop_value().unwrap();
+                let value = value.as_str().unwrap();
+                visitor.visit_borrowed_str(value)
+            }
+        }
+    }
+
+    fn deserialize_str<V>(self, visitor: V) -> Result<V::Value, DbError>
     where
         V: Visitor<'de>,
     {
@@ -706,69 +801,6 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     }
 
     // Unsupported types:
-
-    fn deserialize_i8<V>(self, _visitor: V) -> Result<V::Value, DbError>
-    where
-        V: Visitor<'de>,
-    {
-        return Err(DbError::SerdeError(
-            "Deserializing 'i8' is not supported".to_string(),
-        ));
-    }
-
-    fn deserialize_u8<V>(self, _visitor: V) -> Result<V::Value, DbError>
-    where
-        V: Visitor<'de>,
-    {
-        return Err(DbError::SerdeError(
-            "Deserializing 'u8' is not supported".to_string(),
-        ));
-    }
-
-    fn deserialize_u16<V>(self, _visitor: V) -> Result<V::Value, DbError>
-    where
-        V: Visitor<'de>,
-    {
-        return Err(DbError::SerdeError(
-            "Deserializing 'u16' is not supported".to_string(),
-        ));
-    }
-
-    fn deserialize_u32<V>(self, _visitor: V) -> Result<V::Value, DbError>
-    where
-        V: Visitor<'de>,
-    {
-        return Err(DbError::SerdeError(
-            "Deserializing 'u32' is not supported".to_string(),
-        ));
-    }
-
-    fn deserialize_u64<V>(self, _visitor: V) -> Result<V::Value, DbError>
-    where
-        V: Visitor<'de>,
-    {
-        return Err(DbError::SerdeError(
-            "Deserializing 'u64' is not supported".to_string(),
-        ));
-    }
-
-    fn deserialize_char<V>(self, _visitor: V) -> Result<V::Value, DbError>
-    where
-        V: Visitor<'de>,
-    {
-        return Err(DbError::SerdeError(
-            "Deserializing 'char' is not supported".to_string(),
-        ));
-    }
-
-    fn deserialize_str<V>(self, _visitor: V) -> Result<V::Value, DbError>
-    where
-        V: Visitor<'de>,
-    {
-        return Err(DbError::SerdeError(
-            "Deserializing 'str' is not supported".to_string(),
-        ));
-    }
 
     fn deserialize_bytes<V>(self, _visitor: V) -> Result<V::Value, DbError>
     where
@@ -914,6 +946,10 @@ mod tests {
         struct TestStruct {
             boolean: bool,
             boolean_opt: Option<bool>,
+            tinyint: i8,
+            tinyint_opt: Option<i8>,
+            tiny_unsigned: u8,
+            tiny_unsigned_opt: Option<u8>,
             smallint: i16,
             smallint_opt: Option<i16>,
             mediumint: i32,
@@ -924,14 +960,18 @@ mod tests {
             smallfloat_opt: Option<f32>,
             bigfloat: f64,
             bigfloat_opt: Option<f64>,
-            // biggerfloat: Decimal,
             text: String,
             text_opt: Option<String>,
+            // biggerfloat: Decimal,
         }
 
         let expected_struct = TestStruct {
             boolean: true,
             boolean_opt: Some(true),
+            tinyint: 1,
+            tinyint_opt: Some(1),
+            tiny_unsigned: 1,
+            tiny_unsigned_opt: None,
             smallint: 1,
             smallint_opt: None,
             mediumint: 1,
@@ -942,14 +982,18 @@ mod tests {
             smallfloat_opt: Some(1_f32),
             bigfloat: 1_f64,
             bigfloat_opt: None,
-            // biggerfloat: dec!(1),
             text: 1.to_string(),
             text_opt: Some(1.to_string()),
+            // biggerfloat: dec!(1),
         };
 
         let expected_db_row = db_row! {
             "boolean" => true,
             "boolean_opt" => true,
+            "tinyint" => 1_i16,
+            "tinyint_opt" => 1_i16,
+            "tiny_unsigned" => 1_i16,
+            "tiny_unsigned_opt" => DbValue::Null,
             "smallint" => 1_i16,
             "smallint_opt" => DbValue::Null,
             "mediumint" => 1_i32,
@@ -960,9 +1004,9 @@ mod tests {
             "smallfloat_opt" => 1_f32,
             "bigfloat" => 1_f64,
             "bigfloat_opt" => DbValue::Null,
-            // "biggerfloat" => 1_i64,
             "text" => "1",
             "text_opt" => "1",
+            // "biggerfloat" => 1_i64,
         };
         assert_eq!(expected_db_row, to_db_row(&expected_struct).unwrap());
         assert_eq!(expected_struct, from_db_row(&expected_db_row).unwrap());

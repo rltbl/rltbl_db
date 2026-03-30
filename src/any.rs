@@ -956,7 +956,7 @@ mod tests {
                 },
                 db_row! {
                     "float_value" => DbValue::Null,
-                    "int_value" => DbValue::from(1_i64),
+                    "int_value" => 1_i64,
                 }
             ]
         );
