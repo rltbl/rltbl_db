@@ -36,24 +36,6 @@ where
     let mut serializer = DbRowSerializer::new();
     value.serialize(&mut serializer)?;
 
-    // Finish up anything that has been started:
-    if serializer.tmp_keys.len() > 0 {
-        assert_eq!(serializer.tmp_keys.len(), serializer.tmp_values.len());
-        let mut inner_row = JsonRow::new();
-        for (i, key) in serializer.tmp_keys.iter().enumerate() {
-            inner_row.insert(key.to_string(), serializer.tmp_values[i].clone().into());
-        }
-        serializer
-            .values
-            .push(DbValue::Text(json!(inner_row).to_string()));
-
-        // Empty the nest: (not really necessary but we do it anyway):
-        serializer.nested_struct = "".to_string();
-        serializer.nested_struct_len = 0;
-        serializer.tmp_keys.clear();
-        serializer.tmp_values.clear();
-    }
-
     let keys = serializer.keys;
     let values = serializer.values;
     if keys.len() != values.len() {
@@ -150,31 +132,46 @@ where
 // Serialization implementations
 ////////////////////////////////////////////////////////////////////////////////
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct DbRowSerializer {
-    nesting_struct: String,
-    nested_struct: String,
-    nested_struct_len: usize,
     /// The keys of the output [DbRow].
     keys: Vec<String>,
     /// The values of the output [DbRow].
     values: Vec<DbValue>,
-    /// WIP document these temporary buffer fields:
-    tmp_keys: Vec<String>,
-    tmp_values: Vec<JsonValue>,
+    /// TODO: Add docstrings for all of these.
+    nesting_type: String,
+    nested_type: String,
+    nested_type_len: usize,
+    nested_keys: Vec<String>,
+    nested_values: Vec<JsonValue>,
 }
 
 impl DbRowSerializer {
     fn new() -> Self {
-        DbRowSerializer {
-            nesting_struct: "".to_string(),
-            nested_struct: "".to_string(),
-            nested_struct_len: 0,
-            keys: vec![],
-            values: vec![],
-            tmp_keys: vec![],
-            tmp_values: vec![],
+        DbRowSerializer::default()
+    }
+
+    fn push_nested_row(&mut self) -> Result<(), DbError> {
+        assert_eq!(self.nested_keys.len(), self.nested_values.len());
+        let mut nested_row = JsonRow::new();
+        for (i, key) in self.nested_keys.iter().enumerate() {
+            nested_row.insert(key.to_string(), self.nested_values[i].clone());
         }
+        self.values
+            .push(DbValue::Text(json!(nested_row).to_string()));
+        self.nested_type.clear();
+        self.nested_keys.clear();
+        self.nested_values.clear();
+        Ok(())
+    }
+
+    fn push_to_nested_values(&mut self, value: JsonValue) -> Result<(), DbError> {
+        self.nested_values.push(value);
+        self.nested_type_len -= 1;
+        if self.nested_type_len == 0 {
+            self.push_nested_row()?;
+        }
+        Ok(())
     }
 }
 
@@ -204,94 +201,97 @@ impl<'a> ser::Serializer for &'a mut DbRowSerializer {
         // TODO: These printlns are useful but they should be replaced with tracing statements.
         //println!("In serialize_bool with SELF: {self:#?}");
         self.values.push(DbValue::from(value));
-        //println!("SELF IS NOW: {self:#?}");
+        // println!("SELF IS NOW: {self:#?}");
         Ok(())
     }
 
     fn serialize_i8(self, value: i8) -> Result<(), Self::Error> {
         //println!("In serialize_i8 with SELF: {self:#?}");
         self.values.push(DbValue::from(value));
+        // println!("SELF IS NOW: {self:#?}");
         Ok(())
     }
 
     fn serialize_i16(self, value: i16) -> Result<(), Self::Error> {
         //println!("In serialize_i16 with SELF: {self:#?}");
-        if self.nested_struct != "" {
-            self.tmp_values.push(json!(value));
-        } else {
+
+        if self.nested_type_len == 0 {
             self.values.push(DbValue::from(value));
+        } else {
+            self.push_to_nested_values(json!(value))?;
         }
-        //println!("SELF IS NOW: {self:#?}");
+
+        // println!("SELF IS NOW: {self:#?}");
         Ok(())
     }
 
     fn serialize_i32(self, value: i32) -> Result<(), Self::Error> {
         //println!("In serialize_i32 with SELF: {self:#?}");
         self.values.push(DbValue::from(value));
-        //println!("SELF IS NOW {self:#?}");
+        // println!("SELF IS NOW {self:#?}");
         Ok(())
     }
 
     fn serialize_i64(self, value: i64) -> Result<(), Self::Error> {
         //println!("In serialize_i64 with SELF: {self:#?}");
         self.values.push(DbValue::from(value));
-        //println!("SELF IS NOW {self:#?}");
+        // println!("SELF IS NOW {self:#?}");
         Ok(())
     }
 
     fn serialize_u8(self, value: u8) -> Result<(), Self::Error> {
         //println!("In serialize_u8 with SELF: {self:#?}");
         self.values.push(DbValue::from(value));
-        //println!("SELF IS NOW {self:#?}");
+        // println!("SELF IS NOW {self:#?}");
         Ok(())
     }
 
     fn serialize_u16(self, value: u16) -> Result<(), Self::Error> {
         //println!("In serialize_u16 with SELF: {self:#?}");
         self.values.push(DbValue::from(value));
-        //println!("SELF IS NOW {self:#?}");
+        // println!("SELF IS NOW {self:#?}");
         Ok(())
     }
 
     fn serialize_u32(self, value: u32) -> Result<(), Self::Error> {
         //println!("In serialize_u32 with SELF: {self:#?}");
         self.values.push(DbValue::from(value));
-        //println!("SELF IS NOW {self:#?}");
+        // println!("SELF IS NOW {self:#?}");
         Ok(())
     }
 
     fn serialize_u64(self, value: u64) -> Result<(), Self::Error> {
         //println!("In serialize_u64 with SELF: {self:#?}");
         self.values.push(DbValue::from(value));
-        //println!("SELF IS NOW {self:#?}");
+        // println!("SELF IS NOW {self:#?}");
         Ok(())
     }
 
     fn serialize_f32(self, value: f32) -> Result<(), Self::Error> {
         //println!("In serialize_f32 with SELF: {self:#?}");
         self.values.push(DbValue::from(value));
-        //println!("SELF IS NOW: {self:#?}");
+        // println!("SELF IS NOW: {self:#?}");
         Ok(())
     }
 
     fn serialize_f64(self, value: f64) -> Result<(), Self::Error> {
         //println!("In serialize_f64 with SELF: {self:#?}");
         self.values.push(DbValue::from(value));
-        //println!("SELF IS NOW {self:#?}");
+        // println!("SELF IS NOW {self:#?}");
         Ok(())
     }
 
     fn serialize_str(self, value: &str) -> Result<(), Self::Error> {
         //println!("In serialize_str with SELF: {self:#?}");
         self.values.push(DbValue::from(value));
-        //println!("SELF IS NOW {self:#?}");
+        // println!("SELF IS NOW {self:#?}");
         Ok(())
     }
 
     fn serialize_char(self, value: char) -> Result<(), Self::Error> {
         //println!("In serialize_value with SELF: {self:#?}");
         self.values.push(DbValue::from(value.to_string()));
-        //println!("SELF IS NOW {self:#?}");
+        // println!("SELF IS NOW {self:#?}");
         Ok(())
     }
 
@@ -313,6 +313,7 @@ impl<'a> ser::Serializer for &'a mut DbRowSerializer {
     fn serialize_unit(self) -> Result<(), Self::Error> {
         //println!("In serialize_unit with SELF: {self:#?}");
         self.values.push(DbValue::Null);
+        // println!("SELF IS NOW {self:#?}");
         Ok(())
     }
 
@@ -324,27 +325,24 @@ impl<'a> ser::Serializer for &'a mut DbRowSerializer {
         len: usize,
     ) -> Result<Self::SerializeStruct, Self::Error> {
         //println!("In serialize_struct with NAME: {name}, LEN: {len}, and SELF: {self:#?}");
-
-        assert_ne!(name, "");
-
-        if self.nesting_struct == "" {
-            self.nesting_struct = name.to_string();
+        if self.nesting_type == "" {
+            self.nesting_type = name.to_string();
         }
 
-        if name != self.nesting_struct {
-            if self.nested_struct == "" {
-                self.nested_struct = name.to_string();
-                self.nested_struct_len = len;
-            } else if name != self.nested_struct {
-                panic!("Can't nest another struct '{name}'!");
+        if name != self.nesting_type {
+            if self.nested_type == "" {
+                self.nested_type = name.to_string();
+                self.nested_type_len = len;
+            } else {
+                // TODO: We should be able to support this:
+                panic!("Can't nest another type");
             }
         }
-
-        //println!("SELF IS NOW: {self:#?}");
         self.serialize_map(Some(len))
     }
 
     fn serialize_map(self, _len: Option<usize>) -> Result<Self::SerializeMap, Self::Error> {
+        //println!("In serialize_map with LEN: {len:?}");
         Ok(self)
     }
 
@@ -454,33 +452,13 @@ impl<'a> ser::SerializeStruct for &'a mut DbRowSerializer {
         T: ?Sized + Serialize,
     {
         //println!("In SerializeStruct::serialize_field: {self:#?}");
-        if self.nested_struct != "" {
-            if self.tmp_keys.len() == self.nested_struct_len {
-                // We are done processing the nested struct. Pop the temporary keys
-                // and values and make a json row which we will add to the non-temporary list
-                // of values.
-                assert_eq!(self.tmp_keys.len(), self.tmp_values.len());
-                let mut inner_row = JsonRow::new();
-                for (i, key) in self.tmp_keys.iter().enumerate() {
-                    inner_row.insert(key.to_string(), self.tmp_values[i].clone());
-                }
-                self.values
-                    .push(DbValue::Text(json!(inner_row).to_string()));
-
-                // Empty the nest:
-                self.nested_struct = "".to_string();
-                self.nested_struct_len = 0;
-                self.tmp_keys.clear();
-                self.tmp_values.clear();
-            } else {
-                self.tmp_keys.push(key.to_string());
-                value.serialize(&mut **self)?;
-            }
-        } else {
+        if self.nested_type_len == 0 {
             self.keys.push(key.to_string());
-            value.serialize(&mut **self)?;
+        } else {
+            self.nested_keys.push(key.to_string());
         }
-        //println!("SELF IS NOW: {self:#?}");
+        value.serialize(&mut **self)?;
+        // println!("SELF IS NOW: {self:#?}");
         Ok(())
     }
 
@@ -1169,22 +1147,27 @@ mod tests {
 
         #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
         struct NestingStruct {
-            xyzzy: i16,
-            plugh: NestedStruct,
-            //zork: i16,
-            //planetfall: NestedStruct,
+            alpha: i16,
+            beta: i16,
+            gamma: NestedStruct,
+            delta: i16,
+            epsilon: NestedStruct,
         }
 
         let expected_struct = NestingStruct {
-            xyzzy: 1_i16,
-            plugh: NestedStruct { foo: 12, bar: 13 },
-            //zork: 1_i16,
-            //planetfall: NestedStruct { foo: 14, bar: 15 },
+            alpha: 1_i16,
+            beta: 1_i16,
+            gamma: NestedStruct { foo: 12, bar: 13 },
+            delta: 1_i16,
+            epsilon: NestedStruct { foo: 14, bar: 15 },
         };
 
         let expected_db_row = db_row! {
-            "xyzzy" => 1_i16,
-            "plugh" => r#"{"foo":12,"bar":13}"#,
+            "alpha" => 1_i16,
+            "beta" => 1_i16,
+            "gamma" => r#"{"foo":12,"bar":13}"#,
+            "delta" => 1_i16,
+            "epsilon" => r#"{"foo":14,"bar":15}"#,
         };
 
         assert_eq!(expected_db_row, to_db_row(&expected_struct).unwrap());
