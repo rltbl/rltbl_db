@@ -132,16 +132,24 @@ where
 // Serialization implementations
 ////////////////////////////////////////////////////////////////////////////////
 
+#[derive(Debug, Default, Clone)]
+struct NestedType {
+    _name: String,
+    len: usize,
+}
+
 #[derive(Debug, Default)]
 struct DbRowSerializer {
     /// The keys of the output [DbRow].
     keys: Vec<String>,
     /// The values of the output [DbRow].
     values: Vec<DbValue>,
+
     /// TODO: Add docstrings for all of these.
     nesting_type: String,
-    nested_type: String,
-    nested_type_len: usize,
+
+    nested_types: Vec<NestedType>,
+
     nested_keys: Vec<String>,
     nested_values: Vec<JsonValue>,
 }
@@ -159,7 +167,7 @@ impl DbRowSerializer {
         }
         self.values
             .push(DbValue::Text(json!(nested_row).to_string()));
-        self.nested_type.clear();
+        self.nested_types.pop();
         self.nested_keys.clear();
         self.nested_values.clear();
         Ok(())
@@ -167,9 +175,14 @@ impl DbRowSerializer {
 
     fn push_to_nested_values(&mut self, value: JsonValue) -> Result<(), DbError> {
         self.nested_values.push(value);
-        self.nested_type_len -= 1;
-        if self.nested_type_len == 0 {
-            self.push_nested_row()?;
+        let num_types = self.nested_types.len();
+        if let Some(ref mut nested) = self.nested_types.get_mut(num_types - 1) {
+            nested.len -= 1;
+        }
+        if let Some(ntype) = &self.nested_types.last() {
+            if ntype.len == 0 {
+                self.push_nested_row()?;
+            }
         }
         Ok(())
     }
@@ -215,7 +228,14 @@ impl<'a> ser::Serializer for &'a mut DbRowSerializer {
     fn serialize_i16(self, value: i16) -> Result<(), Self::Error> {
         //println!("In serialize_i16 with SELF: {self:#?}");
 
-        if self.nested_type_len == 0 {
+        if self
+            .nested_types
+            .last()
+            .clone()
+            .and_then(|ntype| Some(ntype.len))
+            .unwrap_or(0)
+            == 0
+        {
             self.values.push(DbValue::from(value));
         } else {
             self.push_to_nested_values(json!(value))?;
@@ -330,9 +350,11 @@ impl<'a> ser::Serializer for &'a mut DbRowSerializer {
         }
 
         if name != self.nesting_type {
-            if self.nested_type == "" {
-                self.nested_type = name.to_string();
-                self.nested_type_len = len;
+            if let None = self.nested_types.last() {
+                self.nested_types.push(NestedType {
+                    _name: name.to_string(),
+                    len,
+                });
             } else {
                 // TODO: We should be able to support this:
                 panic!("Can't nest another type");
@@ -452,7 +474,14 @@ impl<'a> ser::SerializeStruct for &'a mut DbRowSerializer {
         T: ?Sized + Serialize,
     {
         //println!("In SerializeStruct::serialize_field: {self:#?}");
-        if self.nested_type_len == 0 {
+        if self
+            .nested_types
+            .last()
+            .clone()
+            .and_then(|ntype| Some(ntype.len))
+            .unwrap_or(0)
+            == 0
+        {
             self.keys.push(key.to_string());
         } else {
             self.nested_keys.push(key.to_string());
