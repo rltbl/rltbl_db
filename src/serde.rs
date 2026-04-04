@@ -4,7 +4,6 @@ use crate::{
     core::DbError,
     db_value::{DbRow, DbValue, JsonRow, JsonValue},
 };
-use rust_decimal::prelude::ToPrimitive;
 use serde::{
     Deserialize, Serialize,
     de::{self, Visitor},
@@ -13,7 +12,7 @@ use serde::{
 use serde_json::json;
 
 /// Convert the given supported struct to a [DbRow]. For this to be successful, the struct
-/// must be a "normal struct" of the form:
+/// must be a struct of the form:
 ///
 /// ```ignore
 /// struct NormalStruct {
@@ -22,13 +21,6 @@ use serde_json::json;
 ///   ...
 /// }
 /// ```
-///
-/// where type1, type2, ... are among the primitive types associated with
-/// the different kinds of [DbValue]. Other field types, and other types of
-/// structs (e.g., tuple structs, unit structs, see
-/// <https://doc.rust-lang.org/book/ch05-01-defining-structs.html>) are not
-/// supported and attempts to serialize them will result in an error, as will
-/// attempts to serialize anything other than a struct (e.g., an enum).
 pub fn to_db_row<T>(value: &T) -> Result<DbRow, DbError>
 where
     T: Serialize,
@@ -47,12 +39,10 @@ where
             vlen = values.len(),
         )));
     }
-
     let mut db_row = DbRow::new();
     for (i, key) in keys.iter().enumerate() {
         db_row.insert(key.to_string(), values[i].clone());
     }
-
     Ok(db_row)
 }
 
@@ -66,14 +56,6 @@ where
 ///   ...
 /// }
 /// ```
-///
-/// where type1, type2, ... are among the primitive types associated with
-/// the different kinds of [DbValue]. Other field types, and other types of
-/// structs (e.g., tuple structs, unit structs, see
-/// <https://doc.rust-lang.org/book/ch05-01-defining-structs.html>) are not
-/// supported and attempts to deserialize a [DbRow] to them will result in an
-/// error, as will attempts to deserialize a [DbRow] to anything other than a
-/// struct (e.g., an enum).
 pub fn from_db_row<T>(db_row: &DbRow) -> Result<T, DbError>
 where
     T: for<'de> Deserialize<'de>,
@@ -90,51 +72,15 @@ where
     }
 }
 
-// TODO: Remove this alternative implementation of from_db_row() before merging this branch.
-// Keeping it around for now for comparison with the preferred implementaion.
-pub fn from_db_row_indirect<T>(db_row: &DbRow) -> Result<T, DbError>
-where
-    T: for<'a> Deserialize<'a>,
-{
-    // The method below *works* and, unlike the case of serializing a struct to a DbRow, where
-    // converting to JSON as an intermediate step necessarily throws away the type information
-    // that we need for a successful serialization to DbRow, in the case of deserialization,
-    // converting to JSON as an intermediate step is not lossy in that sense. So we do not
-    // *need* to find an alternative method. However converting to JSON first seems
-    // inefficient and it is probably be better to deserialize directly from a DbRow
-    // to a T struct, as is done in from_db_row() above.
-    let mut flat_row = JsonRow::new();
-    for (column, value) in db_row.iter() {
-        match value {
-            DbValue::Null => flat_row.insert(column.to_string(), JsonValue::Null),
-            DbValue::Boolean(num) => flat_row.insert(column.to_string(), JsonValue::from(*num)),
-            DbValue::SmallInteger(num) => {
-                flat_row.insert(column.to_string(), JsonValue::from(*num))
-            }
-            DbValue::Integer(num) => flat_row.insert(column.to_string(), JsonValue::from(*num)),
-            DbValue::BigInteger(num) => flat_row.insert(column.to_string(), JsonValue::from(*num)),
-            DbValue::Real(num) => flat_row.insert(column.to_string(), JsonValue::from(*num)),
-            DbValue::BigReal(num) => flat_row.insert(column.to_string(), JsonValue::from(*num)),
-            DbValue::Numeric(num) => {
-                flat_row.insert(column.to_string(), JsonValue::from(num.to_f64()))
-            }
-            DbValue::Text(txt) => {
-                flat_row.insert(column.to_string(), JsonValue::from(txt.to_string()))
-            }
-        };
-    }
-    let t_struct: T = serde_json::from_str(&serde_json::json!(flat_row).to_string())
-        .map_err(|err| DbError::SerdeError(err.to_string()))?;
-    Ok(t_struct)
-}
-
 ////////////////////////////////////////////////////////////////////////////////
 // Serialization implementations
 ////////////////////////////////////////////////////////////////////////////////
 
 #[derive(Debug, Default, Clone)]
-struct NestedType {
-    _name: String,
+struct VisitedType {
+    // The name of the type
+    name: String,
+    // The length of the type (number of fields).
     len: usize,
 }
 
@@ -144,13 +90,13 @@ struct DbRowSerializer {
     keys: Vec<String>,
     /// The values of the output [DbRow].
     values: Vec<DbValue>,
-
-    /// TODO: Add docstrings for all of these.
-    nesting_type: String,
-
-    nested_types: Vec<NestedType>,
-
+    /// The name and length of the top-level struct being serialized.
+    main_type: VisitedType,
+    /// Complex field types:
+    nested_types: Vec<VisitedType>,
+    /// Field names for complex types.
     nested_keys: Vec<String>,
+    /// Values for fields of complex types.
     nested_values: Vec<JsonValue>,
 }
 
@@ -160,7 +106,12 @@ impl DbRowSerializer {
     }
 
     fn push_nested_row(&mut self) -> Result<(), DbError> {
-        assert_eq!(self.nested_keys.len(), self.nested_values.len());
+        if self.nested_keys.len() != self.nested_values.len() {
+            return Err(DbError::SerdeError(format!(
+                "Nested keys and values have different lengths: Keys: {:?}, Values: {:?}",
+                self.nested_keys, self.nested_values,
+            )));
+        }
         let mut nested_row = JsonRow::new();
         for (i, key) in self.nested_keys.iter().enumerate() {
             nested_row.insert(key.to_string(), self.nested_values[i].clone());
@@ -185,6 +136,15 @@ impl DbRowSerializer {
             }
         }
         Ok(())
+    }
+
+    fn get_last_nested_type_len(&self) -> usize {
+        self.nested_types
+            .last()
+            .and_then(|ntype| Some(ntype.len))
+            // If there are no nested types we return a length of 0 rather than the
+            // length of the main struct.
+            .unwrap_or(0)
     }
 }
 
@@ -211,114 +171,125 @@ impl<'a> ser::Serializer for &'a mut DbRowSerializer {
     // Primitive types
 
     fn serialize_bool(self, value: bool) -> Result<(), Self::Error> {
-        // TODO: These printlns are useful but they should be replaced with tracing statements.
-        //println!("In serialize_bool with SELF: {self:#?}");
-        self.values.push(DbValue::from(value));
-        // println!("SELF IS NOW: {self:#?}");
-        Ok(())
-    }
-
-    fn serialize_i8(self, value: i8) -> Result<(), Self::Error> {
-        //println!("In serialize_i8 with SELF: {self:#?}");
-        self.values.push(DbValue::from(value));
-        // println!("SELF IS NOW: {self:#?}");
-        Ok(())
-    }
-
-    fn serialize_i16(self, value: i16) -> Result<(), Self::Error> {
-        //println!("In serialize_i16 with SELF: {self:#?}");
-
-        if self
-            .nested_types
-            .last()
-            .clone()
-            .and_then(|ntype| Some(ntype.len))
-            .unwrap_or(0)
-            == 0
-        {
+        if self.get_last_nested_type_len() == 0 {
             self.values.push(DbValue::from(value));
         } else {
             self.push_to_nested_values(json!(value))?;
         }
+        Ok(())
+    }
 
-        // println!("SELF IS NOW: {self:#?}");
+    fn serialize_i8(self, value: i8) -> Result<(), Self::Error> {
+        if self.get_last_nested_type_len() == 0 {
+            self.values.push(DbValue::from(value));
+        } else {
+            self.push_to_nested_values(json!(value))?;
+        }
+        Ok(())
+    }
+
+    fn serialize_i16(self, value: i16) -> Result<(), Self::Error> {
+        if self.get_last_nested_type_len() == 0 {
+            self.values.push(DbValue::from(value));
+        } else {
+            self.push_to_nested_values(json!(value))?;
+        }
         Ok(())
     }
 
     fn serialize_i32(self, value: i32) -> Result<(), Self::Error> {
-        //println!("In serialize_i32 with SELF: {self:#?}");
-        self.values.push(DbValue::from(value));
-        // println!("SELF IS NOW {self:#?}");
+        if self.get_last_nested_type_len() == 0 {
+            self.values.push(DbValue::from(value));
+        } else {
+            self.push_to_nested_values(json!(value))?;
+        }
         Ok(())
     }
 
     fn serialize_i64(self, value: i64) -> Result<(), Self::Error> {
-        //println!("In serialize_i64 with SELF: {self:#?}");
-        self.values.push(DbValue::from(value));
-        // println!("SELF IS NOW {self:#?}");
+        if self.get_last_nested_type_len() == 0 {
+            self.values.push(DbValue::from(value));
+        } else {
+            self.push_to_nested_values(json!(value))?;
+        }
         Ok(())
     }
 
     fn serialize_u8(self, value: u8) -> Result<(), Self::Error> {
-        //println!("In serialize_u8 with SELF: {self:#?}");
-        self.values.push(DbValue::from(value));
-        // println!("SELF IS NOW {self:#?}");
+        if self.get_last_nested_type_len() == 0 {
+            self.values.push(DbValue::from(value));
+        } else {
+            self.push_to_nested_values(json!(value))?;
+        }
         Ok(())
     }
 
     fn serialize_u16(self, value: u16) -> Result<(), Self::Error> {
-        //println!("In serialize_u16 with SELF: {self:#?}");
-        self.values.push(DbValue::from(value));
-        // println!("SELF IS NOW {self:#?}");
+        if self.get_last_nested_type_len() == 0 {
+            self.values.push(DbValue::from(value));
+        } else {
+            self.push_to_nested_values(json!(value))?;
+        }
         Ok(())
     }
 
     fn serialize_u32(self, value: u32) -> Result<(), Self::Error> {
-        //println!("In serialize_u32 with SELF: {self:#?}");
-        self.values.push(DbValue::from(value));
-        // println!("SELF IS NOW {self:#?}");
+        if self.get_last_nested_type_len() == 0 {
+            self.values.push(DbValue::from(value));
+        } else {
+            self.push_to_nested_values(json!(value))?;
+        }
         Ok(())
     }
 
     fn serialize_u64(self, value: u64) -> Result<(), Self::Error> {
-        //println!("In serialize_u64 with SELF: {self:#?}");
-        self.values.push(DbValue::from(value));
-        // println!("SELF IS NOW {self:#?}");
+        if self.get_last_nested_type_len() == 0 {
+            self.values.push(DbValue::from(value));
+        } else {
+            self.push_to_nested_values(json!(value))?;
+        }
         Ok(())
     }
 
     fn serialize_f32(self, value: f32) -> Result<(), Self::Error> {
-        //println!("In serialize_f32 with SELF: {self:#?}");
-        self.values.push(DbValue::from(value));
-        // println!("SELF IS NOW: {self:#?}");
+        if self.get_last_nested_type_len() == 0 {
+            self.values.push(DbValue::from(value));
+        } else {
+            self.push_to_nested_values(json!(value))?;
+        }
         Ok(())
     }
 
     fn serialize_f64(self, value: f64) -> Result<(), Self::Error> {
-        //println!("In serialize_f64 with SELF: {self:#?}");
-        self.values.push(DbValue::from(value));
-        // println!("SELF IS NOW {self:#?}");
+        if self.get_last_nested_type_len() == 0 {
+            self.values.push(DbValue::from(value));
+        } else {
+            self.push_to_nested_values(json!(value))?;
+        }
         Ok(())
     }
 
     fn serialize_str(self, value: &str) -> Result<(), Self::Error> {
-        //println!("In serialize_str with SELF: {self:#?}");
-        self.values.push(DbValue::from(value));
-        // println!("SELF IS NOW {self:#?}");
+        if self.get_last_nested_type_len() == 0 {
+            self.values.push(DbValue::from(value));
+        } else {
+            self.push_to_nested_values(json!(value))?;
+        }
         Ok(())
     }
 
     fn serialize_char(self, value: char) -> Result<(), Self::Error> {
-        //println!("In serialize_value with SELF: {self:#?}");
-        self.values.push(DbValue::from(value.to_string()));
-        // println!("SELF IS NOW {self:#?}");
+        if self.get_last_nested_type_len() == 0 {
+            self.values.push(DbValue::from(value.to_string()));
+        } else {
+            self.push_to_nested_values(json!(value))?;
+        }
         Ok(())
     }
 
     // Options
 
     fn serialize_none(self) -> Result<(), Self::Error> {
-        //println!("In serialize_none with SELF: {self:#?}");
         self.serialize_unit()
     }
 
@@ -326,14 +297,15 @@ impl<'a> ser::Serializer for &'a mut DbRowSerializer {
     where
         T: ?Sized + Serialize,
     {
-        //println!("In serialize_some with SELF: {self:#?}");
         value.serialize(self)
     }
 
     fn serialize_unit(self) -> Result<(), Self::Error> {
-        //println!("In serialize_unit with SELF: {self:#?}");
-        self.values.push(DbValue::Null);
-        // println!("SELF IS NOW {self:#?}");
+        if self.get_last_nested_type_len() == 0 {
+            self.values.push(DbValue::Null);
+        } else {
+            self.push_to_nested_values(JsonValue::Null)?;
+        }
         Ok(())
     }
 
@@ -344,27 +316,28 @@ impl<'a> ser::Serializer for &'a mut DbRowSerializer {
         name: &str,
         len: usize,
     ) -> Result<Self::SerializeStruct, Self::Error> {
-        //println!("In serialize_struct with NAME: {name}, LEN: {len}, and SELF: {self:#?}");
-        if self.nesting_type == "" {
-            self.nesting_type = name.to_string();
+        if self.main_type.name == "" {
+            self.main_type = VisitedType {
+                name: name.to_string(),
+                len,
+            };
         }
 
-        if name != self.nesting_type {
-            if let None = self.nested_types.last() {
-                self.nested_types.push(NestedType {
-                    _name: name.to_string(),
+        if name != self.main_type.name {
+            if self.nested_types.is_empty() {
+                self.nested_types.push(VisitedType {
+                    name: name.to_string(),
                     len,
                 });
-            } else {
-                // TODO: We should be able to support this:
-                panic!("Can't nest another type");
+            } else if name != self.nested_types.last().unwrap().name {
+                // TODO: If possible, support doubly-nested types:
+                return Err(DbError::SerdeError("Can't nest another type".to_string()));
             }
         }
         self.serialize_map(Some(len))
     }
 
     fn serialize_map(self, _len: Option<usize>) -> Result<Self::SerializeMap, Self::Error> {
-        //println!("In serialize_map with LEN: {len:?}");
         Ok(self)
     }
 
@@ -473,21 +446,12 @@ impl<'a> ser::SerializeStruct for &'a mut DbRowSerializer {
     where
         T: ?Sized + Serialize,
     {
-        //println!("In SerializeStruct::serialize_field: {self:#?}");
-        if self
-            .nested_types
-            .last()
-            .clone()
-            .and_then(|ntype| Some(ntype.len))
-            .unwrap_or(0)
-            == 0
-        {
+        if self.get_last_nested_type_len() == 0 {
             self.keys.push(key.to_string());
         } else {
             self.nested_keys.push(key.to_string());
         }
         value.serialize(&mut **self)?;
-        // println!("SELF IS NOW: {self:#?}");
         Ok(())
     }
 
@@ -662,8 +626,17 @@ impl<'de> DbRowDeserializer<'de> {
         self.keys.pop()
     }
 
-    fn pop_value(&mut self) -> Option<&'de DbValue> {
-        self.values.pop()
+    fn pop_value(&mut self) -> Result<&'de DbValue, DbError> {
+        self.values
+            .pop()
+            .ok_or(DbError::SerdeError("No more values to pop".to_string()))
+    }
+
+    fn last_value(&self) -> Result<&DbValue, DbError> {
+        self.values
+            .last()
+            .ok_or(DbError::SerdeError("No more values".to_string()))
+            .copied()
     }
 }
 
@@ -676,11 +649,13 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        match self.values.last().unwrap() {
+        match self.last_value()? {
             DbValue::Null => self.deserialize_unit(visitor),
             _ => {
-                let value = self.pop_value().unwrap();
-                let value = value.as_bool().unwrap();
+                let value = self.pop_value()?;
+                let value = value
+                    .as_bool()
+                    .ok_or(DbError::SerdeError(format!("Not a boolean: {value}")))?;
                 visitor.visit_bool(value)
             }
         }
@@ -690,11 +665,13 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        match self.values.last().unwrap() {
+        match self.last_value()? {
             DbValue::Null => self.deserialize_unit(visitor),
             _ => {
-                let value = self.pop_value().unwrap();
-                let value = value.as_i8().unwrap();
+                let value = self.pop_value()?;
+                let value = value
+                    .as_i8()
+                    .ok_or(DbError::SerdeError(format!("Not an i8: {value}")))?;
                 visitor.visit_i8(value)
             }
         }
@@ -704,11 +681,13 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        match self.values.last().unwrap() {
+        match self.last_value()? {
             DbValue::Null => self.deserialize_unit(visitor),
             _ => {
-                let value = self.pop_value().unwrap();
-                let value = value.as_i16().unwrap();
+                let value = self.pop_value()?;
+                let value = value
+                    .as_i16()
+                    .ok_or(DbError::SerdeError(format!("Not an i16: {value}")))?;
                 visitor.visit_i16(value)
             }
         }
@@ -718,11 +697,13 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        match self.values.last().unwrap() {
+        match self.last_value()? {
             DbValue::Null => self.deserialize_unit(visitor),
             _ => {
-                let value = self.pop_value().unwrap();
-                let value = value.as_i32().unwrap();
+                let value = self.pop_value()?;
+                let value = value
+                    .as_i32()
+                    .ok_or(DbError::SerdeError(format!("Not an i32: {value}")))?;
                 visitor.visit_i32(value)
             }
         }
@@ -732,11 +713,13 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        match self.values.last().unwrap() {
+        match self.last_value()? {
             DbValue::Null => self.deserialize_unit(visitor),
             _ => {
-                let value = self.pop_value().unwrap();
-                let value = value.as_i64().unwrap();
+                let value = self.pop_value()?;
+                let value = value
+                    .as_i64()
+                    .ok_or(DbError::SerdeError(format!("Not an i64: {value}")))?;
                 visitor.visit_i64(value)
             }
         }
@@ -746,11 +729,13 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        match self.values.last().unwrap() {
+        match self.last_value()? {
             DbValue::Null => self.deserialize_unit(visitor),
             _ => {
-                let value = self.pop_value().unwrap();
-                let value = value.as_u8().unwrap();
+                let value = self.pop_value()?;
+                let value = value
+                    .as_u8()
+                    .ok_or(DbError::SerdeError(format!("Not a u8: {value}")))?;
                 visitor.visit_u8(value)
             }
         }
@@ -760,11 +745,13 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        match self.values.last().unwrap() {
+        match self.last_value()? {
             DbValue::Null => self.deserialize_unit(visitor),
             _ => {
-                let value = self.pop_value().unwrap();
-                let value = value.as_u16().unwrap();
+                let value = self.pop_value()?;
+                let value = value
+                    .as_u16()
+                    .ok_or(DbError::SerdeError(format!("Not a u16: {value}")))?;
                 visitor.visit_u16(value)
             }
         }
@@ -774,11 +761,13 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        match self.values.last().unwrap() {
+        match self.last_value()? {
             DbValue::Null => self.deserialize_unit(visitor),
             _ => {
-                let value = self.pop_value().unwrap();
-                let value = value.as_u32().unwrap();
+                let value = self.pop_value()?;
+                let value = value
+                    .as_u32()
+                    .ok_or(DbError::SerdeError(format!("Not a u32: {value}")))?;
                 visitor.visit_u32(value)
             }
         }
@@ -788,11 +777,13 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        match self.values.last().unwrap() {
+        match self.last_value()? {
             DbValue::Null => self.deserialize_unit(visitor),
             _ => {
-                let value = self.pop_value().unwrap();
-                let value = value.as_u64().unwrap();
+                let value = self.pop_value()?;
+                let value = value
+                    .as_u64()
+                    .ok_or(DbError::SerdeError(format!("Not a u64: {value}")))?;
                 visitor.visit_u64(value)
             }
         }
@@ -802,11 +793,13 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        match self.values.last().unwrap() {
+        match self.last_value()? {
             DbValue::Null => self.deserialize_unit(visitor),
             _ => {
-                let value = self.pop_value().unwrap();
-                let value = value.as_f32().unwrap();
+                let value = self.pop_value()?;
+                let value = value
+                    .as_f32()
+                    .ok_or(DbError::SerdeError(format!("Not an f32: {value}")))?;
                 visitor.visit_f32(value)
             }
         }
@@ -816,11 +809,13 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        match self.values.last().unwrap() {
+        match self.last_value()? {
             DbValue::Null => self.deserialize_unit(visitor),
             _ => {
-                let value = self.pop_value().unwrap();
-                let value = value.as_f64().unwrap();
+                let value = self.pop_value()?;
+                let value = value
+                    .as_f64()
+                    .ok_or(DbError::SerdeError(format!("Not an f64: {value}")))?;
                 visitor.visit_f64(value)
             }
         }
@@ -830,11 +825,13 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        match self.values.last().unwrap() {
+        match self.last_value()? {
             DbValue::Null => self.deserialize_unit(visitor),
             _ => {
-                let value = self.pop_value().unwrap();
-                let value = value.as_str().unwrap();
+                let value = self.pop_value()?;
+                let value = value
+                    .as_str()
+                    .ok_or(DbError::SerdeError(format!("Not a string: {value}")))?;
                 visitor.visit_borrowed_str(value)
             }
         }
@@ -844,11 +841,13 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        match self.values.last().unwrap() {
+        match self.last_value()? {
             DbValue::Null => self.deserialize_unit(visitor),
             _ => {
-                let value = self.pop_value().unwrap();
-                let value = value.as_str().unwrap();
+                let value = self.pop_value()?;
+                let value = value
+                    .as_str()
+                    .ok_or(DbError::SerdeError(format!("Not a char: {value}")))?;
                 visitor.visit_borrowed_str(value)
             }
         }
@@ -858,11 +857,13 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        match self.values.last().unwrap() {
+        match self.last_value()? {
             DbValue::Null => self.deserialize_unit(visitor),
             _ => {
-                let value = self.pop_value().unwrap();
-                let value = value.as_str().unwrap();
+                let value = self.pop_value()?;
+                let value = value
+                    .as_str()
+                    .ok_or(DbError::SerdeError(format!("Not a str: {value}")))?;
                 visitor.visit_borrowed_str(value)
             }
         }
@@ -872,9 +873,9 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        match self.values.last().unwrap() {
+        match self.last_value()? {
             DbValue::Null => self.deserialize_unit(visitor),
-            _ => match self.pop_value().unwrap() {
+            _ => match self.pop_value()? {
                 DbValue::Null => unreachable!(),
                 DbValue::Text(value) => visitor.visit_borrowed_str(&value),
                 DbValue::Boolean(value) => visitor.visit_bool(*value),
@@ -898,8 +899,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        let value = self.values.last().unwrap();
-        match value {
+        match self.last_value()? {
             DbValue::Null => self.deserialize_unit(visitor),
             _ => visitor.visit_some(self),
         }
@@ -909,7 +909,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        let value = self.pop_value().unwrap();
+        let value = self.pop_value()?;
         if *value != DbValue::Null {
             return Err(DbError::SerdeError("Expected NULL".to_string()));
         }
@@ -927,11 +927,16 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        //println!("deserialize_struct {name}");
         if self.keys == fields {
             self.deserialize_map(visitor)
         } else {
-            let value = self.pop_value().unwrap().as_str().unwrap();
+            let value = self
+                .pop_value()?
+                .as_str()
+                .ok_or(DbError::SerdeError(format!(
+                    "Not a string: {}",
+                    self.last_value()?
+                )))?;
             serde_json::Deserializer::from_str(value)
                 .deserialize_struct(name, fields, visitor)
                 .map_err(|err| DbError::SerdeError(err.to_string()))
@@ -949,8 +954,9 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        // TODO: Remove unwraps here and elsewhere.
-        let key = self.pop_key().unwrap();
+        let key = self
+            .pop_key()
+            .ok_or(DbError::SerdeError("No more keys".to_string()))?;
         visitor.visit_borrowed_str(key)
     }
 
@@ -1089,7 +1095,6 @@ mod tests {
         // Serializing and deserializing an arbitrary struct to a DbRow:
         #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
         struct NormalStruct {
-            // TODO: For completeness add all of the possible field types here:
             boolean: bool,
             boolean_opt: Option<bool>,
             tinyint: i8,
@@ -1098,10 +1103,16 @@ mod tests {
             tiny_unsigned_opt: Option<u8>,
             smallint: i16,
             smallint_opt: Option<i16>,
+            small_unsigned: u16,
+            small_unsigned_opt: Option<u16>,
             mediumint: i32,
             mediumint_opt: Option<i32>,
+            medium_unsigned: u32,
+            medium_unsigned_opt: Option<u32>,
             bigint: i64,
             bigint_opt: Option<i64>,
+            big_unsigned: u64,
+            big_unsigned_opt: Option<u64>,
             smallfloat: f32,
             smallfloat_opt: Option<f32>,
             bigfloat: f64,
@@ -1123,10 +1134,16 @@ mod tests {
             tiny_unsigned_opt: None,
             smallint: 1,
             smallint_opt: None,
+            small_unsigned: 1,
+            small_unsigned_opt: None,
             mediumint: 1,
             mediumint_opt: Some(1),
+            medium_unsigned: 1,
+            medium_unsigned_opt: None,
             bigint: 1,
             bigint_opt: None,
+            big_unsigned: 1,
+            big_unsigned_opt: None,
             smallfloat: 1_f32,
             smallfloat_opt: Some(1_f32),
             bigfloat: 1_f64,
@@ -1145,10 +1162,16 @@ mod tests {
             "tiny_unsigned_opt" => DbValue::Null,
             "smallint" => 1_i16,
             "smallint_opt" => DbValue::Null,
+            "small_unsigned" => 1_i32,
+            "small_unsigned_opt" => DbValue::Null,
             "mediumint" => 1_i32,
             "mediumint_opt" => 1_i32,
+            "medium_unsigned" => 1_u64,
+            "medium_unsigned_opt" => DbValue::Null,
             "bigint" => 1_i64,
             "bigint_opt" => DbValue::Null,
+            "big_unsigned" => 1_u64,
+            "big_unsigned_opt" => DbValue::Null,
             "smallfloat" => 1_f32,
             "smallfloat_opt" => 1_f32,
             "bigfloat" => 1_f64,
@@ -1160,10 +1183,6 @@ mod tests {
         };
         assert_eq!(expected_db_row, to_db_row(&expected_struct).unwrap());
         assert_eq!(expected_struct, from_db_row(&expected_db_row).unwrap());
-        assert_eq!(
-            expected_struct,
-            from_db_row_indirect(&expected_db_row).unwrap()
-        );
     }
 
     #[test]
@@ -1171,32 +1190,53 @@ mod tests {
         #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
         struct NestedStruct {
             foo: i16,
-            bar: i16,
+            bar: f64,
         }
+
+        // #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
+        // struct DoublyNestedStruct {
+        //     foo: i16,
+        //     bar: NestedStruct,
+        // }
 
         #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
         struct NestingStruct {
-            alpha: i16,
-            beta: i16,
+            alpha: i32,
+            beta: u8,
             gamma: NestedStruct,
-            delta: i16,
+            delta: f32,
             epsilon: NestedStruct,
+            lambda: Option<u32>,
+            nu: Option<u32>,
+            rho: Option<NestedStruct>,
+            sigma: Option<NestedStruct>,
+            //grue: DoublyNestedStruct,
         }
 
         let expected_struct = NestingStruct {
-            alpha: 1_i16,
-            beta: 1_i16,
-            gamma: NestedStruct { foo: 12, bar: 13 },
-            delta: 1_i16,
-            epsilon: NestedStruct { foo: 14, bar: 15 },
+            alpha: 1_i32,
+            beta: 1_u8,
+            gamma: NestedStruct { foo: 12, bar: 13.0 },
+            delta: 1_f32,
+            epsilon: NestedStruct { foo: 14, bar: 15.0 },
+            lambda: Some(1),
+            nu: None,
+            rho: Some(NestedStruct { foo: 17, bar: 18.0 }),
+            sigma: None,
+            //grue: DoublyNestedStruct { foo: 21, bar: NestedStruct { foo: 20, bar: 21.0 } },
         };
 
         let expected_db_row = db_row! {
-            "alpha" => 1_i16,
-            "beta" => 1_i16,
-            "gamma" => r#"{"foo":12,"bar":13}"#,
-            "delta" => 1_i16,
-            "epsilon" => r#"{"foo":14,"bar":15}"#,
+            "alpha" => 1_i32,
+            "beta" => 1_u8,
+            "gamma" => r#"{"foo":12,"bar":13.0}"#,
+            "delta" => 1_f32,
+            "epsilon" => r#"{"foo":14,"bar":15.0}"#,
+            "lambda" => 1_u32,
+            "nu" => DbValue::Null,
+            "rho" => r#"{"foo":17,"bar":18.0}"#,
+            "sigma" => DbValue::Null,
+            //"grue" => "?",
         };
 
         assert_eq!(expected_db_row, to_db_row(&expected_struct).unwrap());
