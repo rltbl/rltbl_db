@@ -10,6 +10,7 @@ use serde::{
     de::{self, Visitor},
     ser,
 };
+use serde_json::{json, value::Serializer as JsonValueSerializer};
 
 /// Convert the given supported struct to a [DbRow]. For this to be successful, the struct
 /// must be a "normal struct" of the form:
@@ -35,6 +36,8 @@ where
     let mut serializer = DbRowSerializer {
         keys: vec![],
         values: vec![],
+        skip: 0,
+        inner_value: JsonValue::Null,
     };
     value.serialize(&mut serializer)?;
     let keys = serializer.keys;
@@ -138,6 +141,8 @@ struct DbRowSerializer {
     keys: Vec<String>,
     /// The values of the output [DbRow].
     values: Vec<DbValue>,
+    skip: usize,
+    inner_value: JsonValue,
 }
 
 impl<'a> ser::Serializer for &'a mut DbRowSerializer {
@@ -249,10 +254,18 @@ impl<'a> ser::Serializer for &'a mut DbRowSerializer {
 
     fn serialize_struct(
         self,
-        _name: &str,
+        name: &str,
         len: usize,
     ) -> Result<Self::SerializeStruct, Self::Error> {
-        self.serialize_map(Some(len))
+        println!("serliaize_struct {name}");
+        if self.keys.len() > 0 {
+            self.skip = len;
+            self.inner_value = json!({});
+            // self.values.push(DbValue::from("SKIPPED"));
+            Ok(self)
+        } else {
+            self.serialize_map(Some(len))
+        }
     }
 
     fn serialize_map(self, _len: Option<usize>) -> Result<Self::SerializeMap, Self::Error> {
@@ -268,20 +281,24 @@ impl<'a> ser::Serializer for &'a mut DbRowSerializer {
     }
 
     fn serialize_unit_struct(self, _name: &str) -> Result<(), Self::Error> {
-        return Err(DbError::SerdeError(
-            "Serializing unit struct is not supported".to_string(),
-        ));
+        // TODO: I think that I'd prefer to store DbValue::Text(name),
+        // and have the deserializer ignore it.
+        self.values.push(DbValue::Null);
+        Ok(())
     }
 
     fn serialize_unit_variant(
         self,
         _name: &str,
         _variant_index: u32,
-        _variant: &str,
+        variant: &str,
     ) -> Result<(), Self::Error> {
-        return Err(DbError::SerdeError(
-            "Serializing unit variant is not supported".to_string(),
-        ));
+        // TODO: I don't like the extra double-quotes here,
+        // but serde_json wants them for deserializing,
+        // and I get a lifetime error when I try to add them
+        // during the deserializing step.
+        self.values.push(DbValue::from(format!(r#""{variant}""#)));
+        Ok(())
     }
 
     fn serialize_newtype_struct<T>(self, _name: &str, _value: &T) -> Result<(), Self::Error>
@@ -364,12 +381,35 @@ impl<'a> ser::SerializeStruct for &'a mut DbRowSerializer {
     where
         T: ?Sized + Serialize,
     {
-        self.keys.push(key.to_string());
-        value.serialize(&mut **self)?;
+        println!("SerializeStruct::serialize_field({key})");
+        if self.skip > 0 {
+            // println!("skipping!");
+            self.skip -= 1;
+            // self.keys.push(key.to_string());
+            // self.skip_field(key)?;
+            let json_serializer = JsonValueSerializer;
+            let json_value = value
+                .serialize(json_serializer)
+                .map_err(|err| DbError::SerdeError(err.to_string()))?;
+            println!("ser {json_value:?} {:?}", self.inner_value);
+            let inner = self.inner_value.as_object_mut().unwrap();
+            inner.insert(key.to_string(), json_value);
+        } else {
+            self.keys.push(key.to_string());
+            value.serialize(&mut **self)?;
+        }
         Ok(())
     }
 
     fn end(self) -> Result<(), DbError> {
+        println!("SerializeStruct::end(): {:?}", self.inner_value);
+        if self.inner_value != JsonValue::Null {
+            let json_string = serde_json::to_string(&self.inner_value)
+                .map_err(|err| DbError::SerdeError(err.to_string()))?;
+            self.values.push(DbValue::Text(json_string));
+            self.inner_value = JsonValue::Null;
+        }
+
         Ok(())
     }
 }
@@ -398,7 +438,7 @@ impl<'a> ser::SerializeStructVariant for &'a mut DbRowSerializer {
 
 // Although a [DbRow] is essentially a wrapper around an IndexMap, when one is serialized,
 // the serialization begins with our implementation of SerializeStruct and thus does not require
-// us to explicitly implement actually working code for the implemetation of SerializeMap, because
+// us to explicitly implement actually working code for the implemetation of , because
 // the map is serialized, instead, via the call to value.serialize() (see above).
 impl<'a> ser::SerializeMap for &'a mut DbRowSerializer {
     // These need to match the `Ok` and `Error` types of DbRowSerializer:
@@ -521,7 +561,7 @@ impl<'a> ser::SerializeTupleVariant for &'a mut DbRowSerializer {
 ////////////////////////////////////////////////////////////////////////////////
 
 #[derive(Debug)]
-struct DbRowDeserializer<'de> {
+pub(crate) struct DbRowDeserializer<'de> {
     /// The keys of the input [DbRow].
     keys: Vec<&'de str>,
     /// The values of the input [DbRow].
@@ -529,7 +569,7 @@ struct DbRowDeserializer<'de> {
 }
 
 impl<'de> DbRowDeserializer<'de> {
-    fn from_db_row(input: &'de DbRow) -> Self {
+    pub(crate) fn from_db_row(input: &'de DbRow) -> Self {
         DbRowDeserializer {
             keys: input.map.keys().map(|s| s.as_str()).collect::<Vec<_>>(),
             values: input.map.values().collect::<Vec<_>>(),
@@ -774,14 +814,22 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
 
     fn deserialize_struct<V>(
         self,
-        _name: &'static str,
-        _fields: &'static [&'static str],
+        name: &'static str,
+        fields: &'static [&'static str],
         visitor: V,
     ) -> Result<V::Value, DbError>
     where
         V: Visitor<'de>,
     {
-        self.deserialize_map(visitor)
+        println!("deserialize_struct {name}");
+        if self.keys == fields {
+            self.deserialize_map(visitor)
+        } else {
+            let value = self.pop_value().unwrap().as_str().unwrap();
+            serde_json::Deserializer::from_str(value)
+                .deserialize_struct(name, fields, visitor)
+                .map_err(|err| DbError::SerdeError(err.to_string()))
+        }
     }
 
     fn deserialize_map<V>(self, visitor: V) -> Result<V::Value, DbError>
@@ -823,14 +871,14 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     fn deserialize_unit_struct<V>(
         self,
         _name: &'static str,
-        _visitor: V,
+        visitor: V,
     ) -> Result<V::Value, DbError>
     where
         V: Visitor<'de>,
     {
-        return Err(DbError::SerdeError(
-            "Deserializing 'unit_struct' is not supported".to_string(),
-        ));
+        println!("deserialize_unit_struct");
+        self.pop_value().unwrap();
+        visitor.visit_unit()
     }
 
     fn deserialize_newtype_struct<V>(
@@ -880,16 +928,18 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
 
     fn deserialize_enum<V>(
         self,
-        _name: &'static str,
-        _variants: &'static [&'static str],
-        _visitor: V,
+        name: &'static str,
+        variants: &'static [&'static str],
+        visitor: V,
     ) -> Result<V::Value, DbError>
     where
         V: Visitor<'de>,
     {
-        return Err(DbError::SerdeError(
-            "Deserializing 'enum' is not supported".to_string(),
-        ));
+        // println!("deserialize enum {name} {variants:?}");
+        let value = self.pop_value().unwrap().as_str().unwrap();
+        serde_json::Deserializer::from_str(&value)
+            .deserialize_enum(name, variants, visitor)
+            .map_err(|err| DbError::SerdeError(err.to_string()))
     }
 
     fn deserialize_ignored_any<V>(self, _visitor: V) -> Result<V::Value, DbError>
@@ -941,6 +991,24 @@ mod tests {
 
     #[test]
     fn test_serde_struct() {
+        #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
+        struct UnitStruct;
+
+        #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
+        enum TrivialEnum {
+            UnitStruct,
+        }
+
+        #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
+        struct TrivialStruct {
+            foo: String,
+        }
+
+        #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
+        struct NestedStruct {
+            bar: TrivialStruct,
+        }
+
         // Serializing and deserializing an arbitrary struct to a DbRow:
         #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
         struct TestStruct {
@@ -963,6 +1031,10 @@ mod tests {
             text: String,
             text_opt: Option<String>,
             // biggerfloat: Decimal,
+            unit: UnitStruct,
+            enum_field: TrivialEnum,
+            struct_field: TrivialStruct,
+            nested_struct: NestedStruct,
         }
 
         let expected_struct = TestStruct {
@@ -985,6 +1057,16 @@ mod tests {
             text: 1.to_string(),
             text_opt: Some(1.to_string()),
             // biggerfloat: dec!(1),
+            unit: UnitStruct,
+            enum_field: TrivialEnum::UnitStruct,
+            struct_field: TrivialStruct {
+                foo: String::from("bar"),
+            },
+            nested_struct: NestedStruct {
+                bar: TrivialStruct {
+                    foo: String::from("bar"),
+                },
+            },
         };
 
         let expected_db_row = db_row! {
@@ -1007,12 +1089,24 @@ mod tests {
             "text" => "1",
             "text_opt" => "1",
             // "biggerfloat" => 1_i64,
+            "unit" => DbValue::Null,
+            "enum_field" => "\"UnitStruct\"",
+            "struct_field" => "{\"foo\":\"bar\"}",
+            "nested_struct" => "{\"bar\":{\"foo\":\"bar\"}}",
         };
-        assert_eq!(expected_db_row, to_db_row(&expected_struct).unwrap());
-        assert_eq!(expected_struct, from_db_row(&expected_db_row).unwrap());
+        assert_eq!(
+            expected_db_row,
+            to_db_row(&expected_struct).unwrap(),
+            "test serialize"
+        );
         assert_eq!(
             expected_struct,
-            from_db_row_indirect(&expected_db_row).unwrap()
+            from_db_row(&expected_db_row).unwrap(),
+            "test deserialize"
         );
+        // assert_eq!(
+        //     expected_struct,
+        //     from_db_row_indirect(&expected_db_row).unwrap()
+        // );
     }
 }
