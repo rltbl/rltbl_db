@@ -1,16 +1,16 @@
 use crate::core::DbError;
-use indexmap::IndexMap;
+use indexmap::{self, IndexMap};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, json};
 use std::{
     fmt::Display,
     hash::{Hash, Hasher},
+    ops::{Deref, DerefMut},
 };
 
 pub type JsonValue = serde_json::Value;
 pub type JsonRow = JsonMap<String, JsonValue>;
-pub type DbRow = IndexMap<String, DbValue>;
 pub type StringRow = IndexMap<String, String>;
 pub type ColumnMap = IndexMap<String, String>;
 
@@ -47,6 +47,10 @@ impl DbValue {
         self.as_bool().is_some()
     }
 
+    pub fn is_i8(&self) -> bool {
+        self.as_i8().is_some()
+    }
+
     pub fn is_i16(&self) -> bool {
         self.as_i16().is_some()
     }
@@ -57,6 +61,10 @@ impl DbValue {
 
     pub fn is_i64(&self) -> bool {
         self.as_i64().is_some()
+    }
+
+    pub fn is_u8(&self) -> bool {
+        self.as_u8().is_some()
     }
 
     pub fn is_f32(&self) -> bool {
@@ -83,6 +91,10 @@ impl DbValue {
         self.try_into().ok()
     }
 
+    pub fn as_i8(&self) -> Option<i8> {
+        self.try_into().ok()
+    }
+
     pub fn as_i16(&self) -> Option<i16> {
         self.try_into().ok()
     }
@@ -92,6 +104,10 @@ impl DbValue {
     }
 
     pub fn as_i64(&self) -> Option<i64> {
+        self.try_into().ok()
+    }
+
+    pub fn as_u8(&self) -> Option<u8> {
         self.try_into().ok()
     }
 
@@ -317,6 +333,33 @@ impl TryInto<u16> for &DbValue {
     }
 }
 
+impl TryInto<u8> for DbValue {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<u8, DbError> {
+        match self {
+            DbValue::SmallInteger(number) => {
+                Ok(u8::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
+            }
+            DbValue::Integer(number) => {
+                Ok(u8::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
+            }
+            DbValue::BigInteger(number) => {
+                Ok(u8::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
+            }
+            _ => Err(DbError::InputError(format!("Not an integer: {self:?}"))),
+        }
+    }
+}
+
+impl TryInto<u8> for &DbValue {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<u8, DbError> {
+        self.clone().try_into()
+    }
+}
+
 impl TryInto<i64> for DbValue {
     type Error = DbError;
 
@@ -394,6 +437,33 @@ impl TryInto<i16> for &DbValue {
     type Error = DbError;
 
     fn try_into(self) -> Result<i16, DbError> {
+        self.clone().try_into()
+    }
+}
+
+impl TryInto<i8> for DbValue {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<i8, DbError> {
+        match self {
+            DbValue::SmallInteger(number) => {
+                Ok(i8::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
+            }
+            DbValue::Integer(number) => {
+                Ok(i8::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
+            }
+            DbValue::BigInteger(number) => {
+                Ok(i8::try_from(number).map_err(|err| DbError::InputError(err.to_string()))?)
+            }
+            _ => Err(DbError::InputError(format!("Not an integer: {self:?}"))),
+        }
+    }
+}
+
+impl TryInto<i8> for &DbValue {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<i8, DbError> {
         self.clone().try_into()
     }
 }
@@ -534,6 +604,12 @@ impl From<&String> for DbValue {
     }
 }
 
+impl From<i8> for DbValue {
+    fn from(item: i8) -> Self {
+        DbValue::SmallInteger(item.into())
+    }
+}
+
 impl From<i16> for DbValue {
     fn from(item: i16) -> Self {
         DbValue::SmallInteger(item)
@@ -549,6 +625,12 @@ impl From<i32> for DbValue {
 impl From<i64> for DbValue {
     fn from(item: i64) -> Self {
         DbValue::BigInteger(item)
+    }
+}
+
+impl From<u8> for DbValue {
+    fn from(item: u8) -> Self {
+        DbValue::SmallInteger(item.into())
     }
 }
 
@@ -646,6 +728,12 @@ impl From<JsonValue> for DbValue {
             JsonValue::Array(_) => Self::Text(item.to_string()),
             JsonValue::Object(_) => Self::Text(item.to_string()),
         }
+    }
+}
+
+impl From<&JsonValue> for DbValue {
+    fn from(item: &JsonValue) -> Self {
+        item.into()
     }
 }
 
@@ -755,6 +843,62 @@ impl<T: IntoDbValue> IntoDbParams for Vec<T> {
             .map(|i| i.into_db_value())
             .collect::<Vec<_>>();
         DbParams::Positional(values)
+    }
+}
+
+// Database rows
+
+/// A row of database values indexed by column name.
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(transparent)] // See https://serde.rs/container-attrs.html#transparent
+pub struct DbRow {
+    pub map: IndexMap<String, DbValue>,
+}
+
+impl Deref for DbRow {
+    type Target = IndexMap<String, DbValue>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.map
+    }
+}
+
+impl DerefMut for DbRow {
+    fn deref_mut(&mut self) -> &mut IndexMap<String, DbValue> {
+        &mut self.map
+    }
+}
+
+impl DbRow {
+    pub fn new() -> Self {
+        DbRow {
+            map: IndexMap::new(),
+        }
+    }
+
+    pub fn insert(&mut self, key: String, value: DbValue) {
+        self.map.insert(key, value);
+    }
+
+    pub fn get(&self, key: &str) -> Option<DbValue> {
+        self.map.get(key).cloned()
+    }
+}
+
+impl IntoIterator for DbRow {
+    type Item = (String, DbValue);
+    type IntoIter = indexmap::map::IntoIter<String, DbValue>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.map.into_iter()
+    }
+}
+
+impl FromIterator<(String, DbValue)> for DbRow {
+    fn from_iter<I: IntoIterator<Item = (String, DbValue)>>(iter: I) -> Self {
+        DbRow {
+            map: iter.into_iter().collect(),
+        }
     }
 }
 
@@ -890,19 +1034,6 @@ impl FromDbRow for JsonRow {
             .map(|(key, val)| (key, val.into()))
             .collect()
     }
-}
-
-/// Converts a list of assorted types implementing [IntoDbValue] into [DbParams]
-#[macro_export]
-macro_rules! params {
-    () => {
-       ()
-    };
-    ($($value:expr),* $(,)?) => {{
-        use $crate::db_value::IntoDbValue;
-        [$($value.into_db_value()),*]
-
-    }};
 }
 
 #[cfg(test)]

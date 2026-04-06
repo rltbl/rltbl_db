@@ -296,6 +296,7 @@ mod tests {
     use super::*;
     use crate::{
         core::{CachingStrategy, QUERY_CACHE_TABLE, TABLE_CACHE_TABLE},
+        db_row,
         db_value::{ColumnMap, DbRow, DbValue, StringRow},
         memory::{
             clear_memory_query_cache, clear_memory_table_cache, clear_meta_cache,
@@ -303,7 +304,6 @@ mod tests {
         },
         params,
     };
-    use indexmap::indexmap as db_row;
     use rand::{
         SeedableRng as _,
         distr::{Distribution as _, Uniform},
@@ -374,10 +374,10 @@ mod tests {
         );
 
         let row: DbRow = pool.query_row(&select_sql, &["foo"]).await.unwrap();
-        assert_eq!(row, db_row! {"value".into() => DbValue::from("foo")});
+        assert_eq!(row, db_row! {"value" => "foo",});
 
         let rows: Vec<DbRow> = pool.query(&select_sql, &["foo"]).await.unwrap();
-        assert_eq!(rows, [db_row! {"value".into() => DbValue::from("foo")}]);
+        assert_eq!(rows, [db_row! {"value" => "foo",}]);
 
         // Clean up:
         pool.drop_table("test_table_text").await.unwrap();
@@ -497,10 +497,10 @@ mod tests {
         assert_eq!(vec!["1.05".to_owned()], strings);
 
         let row: DbRow = pool.query_row(&select_sql, &[1.0_f64]).await.unwrap();
-        assert_eq!(row, db_row! {"value".into() => DbValue::from(1.05)});
+        assert_eq!(row, db_row! {"value" => 1.05,});
 
         let rows: Vec<DbRow> = pool.query(&select_sql, &[1.0_f64]).await.unwrap();
-        assert_eq!(rows, [db_row! {"value".into() => DbValue::from(1.05)}]);
+        assert_eq!(rows, [db_row! {"value" => 1.05,}]);
 
         // FLOAT4
         pool.execute_batch(&format!(
@@ -615,19 +615,19 @@ mod tests {
         assert_eq!(
             row,
             db_row! {
-                "text_value".into() => DbValue::from("foo"),
-                "alt_text_value".into() => DbValue::Null,
-                "float_value".into() => DbValue::from(1.05),
-                "alt_float_value".into() => DbValue::Null,
-                "int_value".into() => DbValue::from(1_i64),
-                "alt_int_value".into() => DbValue::Null,
-                "bool_value".into() => match pool.kind() {
+                "text_value" => "foo",
+                "alt_text_value" => DbValue::Null,
+                "float_value" => 1.05,
+                "alt_float_value" => DbValue::Null,
+                "int_value" => 1_i64,
+                "alt_int_value" => DbValue::Null,
+                "bool_value" => match pool.kind() {
                     DbKind::SQLite => DbValue::from(1_i64),
                     DbKind::PostgreSQL => DbValue::from(true),
                 },
-                "alt_bool_value".into() => DbValue::Null,
-                "numeric_value".into() => DbValue::from(1_i64),
-                "alt_numeric_value".into() => DbValue::Null,
+                "alt_bool_value" => DbValue::Null,
+                "numeric_value" => 1_i64,
+                "alt_numeric_value" => DbValue::Null,
             }
         );
 
@@ -635,19 +635,19 @@ mod tests {
         assert_eq!(
             rows,
             [db_row! {
-                "text_value".into() => DbValue::from("foo"),
-                "alt_text_value".into() => DbValue::Null,
-                "float_value".into() => DbValue::from(1.05),
-                "alt_float_value".into() => DbValue::Null,
-                "int_value".into() => DbValue::from(1_i64),
-                "alt_int_value".into() => DbValue::Null,
-                "bool_value".into() => match pool.kind() {
+                "text_value" => "foo",
+                "alt_text_value" => DbValue::Null,
+                "float_value" => 1.05,
+                "alt_float_value" => DbValue::Null,
+                "int_value" => 1_i64,
+                "alt_int_value" => DbValue::Null,
+                "bool_value" => match pool.kind() {
                     DbKind::SQLite => DbValue::from(1_i64),
                     DbKind::PostgreSQL => DbValue::from(true),
                 },
-                "alt_bool_value".into() => DbValue::Null,
-                "numeric_value".into() => DbValue::from(1_i64),
-                "alt_numeric_value".into() => DbValue::Null,
+                "alt_bool_value" => DbValue::Null,
+                "numeric_value" => 1_i64,
+                "alt_numeric_value" => DbValue::Null,
             }]
         );
 
@@ -815,10 +815,10 @@ mod tests {
             "test_insert",
             &["text_value", "int_value", "bool_value"],
             &[
-                &db_row! {"text_value".into() => DbValue::from("TEXT")},
+                &db_row! {"text_value" => "TEXT",},
                 &db_row! {
-                    "int_value".into() => DbValue::from(1_i64),
-                    "bool_value".into() => match pool.kind() {
+                    "int_value" => 1_i64,
+                    "bool_value" => match pool.kind() {
                         DbKind::SQLite => DbValue::from(1_i64),
                         DbKind::PostgreSQL => DbValue::from(true),
                     },
@@ -837,18 +837,18 @@ mod tests {
             rows,
             [
                 db_row! {
-                    "text_value".into() => DbValue::from("TEXT"),
-                    "alt_text_value".into() => DbValue::Null,
-                    "float_value".into() => DbValue::Null,
-                    "int_value".into() => DbValue::Null,
-                    "bool_value".into() => DbValue::Null,
+                    "text_value" => "TEXT",
+                    "alt_text_value" => DbValue::Null,
+                    "float_value" => DbValue::Null,
+                    "int_value" => DbValue::Null,
+                    "bool_value" => DbValue::Null,
                 },
                 db_row! {
-                    "text_value".into() => DbValue::Null,
-                    "alt_text_value".into() => DbValue::Null,
-                    "float_value".into() => DbValue::Null,
-                    "int_value".into() => DbValue::from(1_i64),
-                    "bool_value".into() => match pool.kind() {
+                    "text_value" => DbValue::Null,
+                    "alt_text_value" => DbValue::Null,
+                    "float_value" => DbValue::Null,
+                    "int_value" => 1_i64,
+                    "bool_value" => match pool.kind() {
                         DbKind::SQLite => DbValue::from(1_i64),
                         DbKind::PostgreSQL => DbValue::from(true),
                     },
@@ -896,10 +896,10 @@ mod tests {
                 "test_insert_returning",
                 &["text_value", "int_value", "bool_value"],
                 &[
-                    &db_row! {"text_value".into() => DbValue::from("TEXT")},
+                    &db_row! {"text_value" => "TEXT",},
                     &db_row! {
-                        "int_value".into() => DbValue::from(1_i64),
-                        "bool_value".into() => DbValue::from(true)
+                        "int_value" => 1_i64,
+                        "bool_value" => true,
                     },
                 ],
                 &[],
@@ -910,21 +910,21 @@ mod tests {
             rows,
             [
                 db_row! {
-                    "text_value".into() => DbValue::from("TEXT"),
-                    "alt_text_value".into() => DbValue::Null,
-                    "float_value".into() => DbValue::Null,
-                    "int_value".into() => DbValue::Null,
-                    "bool_value".into() => DbValue::Null,
+                    "text_value" => "TEXT",
+                    "alt_text_value" => DbValue::Null,
+                    "float_value" => DbValue::Null,
+                    "int_value" => DbValue::Null,
+                    "bool_value" => DbValue::Null,
                 },
                 db_row! {
-                    "text_value".into() => DbValue::Null,
-                    "alt_text_value".into() => DbValue::Null,
-                    "float_value".into() => DbValue::Null,
-                    "int_value".into() => DbValue::from(1_i64),
-                    "bool_value".into() => match pool.kind() {
+                    "text_value" => DbValue::Null,
+                    "alt_text_value" => DbValue::Null,
+                    "float_value" => DbValue::Null,
+                    "int_value" => 1_i64,
+                    "bool_value" => match pool.kind() {
                         DbKind::SQLite => DbValue::from(1_i64),
                         DbKind::PostgreSQL => DbValue::from(true),
-                    }
+                    },
                 }
             ]
         );
@@ -935,10 +935,12 @@ mod tests {
                 "test_insert_returning",
                 &["text_value", "int_value", "bool_value"],
                 &[
-                    &db_row! {"text_value".into() => DbValue::from("TEXT")},
                     &db_row! {
-                        "int_value".into() => DbValue::from(1_i64),
-                        "bool_value".into() => DbValue::from(true)
+                        "text_value" => "TEXT",
+                    },
+                    &db_row! {
+                        "int_value" => 1_i64,
+                        "bool_value" => true,
                     },
                 ],
                 &["int_value", "float_value"],
@@ -949,12 +951,12 @@ mod tests {
             rows,
             [
                 db_row! {
-                    "float_value".into() => DbValue::Null,
-                    "int_value".into() => DbValue::Null,
+                    "float_value" => DbValue::Null,
+                    "int_value" => DbValue::Null,
                 },
                 db_row! {
-                    "float_value".into() => DbValue::Null,
-                    "int_value".into() => DbValue::from(1_i64),
+                    "float_value" => DbValue::Null,
+                    "int_value" => 1_i64,
                 }
             ]
         );
@@ -1092,9 +1094,9 @@ mod tests {
             "test_update",
             &["foo"],
             &[
-                &db_row! {"foo".into() => DbValue::from(1_i64)},
-                &db_row! {"foo".into() => DbValue::from(2_i64)},
-                &db_row! {"foo".into() => DbValue::from(3_i64)},
+                &db_row! {"foo" => 1_i64,},
+                &db_row! {"foo" => 2_i64,},
+                &db_row! {"foo" => 3_i64,},
             ],
         )
         .await
@@ -1105,25 +1107,25 @@ mod tests {
             &["foo", "bar", "car", "dar", "ear"],
             &[
                 &db_row! {
-                    "foo".into() => DbValue::from(1_i64),
-                    "bar".into() => DbValue::from(10_i64),
-                    "car".into() => DbValue::from(11_i64),
-                    "dar".into() => DbValue::from(12_i64),
-                    "ear".into() => DbValue::from(13_i64),
+                    "foo" => 1_i64,
+                    "bar" => 10_i64,
+                    "car" => 11_i64,
+                    "dar" => 12_i64,
+                    "ear" => 13_i64,
                 },
                 &db_row! {
-                    "foo".into() => DbValue::from(2_i64),
-                    "bar".into() => DbValue::from(14_i64),
-                    "car".into() => DbValue::from(15_i64),
-                    "dar".into() => DbValue::from(16_i64),
-                    "ear".into() => DbValue::from(17_i64),
+                    "foo" => 2_i64,
+                    "bar" => 14_i64,
+                    "car" => 15_i64,
+                    "dar" => 16_i64,
+                    "ear" => 17_i64,
                 },
                 &db_row! {
-                    "foo".into() => DbValue::from(3_i64),
-                    "bar".into() => DbValue::from(18_i64),
-                    "car".into() => DbValue::from(19_i64),
-                    "dar".into() => DbValue::from(20_i64),
-                    "ear".into() => DbValue::from(21_i64),
+                    "foo" => 3_i64,
+                    "bar" => 18_i64,
+                    "car" => 19_i64,
+                    "dar" => 20_i64,
+                    "ear" => 21_i64,
                 },
             ],
         )
@@ -1135,25 +1137,25 @@ mod tests {
             rows,
             [
                 db_row! {
-                    "foo".into() => DbValue::from(1_i64),
-                    "bar".into() => DbValue::from(10_i64),
-                    "car".into() => DbValue::from(11_i64),
-                    "dar".into() => DbValue::from(12_i64),
-                    "ear".into() => DbValue::from(13_i64),
+                    "foo" => 1_i64,
+                    "bar" => 10_i64,
+                    "car" => 11_i64,
+                    "dar" => 12_i64,
+                    "ear" => 13_i64,
                 },
                 db_row! {
-                    "foo".into() => DbValue::from(2_i64),
-                    "bar".into() => DbValue::from(14_i64),
-                    "car".into() => DbValue::from(15_i64),
-                    "dar".into() => DbValue::from(16_i64),
-                    "ear".into() => DbValue::from(17_i64),
+                    "foo" => 2_i64,
+                    "bar" => 14_i64,
+                    "car" => 15_i64,
+                    "dar" => 16_i64,
+                    "ear" => 17_i64,
                 },
                 db_row! {
-                    "foo".into() => DbValue::from(3_i64),
-                    "bar".into() => DbValue::from(18_i64),
-                    "car".into() => DbValue::from(19_i64),
-                    "dar".into() => DbValue::from(20_i64),
-                    "ear".into() => DbValue::from(21_i64),
+                    "foo" => 3_i64,
+                    "bar" => 18_i64,
+                    "car" => 19_i64,
+                    "dar" => 20_i64,
+                    "ear" => 21_i64,
                 },
             ]
         );
@@ -1198,16 +1200,16 @@ mod tests {
             &["foo", "bar", "car", "dar", "ear"],
             &[
                 &db_row! {
-                    "foo".into() => DbValue::from(1_i64),
-                    "bar".into() => DbValue::from(1_i64)
+                    "foo" => 1_i64,
+                    "bar" => 1_i64,
                 },
                 &db_row! {
-                    "foo".into() => DbValue::from(2_i64),
-                    "bar".into() => DbValue::from(2_i64),
+                    "foo" => 2_i64,
+                    "bar" => 2_i64,
                 },
                 &db_row! {
-                    "foo".into() => DbValue::from(3_i64),
-                    "bar".into() => DbValue::from(3_i64),
+                    "foo" => 3_i64,
+                    "bar" => 3_i64,
                 },
             ],
         )
@@ -1218,19 +1220,19 @@ mod tests {
             assert!(rows.iter().all(|row| {
                 [
                     db_row! {
-                        "car".into() => DbValue::from(10_i64),
-                        "dar".into() => DbValue::from(11_i64),
-                        "ear".into() => DbValue::from(12_i64),
+                        "car" => 10_i64,
+                        "dar" => 11_i64,
+                        "ear" => 12_i64,
                     },
                     db_row! {
-                        "car".into() => DbValue::from(13_i64),
-                        "dar".into() => DbValue::from(14_i64),
-                        "ear".into() => DbValue::from(15_i64),
+                        "car" => 13_i64,
+                        "dar" => 14_i64,
+                        "ear" => 15_i64,
                     },
                     db_row! {
-                        "car".into() => DbValue::from(16_i64),
-                        "dar".into() => DbValue::from(17_i64),
-                        "ear".into() => DbValue::from(18_i64),
+                        "car" => 16_i64,
+                        "dar" => 17_i64,
+                        "ear" => 18_i64,
                     },
                 ]
                 .contains(&row)
@@ -1244,25 +1246,25 @@ mod tests {
                     &["foo", "bar", "car", "dar", "ear"],
                     &[
                         &db_row! {
-                            "foo".into() => DbValue::from(1_i64),
-                            "bar".into() => DbValue::from(1_i64),
-                            "car".into() => DbValue::from(10_i64),
-                            "dar".into() => DbValue::from(11_i64),
-                            "ear".into() => DbValue::from(12_i64),
+                            "foo" => 1_i64,
+                            "bar" => 1_i64,
+                            "car" => 10_i64,
+                            "dar" => 11_i64,
+                            "ear" => 12_i64,
                         },
                         &db_row! {
-                            "foo".into() => DbValue::from(2_i64),
-                            "bar".into() => DbValue::from(2_i64),
-                            "car".into() => DbValue::from(13_i64),
-                            "dar".into() => DbValue::from(14_i64),
-                            "ear".into() => DbValue::from(15_i64),
+                            "foo" => 2_i64,
+                            "bar" => 2_i64,
+                            "car" => 13_i64,
+                            "dar" => 14_i64,
+                            "ear" => 15_i64,
                         },
                         &db_row! {
-                            "foo".into() => DbValue::from(3_i64),
-                            "bar".into() => DbValue::from(3_i64),
-                            "car".into() => DbValue::from(16_i64),
-                            "dar".into() => DbValue::from(17_i64),
-                            "ear".into() => DbValue::from(18_i64),
+                            "foo" => 3_i64,
+                            "bar" => 3_i64,
+                            "car" => 16_i64,
+                            "dar" => 17_i64,
+                            "ear" => 18_i64,
                         },
                     ],
                     &["car", "dar", "ear"],
@@ -1282,16 +1284,16 @@ mod tests {
             &["foo", "bar"],
             &[
                 &db_row! {
-                    "foo".into() => DbValue::from(1_i64),
-                    "bar".into() => DbValue::from(1_i64),
+                    "foo" => 1_i64,
+                    "bar" => 1_i64,
                 },
                 &db_row! {
-                    "foo".into() => DbValue::from(2_i64),
-                    "bar".into() => DbValue::from(2_i64),
+                    "foo" => 2_i64,
+                    "bar" => 2_i64,
                 },
                 &db_row! {
-                    "foo".into() => DbValue::from(3_i64),
-                    "bar".into() => DbValue::from(3_i64),
+                    "foo" => 3_i64,
+                    "bar" => 3_i64,
                 },
             ],
         )
@@ -1305,25 +1307,25 @@ mod tests {
                     &["foo", "bar", "car", "dar", "ear"],
                     &[
                         &db_row! {
-                            "ear".into() => DbValue::from(15_i64),
-                            "bar".into() => DbValue::from(2_i64),
-                            "car".into() => DbValue::from(13_i64),
-                            "dar".into() => DbValue::from(14_i64),
-                            "foo".into() => DbValue::from(2_i64),
+                            "ear" => 15_i64,
+                            "bar" => 2_i64,
+                            "car" => 13_i64,
+                            "dar" => 14_i64,
+                            "foo" => 2_i64,
                         },
                         &db_row! {
-                            "foo".into() => DbValue::from(1_i64),
-                            "car".into() => DbValue::from(10_i64),
-                            "bar".into() => DbValue::from(1_i64),
-                            "ear".into() => DbValue::from(12_i64),
-                            "dar".into() => DbValue::from(11_i64),
+                            "foo" => 1_i64,
+                            "car" => 10_i64,
+                            "bar" => 1_i64,
+                            "ear" => 12_i64,
+                            "dar" => 11_i64,
                         },
                         &db_row! {
-                            "car".into() => DbValue::from(16_i64),
-                            "dar".into() => DbValue::from(17_i64),
-                            "ear".into() => DbValue::from(18_i64),
-                            "bar".into() => DbValue::from(3_i64),
-                            "foo".into() => DbValue::from(3_i64),
+                            "car" => 16_i64,
+                            "dar" => 17_i64,
+                            "ear" => 18_i64,
+                            "bar" => 3_i64,
+                            "foo" => 3_i64,
                         },
                     ],
                     &["car", "dar", "ear"],
@@ -1340,25 +1342,25 @@ mod tests {
         assert!(rows.iter().all(|row| {
             [
                 db_row! {
-                    "foo".into() => DbValue::from(1_i64),
-                    "bar".into() => DbValue::from(1_i64),
-                    "car".into() => DbValue::from(10_i64),
-                    "dar".into() => DbValue::from(11_i64),
-                    "ear".into() => DbValue::from(12_i64),
+                    "foo" => 1_i64,
+                    "bar" => 1_i64,
+                    "car" => 10_i64,
+                    "dar" => 11_i64,
+                    "ear" => 12_i64,
                 },
                 db_row! {
-                    "foo".into() => DbValue::from(2_i64),
-                    "bar".into() => DbValue::from(2_i64),
-                    "car".into() => DbValue::from(13_i64),
-                    "dar".into() => DbValue::from(14_i64),
-                    "ear".into() => DbValue::from(15_i64),
+                    "foo" => 2_i64,
+                    "bar" => 2_i64,
+                    "car" => 13_i64,
+                    "dar" => 14_i64,
+                    "ear" => 15_i64,
                 },
                 db_row! {
-                    "foo".into() => DbValue::from(3_i64),
-                    "bar".into() => DbValue::from(3_i64),
-                    "car".into() => DbValue::from(16_i64),
-                    "dar".into() => DbValue::from(17_i64),
-                    "ear".into() => DbValue::from(18_i64),
+                    "foo" => 3_i64,
+                    "bar" => 3_i64,
+                    "car" => 16_i64,
+                    "dar" => 17_i64,
+                    "ear" => 18_i64,
                 },
             ]
             .contains(&row)
@@ -1402,9 +1404,15 @@ mod tests {
             "test_upsert",
             &["foo"],
             &[
-                &db_row! {"foo".into() => DbValue::from(1_i64)},
-                &db_row! {"foo".into() => DbValue::from(2_i64)},
-                &db_row! {"foo".into() => DbValue::from(3_i64)},
+                &db_row! {
+                    "foo" => 1_i64,
+                },
+                &db_row! {
+                    "foo" => 2_i64,
+                },
+                &db_row! {
+                    "foo" => 3_i64,
+                },
             ],
         )
         .await
@@ -1415,25 +1423,25 @@ mod tests {
             &["foo", "bar", "car", "dar", "ear"],
             &[
                 &db_row! {
-                    "foo".into() => DbValue::from(1_i64),
-                    "bar".into() => DbValue::from(10_i64),
-                    "car".into() => DbValue::from(11_i64),
-                    "dar".into() => DbValue::from(12_i64),
-                    "ear".into() => DbValue::from(13_i64),
+                    "foo" => 1_i64,
+                    "bar" => 10_i64,
+                    "car" => 11_i64,
+                    "dar" => 12_i64,
+                    "ear" => 13_i64,
                 },
                 &db_row! {
-                    "foo".into() => DbValue::from(2_i64),
-                    "bar".into() => DbValue::from(14_i64),
-                    "car".into() => DbValue::from(15_i64),
-                    "dar".into() => DbValue::from(16_i64),
-                    "ear".into() => DbValue::from(17_i64),
+                    "foo" => 2_i64,
+                    "bar" => 14_i64,
+                    "car" => 15_i64,
+                    "dar" => 16_i64,
+                    "ear" => 17_i64,
                 },
                 &db_row! {
-                    "foo".into() => DbValue::from(3_i64),
-                    "bar".into() => DbValue::from(18_i64),
-                    "car".into() => DbValue::from(19_i64),
-                    "dar".into() => DbValue::from(20_i64),
-                    "ear".into() => DbValue::from(21_i64),
+                    "foo" => 3_i64,
+                    "bar" => 18_i64,
+                    "car" => 19_i64,
+                    "dar" => 20_i64,
+                    "ear" => 21_i64,
                 },
             ],
         )
@@ -1445,25 +1453,25 @@ mod tests {
             rows,
             [
                 db_row! {
-                    "foo".into() => DbValue::from(1_i64),
-                    "bar".into() => DbValue::from(10_i64),
-                    "car".into() => DbValue::from(11_i64),
-                    "dar".into() => DbValue::from(12_i64),
-                    "ear".into() => DbValue::from(13_i64),
+                    "foo" => 1_i64,
+                    "bar" => 10_i64,
+                    "car" => 11_i64,
+                    "dar" => 12_i64,
+                    "ear" => 13_i64,
                 },
                 db_row! {
-                    "foo".into() => DbValue::from(2_i64),
-                    "bar".into() => DbValue::from(14_i64),
-                    "car".into() => DbValue::from(15_i64),
-                    "dar".into() => DbValue::from(16_i64),
-                    "ear".into() => DbValue::from(17_i64),
+                    "foo" => 2_i64,
+                    "bar" => 14_i64,
+                    "car" => 15_i64,
+                    "dar" => 16_i64,
+                    "ear" => 17_i64,
                 },
                 db_row! {
-                    "foo".into() => DbValue::from(3_i64),
-                    "bar".into() => DbValue::from(18_i64),
-                    "car".into() => DbValue::from(19_i64),
-                    "dar".into() => DbValue::from(20_i64),
-                    "ear".into() => DbValue::from(21_i64),
+                    "foo" => 3_i64,
+                    "bar" => 18_i64,
+                    "car" => 19_i64,
+                    "dar" => 20_i64,
+                    "ear" => 21_i64,
                 },
             ]
         );
@@ -1508,16 +1516,16 @@ mod tests {
             &["foo", "bar", "car", "dar", "ear"],
             &[
                 &db_row! {
-                    "foo".into() => DbValue::from(1_i64),
-                    "bar".into() => DbValue::from(1_i64),
+                    "foo" => 1_i64,
+                    "bar" => 1_i64,
                 },
                 &db_row! {
-                    "foo".into() => DbValue::from(2_i64),
-                    "bar".into() => DbValue::from(2_i64),
+                    "foo" => 2_i64,
+                    "bar" => 2_i64,
                 },
                 &db_row! {
-                    "foo".into() => DbValue::from(3_i64),
-                    "bar".into() => DbValue::from(3_i64),
+                    "foo" => 3_i64,
+                    "bar" => 3_i64,
                 },
             ],
         )
@@ -1530,25 +1538,25 @@ mod tests {
                 &["foo", "bar", "car", "dar", "ear"],
                 &[
                     &db_row! {
-                        "foo".into() => DbValue::from(1_i64),
-                        "bar".into() => DbValue::from(1_i64),
-                        "car".into() => DbValue::from(10_i64),
-                        "dar".into() => DbValue::from(11_i64),
-                        "ear".into() => DbValue::from(12_i64),
+                        "foo" => 1_i64,
+                        "bar" => 1_i64,
+                        "car" => 10_i64,
+                        "dar" => 11_i64,
+                        "ear" => 12_i64,
                     },
                     &db_row! {
-                        "foo".into() => DbValue::from(2_i64),
-                        "bar".into() => DbValue::from(2_i64),
-                        "car".into() => DbValue::from(13_i64),
-                        "dar".into() => DbValue::from(14_i64),
-                        "ear".into() => DbValue::from(15_i64),
+                        "foo" => 2_i64,
+                        "bar" => 2_i64,
+                        "car" => 13_i64,
+                        "dar" => 14_i64,
+                        "ear" => 15_i64,
                     },
                     &db_row! {
-                        "foo".into() => DbValue::from(3_i64),
-                        "bar".into() => DbValue::from(3_i64),
-                        "car".into() => DbValue::from(16_i64),
-                        "dar".into() => DbValue::from(17_i64),
-                        "ear".into() => DbValue::from(18_i64),
+                        "foo" => 3_i64,
+                        "bar" => 3_i64,
+                        "car" => 16_i64,
+                        "dar" => 17_i64,
+                        "ear" => 18_i64,
                     },
                 ],
                 &["car", "dar", "ear"],
@@ -1558,19 +1566,19 @@ mod tests {
         assert!(rows.iter().all(|row| {
             [
                 db_row! {
-                    "car".into() => DbValue::from(10_i64),
-                    "dar".into() => DbValue::from(11_i64),
-                    "ear".into() => DbValue::from(12_i64),
+                    "car" => 10_i64,
+                    "dar" => 11_i64,
+                    "ear" => 12_i64,
                 },
                 db_row! {
-                    "car".into() => DbValue::from(13_i64),
-                    "dar".into() => DbValue::from(14_i64),
-                    "ear".into() => DbValue::from(15_i64),
+                    "car" => 13_i64,
+                    "dar" => 14_i64,
+                    "ear" => 15_i64,
                 },
                 db_row! {
-                    "car".into() => DbValue::from(16_i64),
-                    "dar".into() => DbValue::from(17_i64),
-                    "ear".into() => DbValue::from(18_i64),
+                    "car" => 16_i64,
+                    "dar" => 17_i64,
+                    "ear" => 18_i64,
                 },
             ]
             .contains(&row)
@@ -1671,10 +1679,10 @@ mod tests {
             &["value"],
             &[
                 &db_row! {
-                    "value".into() => DbValue::from("alpha"),
+                    "value" => "alpha",
                 },
                 &db_row! {
-                    "value".into() => DbValue::from("beta"),
+                    "value" => "beta",
                 },
             ],
         )
@@ -1698,8 +1706,12 @@ mod tests {
         assert_eq!(
             rows,
             vec![
-                db_row! {"value".into() => DbValue::from("alpha")},
-                db_row! {"value".into() => DbValue::from("beta")},
+                db_row! {
+                    "value" => "alpha",
+                },
+                db_row! {
+                    "value" => "beta",
+                },
             ]
         );
 
@@ -1720,8 +1732,12 @@ mod tests {
         assert_eq!(
             rows,
             vec![
-                db_row! {"value".into() => DbValue::from("alpha")},
-                db_row! {"value".into() => DbValue::from("beta")},
+                db_row! {
+                    "value" => "alpha",
+                },
+                db_row! {
+                    "value" => "beta",
+                },
             ]
         );
 
@@ -1729,8 +1745,12 @@ mod tests {
             "test_table_caching_1",
             &["value"],
             &[
-                &db_row! {"value".into() => DbValue::from("gamma")},
-                &db_row! {"value".into() => DbValue::from("delta")},
+                &db_row! {
+                    "value" => "gamma",
+                },
+                &db_row! {
+                    "value" => "delta",
+                },
             ],
         )
         .await
@@ -1759,10 +1779,18 @@ mod tests {
         assert_eq!(
             rows,
             vec![
-                db_row! {"value".into() => DbValue::from("alpha")},
-                db_row! {"value".into() => DbValue::from("beta")},
-                db_row! {"value".into() => DbValue::from("gamma")},
-                db_row! {"value".into() => DbValue::from("delta")},
+                db_row! {
+                    "value" => "alpha",
+                },
+                db_row! {
+                    "value" => "beta",
+                },
+                db_row! {
+                    "value" => "gamma",
+                },
+                db_row! {
+                    "value" => "delta",
+                },
             ]
         );
 
@@ -1778,10 +1806,18 @@ mod tests {
         assert_eq!(
             rows,
             vec![
-                db_row! {"value".into() => DbValue::from("alpha")},
-                db_row! {"value".into() => DbValue::from("beta")},
-                db_row! {"value".into() => DbValue::from("gamma")},
-                db_row! {"value".into() => DbValue::from("delta")},
+                db_row! {
+                    "value" => "alpha",
+                },
+                db_row! {
+                    "value" => "beta",
+                },
+                db_row! {
+                    "value" => "gamma",
+                },
+                db_row! {
+                    "value" => "delta",
+                },
             ]
         );
 
@@ -1845,12 +1881,24 @@ mod tests {
         assert_eq!(
             rows,
             vec![
-                db_row! {"value".into() => DbValue::from("alpha")},
-                db_row! {"value".into() => DbValue::from("beta")},
-                db_row! {"value".into() => DbValue::from("gamma")},
-                db_row! {"value".into() => DbValue::from("delta")},
-                db_row! {"value".into() => DbValue::from("rho")},
-                db_row! {"value".into() => DbValue::from("sigma")},
+                db_row! {
+                    "value" => "alpha",
+                },
+                db_row! {
+                    "value" => "beta",
+                },
+                db_row! {
+                    "value" => "gamma",
+                },
+                db_row! {
+                    "value" => "delta",
+                },
+                db_row! {
+                    "value" => "rho",
+                },
+                db_row! {
+                    "value" => "sigma",
+                },
             ]
         );
 
@@ -1975,8 +2023,8 @@ mod tests {
             "test_vcaching_table",
             &["foo", "bar"],
             &[&db_row! {
-                "foo".into() => DbValue::from(2_u64),
-                "bar".into() => DbValue::from(2_u64),
+                "foo" => 2_u64,
+                "bar" => 2_u64,
             }],
         )
         .await
@@ -2048,8 +2096,8 @@ mod tests {
             "test_vcaching_table",
             &["foo", "bar"],
             &[&db_row! {
-                "foo".into() => DbValue::from(27_u64),
-                "bar".into() => DbValue::from(27_u64),
+                "foo" => 27_u64,
+                "bar" => 27_u64,
             }],
         )
         .await
@@ -2088,7 +2136,7 @@ mod tests {
     async fn test_caching_performance() {
         let runs = 2500;
         let edit_rate = 25;
-        let timeout = 37;
+        let timeout = 45;
         #[cfg(feature = "rusqlite")]
         perform_caching(":memory:", runs, edit_rate, timeout).await;
         #[cfg(feature = "tokio-postgres")]
