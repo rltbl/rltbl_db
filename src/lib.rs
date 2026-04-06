@@ -31,35 +31,6 @@ macro_rules! params {
     }};
 }
 
-
-// TODO: Remove this later.
-/// Converts a key value pair into a [db_value::DbRow]. The syntax of this macro is identical to
-/// [indexmap]. For example: db_row! { key1 -> value1, key2 -> value2, ... }
-/// The code for this function is adapted from the code for indexmap! (see
-/// <https://docs.rs/indexmap/latest/src/indexmap/macros.rs.html#59-73>
-#[macro_export]
-macro_rules! db_row_old {
-    ($($key:expr => $value:expr,)+) => {
-        $crate::db_value::DbRow {
-            map: indexmap::indexmap!($($key => $value),+)
-        }
-    };
-    ($($key:expr => $value:expr),*) => {
-        $crate::db_value::DbRow {
-            map: {
-                // Note: `stringify!($key)` is just here to consume the repetition,
-                // but we throw away that string literal during constant evaluation.
-                const CAP: usize = <[()]>::len(&[$({ stringify!($key); }),*]);
-                let mut map = indexmap::IndexMap::with_capacity(CAP);
-                $(
-                    map.insert($key, $value);
-                )*
-                    map
-            }
-        }
-    };
-}
-
 /// Converts a set of pairs into a [db_value::DbRow]. Note that all entries must end in a comma,
 /// even the final one. E.g.,
 /// db_row_new! {
@@ -67,22 +38,17 @@ macro_rules! db_row_old {
 /// };
 #[macro_export]
 macro_rules! db_row {
-    // TODO: What are these two lines for? This macro (like the one above) seems to be working
-    // without them?
-    // (@single $($x:tt)*) => (());
-    // (@count $($rest:expr),*) => (<[()]>::len(&[$(indexmap::indexmap!(@single $rest)),*]));
-
     ($($key:expr => $value:expr,)+) => {
         DbRow {map: indexmap::indexmap!($($key.to_string() => $value.into()),+) }
     };
     ($($key:expr => $value:expr),*) => {
         {
-            let cap = indexmap::indexmap!(@count $($key),*);
-            let mut map = indexmap::IndexMap::with_capacity(cap);
+            const CAP: usize = <[()]>::len(&[$({ stringify!($key); }),*]);
+            let mut _map = indexmap::IndexMap::with_capacity(CAP);
             $(
-                let _ = map.insert($key.to_string(), $value.into());
+                let _ = _map.insert($key.to_string(), $value.into());
             )*
-                DbRow { map }
+                DbRow { map: _map }
         }
     };
 }
@@ -103,6 +69,7 @@ mod tests {
             ]
         );
 
+        // Row with values:
         let mut expected_db_row = DbRow::new();
         expected_db_row
             .map
@@ -114,15 +81,10 @@ mod tests {
 
         assert_eq!(
             expected_db_row,
-            db_row_old! {
-                "foo".into() => DbValue::from(true),
-                "bar".into() => DbValue::from(1_f64),
-            }
+            db_row! { "foo" => true, "bar" => 1_f64}
         );
 
-        assert_eq!(
-            expected_db_row,
-            db_row! { "foo" => true, "bar" => 1_f64,}
-        );
+        // Empty row:
+        assert_eq!(db_row! { }, DbRow::new());
     }
 }
