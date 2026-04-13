@@ -277,20 +277,19 @@ impl<'a> ser::Serializer for &'a mut DbRowSerializer {
         Ok(())
     }
 
+    fn serialize_newtype_struct<T>(self, _name: &str, value: &T) -> Result<(), Self::Error>
+    where
+        T: ?Sized + Serialize,
+    {
+        trace!("DbRowSerializer::serialize_newtype_struct({self:#?}, {_name}, ...)");
+        value.serialize(self)
+    }
+
     // Unsupported types:
 
     fn serialize_bytes(self, _values: &[u8]) -> Result<(), Self::Error> {
         return Err(DbError::SerdeError(
             "Serializing bytes is not supported".to_string(),
-        ));
-    }
-
-    fn serialize_newtype_struct<T>(self, _name: &str, _value: &T) -> Result<(), Self::Error>
-    where
-        T: ?Sized + Serialize,
-    {
-        return Err(DbError::SerdeError(
-            "Serializing newtype struct is not supported".to_string(),
         ));
     }
 
@@ -938,9 +937,21 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        trace!("DbRowDeSerializer::deserialize_unit_struct({self:#?}, ...)");
+        trace!("DbRowDeSerializer::deserialize_unit_struct({self:#?}, {_name}, ...)");
         self.pop_value()?;
         visitor.visit_unit()
+    }
+
+    fn deserialize_newtype_struct<V>(
+        self,
+        _name: &'static str,
+        visitor: V,
+    ) -> Result<V::Value, DbError>
+    where
+        V: Visitor<'de>,
+    {
+        trace!("DbRowDeSerializer::deserialize_newtype_struct({self:#?}, {_name}, ...)");
+        visitor.visit_newtype_struct(self)
     }
 
     fn deserialize_enum<V>(
@@ -979,19 +990,6 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     {
         return Err(DbError::SerdeError(
             "Deserializing 'byte_buf' is not supported".to_string(),
-        ));
-    }
-
-    fn deserialize_newtype_struct<V>(
-        self,
-        _name: &'static str,
-        _visitor: V,
-    ) -> Result<V::Value, DbError>
-    where
-        V: Visitor<'de>,
-    {
-        return Err(DbError::SerdeError(
-            "Deserializing 'newtype_struct' is not supported".to_string(),
         ));
     }
 
@@ -1085,6 +1083,9 @@ mod tests {
         }
 
         #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
+        struct NewTypeStruct(i64);
+
+        #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
         struct NestedStruct {
             bar: TrivialStruct,
         }
@@ -1092,58 +1093,94 @@ mod tests {
         // Serializing and deserializing an arbitrary struct to a DbRow:
         #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
         struct TestStruct {
+            // bool
             boolean: bool,
             boolean_opt_none: Option<bool>,
             boolean_opt_some: Option<bool>,
+            //
+            // i8
             tinyint: i8,
             tinyint_opt_none: Option<i8>,
             tinyint_opt_some: Option<i8>,
+            //
+            // u8
             tiny_unsigned: u8,
             tiny_unsigned_opt_none: Option<u8>,
             tiny_unsigned_opt_some: Option<u8>,
+            //
+            // i16
             smallint: i16,
             smallint_opt_none: Option<i16>,
             smallint_opt_some: Option<i16>,
+            //
+            // u16
             small_unsigned: u16,
             small_unsigned_opt_none: Option<u16>,
             small_unsigned_opt_some: Option<u16>,
+            //
+            // i32
             mediumint: i32,
             mediumint_opt_none: Option<i32>,
             mediumint_opt_some: Option<i32>,
+            //
+            // u32
             medium_unsigned: u32,
             medium_unsigned_opt_none: Option<u32>,
             medium_unsigned_opt_some: Option<u32>,
+            //
+            // i64
             bigint: i64,
             bigint_opt_none: Option<i64>,
             bigint_opt_some: Option<i64>,
+            //
+            // u64
             big_unsigned: u64,
             big_unsigned_opt_none: Option<u64>,
             big_unsigned_opt_some: Option<u64>,
+            //
+            // f32
             smallfloat: f32,
             smallfloat_opt_none: Option<f32>,
             smallfloat_opt_some: Option<f32>,
+            //
+            // f64
             bigfloat: f64,
             bigfloat_opt_none: Option<f64>,
             bigfloat_opt_some: Option<f64>,
+            //
+            // String
             text: String,
             text_opt_none: Option<String>,
             text_opt_some: Option<String>,
+            //
             // TODO: Decimals are only sort-of supported for now, i.e., rust's serializer
             // serializes them to text (see also below). This is not ideal but at least it's
             // consistent.
             biggerfloat: Decimal,
             biggerfloat_opt_none: Option<Decimal>,
             biggerfloat_opt_some: Option<Decimal>,
-            // Nested types:
+            //
+            // Unit struct
             unit_struct: UnitStruct,
             unit_struct_opt_none: Option<UnitStruct>,
             unit_struct_opt_some: Option<UnitStruct>,
-            enum_field: TrivialEnum,
-            enum_field_opt_none: Option<TrivialEnum>,
-            enum_field_opt_some: Option<TrivialEnum>,
-            struct_field: TrivialStruct,
-            struct_field_opt_none: Option<TrivialStruct>,
-            struct_field_opt_some: Option<TrivialStruct>,
+            //
+            // Enum
+            enumeration: TrivialEnum,
+            enumeration_opt_none: Option<TrivialEnum>,
+            enumeration_opt_some: Option<TrivialEnum>,
+            //
+            // Struct
+            structure: TrivialStruct,
+            structure_opt_none: Option<TrivialStruct>,
+            structure_opt_some: Option<TrivialStruct>,
+            //
+            // Newtype struct
+            newtype_struct: NewTypeStruct,
+            newtype_struct_opt_none: Option<NewTypeStruct>,
+            newtype_struct_opt_some: Option<NewTypeStruct>,
+            //
+            // Nested struct
             nested_struct: NestedStruct,
             nested_struct_opt_none: Option<NestedStruct>,
             nested_struct_opt_some: Option<NestedStruct>,
@@ -1202,22 +1239,26 @@ mod tests {
             biggerfloat_opt_none: None,
             biggerfloat_opt_some: Some(dec!(1)),
 
-            // Nested types:
+            // Complex types:
             unit_struct: UnitStruct,
             unit_struct_opt_none: None,
             unit_struct_opt_some: Some(UnitStruct),
 
-            enum_field: TrivialEnum::UnitStruct,
-            enum_field_opt_none: None,
-            enum_field_opt_some: Some(TrivialEnum::UnitStruct),
+            enumeration: TrivialEnum::UnitStruct,
+            enumeration_opt_none: None,
+            enumeration_opt_some: Some(TrivialEnum::UnitStruct),
 
-            struct_field: TrivialStruct {
+            structure: TrivialStruct {
                 foo: String::from("bar"),
             },
-            struct_field_opt_none: None,
-            struct_field_opt_some: Some(TrivialStruct {
+            structure_opt_none: None,
+            structure_opt_some: Some(TrivialStruct {
                 foo: String::from("bar"),
             }),
+
+            newtype_struct: NewTypeStruct(1),
+            newtype_struct_opt_none: None,
+            newtype_struct_opt_some: Some(NewTypeStruct(1)),
 
             nested_struct: NestedStruct {
                 bar: TrivialStruct {
@@ -1273,16 +1314,19 @@ mod tests {
             "biggerfloat" => "1",
             "biggerfloat_opt_none" => DbValue::Null,
             "biggerfloat_opt_some" => "1",
-            // Nested types:
+            // Complex types:
             "unit_struct" => "UnitStruct",
             "unit_struct_opt_none" => DbValue::Null,
             "unit_struct_opt_some" => "UnitStruct",
-            "enum_field" => "\"UnitStruct\"",
-            "enum_field_opt_none" => DbValue::Null,
-            "enum_field_opt_some" => "\"UnitStruct\"",
-            "struct_field" => "{\"foo\":\"bar\"}",
-            "struct_field_opt_none" => DbValue::Null,
-            "struct_field_opt_some" => "{\"foo\":\"bar\"}",
+            "enumeration" => "\"UnitStruct\"",
+            "enumeration_opt_none" => DbValue::Null,
+            "enumeration_opt_some" => "\"UnitStruct\"",
+            "structure" => "{\"foo\":\"bar\"}",
+            "structure_opt_none" => DbValue::Null,
+            "structure_opt_some" => "{\"foo\":\"bar\"}",
+            "newtype_struct" => 1_i64,
+            "newtype_struct_opt_none" => DbValue::Null,
+            "newtype_struct_opt_some" => 1_i64,
             "nested_struct" => "{\"bar\":{\"foo\":\"bar\"}}",
             "nested_struct_opt_none" => DbValue::Null,
             "nested_struct_opt_some" => "{\"bar\":{\"foo\":\"bar\"}}",
