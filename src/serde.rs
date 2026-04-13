@@ -375,7 +375,16 @@ impl<'a> ser::SerializeStruct for &'a mut DbRowSerializer {
                 .serialize(json_serializer)
                 .map_err(|err| DbError::SerdeError(err.to_string()))?;
 
-            let inner = self.inner_value.as_object_mut().unwrap();
+            let inner = match self.inner_value.as_object_mut() {
+                Some(inner) => inner,
+                None => {
+                    return Err(DbError::SerdeError(format!(
+                        "Not a JSON Object: {}",
+                        self.inner_value
+                    )));
+                }
+            };
+
             inner.insert(key.to_string(), json_value);
         } else {
             self.keys.push(key.to_string());
@@ -890,10 +899,13 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
         if self.keys == fields {
             self.deserialize_map(visitor)
         } else {
-            let value = self.pop_value().unwrap().as_str().unwrap();
-            serde_json::Deserializer::from_str(value)
-                .deserialize_struct(name, fields, visitor)
-                .map_err(|err| DbError::SerdeError(err.to_string()))
+            let value = self.pop_value()?;
+            match value.as_str() {
+                Some(value) => serde_json::Deserializer::from_str(value)
+                    .deserialize_struct(name, fields, visitor)
+                    .map_err(|err| DbError::SerdeError(err.to_string())),
+                None => Err(DbError::SerdeError(format!("Not a string: {value:?}"))),
+            }
         }
     }
 
@@ -927,7 +939,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
         V: Visitor<'de>,
     {
         trace!("DbRowDeSerializer::deserialize_unit_struct({self:#?}, ...)");
-        self.pop_value().unwrap();
+        self.pop_value()?;
         visitor.visit_unit()
     }
 
@@ -941,10 +953,13 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
         V: Visitor<'de>,
     {
         trace!("DbRowDeSerializer::deserialize_enum({self:#?}, ...)");
-        let value = self.pop_value().unwrap().as_str().unwrap();
-        serde_json::Deserializer::from_str(&value)
-            .deserialize_enum(name, variants, visitor)
-            .map_err(|err| DbError::SerdeError(err.to_string()))
+        let value = self.pop_value()?;
+        match value.as_str() {
+            Some(value) => serde_json::Deserializer::from_str(&value)
+                .deserialize_enum(name, variants, visitor)
+                .map_err(|err| DbError::SerdeError(err.to_string())),
+            None => Err(DbError::SerdeError(format!("Not a string: {value:?}"))),
+        }
     }
 
     // Unsupported types:
