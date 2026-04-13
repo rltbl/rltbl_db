@@ -285,6 +285,26 @@ impl<'a> ser::Serializer for &'a mut DbRowSerializer {
         value.serialize(self)
     }
 
+    fn serialize_tuple_struct(
+        self,
+        _name: &str,
+        len: usize,
+    ) -> Result<Self::SerializeTupleStruct, Self::Error> {
+        trace!("DbRowSerializer::serialize_tuple_struct({self:#?}, {_name}, {len}, ...)");
+        if self.keys.len() > 0 {
+            self.skip = len;
+            // Start a new empty inner value which will be progressively filled in later:
+            self.inner_value = json!([]);
+            Ok(self)
+        } else {
+            self.serialize_seq(Some(len))
+        }
+    }
+
+    fn serialize_seq(self, _len: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> {
+        Ok(self)
+    }
+
     // Unsupported types:
 
     fn serialize_bytes(self, _values: &[u8]) -> Result<(), Self::Error> {
@@ -308,25 +328,9 @@ impl<'a> ser::Serializer for &'a mut DbRowSerializer {
         ));
     }
 
-    fn serialize_seq(self, _len: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> {
-        return Err(DbError::SerdeError(
-            "Serializing seq is not supported".to_string(),
-        ));
-    }
-
     fn serialize_tuple(self, _len: usize) -> Result<Self::SerializeTuple, Self::Error> {
         return Err(DbError::SerdeError(
             "Serializing tuple is not supported".to_string(),
-        ));
-    }
-
-    fn serialize_tuple_struct(
-        self,
-        _name: &str,
-        _len: usize,
-    ) -> Result<Self::SerializeTupleStruct, Self::Error> {
-        return Err(DbError::SerdeError(
-            "Serializing tuple struct is not supported".to_string(),
         ));
     }
 
@@ -394,6 +398,53 @@ impl<'a> ser::SerializeStruct for &'a mut DbRowSerializer {
 
     fn end(self) -> Result<(), DbError> {
         trace!("SerializeStruct::end({self:#?})");
+        if self.inner_value != JsonValue::Null {
+            let json_string = serde_json::to_string(&self.inner_value)
+                .map_err(|err| DbError::SerdeError(err.to_string()))?;
+
+            self.values.push(DbValue::Text(json_string));
+            self.inner_value = JsonValue::Null;
+        }
+        Ok(())
+    }
+}
+
+impl<'a> ser::SerializeTupleStruct for &'a mut DbRowSerializer {
+    // These need to match the `Ok` and `Error` types of DbRowSerializer:
+    type Ok = ();
+    type Error = DbError;
+
+    fn serialize_field<T>(&mut self, value: &T) -> Result<(), DbError>
+    where
+        T: ?Sized + Serialize,
+    {
+        trace!("SerializeTupleStruct::serialize_field({self:#?}, ...)");
+        if self.skip > 0 {
+            self.skip -= 1;
+            let json_serializer = JsonValueSerializer;
+            let json_value = value
+                .serialize(json_serializer)
+                .map_err(|err| DbError::SerdeError(err.to_string()))?;
+
+            let inner = match self.inner_value.as_array_mut() {
+                Some(inner) => inner,
+                None => {
+                    return Err(DbError::SerdeError(format!(
+                        "Not a JSON Array: {}",
+                        self.inner_value
+                    )));
+                }
+            };
+            inner.push(json_value);
+        } else {
+            value.serialize(&mut **self)?;
+        }
+
+        Ok(())
+    }
+
+    fn end(self) -> Result<(), DbError> {
+        trace!("SerializeTupleStruct::end({self:#?})");
         if self.inner_value != JsonValue::Null {
             let json_string = serde_json::to_string(&self.inner_value)
                 .map_err(|err| DbError::SerdeError(err.to_string()))?;
@@ -499,28 +550,6 @@ impl<'a> ser::SerializeTuple for &'a mut DbRowSerializer {
     fn end(self) -> Result<(), DbError> {
         return Err(DbError::SerdeError(
             "SerializeTuple::end() is not supported for DbRowSerializer".to_string(),
-        ));
-    }
-}
-
-impl<'a> ser::SerializeTupleStruct for &'a mut DbRowSerializer {
-    // These need to match the `Ok` and `Error` types of DbRowSerializer:
-    type Ok = ();
-    type Error = DbError;
-
-    fn serialize_field<T>(&mut self, _value: &T) -> Result<(), DbError>
-    where
-        T: ?Sized + Serialize,
-    {
-        return Err(DbError::SerdeError(
-            "SerializeTupleStruct::serialize_field() is not supported for DbRowSerializer"
-                .to_string(),
-        ));
-    }
-
-    fn end(self) -> Result<(), DbError> {
-        return Err(DbError::SerdeError(
-            "SerializeTupleStruct::end() is not supported for DbRowSerializer".to_string(),
         ));
     }
 }
@@ -954,6 +983,19 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
         visitor.visit_newtype_struct(self)
     }
 
+    fn deserialize_tuple_struct<V>(
+        self,
+        _name: &'static str,
+        _len: usize,
+        visitor: V,
+    ) -> Result<V::Value, DbError>
+    where
+        V: Visitor<'de>,
+    {
+        trace!("DbRowDeSerializer::deserialize_tuple_struct({self:#?}, {_name}, ...)");
+        self.deserialize_seq(visitor)
+    }
+
     fn deserialize_enum<V>(
         self,
         name: &'static str,
@@ -993,13 +1035,18 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
         ));
     }
 
-    fn deserialize_seq<V>(self, _visitor: V) -> Result<V::Value, DbError>
+    fn deserialize_seq<V>(self, visitor: V) -> Result<V::Value, DbError>
     where
         V: Visitor<'de>,
     {
-        return Err(DbError::SerdeError(
-            "Deserializing 'seq' is not supported".to_string(),
-        ));
+        trace!("DbRowDeSerializer::deserialize_seq({self:#?}, ...)");
+        let value = self.pop_value()?;
+        match value.as_str() {
+            Some(value) => serde_json::Deserializer::from_str(&value)
+                .deserialize_seq(visitor)
+                .map_err(|err| DbError::SerdeError(err.to_string())),
+            None => Err(DbError::SerdeError(format!("Not a string: {value:?}"))),
+        }
     }
 
     fn deserialize_tuple<V>(self, _len: usize, _visitor: V) -> Result<V::Value, DbError>
@@ -1008,20 +1055,6 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     {
         return Err(DbError::SerdeError(
             "Deserializing 'tuple' is not supported".to_string(),
-        ));
-    }
-
-    fn deserialize_tuple_struct<V>(
-        self,
-        _name: &'static str,
-        _len: usize,
-        _visitor: V,
-    ) -> Result<V::Value, DbError>
-    where
-        V: Visitor<'de>,
-    {
-        return Err(DbError::SerdeError(
-            "Deserializing 'tuple_struct' is not supported".to_string(),
         ));
     }
 
@@ -1084,6 +1117,9 @@ mod tests {
 
         #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
         struct NewTypeStruct(i64);
+
+        #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
+        struct TupleStruct(i64, i64);
 
         #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
         struct NestedStruct {
@@ -1179,6 +1215,12 @@ mod tests {
             newtype_struct: NewTypeStruct,
             newtype_struct_opt_none: Option<NewTypeStruct>,
             newtype_struct_opt_some: Option<NewTypeStruct>,
+
+            // Tuple struct
+            tuple_struct: TupleStruct,
+            tuple_struct_opt_none: Option<TupleStruct>,
+            tuple_struct_opt_some: Option<TupleStruct>,
+
             //
             // Nested struct
             nested_struct: NestedStruct,
@@ -1260,6 +1302,10 @@ mod tests {
             newtype_struct_opt_none: None,
             newtype_struct_opt_some: Some(NewTypeStruct(1)),
 
+            tuple_struct: TupleStruct(111, 111),
+            tuple_struct_opt_none: None,
+            tuple_struct_opt_some: Some(TupleStruct(111, 111)),
+
             nested_struct: NestedStruct {
                 bar: TrivialStruct {
                     foo: String::from("bar"),
@@ -1277,56 +1323,78 @@ mod tests {
             "boolean" => true,
             "boolean_opt_none" => DbValue::Null,
             "boolean_opt_some" => true,
+
             "tinyint" => 1_i16,
             "tinyint_opt_none" => DbValue::Null,
             "tinyint_opt_some" => 1_i16,
+
             "tiny_unsigned" => 1_i16,
             "tiny_unsigned_opt_none" => DbValue::Null,
             "tiny_unsigned_opt_some" => 1_i16,
+
             "smallint" => 1_i16,
             "smallint_opt_none" => DbValue::Null,
             "smallint_opt_some" => 1_i16,
+
             "small_unsigned" => 1_i32,
             "small_unsigned_opt_none" => DbValue::Null,
             "small_unsigned_opt_some" => 1_i32,
+
             "mediumint" => 1_i32,
             "mediumint_opt_none" => DbValue::Null,
             "mediumint_opt_some" => 1_i32,
+
             "medium_unsigned" => 1_u64,
             "medium_unsigned_opt_none" => DbValue::Null,
             "medium_unsigned_opt_some" => 1_u64,
+
             "bigint" => 1_i64,
             "bigint_opt_none" => DbValue::Null,
             "bigint_opt_some" => 1_i64,
+
             "big_unsigned" => 1_u64,
             "big_unsigned_opt_none" => DbValue::Null,
             "big_unsigned_opt_some" => 1_u64,
+
             "smallfloat" => 1_f32,
             "smallfloat_opt_none" => DbValue::Null,
             "smallfloat_opt_some" => 1_f32,
+
             "bigfloat" => 1_f64,
             "bigfloat_opt_none" => DbValue::Null,
             "bigfloat_opt_some" => 1_f64,
+
             "text" => "1",
             "text_opt_none" => DbValue::Null,
             "text_opt_some" => "1",
+
             // Serde interprets Decimals as text:
             "biggerfloat" => "1",
             "biggerfloat_opt_none" => DbValue::Null,
             "biggerfloat_opt_some" => "1",
+
             // Complex types:
+
             "unit_struct" => "UnitStruct",
             "unit_struct_opt_none" => DbValue::Null,
             "unit_struct_opt_some" => "UnitStruct",
+
             "enumeration" => "\"UnitStruct\"",
             "enumeration_opt_none" => DbValue::Null,
             "enumeration_opt_some" => "\"UnitStruct\"",
+
             "structure" => "{\"foo\":\"bar\"}",
             "structure_opt_none" => DbValue::Null,
             "structure_opt_some" => "{\"foo\":\"bar\"}",
+
             "newtype_struct" => 1_i64,
             "newtype_struct_opt_none" => DbValue::Null,
             "newtype_struct_opt_some" => 1_i64,
+
+            "tuple_struct" => "[111,111]",
+            "tuple_struct_opt_none" => DbValue::Null,
+            "tuple_struct_opt_some" => "[111,111]",
+
             "nested_struct" => "{\"bar\":{\"foo\":\"bar\"}}",
             "nested_struct_opt_none" => DbValue::Null,
             "nested_struct_opt_some" => "{\"bar\":{\"foo\":\"bar\"}}",
