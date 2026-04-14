@@ -1184,9 +1184,15 @@ mod tests {
         struct UnitStruct;
 
         #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
+        struct SimpleStruct {
+            foo: u64,
+        }
+
+        #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
         enum ExampleEnum {
             UnitStruct,
             NewTypeStruct(f32),
+            StructVariant(SimpleStruct),
         }
 
         #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
@@ -1297,6 +1303,11 @@ mod tests {
             enumeration_opt_none: Option<ExampleEnum>,
             enumeration_opt_some: Option<ExampleEnum>,
             //
+            // Struct variant
+            struct_variant: ExampleEnum,
+            struct_variant_option_none: Option<ExampleEnum>,
+            struct_variant_option_some: Option<ExampleEnum>,
+            //
             // Struct
             structure: ExampleStruct,
             structure_opt_none: Option<ExampleStruct>,
@@ -1306,6 +1317,7 @@ mod tests {
             newtype_struct: NewTypeStruct,
             newtype_struct_opt_none: Option<NewTypeStruct>,
             newtype_struct_opt_some: Option<NewTypeStruct>,
+            //
             // Tuple
             tuple: (u32, String),
             tuple_opt_none: Option<(u32, String)>,
@@ -1387,6 +1399,10 @@ mod tests {
             enumeration: ExampleEnum::NewTypeStruct(1.0),
             enumeration_opt_none: None,
             enumeration_opt_some: Some(ExampleEnum::UnitStruct),
+
+            struct_variant: ExampleEnum::StructVariant(SimpleStruct { foo: 1 }),
+            struct_variant_option_none: None,
+            struct_variant_option_some: Some(ExampleEnum::StructVariant(SimpleStruct { foo: 1 })),
 
             structure: ExampleStruct {
                 foo: String::from("bar"),
@@ -1519,9 +1535,14 @@ mod tests {
             "enumeration_opt_none" => DbValue::Null,
             "enumeration_opt_some" => "\"UnitStruct\"",
 
+            "struct_variant" => "{\"StructVariant\":{\"foo\":1}}",
+            "struct_variant_option_none" => DbValue::Null,
+            "struct_variant_option_some" => "{\"StructVariant\":{\"foo\":1}}",
+
             "structure" => "{\"foo\":\"bar\",\"bar\":1,\"list\":[1,2,3],\"tuple\":[1,\"bar\"]}",
             "structure_opt_none" => DbValue::Null,
-            "structure_opt_some" => "{\"foo\":\"bar\",\"bar\":1,\"list\":[1,2,3],\"tuple\":[1,\"bar\"]}",
+            "structure_opt_some" => "{\"foo\":\"bar\",\"bar\":1,\"list\":[1,2,3],\
+                                     \"tuple\":[1,\"bar\"]}",
 
             "newtype_struct" => 1_i64,
             "newtype_struct_opt_none" => DbValue::Null,
@@ -1563,11 +1584,49 @@ mod tests {
         );
     }
 
+    // TODO: This is for rough work. Remove it later after transferring the tests above.
     #[test]
     #[traced_test]
-    #[should_panic]
-    fn test_serde_tuple() {
-        let tuple = (1_i32, String::from("foo"));
-        to_db_row(&tuple).unwrap();
+    fn test_serde_scratch() {
+        #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
+        struct SimpleStruct {
+            foo: u64,
+        }
+
+        #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
+        enum ExampleEnum {
+            UnitStruct,
+            NewTypeStruct(f32),
+            StructVariant(SimpleStruct),
+        }
+
+        #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
+        struct ExampleStruct {
+            alpha: ExampleEnum,
+            beta: ExampleEnum,
+            gamma: ExampleEnum,
+        }
+
+        let expected_struct = ExampleStruct {
+            alpha: ExampleEnum::UnitStruct,
+            beta: ExampleEnum::NewTypeStruct(1.0),
+            gamma: ExampleEnum::StructVariant(SimpleStruct { foo: 1 }),
+        };
+        let expected_db_row = db_row! {
+            "alpha" => "\"UnitStruct\"",
+            "beta" => "{\"NewTypeStruct\":1.0}",
+            "gamma" => "{\"StructVariant\":{\"foo\":1}}",
+        };
+
+        assert_eq!(
+            expected_db_row,
+            to_db_row(&expected_struct).unwrap(),
+            "test serialize"
+        );
+        assert_eq!(
+            expected_struct,
+            from_db_row(&expected_db_row).unwrap(),
+            "test deserialize"
+        );
     }
 }
