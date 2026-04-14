@@ -285,6 +285,32 @@ impl<'a> ser::Serializer for &'a mut DbRowSerializer {
         value.serialize(self)
     }
 
+    fn serialize_newtype_variant<T>(
+        self,
+        _name: &str,
+        _variant_index: u32,
+        variant: &str,
+        value: &T,
+    ) -> Result<(), Self::Error>
+    where
+        T: ?Sized + Serialize,
+    {
+        trace!(
+            "DbRowSerializer::serialize_newtype_variant(\
+             {self:#?}, {_name}, {_variant_index}, {variant}, ...\
+             )"
+        );
+        let json_serializer = JsonValueSerializer;
+        let json_value = value
+            .serialize(json_serializer)
+            .map_err(|err| DbError::SerdeError(err.to_string()))?;
+        let json_value = json!({variant.to_string(): json_value});
+        let json_string = serde_json::to_string(&json_value)
+            .map_err(|err| DbError::SerdeError(err.to_string()))?;
+        self.values.push(DbValue::Text(json_string));
+        Ok(())
+    }
+
     fn serialize_tuple_struct(
         self,
         _name: &str,
@@ -318,21 +344,6 @@ impl<'a> ser::Serializer for &'a mut DbRowSerializer {
     fn serialize_bytes(self, _values: &[u8]) -> Result<(), Self::Error> {
         return Err(DbError::SerdeError(
             "Serializing bytes is not supported".to_string(),
-        ));
-    }
-
-    fn serialize_newtype_variant<T>(
-        self,
-        _name: &str,
-        _variant_index: u32,
-        _variant: &str,
-        _value: &T,
-    ) -> Result<(), Self::Error>
-    where
-        T: ?Sized + Serialize,
-    {
-        return Err(DbError::SerdeError(
-            "Serializing newtype variant is not supported".to_string(),
         ));
     }
 
@@ -1138,13 +1149,16 @@ mod tests {
         struct UnitStruct;
 
         #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
-        enum TrivialEnum {
+        enum ExampleEnum {
             UnitStruct,
+            NewTypeStruct(f32),
         }
 
         #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
-        struct TrivialStruct {
+        struct ExampleStruct {
             foo: String,
+            bar: u64,
+            list: Vec<i16>,
         }
 
         #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
@@ -1155,7 +1169,10 @@ mod tests {
 
         #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
         struct NestedStruct {
-            bar: TrivialStruct,
+            foo: ExampleEnum,
+            bar: ExampleStruct,
+            foo_list: Vec<ExampleEnum>,
+            bar_list: Vec<ExampleStruct>,
         }
 
         // Serializing and deserializing an arbitrary struct to a DbRow:
@@ -1239,14 +1256,14 @@ mod tests {
             unit_struct_opt_some: Option<UnitStruct>,
             //
             // Enum
-            enumeration: TrivialEnum,
-            enumeration_opt_none: Option<TrivialEnum>,
-            enumeration_opt_some: Option<TrivialEnum>,
+            enumeration: ExampleEnum,
+            enumeration_opt_none: Option<ExampleEnum>,
+            enumeration_opt_some: Option<ExampleEnum>,
             //
             // Struct
-            structure: TrivialStruct,
-            structure_opt_none: Option<TrivialStruct>,
-            structure_opt_some: Option<TrivialStruct>,
+            structure: ExampleStruct,
+            structure_opt_none: Option<ExampleStruct>,
+            structure_opt_some: Option<ExampleStruct>,
             //
             // Newtype struct
             newtype_struct: NewTypeStruct,
@@ -1326,16 +1343,20 @@ mod tests {
             unit_struct_opt_none: None,
             unit_struct_opt_some: Some(UnitStruct),
 
-            enumeration: TrivialEnum::UnitStruct,
+            enumeration: ExampleEnum::NewTypeStruct(1.0),
             enumeration_opt_none: None,
-            enumeration_opt_some: Some(TrivialEnum::UnitStruct),
+            enumeration_opt_some: Some(ExampleEnum::UnitStruct),
 
-            structure: TrivialStruct {
+            structure: ExampleStruct {
                 foo: String::from("bar"),
+                bar: 1,
+                list: vec![1, 2, 3],
             },
             structure_opt_none: None,
-            structure_opt_some: Some(TrivialStruct {
+            structure_opt_some: Some(ExampleStruct {
                 foo: String::from("bar"),
+                bar: 1,
+                list: vec![1, 2, 3],
             }),
 
             newtype_struct: NewTypeStruct(1),
@@ -1347,15 +1368,33 @@ mod tests {
             tuple_struct_opt_some: Some(TupleStruct(111, 111)),
 
             nested_struct: NestedStruct {
-                bar: TrivialStruct {
+                foo: ExampleEnum::NewTypeStruct(1.0),
+                bar: ExampleStruct {
                     foo: String::from("bar"),
+                    bar: 1,
+                    list: vec![1, 2, 3],
                 },
+                foo_list: vec![ExampleEnum::NewTypeStruct(1.0)],
+                bar_list: vec![ExampleStruct {
+                    foo: String::from("bar"),
+                    bar: 1,
+                    list: vec![1, 2, 3],
+                }],
             },
             nested_struct_opt_none: None,
             nested_struct_opt_some: Some(NestedStruct {
-                bar: TrivialStruct {
+                foo: ExampleEnum::NewTypeStruct(1.0),
+                bar: ExampleStruct {
                     foo: String::from("bar"),
+                    bar: 1,
+                    list: vec![1, 2, 3],
                 },
+                foo_list: vec![ExampleEnum::NewTypeStruct(1.0)],
+                bar_list: vec![ExampleStruct {
+                    foo: String::from("bar"),
+                    bar: 1,
+                    list: vec![1, 2, 3],
+                }],
             }),
         };
 
@@ -1423,13 +1462,13 @@ mod tests {
             "unit_struct_opt_none" => DbValue::Null,
             "unit_struct_opt_some" => "UnitStruct",
 
-            "enumeration" => "\"UnitStruct\"",
+            "enumeration" => "{\"NewTypeStruct\":1.0}",
             "enumeration_opt_none" => DbValue::Null,
             "enumeration_opt_some" => "\"UnitStruct\"",
 
-            "structure" => "{\"foo\":\"bar\"}",
+            "structure" => "{\"foo\":\"bar\",\"bar\":1,\"list\":[1,2,3]}",
             "structure_opt_none" => DbValue::Null,
-            "structure_opt_some" => "{\"foo\":\"bar\"}",
+            "structure_opt_some" => "{\"foo\":\"bar\",\"bar\":1,\"list\":[1,2,3]}",
 
             "newtype_struct" => 1_i64,
             "newtype_struct_opt_none" => DbValue::Null,
@@ -1439,9 +1478,19 @@ mod tests {
             "tuple_struct_opt_none" => DbValue::Null,
             "tuple_struct_opt_some" => "[111,111]",
 
-            "nested_struct" => "{\"bar\":{\"foo\":\"bar\"}}",
+            "nested_struct" => "{\"foo\":{\"NewTypeStruct\":1.0},\
+                                         \"bar\":{\"foo\":\"bar\",\
+                                         \"bar\":1,\"list\":[1,2,3]},\
+                                         \"foo_list\":[{\"NewTypeStruct\":1.0}],\
+                                         \"bar_list\":[{\"foo\":\"bar\",\"bar\":1,\
+                                         \"list\":[1,2,3]}]}",
             "nested_struct_opt_none" => DbValue::Null,
-            "nested_struct_opt_some" => "{\"bar\":{\"foo\":\"bar\"}}",
+            "nested_struct_opt_some" => "{\"foo\":{\"NewTypeStruct\":1.0},\
+                                         \"bar\":{\"foo\":\"bar\",\
+                                         \"bar\":1,\"list\":[1,2,3]},\
+                                         \"foo_list\":[{\"NewTypeStruct\":1.0}],\
+                                         \"bar_list\":[{\"foo\":\"bar\",\"bar\":1,\
+                                         \"list\":[1,2,3]}]}",
         };
         assert_eq!(
             expected_db_row,
