@@ -327,10 +327,21 @@ impl<'a> ser::Serializer for &'a mut DbRowSerializer {
         }
     }
 
+    fn serialize_tuple(self, len: usize) -> Result<Self::SerializeTuple, Self::Error> {
+        trace!("DbRowSerializer::serialize_tuple({self:#?}, {len}, ...)");
+        if self.keys.len() > 0 {
+            self.skip = len;
+            self.inner_value = json!([]);
+            Ok(self)
+        } else {
+            Ok(self)
+        }
+    }
+
     fn serialize_seq(self, len: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> {
         trace!("DbRowSerializer::serialize_seq({self:#?}, {len:?})");
         if self.keys.len() > 0 {
-            self.skip = len.unwrap();
+            self.skip = len.ok_or(DbError::SerdeError("No length given".to_string()))?;
             // Start a new empty inner value which will be progressively filled in later:
             self.inner_value = json!([]);
             Ok(self)
@@ -345,17 +356,6 @@ impl<'a> ser::Serializer for &'a mut DbRowSerializer {
         return Err(DbError::SerdeError(
             "Serializing bytes is not supported".to_string(),
         ));
-    }
-
-    fn serialize_tuple(self, len: usize) -> Result<Self::SerializeTuple, Self::Error> {
-        trace!("DbRowSerializer::serialize_tuple({self:#?}, {len}, ...)");
-        if self.keys.len() > 0 {
-            self.skip = len;
-            self.inner_value = json!([]);
-            Ok(self)
-        } else {
-            Ok(self)
-        }
     }
 
     fn serialize_tuple_variant(
@@ -1572,52 +1572,6 @@ mod tests {
                                          \"list\":[1,2,3],\"tuple\":[1,\"bar\"]}],\
                                          \"bar_tuple\":[1,1,\"bar\"]}",
         };
-        assert_eq!(
-            expected_db_row,
-            to_db_row(&expected_struct).unwrap(),
-            "test serialize"
-        );
-        assert_eq!(
-            expected_struct,
-            from_db_row(&expected_db_row).unwrap(),
-            "test deserialize"
-        );
-    }
-
-    // TODO: This is for rough work. Remove it later after transferring the tests above.
-    #[test]
-    #[traced_test]
-    fn test_serde_scratch() {
-        #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
-        struct SimpleStruct {
-            foo: u64,
-        }
-
-        #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
-        enum ExampleEnum {
-            UnitStruct,
-            NewTypeStruct(f32),
-            StructVariant(SimpleStruct),
-        }
-
-        #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
-        struct ExampleStruct {
-            alpha: ExampleEnum,
-            beta: ExampleEnum,
-            gamma: ExampleEnum,
-        }
-
-        let expected_struct = ExampleStruct {
-            alpha: ExampleEnum::UnitStruct,
-            beta: ExampleEnum::NewTypeStruct(1.0),
-            gamma: ExampleEnum::StructVariant(SimpleStruct { foo: 1 }),
-        };
-        let expected_db_row = db_row! {
-            "alpha" => "\"UnitStruct\"",
-            "beta" => "{\"NewTypeStruct\":1.0}",
-            "gamma" => "{\"StructVariant\":{\"foo\":1}}",
-        };
-
         assert_eq!(
             expected_db_row,
             to_db_row(&expected_struct).unwrap(),
