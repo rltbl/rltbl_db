@@ -1159,6 +1159,7 @@ mod tests {
             foo: String,
             bar: u64,
             list: Vec<i16>,
+            tuple: (u64, String),
         }
 
         #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
@@ -1173,6 +1174,7 @@ mod tests {
             bar: ExampleStruct,
             foo_list: Vec<ExampleEnum>,
             bar_list: Vec<ExampleStruct>,
+            bar_tuple: (u32, i32, String),
         }
 
         // Serializing and deserializing an arbitrary struct to a DbRow:
@@ -1351,12 +1353,14 @@ mod tests {
                 foo: String::from("bar"),
                 bar: 1,
                 list: vec![1, 2, 3],
+                tuple: (1, String::from("bar")),
             },
             structure_opt_none: None,
             structure_opt_some: Some(ExampleStruct {
                 foo: String::from("bar"),
                 bar: 1,
                 list: vec![1, 2, 3],
+                tuple: (1, String::from("bar")),
             }),
 
             newtype_struct: NewTypeStruct(1),
@@ -1373,13 +1377,16 @@ mod tests {
                     foo: String::from("bar"),
                     bar: 1,
                     list: vec![1, 2, 3],
+                    tuple: (1, String::from("bar")),
                 },
                 foo_list: vec![ExampleEnum::NewTypeStruct(1.0)],
                 bar_list: vec![ExampleStruct {
                     foo: String::from("bar"),
                     bar: 1,
                     list: vec![1, 2, 3],
+                    tuple: (1, String::from("bar")),
                 }],
+                bar_tuple: (1, 1, String::from("bar")),
             },
             nested_struct_opt_none: None,
             nested_struct_opt_some: Some(NestedStruct {
@@ -1388,13 +1395,16 @@ mod tests {
                     foo: String::from("bar"),
                     bar: 1,
                     list: vec![1, 2, 3],
+                    tuple: (1, String::from("bar")),
                 },
                 foo_list: vec![ExampleEnum::NewTypeStruct(1.0)],
                 bar_list: vec![ExampleStruct {
                     foo: String::from("bar"),
                     bar: 1,
                     list: vec![1, 2, 3],
+                    tuple: (1, String::from("bar")),
                 }],
+                bar_tuple: (1, 1, String::from("bar")),
             }),
         };
 
@@ -1466,9 +1476,9 @@ mod tests {
             "enumeration_opt_none" => DbValue::Null,
             "enumeration_opt_some" => "\"UnitStruct\"",
 
-            "structure" => "{\"foo\":\"bar\",\"bar\":1,\"list\":[1,2,3]}",
+            "structure" => "{\"foo\":\"bar\",\"bar\":1,\"list\":[1,2,3],\"tuple\":[1,\"bar\"]}",
             "structure_opt_none" => DbValue::Null,
-            "structure_opt_some" => "{\"foo\":\"bar\",\"bar\":1,\"list\":[1,2,3]}",
+            "structure_opt_some" => "{\"foo\":\"bar\",\"bar\":1,\"list\":[1,2,3],\"tuple\":[1,\"bar\"]}",
 
             "newtype_struct" => 1_i64,
             "newtype_struct_opt_none" => DbValue::Null,
@@ -1480,17 +1490,19 @@ mod tests {
 
             "nested_struct" => "{\"foo\":{\"NewTypeStruct\":1.0},\
                                          \"bar\":{\"foo\":\"bar\",\
-                                         \"bar\":1,\"list\":[1,2,3]},\
+                                         \"bar\":1,\"list\":[1,2,3],\"tuple\":[1,\"bar\"]},\
                                          \"foo_list\":[{\"NewTypeStruct\":1.0}],\
                                          \"bar_list\":[{\"foo\":\"bar\",\"bar\":1,\
-                                         \"list\":[1,2,3]}]}",
+                                         \"list\":[1,2,3],\"tuple\":[1,\"bar\"]}],\
+                                         \"bar_tuple\":[1,1,\"bar\"]}",
             "nested_struct_opt_none" => DbValue::Null,
             "nested_struct_opt_some" => "{\"foo\":{\"NewTypeStruct\":1.0},\
                                          \"bar\":{\"foo\":\"bar\",\
-                                         \"bar\":1,\"list\":[1,2,3]},\
+                                         \"bar\":1,\"list\":[1,2,3],\"tuple\":[1,\"bar\"]},\
                                          \"foo_list\":[{\"NewTypeStruct\":1.0}],\
                                          \"bar_list\":[{\"foo\":\"bar\",\"bar\":1,\
-                                         \"list\":[1,2,3]}]}",
+                                         \"list\":[1,2,3],\"tuple\":[1,\"bar\"]}],\
+                                         \"bar_tuple\":[1,1,\"bar\"]}",
         };
         assert_eq!(
             expected_db_row,
