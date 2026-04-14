@@ -301,8 +301,16 @@ impl<'a> ser::Serializer for &'a mut DbRowSerializer {
         }
     }
 
-    fn serialize_seq(self, _len: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> {
-        Ok(self)
+    fn serialize_seq(self, len: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> {
+        trace!("DbRowSerializer::serialize_seq({self:#?}, {len:?})");
+        if self.keys.len() > 0 {
+            self.skip = len.unwrap();
+            // Start a new empty inner value which will be progressively filled in later:
+            self.inner_value = json!([]);
+            Ok(self)
+        } else {
+            Ok(self)
+        }
     }
 
     // Unsupported types:
@@ -439,12 +447,57 @@ impl<'a> ser::SerializeTupleStruct for &'a mut DbRowSerializer {
         } else {
             value.serialize(&mut **self)?;
         }
-
         Ok(())
     }
 
     fn end(self) -> Result<(), DbError> {
         trace!("SerializeTupleStruct::end({self:#?})");
+        if self.inner_value != JsonValue::Null {
+            let json_string = serde_json::to_string(&self.inner_value)
+                .map_err(|err| DbError::SerdeError(err.to_string()))?;
+
+            self.values.push(DbValue::Text(json_string));
+            self.inner_value = JsonValue::Null;
+        }
+        Ok(())
+    }
+}
+
+impl<'a> ser::SerializeSeq for &'a mut DbRowSerializer {
+    // These need to match the `Ok` and `Error` types of DbRowSerializer:
+    type Ok = ();
+    type Error = DbError;
+
+    fn serialize_element<T>(&mut self, value: &T) -> Result<(), Self::Error>
+    where
+        T: ?Sized + Serialize,
+    {
+        trace!("SerializeSeq::serialize_element({self:#?}, ...)");
+        if self.skip > 0 {
+            self.skip -= 1;
+            let json_serializer = JsonValueSerializer;
+            let json_value = value
+                .serialize(json_serializer)
+                .map_err(|err| DbError::SerdeError(err.to_string()))?;
+
+            let inner = match self.inner_value.as_array_mut() {
+                Some(inner) => inner,
+                None => {
+                    return Err(DbError::SerdeError(format!(
+                        "Not a JSON Array: {}",
+                        self.inner_value
+                    )));
+                }
+            };
+            inner.push(json_value);
+        } else {
+            value.serialize(&mut **self)?;
+        }
+        Ok(())
+    }
+
+    fn end(self) -> Result<(), Self::Error> {
+        trace!("SerializeSeq::end({self:#?})");
         if self.inner_value != JsonValue::Null {
             let json_string = serde_json::to_string(&self.inner_value)
                 .map_err(|err| DbError::SerdeError(err.to_string()))?;
@@ -508,27 +561,6 @@ impl<'a> ser::SerializeMap for &'a mut DbRowSerializer {
     fn end(self) -> Result<(), DbError> {
         return Err(DbError::SerdeError(
             "SerializeMap::end() is not supported for DbRowSerializer".to_string(),
-        ));
-    }
-}
-
-impl<'a> ser::SerializeSeq for &'a mut DbRowSerializer {
-    // These need to match the `Ok` and `Error` types of DbRowSerializer:
-    type Ok = ();
-    type Error = DbError;
-
-    fn serialize_element<T>(&mut self, _value: &T) -> Result<(), Self::Error>
-    where
-        T: ?Sized + Serialize,
-    {
-        return Err(DbError::SerdeError(
-            "SerializeSeq::serialize_element() is not supported for DbRowSerializer".to_string(),
-        ));
-    }
-
-    fn end(self) -> Result<(), Self::Error> {
-        return Err(DbError::SerdeError(
-            "SerializeSeq::end() is not supported for DbRowSerializer".to_string(),
         ));
     }
 }
@@ -1196,6 +1228,11 @@ mod tests {
             biggerfloat_opt_none: Option<Decimal>,
             biggerfloat_opt_some: Option<Decimal>,
             //
+            // Sequence
+            sequence: Vec<String>,
+            sequence_opt_none: Option<Vec<String>>,
+            sequence_opt_some: Option<Vec<String>>,
+            //
             // Unit struct
             unit_struct: UnitStruct,
             unit_struct_opt_none: Option<UnitStruct>,
@@ -1215,12 +1252,11 @@ mod tests {
             newtype_struct: NewTypeStruct,
             newtype_struct_opt_none: Option<NewTypeStruct>,
             newtype_struct_opt_some: Option<NewTypeStruct>,
-
+            //
             // Tuple struct
             tuple_struct: TupleStruct,
             tuple_struct_opt_none: Option<TupleStruct>,
             tuple_struct_opt_some: Option<TupleStruct>,
-
             //
             // Nested struct
             nested_struct: NestedStruct,
@@ -1282,6 +1318,10 @@ mod tests {
             biggerfloat_opt_some: Some(dec!(1)),
 
             // Complex types:
+            sequence: vec!["hello".into(), "world".into()],
+            sequence_opt_none: None,
+            sequence_opt_some: Some(vec!["hello".into(), "world".into()]),
+
             unit_struct: UnitStruct,
             unit_struct_opt_none: None,
             unit_struct_opt_some: Some(UnitStruct),
@@ -1374,6 +1414,10 @@ mod tests {
             "biggerfloat_opt_some" => "1",
 
             // Complex types:
+
+            "sequence" => r#"["hello","world"]"#,
+            "sequence_opt_none" => DbValue::Null,
+            "sequence_opt_some" => r#"["hello","world"]"#,
 
             "unit_struct" => "UnitStruct",
             "unit_struct_opt_none" => DbValue::Null,
