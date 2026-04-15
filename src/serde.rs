@@ -311,6 +311,28 @@ impl<'a> ser::Serializer for &'a mut DbRowSerializer {
         Ok(())
     }
 
+    fn serialize_tuple_variant(
+        self,
+        name: &str,
+        _variant_index: u32,
+        variant: &str,
+        len: usize,
+    ) -> Result<Self::SerializeTupleVariant, Self::Error> {
+        trace!(
+            "DbRowSerializer::serialize_tuple_variant(\
+             {self:#?}, {name}, {_variant_index}, {variant}, {len}, ...\
+             )"
+        );
+
+        if self.keys.len() > 0 {
+            self.skip = len;
+            self.inner_value = json!({variant.to_string(): []});
+            Ok(self)
+        } else {
+            Ok(self)
+        }
+    }
+
     fn serialize_tuple_struct(
         self,
         _name: &str,
@@ -355,18 +377,6 @@ impl<'a> ser::Serializer for &'a mut DbRowSerializer {
     fn serialize_bytes(self, _values: &[u8]) -> Result<(), Self::Error> {
         return Err(DbError::SerdeError(
             "Serializing bytes is not supported".to_string(),
-        ));
-    }
-
-    fn serialize_tuple_variant(
-        self,
-        _name: &str,
-        _variant_index: u32,
-        _variant: &str,
-        _len: usize,
-    ) -> Result<Self::SerializeTupleVariant, Self::Error> {
-        return Err(DbError::SerdeError(
-            "Serializing tuple variant is not supported".to_string(),
         ));
     }
 
@@ -525,6 +535,56 @@ impl<'a> ser::SerializeSeq for &'a mut DbRowSerializer {
     }
 }
 
+impl<'a> ser::SerializeTupleVariant for &'a mut DbRowSerializer {
+    // These need to match the `Ok` and `Error` types of DbRowSerializer:
+    type Ok = ();
+    type Error = DbError;
+
+    fn serialize_field<T>(&mut self, value: &T) -> Result<(), DbError>
+    where
+        T: ?Sized + Serialize,
+    {
+        trace!("SerializeTupleVariant::serialize_field({self:#?}, ...)");
+        if self.skip > 0 {
+            self.skip -= 1;
+            let json_serializer = JsonValueSerializer;
+            let json_value = value
+                .serialize(json_serializer)
+                .map_err(|err| DbError::SerdeError(err.to_string()))?;
+
+            let inner = match self.inner_value.as_object_mut() {
+                Some(inner) => inner,
+                None => {
+                    return Err(DbError::SerdeError(format!(
+                        "Not a JSON object: {}",
+                        self.inner_value
+                    )));
+                }
+            };
+            assert_eq!(inner.len(), 1);
+            for (_key, json_array) in inner.into_iter() {
+                let json_array: &mut Vec<JsonValue> = json_array.as_array_mut().unwrap();
+                json_array.push(json_value.clone());
+            }
+        } else {
+            value.serialize(&mut **self)?;
+        }
+        Ok(())
+    }
+
+    fn end(self) -> Result<(), DbError> {
+        trace!("SerializeTupleVariant::end({self:#?})");
+        if self.inner_value != JsonValue::Null {
+            let json_string = serde_json::to_string(&self.inner_value)
+                .map_err(|err| DbError::SerdeError(err.to_string()))?;
+
+            self.values.push(DbValue::Text(json_string));
+            self.inner_value = JsonValue::Null;
+        }
+        Ok(())
+    }
+}
+
 impl<'a> ser::SerializeTuple for &'a mut DbRowSerializer {
     // These need to match the `Ok` and `Error` types of DbRowSerializer:
     type Ok = ();
@@ -623,28 +683,6 @@ impl<'a> ser::SerializeMap for &'a mut DbRowSerializer {
     fn end(self) -> Result<(), DbError> {
         return Err(DbError::SerdeError(
             "SerializeMap::end() is not supported for DbRowSerializer".to_string(),
-        ));
-    }
-}
-
-impl<'a> ser::SerializeTupleVariant for &'a mut DbRowSerializer {
-    // These need to match the `Ok` and `Error` types of DbRowSerializer:
-    type Ok = ();
-    type Error = DbError;
-
-    fn serialize_field<T>(&mut self, _value: &T) -> Result<(), DbError>
-    where
-        T: ?Sized + Serialize,
-    {
-        return Err(DbError::SerdeError(
-            "SerializeTupleVariant::serialize_field() is not supported for DbRowSerializer"
-                .to_string(),
-        ));
-    }
-
-    fn end(self) -> Result<(), DbError> {
-        return Err(DbError::SerdeError(
-            "SerializeTupleVariant::end() is not supported for DbRowSerializer".to_string(),
         ));
     }
 }
@@ -1193,6 +1231,7 @@ mod tests {
             UnitStruct,
             NewTypeStruct(f32),
             StructVariant(SimpleStruct),
+            TupleVariant(i64, i64),
         }
 
         #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
@@ -1305,8 +1344,14 @@ mod tests {
             //
             // Struct variant
             struct_variant: ExampleEnum,
-            struct_variant_option_none: Option<ExampleEnum>,
-            struct_variant_option_some: Option<ExampleEnum>,
+            struct_variant_opt_none: Option<ExampleEnum>,
+            struct_variant_opt_some: Option<ExampleEnum>,
+            //
+            // Tuple variant
+            tuple_variant: ExampleEnum,
+            tuple_variant_opt_none: Option<ExampleEnum>,
+            tuple_variant_opt_some: Option<ExampleEnum>,
+
             //
             // Struct
             structure: ExampleStruct,
@@ -1401,8 +1446,12 @@ mod tests {
             enumeration_opt_some: Some(ExampleEnum::UnitStruct),
 
             struct_variant: ExampleEnum::StructVariant(SimpleStruct { foo: 1 }),
-            struct_variant_option_none: None,
-            struct_variant_option_some: Some(ExampleEnum::StructVariant(SimpleStruct { foo: 1 })),
+            struct_variant_opt_none: None,
+            struct_variant_opt_some: Some(ExampleEnum::StructVariant(SimpleStruct { foo: 1 })),
+
+            tuple_variant: ExampleEnum::TupleVariant(1, 1),
+            tuple_variant_opt_none: None,
+            tuple_variant_opt_some: Some(ExampleEnum::TupleVariant(1, 1)),
 
             structure: ExampleStruct {
                 foo: String::from("bar"),
@@ -1536,8 +1585,12 @@ mod tests {
             "enumeration_opt_some" => "\"UnitStruct\"",
 
             "struct_variant" => "{\"StructVariant\":{\"foo\":1}}",
-            "struct_variant_option_none" => DbValue::Null,
-            "struct_variant_option_some" => "{\"StructVariant\":{\"foo\":1}}",
+            "struct_variant_opt_none" => DbValue::Null,
+            "struct_variant_opt_some" => "{\"StructVariant\":{\"foo\":1}}",
+
+            "tuple_variant" => "{\"TupleVariant\":[1,1]}",
+            "tuple_variant_opt_none" => DbValue::Null,
+            "tuple_variant_opt_some" => "{\"TupleVariant\":[1,1]}",
 
             "structure" => "{\"foo\":\"bar\",\"bar\":1,\"list\":[1,2,3],\"tuple\":[1,\"bar\"]}",
             "structure_opt_none" => DbValue::Null,
@@ -1577,6 +1630,48 @@ mod tests {
             to_db_row(&expected_struct).unwrap(),
             "test serialize"
         );
+        assert_eq!(
+            expected_struct,
+            from_db_row(&expected_db_row).unwrap(),
+            "test deserialize"
+        );
+    }
+
+    // TODO: This is for rough work. Remove it later.
+    #[test]
+    #[traced_test]
+    fn test_serde_scratch() {
+        #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
+        enum ExampleEnum {
+            UnitStruct,
+            NewTypeStruct(f32),
+            TupleStruct(i64, i64),
+        }
+
+        #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
+        struct ExampleStruct {
+            alpha: ExampleEnum,
+            beta: ExampleEnum,
+            gamma: ExampleEnum,
+        }
+
+        let expected_struct = ExampleStruct {
+            alpha: ExampleEnum::UnitStruct,
+            beta: ExampleEnum::NewTypeStruct(1.0),
+            gamma: ExampleEnum::TupleStruct(1, 1),
+        };
+        let expected_db_row = db_row! {
+            "alpha" => "\"UnitStruct\"",
+            "beta" => "{\"NewTypeStruct\":1.0}",
+            "gamma" => "{\"TupleStruct\":[1,1]}",
+        };
+
+        assert_eq!(
+            expected_db_row,
+            to_db_row(&expected_struct).unwrap(),
+            "test serialize"
+        );
+
         assert_eq!(
             expected_struct,
             from_db_row(&expected_db_row).unwrap(),
