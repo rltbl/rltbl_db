@@ -31,11 +31,7 @@ macro_rules! params {
     }};
 }
 
-/// Converts a set of pairs into a [db_value::DbRow]. Note that all entries must end in a comma,
-/// even the final one. E.g.,
-/// db_row_new! {
-///   "table" => "data",
-/// };
+/// Converts a set of pairs into a [db_value::DbRow].
 #[macro_export]
 macro_rules! db_row {
     ($($key:expr => $value:expr,)+) => {
