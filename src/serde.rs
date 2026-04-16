@@ -92,10 +92,12 @@ struct DbRowSerializer {
     keys: Vec<String>,
     /// The values of the serialized output [DbRow].
     values: Vec<DbValue>,
-    /// When dealing with complex field types, this is used to skip the sub-fields
-    /// of the given type, since complex types are serialized as JSON.
-    skip: usize,
-    /// Represents the value of a complex type.
+    /// When dealing with compound field types, this is used to keep track of the number of
+    /// sub-fields of the given type. These are progressively added to `inner_value` until
+    /// there are no further sub-fields to process.
+    remaining_fields: usize,
+    /// Represents the value of a compound type. Once the compound type has been fully
+    /// serialized, it is cleared and added to `values`.
     inner_value: JsonValue,
 }
 
@@ -208,7 +210,7 @@ impl<'a> ser::Serializer for &'a mut DbRowSerializer {
     // Option types
 
     fn serialize_none(self) -> Result<(), Self::Error> {
-        trace!("DbRowSerializer::serialize_unit({self:#?})");
+        trace!("DbRowSerializer::serialize_none({self:#?})");
         self.serialize_unit()
     }
 
@@ -227,21 +229,30 @@ impl<'a> ser::Serializer for &'a mut DbRowSerializer {
         Ok(())
     }
 
-    // More complex types:
+    // Compound types:
 
-    fn serialize_struct(
-        self,
-        _name: &str,
-        len: usize,
-    ) -> Result<Self::SerializeStruct, Self::Error> {
-        trace!("DbRowSerializer::serialize_struct({self:#?}, {_name}, {len})");
-        if self.keys.len() > 0 {
-            self.skip = len;
+    fn serialize_tuple(self, len: usize) -> Result<Self::SerializeTuple, Self::Error> {
+        trace!("DbRowSerializer::serialize_tuple({self:#?}, {len}, ...)");
+        if self.keys.len() > self.values.len() {
+            self.remaining_fields = len;
             // Start a new empty inner value which will be progressively filled in later:
-            self.inner_value = json!({});
+            self.inner_value = json!([]);
             Ok(self)
         } else {
-            self.serialize_map(Some(len))
+            Ok(self)
+        }
+    }
+
+    fn serialize_seq(self, len: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> {
+        trace!("DbRowSerializer::serialize_seq({self:#?}, {len:?})");
+        if self.keys.len() > self.values.len() {
+            self.remaining_fields =
+                len.ok_or(DbError::SerdeError("No length given".to_string()))?;
+            // Start a new empty inner value which will be progressively filled in later:
+            self.inner_value = json!([]);
+            Ok(self)
+        } else {
+            Ok(self)
         }
     }
 
@@ -250,12 +261,51 @@ impl<'a> ser::Serializer for &'a mut DbRowSerializer {
         Ok(self)
     }
 
-    // A "unit" struct is another word for a struct that has no fields (I think "null" struct
-    // would have been a better name).
+    fn serialize_struct(
+        self,
+        _name: &str,
+        len: usize,
+    ) -> Result<Self::SerializeStruct, Self::Error> {
+        trace!("DbRowSerializer::serialize_struct({self:#?}, {_name}, {len})");
+        if self.keys.len() > self.values.len() {
+            self.remaining_fields = len;
+            // Start a new empty inner value which will be progressively filled in later:
+            self.inner_value = json!({});
+            Ok(self)
+        } else {
+            self.serialize_map(Some(len))
+        }
+    }
+
+    // A "unit" struct has no fields.
     fn serialize_unit_struct(self, name: &str) -> Result<(), Self::Error> {
         trace!("DbRowSerializer::serialize_unit_struct({self:#?}, {name})");
         self.values.push(DbValue::from(name));
         Ok(())
+    }
+
+    fn serialize_newtype_struct<T>(self, _name: &str, value: &T) -> Result<(), Self::Error>
+    where
+        T: ?Sized + Serialize,
+    {
+        trace!("DbRowSerializer::serialize_newtype_struct({self:#?}, {_name}, ...)");
+        value.serialize(self)
+    }
+
+    fn serialize_tuple_struct(
+        self,
+        _name: &str,
+        len: usize,
+    ) -> Result<Self::SerializeTupleStruct, Self::Error> {
+        trace!("DbRowSerializer::serialize_tuple_struct({self:#?}, {_name}, {len}, ...)");
+        if self.keys.len() > self.values.len() {
+            self.remaining_fields = len;
+            // Start a new empty inner value which will be progressively filled in later:
+            self.inner_value = json!([]);
+            Ok(self)
+        } else {
+            self.serialize_seq(Some(len))
+        }
     }
 
     fn serialize_unit_variant(
@@ -275,14 +325,6 @@ impl<'a> ser::Serializer for &'a mut DbRowSerializer {
         // during the deserializing step.
         self.values.push(DbValue::from(format!(r#""{variant}""#)));
         Ok(())
-    }
-
-    fn serialize_newtype_struct<T>(self, _name: &str, value: &T) -> Result<(), Self::Error>
-    where
-        T: ?Sized + Serialize,
-    {
-        trace!("DbRowSerializer::serialize_newtype_struct({self:#?}, {_name}, ...)");
-        value.serialize(self)
     }
 
     fn serialize_newtype_variant<T>(
@@ -324,8 +366,9 @@ impl<'a> ser::Serializer for &'a mut DbRowSerializer {
              )"
         );
 
-        if self.keys.len() > 0 {
-            self.skip = len;
+        if self.keys.len() > self.values.len() {
+            self.remaining_fields = len;
+            // Start a new inner value with a single key (the tuple variant's name).
             self.inner_value = json!({variant.to_string(): []});
             Ok(self)
         } else {
@@ -333,52 +376,7 @@ impl<'a> ser::Serializer for &'a mut DbRowSerializer {
         }
     }
 
-    fn serialize_tuple_struct(
-        self,
-        _name: &str,
-        len: usize,
-    ) -> Result<Self::SerializeTupleStruct, Self::Error> {
-        trace!("DbRowSerializer::serialize_tuple_struct({self:#?}, {_name}, {len}, ...)");
-        if self.keys.len() > 0 {
-            self.skip = len;
-            // Start a new empty inner value which will be progressively filled in later:
-            self.inner_value = json!([]);
-            Ok(self)
-        } else {
-            self.serialize_seq(Some(len))
-        }
-    }
-
-    fn serialize_tuple(self, len: usize) -> Result<Self::SerializeTuple, Self::Error> {
-        trace!("DbRowSerializer::serialize_tuple({self:#?}, {len}, ...)");
-        if self.keys.len() > 0 {
-            self.skip = len;
-            self.inner_value = json!([]);
-            Ok(self)
-        } else {
-            Ok(self)
-        }
-    }
-
-    fn serialize_seq(self, len: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> {
-        trace!("DbRowSerializer::serialize_seq({self:#?}, {len:?})");
-        if self.keys.len() > 0 {
-            self.skip = len.ok_or(DbError::SerdeError("No length given".to_string()))?;
-            // Start a new empty inner value which will be progressively filled in later:
-            self.inner_value = json!([]);
-            Ok(self)
-        } else {
-            Ok(self)
-        }
-    }
-
-    // Unsupported types:
-
-    fn serialize_bytes(self, _values: &[u8]) -> Result<(), Self::Error> {
-        return Err(DbError::SerdeError(
-            "Serializing bytes is not supported".to_string(),
-        ));
-    }
+    // Unsupported compound types
 
     fn serialize_struct_variant(
         self,
@@ -389,6 +387,14 @@ impl<'a> ser::Serializer for &'a mut DbRowSerializer {
     ) -> Result<Self::SerializeStructVariant, Self::Error> {
         return Err(DbError::SerdeError(
             "Serializing struct variant is not supported".to_string(),
+        ));
+    }
+
+    // Although we don't support fields with type &[u8], bytes fields are supported as long
+    // as they are owned, i.e., Vec<u8>, throush serialize_seq().
+    fn serialize_bytes(self, _values: &[u8]) -> Result<(), Self::Error> {
+        return Err(DbError::SerdeError(
+            "Serializing bytes is not supported".to_string(),
         ));
     }
 }
@@ -403,15 +409,12 @@ impl<'a> ser::SerializeStruct for &'a mut DbRowSerializer {
         T: ?Sized + Serialize,
     {
         trace!("SerializeStruct::serialize_field({self:#?}, {key}, ...)");
-        if self.skip > 0 {
-            self.skip -= 1;
-            // self.keys.push(key.to_string());
-            // self.skip_field(key)?;
+        if self.remaining_fields > 0 {
+            self.remaining_fields -= 1;
             let json_serializer = JsonValueSerializer;
             let json_value = value
                 .serialize(json_serializer)
                 .map_err(|err| DbError::SerdeError(err.to_string()))?;
-
             let inner = match self.inner_value.as_object_mut() {
                 Some(inner) => inner,
                 None => {
@@ -421,7 +424,6 @@ impl<'a> ser::SerializeStruct for &'a mut DbRowSerializer {
                     )));
                 }
             };
-
             inner.insert(key.to_string(), json_value);
         } else {
             self.keys.push(key.to_string());
@@ -435,7 +437,6 @@ impl<'a> ser::SerializeStruct for &'a mut DbRowSerializer {
         if self.inner_value != JsonValue::Null {
             let json_string = serde_json::to_string(&self.inner_value)
                 .map_err(|err| DbError::SerdeError(err.to_string()))?;
-
             self.values.push(DbValue::Text(json_string));
             self.inner_value = JsonValue::Null;
         }
@@ -453,13 +454,12 @@ impl<'a> ser::SerializeTupleStruct for &'a mut DbRowSerializer {
         T: ?Sized + Serialize,
     {
         trace!("SerializeTupleStruct::serialize_field({self:#?}, ...)");
-        if self.skip > 0 {
-            self.skip -= 1;
+        if self.remaining_fields > 0 {
+            self.remaining_fields -= 1;
             let json_serializer = JsonValueSerializer;
             let json_value = value
                 .serialize(json_serializer)
                 .map_err(|err| DbError::SerdeError(err.to_string()))?;
-
             let inner = match self.inner_value.as_array_mut() {
                 Some(inner) => inner,
                 None => {
@@ -481,103 +481,6 @@ impl<'a> ser::SerializeTupleStruct for &'a mut DbRowSerializer {
         if self.inner_value != JsonValue::Null {
             let json_string = serde_json::to_string(&self.inner_value)
                 .map_err(|err| DbError::SerdeError(err.to_string()))?;
-
-            self.values.push(DbValue::Text(json_string));
-            self.inner_value = JsonValue::Null;
-        }
-        Ok(())
-    }
-}
-
-impl<'a> ser::SerializeSeq for &'a mut DbRowSerializer {
-    // These need to match the `Ok` and `Error` types of DbRowSerializer:
-    type Ok = ();
-    type Error = DbError;
-
-    fn serialize_element<T>(&mut self, value: &T) -> Result<(), Self::Error>
-    where
-        T: ?Sized + Serialize,
-    {
-        trace!("SerializeSeq::serialize_element({self:#?}, ...)");
-        if self.skip > 0 {
-            self.skip -= 1;
-            let json_serializer = JsonValueSerializer;
-            let json_value = value
-                .serialize(json_serializer)
-                .map_err(|err| DbError::SerdeError(err.to_string()))?;
-
-            let inner = match self.inner_value.as_array_mut() {
-                Some(inner) => inner,
-                None => {
-                    return Err(DbError::SerdeError(format!(
-                        "Not a JSON Array: {}",
-                        self.inner_value
-                    )));
-                }
-            };
-            inner.push(json_value);
-        } else {
-            value.serialize(&mut **self)?;
-        }
-        Ok(())
-    }
-
-    fn end(self) -> Result<(), Self::Error> {
-        trace!("SerializeSeq::end({self:#?})");
-        if self.inner_value != JsonValue::Null {
-            let json_string = serde_json::to_string(&self.inner_value)
-                .map_err(|err| DbError::SerdeError(err.to_string()))?;
-
-            self.values.push(DbValue::Text(json_string));
-            self.inner_value = JsonValue::Null;
-        }
-        Ok(())
-    }
-}
-
-impl<'a> ser::SerializeTupleVariant for &'a mut DbRowSerializer {
-    // These need to match the `Ok` and `Error` types of DbRowSerializer:
-    type Ok = ();
-    type Error = DbError;
-
-    fn serialize_field<T>(&mut self, value: &T) -> Result<(), DbError>
-    where
-        T: ?Sized + Serialize,
-    {
-        trace!("SerializeTupleVariant::serialize_field({self:#?}, ...)");
-        if self.skip > 0 {
-            self.skip -= 1;
-            let json_serializer = JsonValueSerializer;
-            let json_value = value
-                .serialize(json_serializer)
-                .map_err(|err| DbError::SerdeError(err.to_string()))?;
-
-            let inner = match self.inner_value.as_object_mut() {
-                Some(inner) => inner,
-                None => {
-                    return Err(DbError::SerdeError(format!(
-                        "Not a JSON object: {}",
-                        self.inner_value
-                    )));
-                }
-            };
-            assert_eq!(inner.len(), 1);
-            for (_key, json_array) in inner.into_iter() {
-                let json_array: &mut Vec<JsonValue> = json_array.as_array_mut().unwrap();
-                json_array.push(json_value.clone());
-            }
-        } else {
-            value.serialize(&mut **self)?;
-        }
-        Ok(())
-    }
-
-    fn end(self) -> Result<(), DbError> {
-        trace!("SerializeTupleVariant::end({self:#?})");
-        if self.inner_value != JsonValue::Null {
-            let json_string = serde_json::to_string(&self.inner_value)
-                .map_err(|err| DbError::SerdeError(err.to_string()))?;
-
             self.values.push(DbValue::Text(json_string));
             self.inner_value = JsonValue::Null;
         }
@@ -595,13 +498,12 @@ impl<'a> ser::SerializeTuple for &'a mut DbRowSerializer {
         T: ?Sized + Serialize,
     {
         trace!("SerializeTuple::serialize_element({self:#?}, ...)");
-        if self.skip > 0 {
-            self.skip -= 1;
+        if self.remaining_fields > 0 {
+            self.remaining_fields -= 1;
             let json_serializer = JsonValueSerializer;
             let json_value = value
                 .serialize(json_serializer)
                 .map_err(|err| DbError::SerdeError(err.to_string()))?;
-
             let inner = match self.inner_value.as_array_mut() {
                 Some(inner) => inner,
                 None => {
@@ -623,7 +525,6 @@ impl<'a> ser::SerializeTuple for &'a mut DbRowSerializer {
         if self.inner_value != JsonValue::Null {
             let json_string = serde_json::to_string(&self.inner_value)
                 .map_err(|err| DbError::SerdeError(err.to_string()))?;
-
             self.values.push(DbValue::Text(json_string));
             self.inner_value = JsonValue::Null;
         }
@@ -631,27 +532,105 @@ impl<'a> ser::SerializeTuple for &'a mut DbRowSerializer {
     }
 }
 
-impl<'a> ser::SerializeStructVariant for &'a mut DbRowSerializer {
+impl<'a> ser::SerializeTupleVariant for &'a mut DbRowSerializer {
     // These need to match the `Ok` and `Error` types of DbRowSerializer:
     type Ok = ();
     type Error = DbError;
 
-    fn serialize_field<T>(&mut self, _key: &'static str, _value: &T) -> Result<(), DbError>
+    fn serialize_field<T>(&mut self, value: &T) -> Result<(), DbError>
     where
         T: ?Sized + Serialize,
     {
-        return Err(DbError::SerdeError(
-            "SerializeStructVariant::serialize_field() is not supported for DbRowSerializer"
-                .to_string(),
-        ));
+        trace!("SerializeTupleVariant::serialize_field({self:#?}, ...)");
+        if self.remaining_fields > 0 {
+            self.remaining_fields -= 1;
+            let json_serializer = JsonValueSerializer;
+            let json_value = value
+                .serialize(json_serializer)
+                .map_err(|err| DbError::SerdeError(err.to_string()))?;
+            let inner = match self.inner_value.as_object_mut() {
+                Some(inner) => inner,
+                None => {
+                    return Err(DbError::SerdeError(format!(
+                        "Not a JSON object: {}",
+                        self.inner_value
+                    )));
+                }
+            };
+            assert_eq!(inner.len(), 1);
+            for (_key, json_array) in inner.into_iter() {
+                let json_array_as_string = json_array.to_string();
+                let json_array: &mut Vec<JsonValue> =
+                    json_array
+                        .as_array_mut()
+                        .ok_or(DbError::SerdeError(format!(
+                            "Not an array: {json_array_as_string}"
+                        )))?;
+                json_array.push(json_value.clone());
+            }
+        } else {
+            value.serialize(&mut **self)?;
+        }
+        Ok(())
     }
 
     fn end(self) -> Result<(), DbError> {
-        return Err(DbError::SerdeError(
-            "SerializeStructVariant::end() is not supported for DbRowSerializer".to_string(),
-        ));
+        trace!("SerializeTupleVariant::end({self:#?})");
+        if self.inner_value != JsonValue::Null {
+            let json_string = serde_json::to_string(&self.inner_value)
+                .map_err(|err| DbError::SerdeError(err.to_string()))?;
+            self.values.push(DbValue::Text(json_string));
+            self.inner_value = JsonValue::Null;
+        }
+        Ok(())
     }
 }
+
+impl<'a> ser::SerializeSeq for &'a mut DbRowSerializer {
+    // These need to match the `Ok` and `Error` types of DbRowSerializer:
+    type Ok = ();
+    type Error = DbError;
+
+    fn serialize_element<T>(&mut self, value: &T) -> Result<(), Self::Error>
+    where
+        T: ?Sized + Serialize,
+    {
+        trace!("SerializeSeq::serialize_element({self:#?}, ...)");
+        if self.remaining_fields > 0 {
+            self.remaining_fields -= 1;
+            let json_serializer = JsonValueSerializer;
+            let json_value = value
+                .serialize(json_serializer)
+                .map_err(|err| DbError::SerdeError(err.to_string()))?;
+            let inner = match self.inner_value.as_array_mut() {
+                Some(inner) => inner,
+                None => {
+                    return Err(DbError::SerdeError(format!(
+                        "Not a JSON Array: {}",
+                        self.inner_value
+                    )));
+                }
+            };
+            inner.push(json_value);
+        } else {
+            value.serialize(&mut **self)?;
+        }
+        Ok(())
+    }
+
+    fn end(self) -> Result<(), Self::Error> {
+        trace!("SerializeSeq::end({self:#?})");
+        if self.inner_value != JsonValue::Null {
+            let json_string = serde_json::to_string(&self.inner_value)
+                .map_err(|err| DbError::SerdeError(err.to_string()))?;
+            self.values.push(DbValue::Text(json_string));
+            self.inner_value = JsonValue::Null;
+        }
+        Ok(())
+    }
+}
+
+// Unsupported implementations
 
 // Although a [DbRow] is essentially a wrapper around an IndexMap, when one is serialized,
 // the serialization begins with our implementation of SerializeStruct and thus does not require
@@ -687,6 +666,28 @@ impl<'a> ser::SerializeMap for &'a mut DbRowSerializer {
     }
 }
 
+impl<'a> ser::SerializeStructVariant for &'a mut DbRowSerializer {
+    // These need to match the `Ok` and `Error` types of DbRowSerializer:
+    type Ok = ();
+    type Error = DbError;
+
+    fn serialize_field<T>(&mut self, _key: &'static str, _value: &T) -> Result<(), DbError>
+    where
+        T: ?Sized + Serialize,
+    {
+        return Err(DbError::SerdeError(
+            "SerializeStructVariant::serialize_field() is not supported for DbRowSerializer"
+                .to_string(),
+        ));
+    }
+
+    fn end(self) -> Result<(), DbError> {
+        return Err(DbError::SerdeError(
+            "SerializeStructVariant::end() is not supported for DbRowSerializer".to_string(),
+        ));
+    }
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // Deserialization implementations
 ////////////////////////////////////////////////////////////////////////////////
@@ -717,14 +718,14 @@ impl<'de> DbRowDeserializer<'de> {
         trace!("DbRowDeSerializer::pop_value({self:#?})");
         self.values
             .pop()
-            .ok_or(DbError::SerdeError("No more values to pop".to_string()))
+            .ok_or(DbError::SerdeError("No values to pop".to_string()))
     }
 
     fn last_value(&self) -> Result<&DbValue, DbError> {
         trace!("DbRowDeSerializer::last_value({self:#?})");
         self.values
             .last()
-            .ok_or(DbError::SerdeError("No more values".to_string()))
+            .ok_or(DbError::SerdeError("No values".to_string()))
             .copied()
     }
 }
@@ -997,7 +998,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
         }
     }
 
-    // Options:
+    // Options
 
     fn deserialize_option<V>(self, visitor: V) -> Result<V::Value, DbError>
     where
@@ -1023,7 +1024,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
         visitor.visit_unit()
     }
 
-    // More complex types:
+    // Compound types
 
     fn deserialize_struct<V>(
         self,
@@ -1034,7 +1035,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        trace!("DbRowDeSerializer::deserialize_struct({self:#?}, ...)");
+        trace!("DbRowDeSerializer::deserialize_struct({self:#?}, {name}, {fields:?}, ...)");
         if self.keys == fields {
             self.deserialize_map(visitor)
         } else {
@@ -1067,8 +1068,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
         visitor.visit_borrowed_str(key)
     }
 
-    // A "unit" struct is another word for a struct that has no fields (I think "null" struct
-    // would have been a better name).
+    // A "unit" struct has no fields.
     fn deserialize_unit_struct<V>(
         self,
         _name: &'static str,
@@ -1103,7 +1103,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        trace!("DbRowDeSerializer::deserialize_tuple_struct({self:#?}, {_name}, ...)");
+        trace!("DbRowDeSerializer::deserialize_tuple_struct({self:#?}, {_name}, {_len}, ...)");
         self.deserialize_seq(visitor)
     }
 
@@ -1116,7 +1116,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        trace!("DbRowDeSerializer::deserialize_enum({self:#?}, ...)");
+        trace!("DbRowDeSerializer::deserialize_enum({self:#?}, {name}, {variants:?}, ...)");
         let value = self.pop_value()?;
         match value.as_str() {
             Some(value) => serde_json::Deserializer::from_str(&value)
@@ -1144,7 +1144,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        trace!("DbRowDeSerializer::deserialize_tuple({self:#?}, ...)");
+        trace!("DbRowDeSerializer::deserialize_tuple({self:#?}, {_len}, ...)");
         let value = self.pop_value()?;
         match value.as_str() {
             Some(value) => serde_json::Deserializer::from_str(&value)
@@ -1154,7 +1154,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
         }
     }
 
-    // Unsupported types:
+    // Unsupported types
 
     fn deserialize_bytes<V>(self, _visitor: V) -> Result<V::Value, DbError>
     where
@@ -1217,7 +1217,7 @@ mod tests {
 
     #[test]
     #[traced_test]
-    fn test_serde_struct() {
+    fn test_serde() {
         #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
         struct UnitStruct;
 
@@ -1227,15 +1227,7 @@ mod tests {
         }
 
         #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
-        enum ExampleEnum {
-            UnitStruct,
-            NewTypeStruct(f32),
-            StructVariant(SimpleStruct),
-            TupleVariant(i64, i64),
-        }
-
-        #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
-        struct ExampleStruct {
+        struct NormalStruct {
             foo: String,
             bar: u64,
             list: Vec<i16>,
@@ -1249,11 +1241,19 @@ mod tests {
         struct TupleStruct(i64, i64);
 
         #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
+        enum Enumeration {
+            UnitVariant,
+            NewTypeVariant(f32),
+            StructVariant(SimpleStruct),
+            TupleVariant(i64, i64),
+        }
+
+        #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
         struct NestedStruct {
-            foo: ExampleEnum,
-            bar: ExampleStruct,
-            foo_list: Vec<ExampleEnum>,
-            bar_list: Vec<ExampleStruct>,
+            foo: Enumeration,
+            bar: NormalStruct,
+            foo_list: Vec<Enumeration>,
+            bar_list: Vec<NormalStruct>,
             bar_tuple: (u32, i32, String),
         }
 
@@ -1270,35 +1270,35 @@ mod tests {
             tinyint_opt_none: Option<i8>,
             tinyint_opt_some: Option<i8>,
             //
-            // u8
-            tiny_unsigned: u8,
-            tiny_unsigned_opt_none: Option<u8>,
-            tiny_unsigned_opt_some: Option<u8>,
-            //
             // i16
             smallint: i16,
             smallint_opt_none: Option<i16>,
             smallint_opt_some: Option<i16>,
-            //
-            // u16
-            small_unsigned: u16,
-            small_unsigned_opt_none: Option<u16>,
-            small_unsigned_opt_some: Option<u16>,
             //
             // i32
             mediumint: i32,
             mediumint_opt_none: Option<i32>,
             mediumint_opt_some: Option<i32>,
             //
-            // u32
-            medium_unsigned: u32,
-            medium_unsigned_opt_none: Option<u32>,
-            medium_unsigned_opt_some: Option<u32>,
-            //
             // i64
             bigint: i64,
             bigint_opt_none: Option<i64>,
             bigint_opt_some: Option<i64>,
+            //
+            // u8
+            tiny_unsigned: u8,
+            tiny_unsigned_opt_none: Option<u8>,
+            tiny_unsigned_opt_some: Option<u8>,
+            //
+            // u16
+            small_unsigned: u16,
+            small_unsigned_opt_none: Option<u16>,
+            small_unsigned_opt_some: Option<u16>,
+            //
+            // u32
+            medium_unsigned: u32,
+            medium_unsigned_opt_none: Option<u32>,
+            medium_unsigned_opt_some: Option<u32>,
             //
             // u64
             big_unsigned: u64,
@@ -1320,43 +1320,40 @@ mod tests {
             text_opt_none: Option<String>,
             text_opt_some: Option<String>,
             //
-            // TODO: Decimals are only sort-of supported for now, i.e., rust's serializer
-            // serializes them to text (see also below). This is not ideal but at least it's
-            // consistent.
+            // Note that rust's serializer serializes Decimal values to text (see also below).
             biggerfloat: Decimal,
             biggerfloat_opt_none: Option<Decimal>,
             biggerfloat_opt_some: Option<Decimal>,
             //
-            // Sequence
-            sequence: Vec<String>,
-            sequence_opt_none: Option<Vec<String>>,
-            sequence_opt_some: Option<Vec<String>>,
+            // A vector of u8 (bytes)
+            sequence: Vec<u8>,
+            sequence_opt_none: Option<Vec<u8>>,
+            sequence_opt_some: Option<Vec<u8>>,
+            //
+            // Enum
+            enumeration: Enumeration,
+            enumeration_opt_none: Option<Enumeration>,
+            enumeration_opt_some: Option<Enumeration>,
+            //
+            // Struct variant
+            struct_variant: Enumeration,
+            struct_variant_opt_none: Option<Enumeration>,
+            struct_variant_opt_some: Option<Enumeration>,
+            //
+            // Tuple variant
+            tuple_variant: Enumeration,
+            tuple_variant_opt_none: Option<Enumeration>,
+            tuple_variant_opt_some: Option<Enumeration>,
             //
             // Unit struct
             unit_struct: UnitStruct,
             unit_struct_opt_none: Option<UnitStruct>,
             unit_struct_opt_some: Option<UnitStruct>,
             //
-            // Enum
-            enumeration: ExampleEnum,
-            enumeration_opt_none: Option<ExampleEnum>,
-            enumeration_opt_some: Option<ExampleEnum>,
-            //
-            // Struct variant
-            struct_variant: ExampleEnum,
-            struct_variant_opt_none: Option<ExampleEnum>,
-            struct_variant_opt_some: Option<ExampleEnum>,
-            //
-            // Tuple variant
-            tuple_variant: ExampleEnum,
-            tuple_variant_opt_none: Option<ExampleEnum>,
-            tuple_variant_opt_some: Option<ExampleEnum>,
-
-            //
             // Struct
-            structure: ExampleStruct,
-            structure_opt_none: Option<ExampleStruct>,
-            structure_opt_some: Option<ExampleStruct>,
+            structure: NormalStruct,
+            structure_opt_none: Option<NormalStruct>,
+            structure_opt_some: Option<NormalStruct>,
             //
             // Newtype struct
             newtype_struct: NewTypeStruct,
@@ -1388,29 +1385,29 @@ mod tests {
             tinyint_opt_none: None,
             tinyint_opt_some: Some(1),
 
-            tiny_unsigned: 1,
-            tiny_unsigned_opt_none: None,
-            tiny_unsigned_opt_some: Some(1),
-
             smallint: 1,
             smallint_opt_none: None,
             smallint_opt_some: Some(1),
-
-            small_unsigned: 1,
-            small_unsigned_opt_none: None,
-            small_unsigned_opt_some: Some(1),
 
             mediumint: 1,
             mediumint_opt_none: None,
             mediumint_opt_some: Some(1),
 
-            medium_unsigned: 1,
-            medium_unsigned_opt_none: None,
-            medium_unsigned_opt_some: Some(1),
-
             bigint: 1,
             bigint_opt_none: None,
             bigint_opt_some: Some(1),
+
+            tiny_unsigned: 1,
+            tiny_unsigned_opt_none: None,
+            tiny_unsigned_opt_some: Some(1),
+
+            small_unsigned: 1,
+            small_unsigned_opt_none: None,
+            small_unsigned_opt_some: Some(1),
+
+            medium_unsigned: 1,
+            medium_unsigned_opt_none: None,
+            medium_unsigned_opt_some: Some(1),
 
             big_unsigned: 1,
             big_unsigned_opt_none: None,
@@ -1432,35 +1429,35 @@ mod tests {
             biggerfloat_opt_none: None,
             biggerfloat_opt_some: Some(dec!(1)),
 
-            // Complex types:
-            sequence: vec!["hello".into(), "world".into()],
+            // Compound types:
+            sequence: vec![0, 1, 2],
             sequence_opt_none: None,
-            sequence_opt_some: Some(vec!["hello".into(), "world".into()]),
+            sequence_opt_some: Some(vec![0, 1, 2]),
+
+            enumeration: Enumeration::NewTypeVariant(1.0),
+            enumeration_opt_none: None,
+            enumeration_opt_some: Some(Enumeration::UnitVariant),
+
+            struct_variant: Enumeration::StructVariant(SimpleStruct { foo: 1 }),
+            struct_variant_opt_none: None,
+            struct_variant_opt_some: Some(Enumeration::StructVariant(SimpleStruct { foo: 1 })),
+
+            tuple_variant: Enumeration::TupleVariant(1, 1),
+            tuple_variant_opt_none: None,
+            tuple_variant_opt_some: Some(Enumeration::TupleVariant(1, 1)),
 
             unit_struct: UnitStruct,
             unit_struct_opt_none: None,
             unit_struct_opt_some: Some(UnitStruct),
 
-            enumeration: ExampleEnum::NewTypeStruct(1.0),
-            enumeration_opt_none: None,
-            enumeration_opt_some: Some(ExampleEnum::UnitStruct),
-
-            struct_variant: ExampleEnum::StructVariant(SimpleStruct { foo: 1 }),
-            struct_variant_opt_none: None,
-            struct_variant_opt_some: Some(ExampleEnum::StructVariant(SimpleStruct { foo: 1 })),
-
-            tuple_variant: ExampleEnum::TupleVariant(1, 1),
-            tuple_variant_opt_none: None,
-            tuple_variant_opt_some: Some(ExampleEnum::TupleVariant(1, 1)),
-
-            structure: ExampleStruct {
+            structure: NormalStruct {
                 foo: String::from("bar"),
                 bar: 1,
                 list: vec![1, 2, 3],
                 tuple: (1, String::from("bar")),
             },
             structure_opt_none: None,
-            structure_opt_some: Some(ExampleStruct {
+            structure_opt_some: Some(NormalStruct {
                 foo: String::from("bar"),
                 bar: 1,
                 list: vec![1, 2, 3],
@@ -1480,15 +1477,15 @@ mod tests {
             tuple_struct_opt_some: Some(TupleStruct(111, 111)),
 
             nested_struct: NestedStruct {
-                foo: ExampleEnum::NewTypeStruct(1.0),
-                bar: ExampleStruct {
+                foo: Enumeration::NewTypeVariant(1.0),
+                bar: NormalStruct {
                     foo: String::from("bar"),
                     bar: 1,
                     list: vec![1, 2, 3],
                     tuple: (1, String::from("bar")),
                 },
-                foo_list: vec![ExampleEnum::NewTypeStruct(1.0)],
-                bar_list: vec![ExampleStruct {
+                foo_list: vec![Enumeration::NewTypeVariant(1.0)],
+                bar_list: vec![NormalStruct {
                     foo: String::from("bar"),
                     bar: 1,
                     list: vec![1, 2, 3],
@@ -1498,15 +1495,15 @@ mod tests {
             },
             nested_struct_opt_none: None,
             nested_struct_opt_some: Some(NestedStruct {
-                foo: ExampleEnum::NewTypeStruct(1.0),
-                bar: ExampleStruct {
+                foo: Enumeration::NewTypeVariant(1.0),
+                bar: NormalStruct {
                     foo: String::from("bar"),
                     bar: 1,
                     list: vec![1, 2, 3],
                     tuple: (1, String::from("bar")),
                 },
-                foo_list: vec![ExampleEnum::NewTypeStruct(1.0)],
-                bar_list: vec![ExampleStruct {
+                foo_list: vec![Enumeration::NewTypeVariant(1.0)],
+                bar_list: vec![NormalStruct {
                     foo: String::from("bar"),
                     bar: 1,
                     list: vec![1, 2, 3],
@@ -1525,29 +1522,29 @@ mod tests {
             "tinyint_opt_none" => DbValue::Null,
             "tinyint_opt_some" => 1_i16,
 
-            "tiny_unsigned" => 1_i16,
-            "tiny_unsigned_opt_none" => DbValue::Null,
-            "tiny_unsigned_opt_some" => 1_i16,
-
             "smallint" => 1_i16,
             "smallint_opt_none" => DbValue::Null,
             "smallint_opt_some" => 1_i16,
-
-            "small_unsigned" => 1_i32,
-            "small_unsigned_opt_none" => DbValue::Null,
-            "small_unsigned_opt_some" => 1_i32,
 
             "mediumint" => 1_i32,
             "mediumint_opt_none" => DbValue::Null,
             "mediumint_opt_some" => 1_i32,
 
-            "medium_unsigned" => 1_u64,
-            "medium_unsigned_opt_none" => DbValue::Null,
-            "medium_unsigned_opt_some" => 1_u64,
-
             "bigint" => 1_i64,
             "bigint_opt_none" => DbValue::Null,
             "bigint_opt_some" => 1_i64,
+
+            "tiny_unsigned" => 1_i16,
+            "tiny_unsigned_opt_none" => DbValue::Null,
+            "tiny_unsigned_opt_some" => 1_i16,
+
+            "small_unsigned" => 1_i32,
+            "small_unsigned_opt_none" => DbValue::Null,
+            "small_unsigned_opt_some" => 1_i32,
+
+            "medium_unsigned" => 1_u64,
+            "medium_unsigned_opt_none" => DbValue::Null,
+            "medium_unsigned_opt_some" => 1_u64,
 
             "big_unsigned" => 1_u64,
             "big_unsigned_opt_none" => DbValue::Null,
@@ -1572,17 +1569,13 @@ mod tests {
 
             // Complex types:
 
-            "sequence" => r#"["hello","world"]"#,
+            "sequence" => r#"[0,1,2]"#,
             "sequence_opt_none" => DbValue::Null,
-            "sequence_opt_some" => r#"["hello","world"]"#,
+            "sequence_opt_some" => r#"[0,1,2]"#,
 
-            "unit_struct" => "UnitStruct",
-            "unit_struct_opt_none" => DbValue::Null,
-            "unit_struct_opt_some" => "UnitStruct",
-
-            "enumeration" => "{\"NewTypeStruct\":1.0}",
+            "enumeration" => "{\"NewTypeVariant\":1.0}",
             "enumeration_opt_none" => DbValue::Null,
-            "enumeration_opt_some" => "\"UnitStruct\"",
+            "enumeration_opt_some" => "\"UnitVariant\"",
 
             "struct_variant" => "{\"StructVariant\":{\"foo\":1}}",
             "struct_variant_opt_none" => DbValue::Null,
@@ -1591,6 +1584,10 @@ mod tests {
             "tuple_variant" => "{\"TupleVariant\":[1,1]}",
             "tuple_variant_opt_none" => DbValue::Null,
             "tuple_variant_opt_some" => "{\"TupleVariant\":[1,1]}",
+
+            "unit_struct" => "UnitStruct",
+            "unit_struct_opt_none" => DbValue::Null,
+            "unit_struct_opt_some" => "UnitStruct",
 
             "structure" => "{\"foo\":\"bar\",\"bar\":1,\"list\":[1,2,3],\"tuple\":[1,\"bar\"]}",
             "structure_opt_none" => DbValue::Null,
@@ -1609,18 +1606,18 @@ mod tests {
             "tuple_struct_opt_none" => DbValue::Null,
             "tuple_struct_opt_some" => "[111,111]",
 
-            "nested_struct" => "{\"foo\":{\"NewTypeStruct\":1.0},\
+            "nested_struct" => "{\"foo\":{\"NewTypeVariant\":1.0},\
                                          \"bar\":{\"foo\":\"bar\",\
                                          \"bar\":1,\"list\":[1,2,3],\"tuple\":[1,\"bar\"]},\
-                                         \"foo_list\":[{\"NewTypeStruct\":1.0}],\
+                                         \"foo_list\":[{\"NewTypeVariant\":1.0}],\
                                          \"bar_list\":[{\"foo\":\"bar\",\"bar\":1,\
                                          \"list\":[1,2,3],\"tuple\":[1,\"bar\"]}],\
                                          \"bar_tuple\":[1,1,\"bar\"]}",
             "nested_struct_opt_none" => DbValue::Null,
-            "nested_struct_opt_some" => "{\"foo\":{\"NewTypeStruct\":1.0},\
+            "nested_struct_opt_some" => "{\"foo\":{\"NewTypeVariant\":1.0},\
                                          \"bar\":{\"foo\":\"bar\",\
                                          \"bar\":1,\"list\":[1,2,3],\"tuple\":[1,\"bar\"]},\
-                                         \"foo_list\":[{\"NewTypeStruct\":1.0}],\
+                                         \"foo_list\":[{\"NewTypeVariant\":1.0}],\
                                          \"bar_list\":[{\"foo\":\"bar\",\"bar\":1,\
                                          \"list\":[1,2,3],\"tuple\":[1,\"bar\"]}],\
                                          \"bar_tuple\":[1,1,\"bar\"]}",
@@ -1630,48 +1627,6 @@ mod tests {
             to_db_row(&expected_struct).unwrap(),
             "test serialize"
         );
-        assert_eq!(
-            expected_struct,
-            from_db_row(&expected_db_row).unwrap(),
-            "test deserialize"
-        );
-    }
-
-    // TODO: This is for rough work. Remove it later.
-    #[test]
-    #[traced_test]
-    fn test_serde_scratch() {
-        #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
-        enum ExampleEnum {
-            UnitStruct,
-            NewTypeStruct(f32),
-            TupleStruct(i64, i64),
-        }
-
-        #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
-        struct ExampleStruct {
-            alpha: ExampleEnum,
-            beta: ExampleEnum,
-            gamma: ExampleEnum,
-        }
-
-        let expected_struct = ExampleStruct {
-            alpha: ExampleEnum::UnitStruct,
-            beta: ExampleEnum::NewTypeStruct(1.0),
-            gamma: ExampleEnum::TupleStruct(1, 1),
-        };
-        let expected_db_row = db_row! {
-            "alpha" => "\"UnitStruct\"",
-            "beta" => "{\"NewTypeStruct\":1.0}",
-            "gamma" => "{\"TupleStruct\":[1,1]}",
-        };
-
-        assert_eq!(
-            expected_db_row,
-            to_db_row(&expected_struct).unwrap(),
-            "test serialize"
-        );
-
         assert_eq!(
             expected_struct,
             from_db_row(&expected_db_row).unwrap(),
