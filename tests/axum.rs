@@ -4,13 +4,7 @@ use axum::{
     response::{Html, IntoResponse},
     routing::get,
 };
-use indexmap::indexmap;
-use rltbl_db::{
-    any::AnyPool,
-    core::DbQuery,
-    db_kind::DbKind,
-    db_value::{DbRow, DbValue},
-};
+use rltbl_db::{any::AnyPool, core::DbQuery, db_kind::DbKind, db_row, db_value::DbRow};
 use std::{marker::Sync, sync::Arc};
 use tower_service::Service;
 
@@ -39,7 +33,9 @@ async fn run_axum(url: &str) {
     pool.insert(
         "test",
         &["value"],
-        &[&indexmap! {"value".into() => DbValue::from("foo")}],
+        &[&db_row! {
+            "value" => "foo",
+        }],
     )
     .await
     .unwrap();

@@ -414,8 +414,7 @@ impl DbQuery for RusqlitePool {
 mod tests {
     use super::*;
 
-    use crate::params;
-    use indexmap::indexmap as db_row;
+    use crate::{db_row, params};
 
     #[tokio::test]
     async fn test_aliases_and_builtin_functions() {
@@ -448,7 +447,9 @@ mod tests {
             .unwrap();
         assert_eq!(
             rows,
-            [db_row! {"MAX(int_value)".into() => DbValue::from(1_i64)}]
+            [db_row! {
+                "MAX(int_value)" => 1_i64,
+            }]
         );
 
         // Test alias:
@@ -459,10 +460,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(
-            rows,
-            [db_row! {"bool_value_alias".into() => DbValue::from(1_i64)}]
-        );
+        assert_eq!(rows, [db_row! {"bool_value_alias" => 1_i64,}]);
 
         // Test aggregate with alias:
         let rows: Vec<DbRow> = pool
@@ -473,10 +471,7 @@ mod tests {
             .await
             .unwrap();
         // Note that the alias is not shown in the results:
-        assert_eq!(
-            rows,
-            [db_row! {"max_int_value".into() => DbValue::from(1_i64)}]
-        );
+        assert_eq!(rows, [db_row! {"max_int_value" => 1_i64,}]);
 
         // Test non-aggregate function:
         let rows: Vec<DbRow> = pool
@@ -488,7 +483,9 @@ mod tests {
             .unwrap();
         assert_eq!(
             rows,
-            [db_row! {"CAST(int_value AS TEXT)".into() => DbValue::from("1")}]
+            [db_row! {
+                "CAST(int_value AS TEXT)" => "1",
+            }]
         );
 
         // Test non-aggregate function with alias:
@@ -501,7 +498,9 @@ mod tests {
             .unwrap();
         assert_eq!(
             rows,
-            [db_row! {"int_value_cast".into() => DbValue::from("1")}]
+            [db_row! {
+                "int_value_cast" => "1",
+            }]
         );
 
         // Test functions over booleans:
@@ -520,7 +519,9 @@ mod tests {
         // sqlite.
         assert_eq!(
             rows,
-            [db_row! {"MAX(bool_value)".into() => DbValue::from(1_i64)}]
+            [db_row! {
+                "MAX(bool_value)" => 1_i64,
+            }]
         );
     }
 

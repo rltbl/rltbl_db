@@ -12,12 +12,12 @@ test: test_default test_libsql
 
 test_default:
 	@echo "Running unit tests using default features."
-	cargo test -- --no-capture
+	cargo test
 	@echo "Default unit tests succeeded."
 
 test_libsql:
 	@echo "Running unit tests using Libsql."
-	cargo test --no-default-features --features libsql -- --no-capture
+	cargo test --no-default-features --features libsql
 	@echo "Libsql unit tests succeeded."
 
 test_ignored: test_default_ignored test_libsql_ignored
