@@ -10,7 +10,6 @@ use serde::{
     ser,
 };
 use serde_json::{json, value::Serializer as JsonValueSerializer};
-use tracing::trace;
 
 /// Convert the given supported struct to a [DbRow]. For this to be successful, the struct
 /// must be a struct of the form:
@@ -23,13 +22,11 @@ use tracing::trace;
 /// }
 /// ```
 /// where `type1`, `type2` can either be a primitive or a complex type. In the case
-/// of a complex type, the associated field will be serialized as JSON.
+/// of a complex type, the associated field will be serialized as a JSON string.
 pub fn to_db_row<T>(value: &T) -> Result<DbRow, DbError>
 where
     T: Serialize,
 {
-    trace!("to_db_row(...)");
-
     // Serialize the given value.
     let mut serializer = DbRowSerializer::new();
     value.serialize(&mut serializer)?;
@@ -68,8 +65,6 @@ pub fn from_db_row<T>(db_row: &DbRow) -> Result<T, DbError>
 where
     T: for<'de> Deserialize<'de>,
 {
-    trace!("from_db_row({db_row:?})");
-
     let mut deserializer = DbRowDeserializer::from_db_row(db_row);
     let t = T::deserialize(&mut deserializer)?;
     if deserializer.keys.is_empty() && deserializer.values.is_empty() {
@@ -103,7 +98,6 @@ struct DbRowSerializer {
 
 impl DbRowSerializer {
     fn new() -> Self {
-        trace!("DbRowSerializer::new()");
         DbRowSerializer::default()
     }
 }
@@ -130,79 +124,66 @@ impl<'a> ser::Serializer for &'a mut DbRowSerializer {
     // Primitive types
 
     fn serialize_bool(self, value: bool) -> Result<(), Self::Error> {
-        trace!("DbRowSerializer::serialize_bool({self:#?}, {value})");
         self.values.push(DbValue::from(value));
         Ok(())
     }
 
     fn serialize_i8(self, value: i8) -> Result<(), Self::Error> {
-        trace!("DbRowSerializer::serialize_i8({self:#?}, {value})");
         self.values.push(DbValue::from(value));
         Ok(())
     }
 
     fn serialize_i16(self, value: i16) -> Result<(), Self::Error> {
-        trace!("DbRowSerializer::serialize_i16({self:#?}, {value})");
         self.values.push(DbValue::from(value));
         Ok(())
     }
 
     fn serialize_i32(self, value: i32) -> Result<(), Self::Error> {
-        trace!("DbRowSerializer::serialize_i32({self:#?}, {value})");
         self.values.push(DbValue::from(value));
         Ok(())
     }
 
     fn serialize_i64(self, value: i64) -> Result<(), Self::Error> {
-        trace!("DbRowSerializer::serialize_i64({self:#?}, {value})");
         self.values.push(DbValue::from(value));
         Ok(())
     }
 
     fn serialize_u8(self, value: u8) -> Result<(), Self::Error> {
-        trace!("DbRowSerializer::serialize_u8({self:#?}, {value})");
         self.values.push(DbValue::from(value));
         Ok(())
     }
 
     fn serialize_u16(self, value: u16) -> Result<(), Self::Error> {
-        trace!("DbRowSerializer::serialize_u16({self:#?}, {value})");
         self.values.push(DbValue::from(value));
         Ok(())
     }
 
     fn serialize_u32(self, value: u32) -> Result<(), Self::Error> {
-        trace!("DbRowSerializer::serialize_u32({self:#?}, {value})");
         self.values.push(DbValue::from(value));
         Ok(())
     }
 
     fn serialize_u64(self, value: u64) -> Result<(), Self::Error> {
-        trace!("DbRowSerializer::serialize_u64({self:#?}, {value})");
         self.values.push(DbValue::from(value));
         Ok(())
     }
 
     fn serialize_f32(self, value: f32) -> Result<(), Self::Error> {
-        trace!("DbRowSerializer::serialize_f32({self:#?}, {value})");
         self.values.push(DbValue::from(value));
         Ok(())
     }
 
     fn serialize_f64(self, value: f64) -> Result<(), Self::Error> {
-        trace!("DbRowSerializer::serialize_f64({self:#?}, {value})");
         self.values.push(DbValue::from(value));
         Ok(())
     }
 
     fn serialize_str(self, value: &str) -> Result<(), Self::Error> {
-        trace!("DbRowSerializer::serialize_str({self:#?}, {value})");
         self.values.push(DbValue::from(value));
         Ok(())
     }
 
     fn serialize_char(self, value: char) -> Result<(), Self::Error> {
-        trace!("DbRowSerializer::serialize_char({self:#?}, {value})");
         self.values.push(DbValue::from(value.to_string()));
         Ok(())
     }
@@ -210,7 +191,6 @@ impl<'a> ser::Serializer for &'a mut DbRowSerializer {
     // Option types
 
     fn serialize_none(self) -> Result<(), Self::Error> {
-        trace!("DbRowSerializer::serialize_none({self:#?})");
         self.serialize_unit()
     }
 
@@ -218,13 +198,11 @@ impl<'a> ser::Serializer for &'a mut DbRowSerializer {
     where
         T: ?Sized + Serialize,
     {
-        trace!("DbRowSerializer::serialize_some({self:#?}, ...)");
         value.serialize(self)
     }
 
     // Serializes an absent value (None)
     fn serialize_unit(self) -> Result<(), Self::Error> {
-        trace!("DbRowSerializer::serialize_unit({self:#?})");
         self.values.push(DbValue::Null);
         Ok(())
     }
@@ -232,7 +210,6 @@ impl<'a> ser::Serializer for &'a mut DbRowSerializer {
     // Compound types:
 
     fn serialize_tuple(self, len: usize) -> Result<Self::SerializeTuple, Self::Error> {
-        trace!("DbRowSerializer::serialize_tuple({self:#?}, {len}, ...)");
         if self.keys.len() > self.values.len() {
             self.remaining_fields = len;
             // Start a new empty inner value which will be progressively filled in later:
@@ -244,7 +221,6 @@ impl<'a> ser::Serializer for &'a mut DbRowSerializer {
     }
 
     fn serialize_seq(self, len: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> {
-        trace!("DbRowSerializer::serialize_seq({self:#?}, {len:?})");
         if self.keys.len() > self.values.len() {
             self.remaining_fields =
                 len.ok_or(DbError::SerdeError("No length given".to_string()))?;
@@ -257,7 +233,6 @@ impl<'a> ser::Serializer for &'a mut DbRowSerializer {
     }
 
     fn serialize_map(self, _len: Option<usize>) -> Result<Self::SerializeMap, Self::Error> {
-        trace!("DbRowSerializer::serialize_map({self:#?}, {_len:?})");
         Ok(self)
     }
 
@@ -266,7 +241,6 @@ impl<'a> ser::Serializer for &'a mut DbRowSerializer {
         _name: &str,
         len: usize,
     ) -> Result<Self::SerializeStruct, Self::Error> {
-        trace!("DbRowSerializer::serialize_struct({self:#?}, {_name}, {len})");
         if self.keys.len() > self.values.len() {
             self.remaining_fields = len;
             // Start a new empty inner value which will be progressively filled in later:
@@ -279,7 +253,6 @@ impl<'a> ser::Serializer for &'a mut DbRowSerializer {
 
     // A "unit" struct has no fields.
     fn serialize_unit_struct(self, name: &str) -> Result<(), Self::Error> {
-        trace!("DbRowSerializer::serialize_unit_struct({self:#?}, {name})");
         self.values.push(DbValue::from(name));
         Ok(())
     }
@@ -288,7 +261,6 @@ impl<'a> ser::Serializer for &'a mut DbRowSerializer {
     where
         T: ?Sized + Serialize,
     {
-        trace!("DbRowSerializer::serialize_newtype_struct({self:#?}, {_name}, ...)");
         value.serialize(self)
     }
 
@@ -297,7 +269,6 @@ impl<'a> ser::Serializer for &'a mut DbRowSerializer {
         _name: &str,
         len: usize,
     ) -> Result<Self::SerializeTupleStruct, Self::Error> {
-        trace!("DbRowSerializer::serialize_tuple_struct({self:#?}, {_name}, {len}, ...)");
         if self.keys.len() > self.values.len() {
             self.remaining_fields = len;
             // Start a new empty inner value which will be progressively filled in later:
@@ -314,11 +285,6 @@ impl<'a> ser::Serializer for &'a mut DbRowSerializer {
         _variant_index: u32,
         variant: &str,
     ) -> Result<(), Self::Error> {
-        trace!(
-            "DbRowSerializer::serialize_unit_variant(\
-             {self:#?}, {_name}, {_variant_index}, {variant}\
-             )"
-        );
         // TODO: I don't like the extra double-quotes here,
         // but serde_json wants them for deserializing,
         // and I get a lifetime error when I try to add them
@@ -337,11 +303,6 @@ impl<'a> ser::Serializer for &'a mut DbRowSerializer {
     where
         T: ?Sized + Serialize,
     {
-        trace!(
-            "DbRowSerializer::serialize_newtype_variant(\
-             {self:#?}, {_name}, {_variant_index}, {variant}, ...\
-             )"
-        );
         let json_serializer = JsonValueSerializer;
         let json_value = value
             .serialize(json_serializer)
@@ -355,17 +316,11 @@ impl<'a> ser::Serializer for &'a mut DbRowSerializer {
 
     fn serialize_tuple_variant(
         self,
-        name: &str,
+        _name: &str,
         _variant_index: u32,
         variant: &str,
         len: usize,
     ) -> Result<Self::SerializeTupleVariant, Self::Error> {
-        trace!(
-            "DbRowSerializer::serialize_tuple_variant(\
-             {self:#?}, {name}, {_variant_index}, {variant}, {len}, ...\
-             )"
-        );
-
         if self.keys.len() > self.values.len() {
             self.remaining_fields = len;
             // Start a new inner value with a single key (the tuple variant's name).
@@ -408,7 +363,6 @@ impl<'a> ser::SerializeStruct for &'a mut DbRowSerializer {
     where
         T: ?Sized + Serialize,
     {
-        trace!("SerializeStruct::serialize_field({self:#?}, {key}, ...)");
         if self.remaining_fields > 0 {
             self.remaining_fields -= 1;
             let json_serializer = JsonValueSerializer;
@@ -433,7 +387,6 @@ impl<'a> ser::SerializeStruct for &'a mut DbRowSerializer {
     }
 
     fn end(self) -> Result<(), DbError> {
-        trace!("SerializeStruct::end({self:#?})");
         if self.inner_value != JsonValue::Null {
             let json_string = serde_json::to_string(&self.inner_value)
                 .map_err(|err| DbError::SerdeError(err.to_string()))?;
@@ -453,7 +406,6 @@ impl<'a> ser::SerializeTupleStruct for &'a mut DbRowSerializer {
     where
         T: ?Sized + Serialize,
     {
-        trace!("SerializeTupleStruct::serialize_field({self:#?}, ...)");
         if self.remaining_fields > 0 {
             self.remaining_fields -= 1;
             let json_serializer = JsonValueSerializer;
@@ -477,7 +429,6 @@ impl<'a> ser::SerializeTupleStruct for &'a mut DbRowSerializer {
     }
 
     fn end(self) -> Result<(), DbError> {
-        trace!("SerializeTupleStruct::end({self:#?})");
         if self.inner_value != JsonValue::Null {
             let json_string = serde_json::to_string(&self.inner_value)
                 .map_err(|err| DbError::SerdeError(err.to_string()))?;
@@ -497,7 +448,6 @@ impl<'a> ser::SerializeTuple for &'a mut DbRowSerializer {
     where
         T: ?Sized + Serialize,
     {
-        trace!("SerializeTuple::serialize_element({self:#?}, ...)");
         if self.remaining_fields > 0 {
             self.remaining_fields -= 1;
             let json_serializer = JsonValueSerializer;
@@ -521,7 +471,6 @@ impl<'a> ser::SerializeTuple for &'a mut DbRowSerializer {
     }
 
     fn end(self) -> Result<(), DbError> {
-        trace!("SerializeTuple::end({self:#?})");
         if self.inner_value != JsonValue::Null {
             let json_string = serde_json::to_string(&self.inner_value)
                 .map_err(|err| DbError::SerdeError(err.to_string()))?;
@@ -541,7 +490,6 @@ impl<'a> ser::SerializeTupleVariant for &'a mut DbRowSerializer {
     where
         T: ?Sized + Serialize,
     {
-        trace!("SerializeTupleVariant::serialize_field({self:#?}, ...)");
         if self.remaining_fields > 0 {
             self.remaining_fields -= 1;
             let json_serializer = JsonValueSerializer;
@@ -557,7 +505,6 @@ impl<'a> ser::SerializeTupleVariant for &'a mut DbRowSerializer {
                     )));
                 }
             };
-            assert_eq!(inner.len(), 1);
             for (_key, json_array) in inner.into_iter() {
                 let json_array_as_string = json_array.to_string();
                 let json_array: &mut Vec<JsonValue> =
@@ -575,7 +522,6 @@ impl<'a> ser::SerializeTupleVariant for &'a mut DbRowSerializer {
     }
 
     fn end(self) -> Result<(), DbError> {
-        trace!("SerializeTupleVariant::end({self:#?})");
         if self.inner_value != JsonValue::Null {
             let json_string = serde_json::to_string(&self.inner_value)
                 .map_err(|err| DbError::SerdeError(err.to_string()))?;
@@ -595,7 +541,6 @@ impl<'a> ser::SerializeSeq for &'a mut DbRowSerializer {
     where
         T: ?Sized + Serialize,
     {
-        trace!("SerializeSeq::serialize_element({self:#?}, ...)");
         if self.remaining_fields > 0 {
             self.remaining_fields -= 1;
             let json_serializer = JsonValueSerializer;
@@ -619,7 +564,6 @@ impl<'a> ser::SerializeSeq for &'a mut DbRowSerializer {
     }
 
     fn end(self) -> Result<(), Self::Error> {
-        trace!("SerializeSeq::end({self:#?})");
         if self.inner_value != JsonValue::Null {
             let json_string = serde_json::to_string(&self.inner_value)
                 .map_err(|err| DbError::SerdeError(err.to_string()))?;
@@ -702,7 +646,6 @@ pub(crate) struct DbRowDeserializer<'de> {
 
 impl<'de> DbRowDeserializer<'de> {
     pub(crate) fn from_db_row(input: &'de DbRow) -> Self {
-        trace!("DbRowDeserializer::from_db_row({input:?})");
         DbRowDeserializer {
             keys: input.map.keys().map(|s| s.as_str()).collect::<Vec<_>>(),
             values: input.map.values().collect::<Vec<_>>(),
@@ -710,19 +653,16 @@ impl<'de> DbRowDeserializer<'de> {
     }
 
     fn pop_key(&mut self) -> Option<&'de str> {
-        trace!("DbRowDeSerializer::pop_key({self:#?})");
         self.keys.pop()
     }
 
     fn pop_value(&mut self) -> Result<&'de DbValue, DbError> {
-        trace!("DbRowDeSerializer::pop_value({self:#?})");
         self.values
             .pop()
             .ok_or(DbError::SerdeError("No values to pop".to_string()))
     }
 
     fn last_value(&self) -> Result<&DbValue, DbError> {
-        trace!("DbRowDeSerializer::last_value({self:#?})");
         self.values
             .last()
             .ok_or(DbError::SerdeError("No values".to_string()))
@@ -739,7 +679,6 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        trace!("DbRowDeSerializer::deserialize_bool({self:#?}, ...)");
         match self.last_value()? {
             DbValue::Null => self.deserialize_unit(visitor),
             _ => {
@@ -756,7 +695,6 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        trace!("DbRowDeSerializer::deserialize_i8({self:#?}, ...)");
         match self.last_value()? {
             DbValue::Null => self.deserialize_unit(visitor),
             _ => {
@@ -773,7 +711,6 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        trace!("DbRowDeSerializer::deserialize_i16({self:#?}, ...)");
         match self.last_value()? {
             DbValue::Null => self.deserialize_unit(visitor),
             _ => {
@@ -790,7 +727,6 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        trace!("DbRowDeSerializer::deserialize_i32({self:#?}, ...)");
         match self.last_value()? {
             DbValue::Null => self.deserialize_unit(visitor),
             _ => {
@@ -807,7 +743,6 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        trace!("DbRowDeSerializer::deserialize_i64({self:#?}, ...)");
         match self.last_value()? {
             DbValue::Null => self.deserialize_unit(visitor),
             _ => {
@@ -824,7 +759,6 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        trace!("DbRowDeSerializer::deserialize_u8({self:#?}, ...)");
         match self.last_value()? {
             DbValue::Null => self.deserialize_unit(visitor),
             _ => {
@@ -841,7 +775,6 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        trace!("DbRowDeSerializer::deserialize_u16({self:#?}, ...)");
         match self.last_value()? {
             DbValue::Null => self.deserialize_unit(visitor),
             _ => {
@@ -858,7 +791,6 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        trace!("DbRowDeSerializer::deserialize_u32({self:#?}, ...)");
         match self.last_value()? {
             DbValue::Null => self.deserialize_unit(visitor),
             _ => {
@@ -875,7 +807,6 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        trace!("DbRowDeSerializer::deserialize_u64({self:#?}, ...)");
         match self.last_value()? {
             DbValue::Null => self.deserialize_unit(visitor),
             _ => {
@@ -892,7 +823,6 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        trace!("DbRowDeSerializer::deserialize_f32({self:#?}, ...)");
         match self.last_value()? {
             DbValue::Null => self.deserialize_unit(visitor),
             _ => {
@@ -909,7 +839,6 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        trace!("DbRowDeSerializer::deserialize_f64({self:#?}, ...)");
         match self.last_value()? {
             DbValue::Null => self.deserialize_unit(visitor),
             _ => {
@@ -926,7 +855,6 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        trace!("DbRowDeSerializer::deserialize_string({self:#?}, ...)");
         match self.last_value()? {
             DbValue::Null => self.deserialize_unit(visitor),
             _ => {
@@ -943,7 +871,6 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        trace!("DbRowDeSerializer::deserialize_char({self:#?}, ...)");
         match self.last_value()? {
             DbValue::Null => self.deserialize_unit(visitor),
             _ => {
@@ -960,7 +887,6 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        trace!("DbRowDeSerializer::deserialize_str({self:#?}, ...)");
         match self.last_value()? {
             DbValue::Null => self.deserialize_unit(visitor),
             _ => {
@@ -977,7 +903,6 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        trace!("DbRowDeSerializer::deserialize_any({self:#?}, ...)");
         match self.last_value()? {
             DbValue::Null => self.deserialize_unit(visitor),
             _ => match self.pop_value()? {
@@ -1004,7 +929,6 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        trace!("DbRowDeSerializer::deserialize_option({self:#?}, ...)");
         match self.last_value()? {
             DbValue::Null => self.deserialize_unit(visitor),
             _ => visitor.visit_some(self),
@@ -1016,7 +940,6 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        trace!("DbRowDeSerializer::deserialize_unit({self:#?}, ...)");
         let value = self.pop_value()?;
         if *value != DbValue::Null {
             return Err(DbError::SerdeError("Expected NULL".to_string()));
@@ -1035,7 +958,6 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        trace!("DbRowDeSerializer::deserialize_struct({self:#?}, {name}, {fields:?}, ...)");
         if self.keys == fields {
             self.deserialize_map(visitor)
         } else {
@@ -1053,7 +975,6 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        trace!("DbRowDeSerializer::deserialize_map({self:#?}, ...)");
         visitor.visit_map(self)
     }
 
@@ -1061,7 +982,6 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        trace!("DbRowDeSerializer::deserialize_identifier({self:#?}, ...)");
         let key = self
             .pop_key()
             .ok_or(DbError::SerdeError("No more keys".to_string()))?;
@@ -1077,7 +997,6 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        trace!("DbRowDeSerializer::deserialize_unit_struct({self:#?}, {_name}, ...)");
         self.pop_value()?;
         visitor.visit_unit()
     }
@@ -1090,7 +1009,6 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        trace!("DbRowDeSerializer::deserialize_newtype_struct({self:#?}, {_name}, ...)");
         visitor.visit_newtype_struct(self)
     }
 
@@ -1103,7 +1021,6 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        trace!("DbRowDeSerializer::deserialize_tuple_struct({self:#?}, {_name}, {_len}, ...)");
         self.deserialize_seq(visitor)
     }
 
@@ -1116,7 +1033,6 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        trace!("DbRowDeSerializer::deserialize_enum({self:#?}, {name}, {variants:?}, ...)");
         let value = self.pop_value()?;
         match value.as_str() {
             Some(value) => serde_json::Deserializer::from_str(&value)
@@ -1130,7 +1046,6 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        trace!("DbRowDeSerializer::deserialize_seq({self:#?}, ...)");
         let value = self.pop_value()?;
         match value.as_str() {
             Some(value) => serde_json::Deserializer::from_str(&value)
@@ -1144,7 +1059,6 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        trace!("DbRowDeSerializer::deserialize_tuple({self:#?}, {_len}, ...)");
         let value = self.pop_value()?;
         match value.as_str() {
             Some(value) => serde_json::Deserializer::from_str(&value)
@@ -1191,7 +1105,6 @@ impl<'de> de::MapAccess<'de> for DbRowDeserializer<'de> {
     where
         S: de::DeserializeSeed<'de>,
     {
-        trace!("DbRowDeSerializer::next_key_seed({self:#?}, ...)");
         if self.keys.len() == 0 {
             return Ok(None);
         }
@@ -1202,7 +1115,6 @@ impl<'de> de::MapAccess<'de> for DbRowDeserializer<'de> {
     where
         S: de::DeserializeSeed<'de>,
     {
-        trace!("DbRowDeSerializer::next_value_seed({self:#?}, ...)");
         seed.deserialize(&mut *self)
     }
 }
@@ -1213,10 +1125,8 @@ mod tests {
     use crate::{db_row, db_value::DbValue};
     use rust_decimal::{Decimal, dec};
     use serde::Deserialize;
-    use tracing_test::traced_test;
 
     #[test]
-    #[traced_test]
     fn test_serde() {
         #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
         struct UnitStruct;
