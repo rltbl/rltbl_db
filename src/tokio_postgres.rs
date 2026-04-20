@@ -91,10 +91,11 @@ fn extract_value(row: &Row, idx: usize) -> Result<DbValue, DbError> {
             }
             None => Ok(DbValue::Null),
         },
-        _ => {
-            eprint!("Unimplemented column type: {column:?}");
-            unimplemented!();
-        }
+        _ => Err(DbError::DataError(format!(
+            "Unsupported column type: {}. Supported types are: TEXT, VARCHAR, INT2, INT4, INT8, \
+             FLOAT4, FLOAT8, NUMERIC, BOOL.",
+            column.type_()
+        ))),
     }
 }
 
@@ -282,7 +283,18 @@ impl DbQuery for TokioPostgresPool {
             let mut db_row = DbRow::new();
             let columns = row.columns();
             for (i, column) in columns.iter().enumerate() {
-                db_row.insert(column.name().to_string(), extract_value(row, i)?);
+                db_row.insert(
+                    column.name().to_string(),
+                    match extract_value(row, i) {
+                        Err(err) => {
+                            // TODO: If we keep this, should it be a proper tracing::warn!()
+                            // call?
+                            eprintln!("WARNING: Got error: '{err}' while querying column.");
+                            DbValue::Null
+                        }
+                        Ok(val) => val,
+                    },
+                );
             }
             db_rows.push(db_row);
         }
@@ -667,5 +679,26 @@ mod tests {
         };
 
         pool.drop_table("test_special_floats").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_unknown_types() {
+        let pool = TokioPostgresPool::connect("postgresql:///rltbl_db")
+            .await
+            .unwrap();
+        pool.drop_table("test_unknown_types").await.unwrap();
+        pool.execute(r#"CREATE TABLE test_unknown_types (bar JSONB)"#, ())
+            .await
+            .unwrap();
+        pool.execute(r#"INSERT INTO test_unknown_types VALUES ('{}'::JSONB)"#, ())
+            .await
+            .unwrap();
+
+        let mut db_row: Vec<DbRow> = pool
+            .query(r#"SELECT * FROM test_unknown_types"#, ())
+            .await
+            .unwrap();
+        let db_row = db_row.pop();
+        println!("ROW: {db_row:?}");
     }
 }
