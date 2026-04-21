@@ -103,6 +103,11 @@ fn query_prepared(
                             ))
                         })?;
                     }
+                    DbValue::Other(_, _) => {
+                        return Err(DbError::InputError(
+                            "SQLite does not support type DbValue::Other".to_string(),
+                        ));
+                    }
                 };
             }
         }

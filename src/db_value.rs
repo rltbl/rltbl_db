@@ -36,6 +36,8 @@ pub enum DbValue {
     Numeric(Decimal),
     /// Use with TEXT and VARCHAR column types or equivalent.
     Text(String),
+    /// TODO: Add docstring.
+    Other(String, Vec<u8>),
 }
 
 impl DbValue {
@@ -176,6 +178,7 @@ impl Hash for DbValue {
                 }
             }
             DbValue::Numeric(num) => num.hash(h),
+            DbValue::Other(txt1, txt2) => format!("{txt1}{txt2:?}").hash(h),
         }
     }
 }
@@ -201,6 +204,7 @@ impl Into<JsonValue> for DbValue {
             DbValue::BigReal(value) => json!(value),
             DbValue::Numeric(value) => json!(value),
             DbValue::Text(value) => JsonValue::String(value),
+            DbValue::Other(_type_name, _text_value) => todo!(),
         }
     }
 }
@@ -223,6 +227,9 @@ impl Into<String> for DbValue {
             DbValue::BigReal(number) => number.to_string(),
             DbValue::Numeric(decimal) => decimal.to_string(),
             DbValue::Text(string) => string.to_string(),
+            DbValue::Other(_type_name, you_eights) => {
+                std::str::from_utf8(&you_eights).unwrap().to_string()
+            }
         }
     }
 }

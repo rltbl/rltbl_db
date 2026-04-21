@@ -919,6 +919,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
                 DbValue::Numeric(_) => Err(DbError::SerdeError(
                     "Deserializing Decimal values is not yet supported".to_string(),
                 )),
+                DbValue::Other(_, _) => todo!(),
             },
         }
     }

@@ -12,7 +12,7 @@ use deadpool_postgres::{
     tokio_postgres::{
         NoTls,
         row::Row,
-        types::{ToSql, Type},
+        types::{FromSql, ToSql, Type},
     },
 };
 use rust_decimal::Decimal;
@@ -20,50 +20,50 @@ use rust_decimal::Decimal;
 /// Extracts the value at the given index from the given [Row].
 fn extract_value(row: &Row, idx: usize) -> Result<DbValue, DbError> {
     let column = &row.columns()[idx];
-    match *column.type_() {
-        Type::TEXT | Type::VARCHAR | Type::NAME => match row
+    match column.type_() {
+        &Type::TEXT | &Type::VARCHAR | &Type::NAME => match row
             .try_get::<usize, Option<&str>>(idx)
             .map_err(|err| DbError::DataError(err.to_string()))?
         {
             Some(value) => Ok(value.into()),
             None => Ok(DbValue::Null),
         },
-        Type::INT2 => match row
+        &Type::INT2 => match row
             .try_get::<usize, Option<i16>>(idx)
             .map_err(|err| DbError::DataError(err.to_string()))?
         {
             Some(value) => Ok(value.into()),
             None => Ok(DbValue::Null),
         },
-        Type::INT4 => match row
+        &Type::INT4 => match row
             .try_get::<usize, Option<i32>>(idx)
             .map_err(|err| DbError::DataError(err.to_string()))?
         {
             Some(value) => Ok(value.into()),
             None => Ok(DbValue::Null),
         },
-        Type::INT8 => match row
+        &Type::INT8 => match row
             .try_get::<usize, Option<i64>>(idx)
             .map_err(|err| DbError::DataError(err.to_string()))?
         {
             Some(value) => Ok(value.into()),
             None => Ok(DbValue::Null),
         },
-        Type::BOOL => match row
+        &Type::BOOL => match row
             .try_get::<usize, Option<bool>>(idx)
             .map_err(|err| DbError::DataError(err.to_string()))?
         {
             Some(value) => Ok(value.into()),
             None => Ok(DbValue::Null),
         },
-        Type::FLOAT4 => match row
+        &Type::FLOAT4 => match row
             .try_get::<usize, Option<f32>>(idx)
             .map_err(|err| DbError::DataError(err.to_string()))?
         {
             Some(value) => Ok(value.into()),
             None => Ok(DbValue::Null),
         },
-        Type::FLOAT8 => match row
+        &Type::FLOAT8 => match row
             .try_get::<usize, Option<f64>>(idx)
             .map_err(|err| DbError::DataError(err.to_string()))?
         {
@@ -71,7 +71,7 @@ fn extract_value(row: &Row, idx: usize) -> Result<DbValue, DbError> {
             None => Ok(DbValue::Null),
         },
         // WARN: This downcasts a Postgres NUMERIC to a 64 bit Number.
-        Type::NUMERIC => match row
+        &Type::NUMERIC => match row
             .try_get::<usize, Option<Decimal>>(idx)
             .map_err(|err| DbError::DataError(err.to_string()))?
         {
@@ -91,11 +91,34 @@ fn extract_value(row: &Row, idx: usize) -> Result<DbValue, DbError> {
             }
             None => Ok(DbValue::Null),
         },
-        _ => Err(DbError::DataError(format!(
-            "Unsupported column type: {}. Supported types are: TEXT, VARCHAR, INT2, INT4, INT8, \
-             FLOAT4, FLOAT8, NUMERIC, BOOL.",
-            column.type_()
-        ))),
+        other => {
+            let value: GenericPgValue = row.get(idx);
+            Ok(DbValue::Other(other.to_string(), value.0))
+
+            //Err(DbError::DataError(format!(
+            //    "Unsupported column type: {}. Supported types are: TEXT, VARCHAR, INT2, INT4, \
+            //     INT8, FLOAT4, FLOAT8, NUMERIC, BOOL.",
+            //    column.type_()
+            //)))
+        }
+    }
+}
+
+// TODO: Possibly move this (and the implementation) to a better location in this file.
+#[derive(Debug)]
+struct GenericPgValue(Vec<u8>);
+
+impl FromSql<'_> for GenericPgValue {
+    fn from_sql(
+        _: &Type,
+        raw: &[u8],
+    ) -> Result<GenericPgValue, Box<dyn std::error::Error + Sync + Send>> {
+        //let result = std::str::from_utf8(raw).unwrap();
+        let val = GenericPgValue(raw.to_owned());
+        Ok(val)
+    }
+    fn accepts(_ty: &Type) -> bool {
+        true
     }
 }
 
@@ -686,6 +709,8 @@ mod tests {
         let pool = TokioPostgresPool::connect("postgresql:///rltbl_db")
             .await
             .unwrap();
+
+        ///////////////////////////////////
         pool.drop_table("test_unknown_types").await.unwrap();
         pool.execute(r#"CREATE TABLE test_unknown_types (bar JSONB)"#, ())
             .await
@@ -693,12 +718,113 @@ mod tests {
         pool.execute(r#"INSERT INTO test_unknown_types VALUES ('{}'::JSONB)"#, ())
             .await
             .unwrap();
-
         let mut db_row: Vec<DbRow> = pool
             .query(r#"SELECT * FROM test_unknown_types"#, ())
             .await
             .unwrap();
-        let db_row = db_row.pop();
-        println!("ROW: {db_row:?}");
+        let db_row = db_row.pop().unwrap();
+        assert_eq!(
+            format!("{db_row:?}"),
+            r#"DbRow { map: {"bar": Other("jsonb", [1, 123, 125])} }"#
+        );
+        match db_row.get("bar").unwrap() {
+            DbValue::Other(_ctype, cval) => {
+                let cval = std::str::from_utf8(&cval).unwrap();
+                assert_eq!(cval, "\u{1}{}");
+            }
+            _ => panic!(),
+        };
+
+        ///////////////////////////////////
+        pool.drop_table("test_unknown_types").await.unwrap();
+        pool.execute(r#"CREATE TABLE test_unknown_types (bar JSON)"#, ())
+            .await
+            .unwrap();
+        pool.execute(r#"INSERT INTO test_unknown_types VALUES ('{}')"#, ())
+            .await
+            .unwrap();
+        let mut db_row: Vec<DbRow> = pool
+            .query(r#"SELECT * FROM test_unknown_types"#, ())
+            .await
+            .unwrap();
+        let db_row = db_row.pop().unwrap();
+        assert_eq!(
+            format!("{db_row:?}"),
+            r#"DbRow { map: {"bar": Other("json", [123, 125])} }"#
+        );
+        match db_row.get("bar").unwrap() {
+            DbValue::Other(_ctype, cval) => {
+                let cval = std::str::from_utf8(&cval).unwrap();
+                assert_eq!(cval, "{}");
+            }
+            _ => panic!(),
+        };
+
+        // The examples below will not convert to a string without error, but that isn't
+        // surprising. The caller will have to know how to convert a vector of u8 values
+        // (bytes) into whatever they would like at the end of the day.
+
+        ///////////////////////////////////
+        pool.drop_table("test_unknown_types").await.unwrap();
+        pool.execute(r#"CREATE TABLE test_unknown_types (bar BYTEA)"#, ())
+            .await
+            .unwrap();
+        pool.execute(
+            r#"INSERT INTO test_unknown_types VALUES ('\xDEADBEEF'::bytea)"#,
+            (),
+        )
+        .await
+        .unwrap();
+        let mut db_row: Vec<DbRow> = pool
+            .query(r#"SELECT * FROM test_unknown_types"#, ())
+            .await
+            .unwrap();
+        let db_row = db_row.pop().unwrap();
+        assert_eq!(
+            format!("{db_row:?}"),
+            r#"DbRow { map: {"bar": Other("bytea", [222, 173, 190, 239])} }"#
+        );
+
+        ///////////////////////////////////
+        pool.drop_table("test_unknown_types").await.unwrap();
+        pool.execute(r#"CREATE TABLE test_unknown_types (bar TIMESTAMP)"#, ())
+            .await
+            .unwrap();
+        pool.execute(
+            r#"INSERT INTO test_unknown_types VALUES ('2004-10-19 10:23:54')"#,
+            (),
+        )
+        .await
+        .unwrap();
+        let mut db_row: Vec<DbRow> = pool
+            .query(r#"SELECT * FROM test_unknown_types"#, ())
+            .await
+            .unwrap();
+        let db_row = db_row.pop().unwrap();
+        assert_eq!(
+            format!("{db_row:?}"),
+            r#"DbRow { map: {"bar": Other("timestamp", [0, 0, 137, 201, 15, 13, 226, 128])} }"#
+        );
+
+        ///////////////////////////////////
+        pool.drop_table("test_unknown_types").await.unwrap();
+        pool.execute(r#"CREATE TABLE test_unknown_types (bar TEXT[])"#, ())
+            .await
+            .unwrap();
+        pool.execute(
+            r#"INSERT INTO test_unknown_types VALUES ('{"meeting", "lunch"}')"#,
+            (),
+        )
+        .await
+        .unwrap();
+        let mut db_row: Vec<DbRow> = pool
+            .query(r#"SELECT * FROM test_unknown_types"#, ())
+            .await
+            .unwrap();
+        let db_row = db_row.pop().unwrap();
+        assert_eq!(
+            format!("{db_row:?}"),
+            r#"DbRow { map: {"bar": Other("_text", [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 25, 0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0, 7, 109, 101, 101, 116, 105, 110, 103, 0, 0, 0, 5, 108, 117, 110, 99, 104])} }"#
+        );
     }
 }
