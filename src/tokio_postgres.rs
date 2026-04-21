@@ -7,12 +7,14 @@ use crate::{
     shared::{EditType, edit},
 };
 
+use bytes::{BufMut, BytesMut};
+
 use deadpool_postgres::{
     Config, Pool, Runtime,
     tokio_postgres::{
         NoTls,
         row::Row,
-        types::{FromSql, ToSql, Type},
+        types::{FromSql, IsNull, ToSql, Type},
     },
 };
 use rust_decimal::Decimal;
@@ -105,7 +107,7 @@ fn extract_value(row: &Row, idx: usize) -> Result<DbValue, DbError> {
 }
 
 // TODO: Possibly move this (and the implementation) to a better location in this file.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct GenericPgValue(Vec<u8>);
 
 impl FromSql<'_> for GenericPgValue {
@@ -119,6 +121,37 @@ impl FromSql<'_> for GenericPgValue {
     }
     fn accepts(_ty: &Type) -> bool {
         true
+    }
+}
+
+impl ToSql for GenericPgValue {
+    fn to_sql(
+        &self,
+        _ty: &Type,
+        _out: &mut BytesMut,
+    ) -> Result<IsNull, Box<dyn std::error::Error + Sync + Send>>
+    where
+        Self: Sized,
+    {
+        todo!()
+    }
+
+    fn accepts(_ty: &Type) -> bool
+    where
+        Self: Sized,
+    {
+        todo!()
+    }
+
+    fn to_sql_checked(
+        &self,
+        _ty: &Type,
+        out: &mut BytesMut,
+    ) -> Result<IsNull, Box<dyn std::error::Error + Sync + Send>> {
+        //println!("SELF: {self:?}, TYPE: {_ty:?}");
+        out.put(&*self.0);
+        // TODO: Actually check for null rather than assume no?
+        Ok(IsNull::No)
     }
 }
 
@@ -286,7 +319,18 @@ impl DbQuery for TokioPostgresPool {
                                 _ => return Err(DbError::InputError(gen_err(&param, "BOOL"))),
                             };
                         }
-                        _ => unimplemented!(),
+                        _ => {
+                            match param {
+                                DbValue::Null => todo!(),
+                                DbValue::Other(_cname, cval) => {
+                                    //let cval = std::str::from_utf8(&cval).unwrap().to_string();
+                                    //let cval = json!(cval);
+                                    let cval = GenericPgValue(cval.clone());
+                                    params.push(Box::new(cval.clone()))
+                                }
+                                _ => return Err(DbError::InputError(gen_err(&param, "OTHER"))),
+                            };
+                        }
                     };
                 }
             }
@@ -712,37 +756,17 @@ mod tests {
 
         ///////////////////////////////////
         pool.drop_table("test_unknown_types").await.unwrap();
-        pool.execute(r#"CREATE TABLE test_unknown_types (bar JSONB)"#, ())
-            .await
-            .unwrap();
-        pool.execute(r#"INSERT INTO test_unknown_types VALUES ('{}'::JSONB)"#, ())
-            .await
-            .unwrap();
-        let mut db_row: Vec<DbRow> = pool
-            .query(r#"SELECT * FROM test_unknown_types"#, ())
-            .await
-            .unwrap();
-        let db_row = db_row.pop().unwrap();
-        assert_eq!(
-            format!("{db_row:?}"),
-            r#"DbRow { map: {"bar": Other("jsonb", [1, 123, 125])} }"#
-        );
-        match db_row.get("bar").unwrap() {
-            DbValue::Other(_ctype, cval) => {
-                let cval = std::str::from_utf8(&cval).unwrap();
-                assert_eq!(cval, "\u{1}{}");
-            }
-            _ => panic!(),
-        };
+        pool.execute(
+            r#"CREATE TABLE test_unknown_types (bar JSONB, foo BOOL DEFAULT FALSE)"#,
+            (),
+        )
+        .await
+        .unwrap();
 
-        ///////////////////////////////////
-        pool.drop_table("test_unknown_types").await.unwrap();
-        pool.execute(r#"CREATE TABLE test_unknown_types (bar JSON)"#, ())
-            .await
-            .unwrap();
         pool.execute(r#"INSERT INTO test_unknown_types VALUES ('{}')"#, ())
             .await
             .unwrap();
+
         let mut db_row: Vec<DbRow> = pool
             .query(r#"SELECT * FROM test_unknown_types"#, ())
             .await
@@ -750,25 +774,34 @@ mod tests {
         let db_row = db_row.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
-            r#"DbRow { map: {"bar": Other("json", [123, 125])} }"#
+            r#"DbRow { map: {"bar": Other("jsonb", [1, 123, 125]), "foo": Boolean(false)} }"#
         );
-        match db_row.get("bar").unwrap() {
-            DbValue::Other(_ctype, cval) => {
-                let cval = std::str::from_utf8(&cval).unwrap();
-                assert_eq!(cval, "{}");
-            }
-            _ => panic!(),
-        };
 
-        // The examples below will not convert to a string without error, but that isn't
-        // surprising. The caller will have to know how to convert a vector of u8 values
-        // (bytes) into whatever they would like at the end of the day.
-
-        ///////////////////////////////////
-        pool.drop_table("test_unknown_types").await.unwrap();
-        pool.execute(r#"CREATE TABLE test_unknown_types (bar BYTEA)"#, ())
+        let db_value = db_row.get("bar").unwrap();
+        pool.execute(
+            r#"UPDATE test_unknown_types SET foo = TRUE WHERE bar = $1"#,
+            params![db_value],
+        )
+        .await
+        .unwrap();
+        let mut db_row: Vec<DbRow> = pool
+            .query(r#"SELECT * FROM test_unknown_types"#, ())
             .await
             .unwrap();
+        let db_row = db_row.pop().unwrap();
+        assert_eq!(
+            format!("{db_row:?}"),
+            r#"DbRow { map: {"bar": Other("jsonb", [1, 123, 125]), "foo": Boolean(true)} }"#
+        );
+        ///////////////////////////////////
+        pool.drop_table("test_unknown_types").await.unwrap();
+        pool.execute(
+            r#"CREATE TABLE test_unknown_types (bar BYTEA, foo BOOL DEFAULT FALSE)"#,
+            (),
+        )
+        .await
+        .unwrap();
+
         pool.execute(
             r#"INSERT INTO test_unknown_types VALUES ('\xDEADBEEF'::bytea)"#,
             (),
@@ -782,14 +815,32 @@ mod tests {
         let db_row = db_row.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
-            r#"DbRow { map: {"bar": Other("bytea", [222, 173, 190, 239])} }"#
+            r#"DbRow { map: {"bar": Other("bytea", [222, 173, 190, 239]), "foo": Boolean(false)} }"#
         );
-
-        ///////////////////////////////////
-        pool.drop_table("test_unknown_types").await.unwrap();
-        pool.execute(r#"CREATE TABLE test_unknown_types (bar TIMESTAMP)"#, ())
+        let db_value = db_row.get("bar").unwrap();
+        pool.execute(
+            r#"UPDATE test_unknown_types SET foo = TRUE WHERE bar = $1"#,
+            params![db_value],
+        )
+        .await
+        .unwrap();
+        let mut db_row: Vec<DbRow> = pool
+            .query(r#"SELECT * FROM test_unknown_types"#, ())
             .await
             .unwrap();
+        let db_row = db_row.pop().unwrap();
+        assert_eq!(
+            format!("{db_row:?}"),
+            r#"DbRow { map: {"bar": Other("bytea", [222, 173, 190, 239]), "foo": Boolean(true)} }"#
+        );
+        ///////////////////////////////////
+        pool.drop_table("test_unknown_types").await.unwrap();
+        pool.execute(
+            r#"CREATE TABLE test_unknown_types (bar TIMESTAMP, foo BOOL DEFAULT FALSE)"#,
+            (),
+        )
+        .await
+        .unwrap();
         pool.execute(
             r#"INSERT INTO test_unknown_types VALUES ('2004-10-19 10:23:54')"#,
             (),
@@ -803,14 +854,33 @@ mod tests {
         let db_row = db_row.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
-            r#"DbRow { map: {"bar": Other("timestamp", [0, 0, 137, 201, 15, 13, 226, 128])} }"#
+            "DbRow { map: {\"bar\": Other(\"timestamp\", [0, 0, 137, 201, 15, 13, 226, 128]), \
+             \"foo\": Boolean(false)} }"
         );
-
-        ///////////////////////////////////
-        pool.drop_table("test_unknown_types").await.unwrap();
-        pool.execute(r#"CREATE TABLE test_unknown_types (bar TEXT[])"#, ())
+        let db_value = db_row.get("bar").unwrap();
+        pool.execute(
+            r#"UPDATE test_unknown_types SET foo = TRUE WHERE bar = $1"#,
+            params![db_value],
+        )
+        .await
+        .unwrap();
+        let mut db_row: Vec<DbRow> = pool
+            .query(r#"SELECT * FROM test_unknown_types"#, ())
             .await
             .unwrap();
+        let db_row = db_row.pop().unwrap();
+        assert_eq!(
+            format!("{db_row:?}"),
+            r#"DbRow { map: {"bar": Other("timestamp", [0, 0, 137, 201, 15, 13, 226, 128]), "foo": Boolean(true)} }"#
+        );
+        ///////////////////////////////////
+        pool.drop_table("test_unknown_types").await.unwrap();
+        pool.execute(
+            r#"CREATE TABLE test_unknown_types (bar TEXT[], foo BOOL DEFAULT FALSE)"#,
+            (),
+        )
+        .await
+        .unwrap();
         pool.execute(
             r#"INSERT INTO test_unknown_types VALUES ('{"meeting", "lunch"}')"#,
             (),
@@ -824,7 +894,23 @@ mod tests {
         let db_row = db_row.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
-            r#"DbRow { map: {"bar": Other("_text", [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 25, 0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0, 7, 109, 101, 101, 116, 105, 110, 103, 0, 0, 0, 5, 108, 117, 110, 99, 104])} }"#
+            r#"DbRow { map: {"bar": Other("_text", [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 25, 0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0, 7, 109, 101, 101, 116, 105, 110, 103, 0, 0, 0, 5, 108, 117, 110, 99, 104]), "foo": Boolean(false)} }"#
+        );
+        let db_value = db_row.get("bar").unwrap();
+        pool.execute(
+            r#"UPDATE test_unknown_types SET foo = TRUE WHERE bar = $1"#,
+            params![db_value],
+        )
+        .await
+        .unwrap();
+        let mut db_row: Vec<DbRow> = pool
+            .query(r#"SELECT * FROM test_unknown_types"#, ())
+            .await
+            .unwrap();
+        let db_row = db_row.pop().unwrap();
+        assert_eq!(
+            format!("{db_row:?}"),
+            r#"DbRow { map: {"bar": Other("_text", [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 25, 0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0, 7, 109, 101, 101, 116, 105, 110, 103, 0, 0, 0, 5, 108, 117, 110, 99, 104]), "foo": Boolean(true)} }"#
         );
     }
 }
