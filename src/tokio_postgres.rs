@@ -3,7 +3,7 @@
 use crate::{
     core::{CachingStrategy, DbError, DbQuery},
     db_kind::{DbKind, MAX_PARAMS_POSTGRES},
-    db_value::{DbParams, DbRow, DbRows, DbValue, FromDbRows, IntoDbParams, IntoDbRows},
+    db_value::{DbParams, DbRow, DbRows, DbValue, IntoDbParams, IntoDbRows},
     shared::{EditType, edit},
 };
 
@@ -177,11 +177,11 @@ impl DbQuery for TokioPostgresPool {
     }
 
     /// Implements [DbQuery::query()] for PostgreSQL.
-    async fn query<T: FromDbRows>(
+    async fn query(
         &self,
         sql: &str,
         into_db_params: impl IntoDbParams + Send,
-    ) -> Result<T, DbError> {
+    ) -> Result<DbRows, DbError> {
         let into_db_params = into_db_params.into_db_params();
         let client =
             self.pool.get().await.map_err(|err| {
@@ -290,7 +290,7 @@ impl DbQuery for TokioPostgresPool {
         if self.get_cache_aware_query() {
             self.clear_cache_for_affected_tables(sql).await?;
         }
-        Ok(FromDbRows::from(db_rows))
+        Ok(DbRows { rows: db_rows })
     }
 
     /// Implements [DbQuery::insert()] for PostgreSQL
@@ -454,19 +454,19 @@ mod tests {
         .unwrap();
 
         // Test aggregate:
-        let rows: Vec<DbRow> = pool
+        let rows: DbRows = pool
             .query("SELECT MAX(int_value) FROM test_table_indirect", ())
             .await
             .unwrap();
         assert_eq!(
-            rows,
+            rows.rows,
             [db_row! {
                 "max" => 1_i64,
             }]
         );
 
         // Test alias:
-        let rows: Vec<DbRow> = pool
+        let rows: DbRows = pool
             .query(
                 "SELECT bool_value AS bool_value_alias FROM test_table_indirect",
                 (),
@@ -474,14 +474,14 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            rows,
+            rows.rows,
             [db_row! {
                 "bool_value_alias" => true,
             }]
         );
 
         // Test aggregate with alias:
-        let rows: Vec<DbRow> = pool
+        let rows: DbRows = pool
             .query(
                 "SELECT MAX(int_value) AS max_int_value FROM test_table_indirect",
                 (),
@@ -489,14 +489,14 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            rows,
+            rows.rows,
             [db_row! {
                 "max_int_value" => 1_i64,
             }]
         );
 
         // Test non-aggregate function:
-        let rows: Vec<DbRow> = pool
+        let rows: DbRows = pool
             .query(
                 "SELECT CAST(int_value AS TEXT) FROM test_table_indirect",
                 (),
@@ -504,14 +504,14 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            rows,
+            rows.rows,
             [db_row! {
                 "int_value" => "1",
             }]
         );
 
         // Test non-aggregate function with alias:
-        let rows: Vec<DbRow> = pool
+        let rows: DbRows = pool
             .query(
                 "SELECT CAST(int_value AS TEXT) AS int_value_cast FROM test_table_indirect",
                 (),
@@ -519,7 +519,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            rows,
+            rows.rows,
             [db_row! {
                 "int_value_cast" => "1",
             }]
@@ -636,7 +636,7 @@ mod tests {
             _ => panic!(),
         };
 
-        let rows: Vec<DbRow> = pool
+        let rows: DbRows = pool
             .query(
                 r#"select bar from test_special_floats where bar = $1"#,
                 params![DbValue::BigReal(f64::NEG_INFINITY)],
@@ -654,7 +654,7 @@ mod tests {
             _ => panic!(),
         };
 
-        let rows: Vec<DbRow> = pool
+        let rows: DbRows = pool
             .query(
                 r#"select pseudo_bar from test_special_floats where pseudo_bar = $1"#,
                 &["-Infinity"],

@@ -2,10 +2,7 @@
 
 use crate::{
     db_kind::DbKind,
-    db_value::{
-        ColumnMap, DbParams, DbRow, DbRows, DbValue, FromDbRow, FromDbRows, IntoDbParams,
-        IntoDbRows, StringRow,
-    },
+    db_value::{ColumnMap, DbParams, DbRow, DbRows, DbValue, IntoDbParams, IntoDbRows, StringRow},
     memory::{
         DEFAULT_MEMORY_QUERY_CACHE_SIZE, MemoryQueryCacheKey, MemoryQueryCacheValue,
         clear_memory_query_cache, exists_in_meta_cache, get_memory_query_cache,
@@ -491,7 +488,7 @@ pub trait DbQuery {
     /// Get the SQL code that is used to define the given view.
     async fn get_view_sql(&self, view: &str) -> Result<String, DbError> {
         let view_sql = {
-            let rows: Vec<DbRow> = {
+            let rows: DbRows = {
                 let (sql, params) = self.kind().view_sql_sql(view);
                 self.query(&sql, &params).await?
             };
@@ -586,7 +583,7 @@ pub trait DbQuery {
                        ORDER BY "last_modified" DESC
                        LIMIT 1"#,
                 );
-                let rows: Vec<DbRow> = self.query(&sql, parameters).await?;
+                let rows: DbRows = self.query(&sql, parameters).await?;
                 match rows.len() {
                     0 => Ok(0),
                     1 => {
@@ -627,7 +624,7 @@ pub trait DbQuery {
                     p = self.kind().param_prefix(),
                 );
                 let table_param = format!(r#"%"{table}"%"#);
-                let rows: Vec<DbRow> = self.query(&sql, &[&table_param]).await?;
+                let rows: DbRows = self.query(&sql, &[&table_param]).await?;
                 match rows.first() {
                     Some(row) => match row.get("last_verified") {
                         Some(value) if value == DbValue::Null => Ok(0),
@@ -646,12 +643,12 @@ pub trait DbQuery {
     /// Execute a SQL command, returning a vector of rows. If the result of the command exists
     /// in the cache, get the value from it instead of from the table(s) actually mentioned in the
     /// command, using the given [CachingStrategy].
-    async fn cache<T: FromDbRows>(
+    async fn cache(
         &self,
         tables: &[&str],
         sql: &str,
         params: impl IntoDbParams + Send + Copy + Sync,
-    ) -> Result<T, DbError> {
+    ) -> Result<DbRows, DbError> {
         let db_cache = async |tables: &[&str],
                               sql: &str,
                               params: &DbParams|
@@ -687,7 +684,7 @@ pub trait DbQuery {
             let cache_params = &["[", "]", &tables_param, sql, &params_param];
 
             let strings = {
-                let rows: Vec<DbRow> = self.query(&cache_sql, cache_params).await?;
+                let rows: DbRows = self.query(&cache_sql, cache_params).await?;
                 let strings = rows
                     .iter()
                     .map(|row| match row.values().nth(0) {
@@ -711,10 +708,10 @@ pub trait DbQuery {
                     Ok(db_rows)
                 }
                 None => {
-                    let db_rows: Vec<DbRow> = self.query(sql, params).await?;
+                    let db_rows: DbRows = self.query(sql, params).await?;
                     let rows_as_string = {
                         let mut rows_as_string = vec![];
-                        for db_row in &db_rows {
+                        for db_row in &db_rows.rows {
                             let db_row = serde_json::to_string(db_row).map_err(|err| {
                                 DbError::DataError(format!("Invalid data ({err}): {db_row:?}"))
                             })?;
@@ -730,7 +727,7 @@ pub trait DbQuery {
                     );
                     let insert_params = [&tables_param, sql, &params_param, &rows_as_string];
                     self.execute_no_cache(&insert_sql, &insert_params).await?;
-                    Ok(db_rows)
+                    Ok(db_rows.rows)
                 }
             }
         };
@@ -770,7 +767,7 @@ pub trait DbQuery {
                     Ok(db_rows)
                 }
                 None => {
-                    let db_rows: Vec<DbRow> = self.query(sql, params).await?;
+                    let db_rows: DbRows = self.query(sql, params).await?;
                     let mut cache = get_memory_query_cache()?;
                     // If the number of entries exceeds the allowed cache size, remove the oldest
                     // keys first.
@@ -792,22 +789,19 @@ pub trait DbQuery {
                                 .as_millis(),
                         },
                     );
-                    Ok(db_rows)
+                    Ok(db_rows.rows)
                 }
             }
         };
 
         // Now proceed to lookup the given query for the given tables in the cache:
         match self.get_caching_strategy() {
-            CachingStrategy::None => {
-                let rows: Vec<DbRow> = self.query(sql, params).await?;
-                Ok(FromDbRows::from(rows))
-            }
+            CachingStrategy::None => self.query(sql, params).await,
             CachingStrategy::TruncateAll | CachingStrategy::Truncate => {
                 self.ensure_cache_tables_exist().await?;
                 self.update_cached_views(tables).await?;
                 let rows: Vec<DbRow> = db_cache(tables, sql, &params.into_db_params()).await?;
-                Ok(FromDbRows::from(rows))
+                Ok(DbRows { rows: rows })
             }
             CachingStrategy::Trigger => {
                 let views = self
@@ -828,12 +822,12 @@ pub trait DbQuery {
                     self.ensure_caching_triggers_exist_for_view(view).await?;
                 }
                 let rows: Vec<DbRow> = db_cache(&tables, sql, &params.into_db_params()).await?;
-                Ok(FromDbRows::from(rows))
+                Ok(DbRows { rows: rows })
             }
             CachingStrategy::Memory(cache_size) => {
                 self.update_cached_views(tables).await?;
                 let rows = mem_cache(tables, sql, &params.into_db_params(), cache_size).await?;
-                Ok(FromDbRows::from(rows))
+                Ok(DbRows { rows: rows })
             }
         }
     }
@@ -842,8 +836,8 @@ pub trait DbQuery {
     async fn columns(&self, table: &str) -> Result<ColumnMap, DbError> {
         let mut columns = ColumnMap::new();
         let (sql, params) = self.kind().columns_sql(table);
-        let rows: Vec<DbRow> = self.query(&sql, params).await?;
-        for row in &rows {
+        let rows: DbRows = self.query(&sql, params).await?;
+        for row in &rows.rows {
             match (
                 row.get("column_name")
                     .and_then(|value| Some::<String>(value.into())),
@@ -872,7 +866,7 @@ pub trait DbQuery {
     /// Retrieve the primary key columns for a given table.
     async fn primary_keys(&self, table: &str) -> Result<Vec<String>, DbError> {
         let (sql, params) = self.kind().primary_keys_sql(table);
-        let rows: Vec<DbRow> = self.query(&sql, params).await?;
+        let rows: DbRows = self.query(&sql, params).await?;
         rows.iter()
             .map(|row| {
                 match row
@@ -889,7 +883,7 @@ pub trait DbQuery {
     /// Execute a SQL command, returning nothing.
     async fn execute(&self, sql: &str, params: impl IntoDbParams + Send) -> Result<(), DbError> {
         let params = params.into_db_params();
-        let _: Vec<DbRow> = match params {
+        let _: DbRows = match params {
             DbParams::None => self.query(sql, ()).await?,
             _ => self.query(sql, params).await?,
         };
@@ -904,7 +898,7 @@ pub trait DbQuery {
         params: impl IntoDbParams + Send,
     ) -> Result<(), DbError> {
         let params = params.into_db_params();
-        let _: Vec<DbRow> = match params {
+        let _: DbRows = match params {
             DbParams::None => self.query(sql, ()).await?,
             _ => self.query(sql, params).await?,
         };
@@ -915,26 +909,26 @@ pub trait DbQuery {
     fn execute_batch(&self, sql: &str) -> impl Future<Output = Result<(), DbError>> + Send;
 
     /// Execute a SQL command, returning a vector of rows.
-    fn query<T: FromDbRows>(
+    fn query(
         &self,
         sql: &str,
         params: impl IntoDbParams + Send,
-    ) -> impl Future<Output = Result<T, DbError>> + Send;
+    ) -> impl Future<Output = Result<DbRows, DbError>> + Send;
 
     /// Execute a SQL command, returning a single row.
-    async fn query_row<T: FromDbRow>(
+    async fn query_row(
         &self,
         sql: &str,
         params: impl IntoDbParams + Send,
-    ) -> Result<T, DbError> {
-        let rows: Vec<DbRow> = self.query(&sql, params).await?;
+    ) -> Result<DbRow, DbError> {
+        let rows: DbRows = self.query(&sql, params).await?;
         if rows.len() > 1 {
             return Err(DbError::DataError(
                 "More than one row returned for query_row()".to_string(),
             ));
         }
-        match rows.into_iter().next() {
-            Some(row) => Ok(FromDbRow::from(row)),
+        match rows.rows.into_iter().next() {
+            Some(row) => Ok(row),
             None => Err(DbError::DataError("No row found".to_string())),
         }
     }
@@ -973,7 +967,7 @@ pub trait DbQuery {
         sql: &str,
         params: impl IntoDbParams + Send,
     ) -> Result<Vec<String>, DbError> {
-        let rows: Vec<DbRow> = self.query(sql, params).await?;
+        let rows: DbRows = self.query(sql, params).await?;
         rows.iter()
             .map(|row| match row.values().nth(0) {
                 Some(value) => Ok(value.into()),
@@ -1001,8 +995,15 @@ pub trait DbQuery {
         sql: &str,
         params: impl IntoDbParams + Send,
     ) -> Result<Vec<StringRow>, DbError> {
-        let rows: Vec<DbRow> = self.query(sql, params).await?;
-        Ok(<Vec<StringRow> as FromDbRows>::from(rows))
+        let rows: DbRows = self.query(sql, params).await?;
+        Ok(rows
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|(key, value)| (key.clone(), value.into()))
+                    .collect()
+            })
+            .collect())
     }
 
     /// Execute a SQL command, returning a single unsigned integer.
@@ -1112,8 +1113,8 @@ pub trait DbQuery {
             let (sql, params) = self
                 .kind()
                 .which_are_tables_sql(&unknowns.iter().map(|s| s.as_str()).collect::<Vec<_>>());
-            let rows: Vec<DbRow> = self.query(&sql, params).await?;
-            for row in &rows {
+            let rows: DbRows = self.query(&sql, params).await?;
+            for row in &rows.rows {
                 let table = row
                     .get("table_name")
                     .ok_or(DbError::DataError("No table_name found in row".to_string()))?
@@ -1126,8 +1127,8 @@ pub trait DbQuery {
             let (sql, params) = self
                 .kind()
                 .which_are_views_sql(&unknowns.iter().map(|s| s.as_str()).collect::<Vec<_>>());
-            let rows: Vec<DbRow> = self.query(&sql, params).await?;
-            for row in &rows {
+            let rows: DbRows = self.query(&sql, params).await?;
+            for row in &rows.rows {
                 let view = row
                     .get("view_name")
                     .ok_or(DbError::DataError("No view_name found in row".to_string()))?
@@ -1156,8 +1157,8 @@ pub trait DbQuery {
             let (sql, params) = self
                 .kind()
                 .which_are_views_sql(&unknowns.iter().map(|s| s.as_str()).collect::<Vec<_>>());
-            let rows: Vec<DbRow> = self.query(&sql, params).await?;
-            for row in &rows {
+            let rows: DbRows = self.query(&sql, params).await?;
+            for row in &rows.rows {
                 let view = row
                     .get("view_name")
                     .ok_or(DbError::DataError("No view_name found in row".to_string()))?
@@ -1170,8 +1171,8 @@ pub trait DbQuery {
             let (sql, params) = self
                 .kind()
                 .which_are_tables_sql(&unknowns.iter().map(|s| s.as_str()).collect::<Vec<_>>());
-            let rows: Vec<DbRow> = self.query(&sql, params).await?;
-            for row in &rows {
+            let rows: DbRows = self.query(&sql, params).await?;
+            for row in &rows.rows {
                 let table = row
                     .get("table_name")
                     .ok_or(DbError::DataError("No table_name found in row".to_string()))?

@@ -1018,41 +1018,6 @@ impl IntoDbRows for &Vec<JsonRow> {
     }
 }
 
-/// Enables conversion from a vector of [DbRow]s into something.
-pub trait FromDbRows {
-    fn from(rows: Vec<DbRow>) -> Self;
-}
-
-impl FromDbRows for Vec<StringRow> {
-    fn from(rows: Vec<DbRow>) -> Self {
-        rows.iter()
-            .map(|row| {
-                row.iter()
-                    .map(|(key, value)| (key.clone(), value.into()))
-                    .collect()
-            })
-            .collect()
-    }
-}
-
-impl FromDbRows for Vec<JsonRow> {
-    fn from(rows: Vec<DbRow>) -> Self {
-        rows.into_iter()
-            .map(|row| {
-                row.into_iter()
-                    .map(|(key, val)| (key, val.into()))
-                    .collect()
-            })
-            .collect::<Vec<_>>()
-    }
-}
-
-impl FromDbRows for Vec<DbRow> {
-    fn from(rows: Vec<DbRow>) -> Self {
-        rows
-    }
-}
-
 /// Enables conversion from something into a [DbRow]
 pub trait IntoDbRow {
     fn into_db_row(self) -> DbRow;
@@ -1067,25 +1032,6 @@ impl IntoDbRow for DbRow {
 impl IntoDbRow for JsonRow {
     fn into_db_row(self) -> DbRow {
         self.into_iter()
-            .map(|(key, val)| (key, val.into()))
-            .collect()
-    }
-}
-
-/// Enables conversion from a [DbRow] into something.
-pub trait FromDbRow {
-    fn from(row: DbRow) -> Self;
-}
-
-impl FromDbRow for DbRow {
-    fn from(row: DbRow) -> Self {
-        row
-    }
-}
-
-impl FromDbRow for JsonRow {
-    fn from(row: DbRow) -> Self {
-        row.into_iter()
             .map(|(key, val)| (key, val.into()))
             .collect()
     }

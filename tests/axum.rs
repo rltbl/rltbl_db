@@ -40,12 +40,10 @@ async fn run_axum(url: &str) {
     .await
     .unwrap();
 
-    let _: Vec<DbRow> = pool
-        .cache(&["test"], "SELECT 1 FROM test", ())
+    pool.cache(&["test"], "SELECT 1 FROM test", ())
         .await
         .unwrap();
-    let _: Vec<DbRow> = pool
-        .cache(&["test"], "SELECT 1 FROM test", ())
+    pool.cache(&["test"], "SELECT 1 FROM test", ())
         .await
         .unwrap();
 
