@@ -247,8 +247,8 @@ impl DbQuery for RusqlitePool {
         }
     }
 
-    /// Implements [DbQuery::query_no_cache()] for SQLite.
-    async fn query_no_cache<T: FromDbRows>(
+    /// Implements [DbQuery::query()] for SQLite.
+    async fn query<T: FromDbRows>(
         &self,
         sql: &str,
         params: impl IntoDbParams + Send,
@@ -280,6 +280,9 @@ impl DbQuery for RusqlitePool {
             .await
             .map_err(|err| DbError::DatabaseError(err.to_string()))??
         };
+        if self.get_cache_aware_query() {
+            self.clear_cache_for_affected_tables(sql).await?;
+        }
         Ok(FromDbRows::from(rows))
     }
 

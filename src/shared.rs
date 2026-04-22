@@ -253,9 +253,7 @@ pub(crate) async fn edit<T: FromDbRows>(
                     .as_slice(),
             ),
         };
-        let rows: Vec<DbRow> = pool
-            .query_no_cache(&sql, params_to_be_bound.clone())
-            .await?;
+        let rows: Vec<DbRow> = pool.query(&sql, params_to_be_bound.clone()).await?;
         lines_to_bind.clear();
         params_to_be_bound.clear();
         *param_idx = 0;

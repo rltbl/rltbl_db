@@ -136,8 +136,8 @@ impl DbQuery for LibSQLPool {
         }
     }
 
-    /// Implements [DbQuery::query_no_cache()] for SQLite.
-    async fn query_no_cache<T: FromDbRows>(
+    /// Implements [DbQuery::query()] for SQLite.
+    async fn query<T: FromDbRows>(
         &self,
         sql: &str,
         params: impl IntoDbParams + Send,
@@ -173,6 +173,9 @@ impl DbQuery for LibSQLPool {
             db_rows.push(db_row);
         }
 
+        if self.get_cache_aware_query() {
+            self.clear_cache_for_affected_tables(sql).await?;
+        }
         Ok(FromDbRows::from(db_rows))
     }
 

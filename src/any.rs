@@ -170,18 +170,18 @@ impl DbQuery for AnyPool {
         }
     }
 
-    async fn query_no_cache<T: FromDbRows>(
+    async fn query<T: FromDbRows>(
         &self,
         sql: &str,
         params: impl IntoDbParams + Send,
     ) -> Result<T, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
-            AnyPool::Rusqlite(pool) => pool.query_no_cache(sql, params).await,
+            AnyPool::Rusqlite(pool) => pool.query(sql, params).await,
             #[cfg(feature = "tokio-postgres")]
-            AnyPool::TokioPostgres(pool) => pool.query_no_cache(sql, params).await,
+            AnyPool::TokioPostgres(pool) => pool.query(sql, params).await,
             #[cfg(feature = "libsql")]
-            AnyPool::LibSQL(pool) => pool.query_no_cache(sql, params).await,
+            AnyPool::LibSQL(pool) => pool.query(sql, params).await,
         }
     }
 
