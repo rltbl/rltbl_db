@@ -893,6 +893,38 @@ impl DbRows {
     }
 }
 
+impl TryInto<String> for DbRows {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<String, Self::Error> {
+        Ok(self.value()?.to_string())
+    }
+}
+
+impl TryInto<u64> for DbRows {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<u64, Self::Error> {
+        Ok(self.value()?.try_into()?)
+    }
+}
+
+impl TryInto<i64> for DbRows {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<i64, Self::Error> {
+        Ok(self.value()?.try_into()?)
+    }
+}
+
+impl TryInto<f64> for DbRows {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<f64, Self::Error> {
+        Ok(self.value()?.try_into()?)
+    }
+}
+
 /// A row of database values indexed by column name.
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(transparent)] // See https://serde.rs/container-attrs.html#transparent

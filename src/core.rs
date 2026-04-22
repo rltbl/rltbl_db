@@ -2,7 +2,7 @@
 
 use crate::{
     db_kind::DbKind,
-    db_value::{ColumnMap, DbParams, DbRow, DbRows, DbValue, IntoDbParams, IntoDbRows, StringRow},
+    db_value::{ColumnMap, DbParams, DbRow, DbRows, DbValue, IntoDbParams, IntoDbRows},
     memory::{
         DEFAULT_MEMORY_QUERY_CACHE_SIZE, MemoryQueryCacheKey, MemoryQueryCacheValue,
         clear_memory_query_cache, exists_in_meta_cache, get_memory_query_cache,
@@ -914,115 +914,6 @@ pub trait DbQuery {
         sql: &str,
         params: impl IntoDbParams + Send,
     ) -> impl Future<Output = Result<DbRows, DbError>> + Send;
-
-    /// Execute a SQL command, returning a single row.
-    async fn query_row(
-        &self,
-        sql: &str,
-        params: impl IntoDbParams + Send,
-    ) -> Result<DbRow, DbError> {
-        let rows: DbRows = self.query(&sql, params).await?;
-        if rows.len() > 1 {
-            return Err(DbError::DataError(
-                "More than one row returned for query_row()".to_string(),
-            ));
-        }
-        match rows.rows.into_iter().next() {
-            Some(row) => Ok(row),
-            None => Err(DbError::DataError("No row found".to_string())),
-        }
-    }
-
-    /// Execute a SQL command, returning a single value.
-    async fn query_value(
-        &self,
-        sql: &str,
-        params: impl IntoDbParams + Send,
-    ) -> Result<DbValue, DbError> {
-        let row: DbRow = self.query_row(sql, params).await?;
-        if row.len() > 1 {
-            return Err(DbError::DataError(
-                "More than one value returned for query_value()".to_string(),
-            ));
-        }
-        match row.values().next() {
-            Some(value) => Ok(value.clone()),
-            None => Err(DbError::DataError("No values found".to_string())),
-        }
-    }
-
-    /// Execute a SQL command, returning a single string.
-    async fn query_string(
-        &self,
-        sql: &str,
-        params: impl IntoDbParams + Send,
-    ) -> Result<String, DbError> {
-        let value = self.query_value(sql, params).await?;
-        Ok(value.into())
-    }
-
-    /// Execute a SQL command, returning a vector of strings: the first value for each row.
-    async fn query_strings(
-        &self,
-        sql: &str,
-        params: impl IntoDbParams + Send,
-    ) -> Result<Vec<String>, DbError> {
-        let rows: DbRows = self.query(sql, params).await?;
-        rows.iter()
-            .map(|row| match row.values().nth(0) {
-                Some(value) => Ok(value.into()),
-                None => Err(DbError::DataError("Empty row".to_owned())),
-            })
-            .collect()
-    }
-
-    /// Execute a SQL command, returning a row of strings.
-    async fn query_string_row(
-        &self,
-        sql: &str,
-        params: impl IntoDbParams + Send,
-    ) -> Result<StringRow, DbError> {
-        let row: DbRow = self.query_row(sql, params).await?;
-        Ok(row
-            .iter()
-            .map(|(key, value)| (key.clone(), value.into()))
-            .collect())
-    }
-
-    /// Execute a SQL command, returning a vector of rows of strings.
-    async fn query_string_rows(
-        &self,
-        sql: &str,
-        params: impl IntoDbParams + Send,
-    ) -> Result<Vec<StringRow>, DbError> {
-        let rows: DbRows = self.query(sql, params).await?;
-        Ok(rows
-            .iter()
-            .map(|row| {
-                row.iter()
-                    .map(|(key, value)| (key.clone(), value.into()))
-                    .collect()
-            })
-            .collect())
-    }
-
-    /// Execute a SQL command, returning a single unsigned integer.
-    async fn query_u64(&self, sql: &str, params: impl IntoDbParams + Send) -> Result<u64, DbError> {
-        let value = self.query_value(sql, params).await?;
-        Ok(value.try_into()?)
-    }
-
-    /// Execute a SQL command, returning a single signed integer.
-    async fn query_i64(&self, sql: &str, params: impl IntoDbParams + Send) -> Result<i64, DbError> {
-        let value = self.query_value(sql, params).await?;
-        Ok(value.try_into()?)
-    }
-
-    /// Execute a SQL command, returning a single float.
-    async fn query_f64(&self, sql: &str, params: impl IntoDbParams + Send) -> Result<f64, DbError> {
-        let value = self.query_value(sql, params).await?;
-        Ok(value.try_into()?)
-    }
 
     /// Insert rows into the given table. If an input row does not have a key for a column,
     /// use NULL as the value of that column when inserting the row to the table.

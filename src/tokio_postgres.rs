@@ -619,18 +619,24 @@ mod tests {
         }
 
         let value = pool
-            .query_value("select max(bar) from test_special_floats", ())
+            .query("select max(bar) from test_special_floats", ())
             .await
-            .unwrap();
+            .unwrap()
+            .value()
+            .unwrap()
+            .clone();
         match value {
             DbValue::BigReal(num) if num.is_nan() => (),
             _ => panic!(),
         };
 
         let value = pool
-            .query_value("select max(pseudo_bar) from test_special_floats", ())
+            .query("select max(pseudo_bar) from test_special_floats", ())
             .await
-            .unwrap();
+            .unwrap()
+            .value()
+            .unwrap()
+            .clone();
         match value {
             DbValue::Text(txt) if txt == "NaN" => (),
             _ => panic!(),
