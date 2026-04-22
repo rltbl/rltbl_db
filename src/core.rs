@@ -3,8 +3,8 @@
 use crate::{
     db_kind::DbKind,
     db_value::{
-        ColumnMap, DbParams, DbRow, DbValue, FromDbRow, FromDbRows, IntoDbParams, IntoDbRows,
-        StringRow,
+        ColumnMap, DbParams, DbRow, DbRows, DbValue, FromDbRow, FromDbRows, IntoDbParams,
+        IntoDbRows, StringRow,
     },
     memory::{
         DEFAULT_MEMORY_QUERY_CACHE_SIZE, MemoryQueryCacheKey, MemoryQueryCacheValue,
@@ -1035,13 +1035,13 @@ pub trait DbQuery {
     /// Like [DbQuery::insert()], but in addition this function also returns the columns from the
     /// inserted data that are included in `returning`, or all of the inserted data if `returning`
     /// is an empty list.
-    fn insert_returning<T: FromDbRows>(
+    fn insert_returning(
         &self,
         table: &str,
         columns: &[&str],
         rows: impl IntoDbRows,
         returning: &[&str],
-    ) -> impl Future<Output = Result<T, DbError>>;
+    ) -> impl Future<Output = Result<DbRows, DbError>>;
 
     /// Update the given table using the given rows. The table should have a primary key
     /// and any columns included in the primary key should be present within each input row.
@@ -1057,13 +1057,13 @@ pub trait DbQuery {
     /// Like [DbQuery::update()], but in addition this function also returns the columns from the
     /// updated data that are included in `returning`, or all of the updated data if `returning`
     /// is an empty list.
-    fn update_returning<T: FromDbRows>(
+    fn update_returning(
         &self,
         table: &str,
         columns: &[&str],
         rows: impl IntoDbRows,
         returning: &[&str],
-    ) -> impl Future<Output = Result<T, DbError>>;
+    ) -> impl Future<Output = Result<DbRows, DbError>>;
 
     /// Attempt to insert the given rows to the given table, similarly to [DbQuery::insert()].
     /// In case there is a conflict, update the table instead, similarly to [DbQuery::update()].
@@ -1077,13 +1077,13 @@ pub trait DbQuery {
     /// Like [DbQuery::upsert()], but in addition this function also returns the columns from the
     /// upserted data that are included in `returning`, or all of the upserted data if `returning`
     /// is an empty list.
-    fn upsert_returning<T: FromDbRows>(
+    fn upsert_returning(
         &self,
         table: &str,
         columns: &[&str],
         rows: impl IntoDbRows,
         returning: &[&str],
-    ) -> impl Future<Output = Result<T, DbError>>;
+    ) -> impl Future<Output = Result<DbRows, DbError>>;
 
     /// Check whether the given table exists in the database.
     async fn table_exists(&self, table: &str) -> Result<bool, DbError> {

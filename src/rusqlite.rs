@@ -3,7 +3,7 @@
 use crate::{
     core::{CachingStrategy, DbError, DbQuery},
     db_kind::{DbKind, MAX_PARAMS_SQLITE},
-    db_value::{DbParams, DbRow, DbValue, FromDbRows, IntoDbParams, IntoDbRows},
+    db_value::{DbParams, DbRow, DbRows, DbValue, FromDbRows, IntoDbParams, IntoDbRows},
     shared::{EditType, edit},
 };
 use deadpool_sqlite::{
@@ -293,7 +293,7 @@ impl DbQuery for RusqlitePool {
         columns: &[&str],
         rows: impl IntoDbRows,
     ) -> Result<(), DbError> {
-        let _: Vec<DbRow> = edit(
+        let _: DbRows = edit(
             self,
             &EditType::Insert,
             &MAX_PARAMS_SQLITE,
@@ -308,13 +308,13 @@ impl DbQuery for RusqlitePool {
     }
 
     /// Implements [DbQuery::insert_returning()] for SQLite.
-    async fn insert_returning<T: FromDbRows>(
+    async fn insert_returning(
         &self,
         table: &str,
         columns: &[&str],
         rows: impl IntoDbRows,
         returning: &[&str],
-    ) -> Result<T, DbError> {
+    ) -> Result<DbRows, DbError> {
         edit(
             self,
             &EditType::Insert,
@@ -335,7 +335,7 @@ impl DbQuery for RusqlitePool {
         columns: &[&str],
         rows: impl IntoDbRows,
     ) -> Result<(), DbError> {
-        let _: Vec<DbRow> = edit(
+        let _: DbRows = edit(
             self,
             &EditType::Update,
             &MAX_PARAMS_SQLITE,
@@ -350,13 +350,13 @@ impl DbQuery for RusqlitePool {
     }
 
     /// Implements [DbQuery::update_returning()] for SQLite.
-    async fn update_returning<T: FromDbRows>(
+    async fn update_returning(
         &self,
         table: &str,
         columns: &[&str],
         rows: impl IntoDbRows,
         returning: &[&str],
-    ) -> Result<T, DbError> {
+    ) -> Result<DbRows, DbError> {
         edit(
             self,
             &EditType::Update,
@@ -377,7 +377,7 @@ impl DbQuery for RusqlitePool {
         columns: &[&str],
         rows: impl IntoDbRows,
     ) -> Result<(), DbError> {
-        let _: Vec<DbRow> = edit(
+        let _: DbRows = edit(
             self,
             &EditType::Upsert,
             &MAX_PARAMS_SQLITE,
@@ -392,13 +392,13 @@ impl DbQuery for RusqlitePool {
     }
 
     /// Implements [DbQuery::upsert_returning()] for SQLite.
-    async fn upsert_returning<T: FromDbRows>(
+    async fn upsert_returning(
         &self,
         table: &str,
         columns: &[&str],
         rows: impl IntoDbRows,
         returning: &[&str],
-    ) -> Result<T, DbError> {
+    ) -> Result<DbRows, DbError> {
         edit(
             self,
             &EditType::Upsert,

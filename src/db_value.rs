@@ -851,7 +851,7 @@ impl<T: IntoDbValue> IntoDbParams for Vec<T> {
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(transparent)] // See https://serde.rs/container-attrs.html#transparent
 pub struct DbRows {
-    rows: Vec<DbRow>,
+    pub rows: Vec<DbRow>,
 }
 
 impl Deref for DbRows {

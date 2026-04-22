@@ -17,7 +17,7 @@
 use crate::{
     core::{CachingStrategy, DbError, DbQuery},
     db_kind::DbKind,
-    db_value::{FromDbRows, IntoDbParams, IntoDbRows},
+    db_value::{DbRows, FromDbRows, IntoDbParams, IntoDbRows},
 };
 
 #[cfg(feature = "rusqlite")]
@@ -201,13 +201,13 @@ impl DbQuery for AnyPool {
         }
     }
 
-    async fn insert_returning<T: FromDbRows>(
+    async fn insert_returning(
         &self,
         table: &str,
         columns: &[&str],
         rows: impl IntoDbRows,
         returning: &[&str],
-    ) -> Result<T, DbError> {
+    ) -> Result<DbRows, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.insert_returning(table, columns, rows, returning).await,
@@ -236,13 +236,13 @@ impl DbQuery for AnyPool {
         }
     }
 
-    async fn update_returning<T: FromDbRows>(
+    async fn update_returning(
         &self,
         table: &str,
         columns: &[&str],
         rows: impl IntoDbRows,
         returning: &[&str],
-    ) -> Result<T, DbError> {
+    ) -> Result<DbRows, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.update_returning(table, columns, rows, returning).await,
@@ -271,13 +271,13 @@ impl DbQuery for AnyPool {
         }
     }
 
-    async fn upsert_returning<T: FromDbRows>(
+    async fn upsert_returning(
         &self,
         table: &str,
         columns: &[&str],
         rows: impl IntoDbRows,
         returning: &[&str],
-    ) -> Result<T, DbError> {
+    ) -> Result<DbRows, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.upsert_returning(table, columns, rows, returning).await,
@@ -891,7 +891,7 @@ mod tests {
         .unwrap();
 
         // Without specific returning columns:
-        let rows: Vec<DbRow> = pool
+        let rows: DbRows = pool
             .insert_returning(
                 "test_insert_returning",
                 &["text_value", "int_value", "bool_value"],
@@ -908,29 +908,31 @@ mod tests {
             .unwrap();
         assert_eq!(
             rows,
-            [
-                db_row! {
-                    "text_value" => "TEXT",
-                    "alt_text_value" => DbValue::Null,
-                    "float_value" => DbValue::Null,
-                    "int_value" => DbValue::Null,
-                    "bool_value" => DbValue::Null,
-                },
-                db_row! {
-                    "text_value" => DbValue::Null,
-                    "alt_text_value" => DbValue::Null,
-                    "float_value" => DbValue::Null,
-                    "int_value" => 1_i64,
-                    "bool_value" => match pool.kind() {
-                        DbKind::SQLite => DbValue::from(1_i64),
-                        DbKind::PostgreSQL => DbValue::from(true),
+            DbRows {
+                rows: vec![
+                    db_row! {
+                        "text_value" => "TEXT",
+                        "alt_text_value" => DbValue::Null,
+                        "float_value" => DbValue::Null,
+                        "int_value" => DbValue::Null,
+                        "bool_value" => DbValue::Null,
                     },
-                }
-            ]
+                    db_row! {
+                        "text_value" => DbValue::Null,
+                        "alt_text_value" => DbValue::Null,
+                        "float_value" => DbValue::Null,
+                        "int_value" => 1_i64,
+                        "bool_value" => match pool.kind() {
+                            DbKind::SQLite => DbValue::from(1_i64),
+                            DbKind::PostgreSQL => DbValue::from(true),
+                        },
+                    }
+                ]
+            }
         );
 
         // With specific returning columns:
-        let rows: Vec<DbRow> = pool
+        let rows: DbRows = pool
             .insert_returning(
                 "test_insert_returning",
                 &["text_value", "int_value", "bool_value"],
@@ -949,16 +951,18 @@ mod tests {
             .unwrap();
         assert_eq!(
             rows,
-            [
-                db_row! {
-                    "float_value" => DbValue::Null,
-                    "int_value" => DbValue::Null,
-                },
-                db_row! {
-                    "float_value" => DbValue::Null,
-                    "int_value" => 1_i64,
-                }
-            ]
+            DbRows {
+                rows: vec![
+                    db_row! {
+                        "float_value" => DbValue::Null,
+                        "int_value" => DbValue::Null,
+                    },
+                    db_row! {
+                        "float_value" => DbValue::Null,
+                        "int_value" => 1_i64,
+                    }
+                ]
+            }
         );
 
         // Clean up.
@@ -1532,7 +1536,7 @@ mod tests {
         .await
         .unwrap();
 
-        let rows: Vec<DbRow> = pool
+        let rows: DbRows = pool
             .upsert_returning(
                 "test_upsert_returning",
                 &["foo", "bar", "car", "dar", "ear"],
