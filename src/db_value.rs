@@ -848,6 +848,51 @@ impl<T: IntoDbValue> IntoDbParams for Vec<T> {
 
 // Database rows
 
+#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(transparent)] // See https://serde.rs/container-attrs.html#transparent
+pub struct DbRows {
+    rows: Vec<DbRow>,
+}
+
+impl Deref for DbRows {
+    type Target = Vec<DbRow>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.rows
+    }
+}
+
+impl DerefMut for DbRows {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.rows
+    }
+}
+
+impl DbRows {
+    pub fn row(&self) -> Result<&DbRow, DbError> {
+        // error unless exactly one row?
+        match self.rows.first() {
+            Some(row) => Ok(row),
+            None => Err(DbError::DataError(format!("Missing row"))),
+        }
+    }
+
+    pub fn value(&self) -> Result<&DbValue, DbError> {
+        // error unless exactly one value?
+        match self.row()?.first() {
+            Some((_key, value)) => Ok(value),
+            None => Err(DbError::DataError(format!("Missing value"))),
+        }
+    }
+
+    pub fn try_into_vec<T>(&self) -> Result<Vec<T>, DbError>
+    where
+        T: for<'de> Deserialize<'de>,
+    {
+        self.rows.iter().map(|row| row.try_into()).collect()
+    }
+}
+
 /// A row of database values indexed by column name.
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(transparent)] // See https://serde.rs/container-attrs.html#transparent
@@ -882,6 +927,16 @@ impl DbRow {
 
     pub fn get(&self, key: &str) -> Option<DbValue> {
         self.map.get(key).cloned()
+    }
+
+    pub fn try_into<T>(&self) -> Result<T, DbError>
+    where
+        T: for<'de> Deserialize<'de>,
+    {
+        let mut deserializer = crate::serde::DbRowDeserializer::from_db_row(self);
+        let t =
+            T::deserialize(&mut deserializer).map_err(|err| DbError::SerdeError(err.to_string()));
+        t
     }
 }
 
