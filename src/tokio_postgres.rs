@@ -14,7 +14,7 @@ use deadpool_postgres::{
     tokio_postgres::{
         NoTls,
         row::Row,
-        types::{FromSql, IsNull, ToSql, Type},
+        types::{FromSql, IsNull, ToSql, Type, to_sql_checked},
     },
 };
 use rust_decimal::Decimal;
@@ -128,31 +128,25 @@ impl ToSql for GenericPgValue {
     fn to_sql(
         &self,
         _ty: &Type,
-        _out: &mut BytesMut,
+        out: &mut BytesMut,
     ) -> Result<IsNull, Box<dyn std::error::Error + Sync + Send>>
     where
         Self: Sized,
     {
-        todo!()
+        //println!("SELF: {self:?}, TYPE: {_ty:?}");
+        out.put(&*self.0);
+        // TODO: Actually check for null rather than assume no?
+        Ok(IsNull::No)
     }
 
     fn accepts(_ty: &Type) -> bool
     where
         Self: Sized,
     {
-        todo!()
+        true
     }
 
-    fn to_sql_checked(
-        &self,
-        _ty: &Type,
-        out: &mut BytesMut,
-    ) -> Result<IsNull, Box<dyn std::error::Error + Sync + Send>> {
-        //println!("SELF: {self:?}, TYPE: {_ty:?}");
-        out.put(&*self.0);
-        // TODO: Actually check for null rather than assume no?
-        Ok(IsNull::No)
-    }
+    to_sql_checked!();
 }
 
 /// Represents a PostgreSQL database connection pool
