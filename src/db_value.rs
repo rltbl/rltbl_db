@@ -36,7 +36,7 @@ pub enum DbValue {
     Numeric(Decimal),
     /// Use with TEXT and VARCHAR column types or equivalent.
     Text(String),
-    /// TODO: Add docstring.
+    /// Other types that are not explicitly supported
     Other(String, Vec<u8>),
 }
 
@@ -178,7 +178,7 @@ impl Hash for DbValue {
                 }
             }
             DbValue::Numeric(num) => num.hash(h),
-            DbValue::Other(txt1, txt2) => format!("{txt1}{txt2:?}").hash(h),
+            DbValue::Other(type_name, bytes) => format!("{type_name}{bytes:?}").hash(h),
         }
     }
 }
@@ -204,7 +204,9 @@ impl Into<JsonValue> for DbValue {
             DbValue::BigReal(value) => json!(value),
             DbValue::Numeric(value) => json!(value),
             DbValue::Text(value) => JsonValue::String(value),
-            DbValue::Other(_type_name, _text_value) => todo!(),
+            DbValue::Other(type_name, bytes) => {
+                JsonValue::String(format!("{type_name}: {bytes:?}"))
+            }
         }
     }
 }
@@ -227,8 +229,8 @@ impl Into<String> for DbValue {
             DbValue::BigReal(number) => number.to_string(),
             DbValue::Numeric(decimal) => decimal.to_string(),
             DbValue::Text(string) => string.to_string(),
-            DbValue::Other(_type_name, you_eights) => {
-                std::str::from_utf8(&you_eights).unwrap().to_string()
+            DbValue::Other(type_name, bytes) => {
+                format!("{type_name}: {bytes:?}")
             }
         }
     }

@@ -58,10 +58,10 @@ impl TryFrom<DbParams> for Vec<Value> {
                             values.push(Value::Real(pvalue.into()))
                         }
                         DbValue::Text(pvalue) => values.push(Value::Text(pvalue)),
-                        DbValue::Other(_, _) => {
-                            return Err(DbError::InputError(
-                                "SQLite does not support type DbValue::Other".to_string(),
-                            ));
+                        DbValue::Other(type_name, bytes) => {
+                            return Err(DbError::InputError(format!(
+                                "Not supported: DbValue::Other({type_name}, {bytes:?})"
+                            )));
                         }
                     };
                 }
