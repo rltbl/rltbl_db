@@ -103,9 +103,9 @@ fn query_prepared(
                             ))
                         })?;
                     }
-                    DbValue::Other(type_name, bytes) => {
+                    DbValue::Other(type_name, bytes, string_opt) => {
                         return Err(DbError::InputError(format!(
-                            "Not supported: DbValue::Other({type_name}, {bytes:?})"
+                            "Not supported: DbValue::Other({type_name}, {bytes:?}, {string_opt:?})"
                         )));
                     }
                 };

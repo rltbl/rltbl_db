@@ -36,8 +36,9 @@ pub enum DbValue {
     Numeric(Decimal),
     /// Use with TEXT and VARCHAR column types or equivalent.
     Text(String),
-    /// Other types that are not explicitly supported
-    Other(String, Vec<u8>),
+    /// Other types that are not explicitly supported, represented by the triple
+    /// (other type, raw representation, optional string representation)
+    Other(String, Vec<u8>, Option<String>),
 }
 
 impl DbValue {
@@ -178,7 +179,9 @@ impl Hash for DbValue {
                 }
             }
             DbValue::Numeric(num) => num.hash(h),
-            DbValue::Other(type_name, bytes) => format!("{type_name}{bytes:?}").hash(h),
+            DbValue::Other(type_name, bytes, string_opt) => {
+                format!("{type_name}{bytes:?}{string_opt:?}").hash(h)
+            }
         }
     }
 }
@@ -204,8 +207,8 @@ impl Into<JsonValue> for DbValue {
             DbValue::BigReal(value) => json!(value),
             DbValue::Numeric(value) => json!(value),
             DbValue::Text(value) => JsonValue::String(value),
-            DbValue::Other(type_name, bytes) => {
-                JsonValue::String(format!("{type_name}: {bytes:?}"))
+            DbValue::Other(type_name, bytes, string_opt) => {
+                JsonValue::String(format!("{type_name}: {bytes:?}, {string_opt:?}"))
             }
         }
     }
@@ -229,8 +232,8 @@ impl Into<String> for DbValue {
             DbValue::BigReal(number) => number.to_string(),
             DbValue::Numeric(decimal) => decimal.to_string(),
             DbValue::Text(string) => string.to_string(),
-            DbValue::Other(type_name, bytes) => {
-                format!("{type_name}: {bytes:?}")
+            DbValue::Other(type_name, bytes, string_opt) => {
+                format!("{type_name}: {bytes:?}, {string_opt:?}")
             }
         }
     }

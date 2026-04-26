@@ -58,9 +58,10 @@ impl TryFrom<DbParams> for Vec<Value> {
                             values.push(Value::Real(pvalue.into()))
                         }
                         DbValue::Text(pvalue) => values.push(Value::Text(pvalue)),
-                        DbValue::Other(type_name, bytes) => {
+                        DbValue::Other(type_name, bytes, string_opt) => {
                             return Err(DbError::InputError(format!(
-                                "Not supported: DbValue::Other({type_name}, {bytes:?})"
+                                "Not supported: \
+                                 DbValue::Other({type_name}, {bytes:?}, {string_opt:?})"
                             )));
                         }
                     };

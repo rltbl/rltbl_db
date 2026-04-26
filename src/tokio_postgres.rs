@@ -19,14 +19,27 @@ use rust_decimal::Decimal;
 
 // Represents a PostgreSQL datatype that is not explicitly handled in extract_value() and query().
 #[derive(Clone, Debug)]
-struct GenericTypeValue(Option<Vec<u8>>);
+struct GenericTypeValue {
+    bytes: Option<Vec<u8>>,
+    string: Option<String>,
+}
 
 impl FromSql<'_> for GenericTypeValue {
     fn from_sql(
-        _: &Type,
+        ty: &Type,
         raw: &[u8],
     ) -> Result<GenericTypeValue, Box<dyn std::error::Error + Sync + Send>> {
-        let val = GenericTypeValue(Some(raw.to_owned()));
+        let string = match std::str::from_utf8(raw) {
+            Ok(string) => Some(string.to_string()),
+            Err(err) => {
+                eprintln!("WARNING: Unable to convert value of type '{ty}' to string: {err}.");
+                None
+            }
+        };
+        let val = GenericTypeValue {
+            bytes: Some(raw.to_owned()),
+            string,
+        };
         Ok(val)
     }
 
@@ -44,7 +57,7 @@ impl ToSql for GenericTypeValue {
     where
         Self: Sized,
     {
-        match &self.0 {
+        match &self.bytes {
             Some(val) => {
                 out.put(&**val);
                 Ok(IsNull::No)
@@ -144,8 +157,8 @@ fn extract_value(row: &Row, idx: usize) -> Result<DbValue, DbError> {
                 ))
             });
             match value {
-                Ok(value) => match value.0 {
-                    Some(value) => Ok(DbValue::Other(other.to_string(), value)),
+                Ok(value) => match value.bytes {
+                    Some(raw_val) => Ok(DbValue::Other(other.to_string(), raw_val, value.string)),
                     None => Ok(DbValue::Null),
                 },
                 // We expect an error is expected for 'other' types whose value is null,
@@ -322,9 +335,15 @@ impl DbQuery for TokioPostgresPool {
                         }
                         other => {
                             match param {
-                                DbValue::Null => params.push(Box::new(GenericTypeValue(None))),
-                                DbValue::Other(_cname, cval) => {
-                                    params.push(Box::new(GenericTypeValue(Some(cval.clone()))))
+                                DbValue::Null => params.push(Box::new(GenericTypeValue {
+                                    bytes: None,
+                                    string: None,
+                                })),
+                                DbValue::Other(_cname, bytes, string_opt) => {
+                                    params.push(Box::new(GenericTypeValue {
+                                        bytes: Some(bytes.clone()),
+                                        string: string_opt.clone(),
+                                    }))
                                 }
                                 _ => {
                                     return Err(DbError::InputError(gen_err(
@@ -755,6 +774,53 @@ mod tests {
             .await
             .unwrap();
 
+        // CHAR
+        pool.drop_table("test_other_types").await.unwrap();
+        pool.execute(
+            r#"CREATE TABLE test_other_types (bar CHAR, foo BOOL DEFAULT FALSE)"#,
+            (),
+        )
+        .await
+        .unwrap();
+        pool.execute(r#"INSERT INTO test_other_types VALUES ('a')"#, ())
+            .await
+            .unwrap();
+
+        // Get the value that was just inserted and use it to edit the table and verify the result:
+        let mut db_rows: Vec<DbRow> = pool
+            .query(r#"SELECT * FROM test_other_types"#, ())
+            .await
+            .unwrap();
+        let db_row = db_rows.pop().unwrap();
+        assert_eq!(
+            format!("{db_row:?}"),
+            "DbRow { \
+             map: {\
+             \"bar\": Other(\"bpchar\", [97], Some(\"a\")), \
+             \"foo\": Boolean(false)} \
+             }"
+        );
+        let db_value = db_row.get("bar").unwrap();
+        pool.execute(
+            r#"UPDATE test_other_types SET foo = TRUE WHERE bar = $1"#,
+            params![db_value],
+        )
+        .await
+        .unwrap();
+        let mut db_rows: Vec<DbRow> = pool
+            .query(r#"SELECT * FROM test_other_types"#, ())
+            .await
+            .unwrap();
+        let db_row = db_rows.pop().unwrap();
+        assert_eq!(
+            format!("{db_row:?}"),
+            "DbRow { \
+             map: {\
+             \"bar\": Other(\"bpchar\", [97], Some(\"a\")), \
+             \"foo\": Boolean(true)} \
+             }"
+        );
+
         // JSONB
         pool.drop_table("test_other_types").await.unwrap();
         pool.execute(
@@ -775,7 +841,11 @@ mod tests {
         let db_row = db_rows.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
-            r#"DbRow { map: {"bar": Other("jsonb", [1, 123, 125]), "foo": Boolean(false)} }"#
+            "DbRow { \
+             map: {\
+             \"bar\": Other(\"jsonb\", [1, 123, 125], Some(\"\\u{1}{}\")), \
+             \"foo\": Boolean(false)} \
+             }"
         );
         let db_value = db_row.get("bar").unwrap();
         pool.execute(
@@ -791,7 +861,60 @@ mod tests {
         let db_row = db_rows.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
-            r#"DbRow { map: {"bar": Other("jsonb", [1, 123, 125]), "foo": Boolean(true)} }"#
+            "DbRow { \
+             map: {\
+             \"bar\": Other(\"jsonb\", [1, 123, 125], Some(\"\\u{1}{}\")), \
+             \"foo\": Boolean(true)} \
+             }"
+        );
+
+        // JSON
+        pool.drop_table("test_other_types").await.unwrap();
+        pool.execute(
+            r#"CREATE TABLE test_other_types (bar JSON, foo BOOL DEFAULT FALSE)"#,
+            (),
+        )
+        .await
+        .unwrap();
+        pool.execute(r#"INSERT INTO test_other_types VALUES ('{}')"#, ())
+            .await
+            .unwrap();
+
+        // Get the value that was just inserted and use it to edit the table and verify the result:
+        let mut db_rows: Vec<DbRow> = pool
+            .query(r#"SELECT * FROM test_other_types"#, ())
+            .await
+            .unwrap();
+        let db_row = db_rows.pop().unwrap();
+        assert_eq!(
+            format!("{db_row:?}"),
+            "DbRow { \
+             map: {\
+             \"bar\": Other(\"json\", [123, 125], Some(\"{}\")), \
+             \"foo\": Boolean(false)} \
+             }"
+        );
+        let db_value = db_row.get("bar").unwrap();
+        // PotgreSQL doesn't support JSON = JSON (this is only supported for JSONB), so we
+        // assign to the JSON field here instead.
+        pool.execute(
+            r#"UPDATE test_other_types SET foo = TRUE, bar = $1"#,
+            params![db_value],
+        )
+        .await
+        .unwrap();
+        let mut db_rows: Vec<DbRow> = pool
+            .query(r#"SELECT * FROM test_other_types"#, ())
+            .await
+            .unwrap();
+        let db_row = db_rows.pop().unwrap();
+        assert_eq!(
+            format!("{db_row:?}"),
+            "DbRow { \
+             map: {\
+             \"bar\": Other(\"json\", [123, 125], Some(\"{}\")), \
+             \"foo\": Boolean(true)} \
+             }"
         );
 
         // BYTEA
@@ -814,7 +937,11 @@ mod tests {
         let db_row = db_rows.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
-            r#"DbRow { map: {"bar": Other("bytea", [222, 173, 190, 239]), "foo": Boolean(false)} }"#
+            "DbRow { \
+             map: {\
+             \"bar\": Other(\"bytea\", [222, 173, 190, 239], None), \
+             \"foo\": Boolean(false)} \
+             }"
         );
         let db_value = db_row.get("bar").unwrap();
         pool.execute(
@@ -830,7 +957,11 @@ mod tests {
         let db_row = db_rows.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
-            r#"DbRow { map: {"bar": Other("bytea", [222, 173, 190, 239]), "foo": Boolean(true)} }"#
+            "DbRow { \
+             map: {\
+             \"bar\": Other(\"bytea\", [222, 173, 190, 239], None), \
+             \"foo\": Boolean(true)} \
+             }"
         );
 
         // TIMESTAMP
@@ -856,8 +987,10 @@ mod tests {
         let db_row = db_rows.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
-            "DbRow { map: {\"bar\": Other(\"timestamp\", [0, 0, 137, 201, 15, 13, 226, 128]), \
-             \"foo\": Boolean(false)} }"
+            "DbRow { \
+             map: {\"bar\": Other(\"timestamp\", [0, 0, 137, 201, 15, 13, 226, 128], None), \
+             \"foo\": Boolean(false)} \
+             }"
         );
         let db_value = db_row.get("bar").unwrap();
         pool.execute(
@@ -873,8 +1006,109 @@ mod tests {
         let db_row = db_rows.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
-            "DbRow { map: {\"bar\": Other(\"timestamp\", [0, 0, 137, 201, 15, 13, 226, 128]), \
-             \"foo\": Boolean(true)} }"
+            "DbRow { \
+             map: {\
+             \"bar\": Other(\"timestamp\", [0, 0, 137, 201, 15, 13, 226, 128], None), \
+             \"foo\": Boolean(true)} \
+             }"
+        );
+
+        // DATE
+        pool.drop_table("test_other_types").await.unwrap();
+        pool.execute(
+            r#"CREATE TABLE test_other_types (bar DATE, foo BOOL DEFAULT FALSE)"#,
+            (),
+        )
+        .await
+        .unwrap();
+        pool.execute(r#"INSERT INTO test_other_types VALUES ('1724-04-22')"#, ())
+            .await
+            .unwrap();
+
+        // Get the value that was just inserted and use it to edit the table and verify the result:
+        let mut db_rows: Vec<DbRow> = pool
+            .query(r#"SELECT * FROM test_other_types"#, ())
+            .await
+            .unwrap();
+        let db_row = db_rows.pop().unwrap();
+        assert_eq!(
+            format!("{db_row:?}"),
+            "DbRow { \
+             map: {\
+             \"bar\": Other(\
+             \"date\", [255, 254, 118, 169], None), \
+             \"foo\": Boolean(false)} \
+             }"
+        );
+        let db_value = db_row.get("bar").unwrap();
+        pool.execute(
+            r#"UPDATE test_other_types SET foo = TRUE WHERE bar = $1"#,
+            params![db_value],
+        )
+        .await
+        .unwrap();
+        let mut db_rows: Vec<DbRow> = pool
+            .query(r#"SELECT * FROM test_other_types"#, ())
+            .await
+            .unwrap();
+        let db_row = db_rows.pop().unwrap();
+        assert_eq!(
+            format!("{db_row:?}"),
+            "DbRow { \
+             map: {\
+             \"bar\": Other(\
+             \"date\", [255, 254, 118, 169], None), \
+             \"foo\": Boolean(true)} \
+             }"
+        );
+
+        // TIME
+        pool.drop_table("test_other_types").await.unwrap();
+        pool.execute(
+            r#"CREATE TABLE test_other_types (bar TIME, foo BOOL DEFAULT FALSE)"#,
+            (),
+        )
+        .await
+        .unwrap();
+        pool.execute(r#"INSERT INTO test_other_types VALUES ('23:59')"#, ())
+            .await
+            .unwrap();
+
+        // Get the value that was just inserted and use it to edit the table and verify the result:
+        let mut db_rows: Vec<DbRow> = pool
+            .query(r#"SELECT * FROM test_other_types"#, ())
+            .await
+            .unwrap();
+        let db_row = db_rows.pop().unwrap();
+        assert_eq!(
+            format!("{db_row:?}"),
+            "DbRow { \
+             map: {\
+             \"bar\": Other(\
+             \"time\", [0, 0, 0, 20, 26, 67, 217, 0], None), \
+             \"foo\": Boolean(false)} \
+             }"
+        );
+        let db_value = db_row.get("bar").unwrap();
+        pool.execute(
+            r#"UPDATE test_other_types SET foo = TRUE WHERE bar = $1"#,
+            params![db_value],
+        )
+        .await
+        .unwrap();
+        let mut db_rows: Vec<DbRow> = pool
+            .query(r#"SELECT * FROM test_other_types"#, ())
+            .await
+            .unwrap();
+        let db_row = db_rows.pop().unwrap();
+        assert_eq!(
+            format!("{db_row:?}"),
+            "DbRow { \
+             map: {\
+             \"bar\": Other(\
+             \"time\", [0, 0, 0, 20, 26, 67, 217, 0], None), \
+             \"foo\": Boolean(true)} \
+             }"
         );
 
         // TEXT[]
@@ -900,9 +1134,17 @@ mod tests {
         let db_row = db_rows.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
-            "DbRow { map: {\"bar\": Other(\"_text\", [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 25, 0, 0, \
+            "DbRow { \
+             map: {\
+             \"bar\": Other(\
+             \"_text\", \
+             [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 25, 0, 0, \
              0, 2, 0, 0, 0, 1, 0, 0, 0, 7, 109, 101, 101, 116, 105, 110, 103, 0, 0, 0, 5, 108, \
-             117, 110, 99, 104]), \"foo\": Boolean(false)} }"
+             117, 110, 99, 104], \
+             Some(\"\\0\\0\\0\\u{1}\\0\\0\\0\\0\\0\\0\\0\\u{19}\\0\\0\\0\\u{2}\\0\\0\\0\
+             \\u{1}\\0\\0\\0\\u{7}meeting\\0\\0\\0\\u{5}lunch\")), \
+             \"foo\": Boolean(false)} \
+             }"
         );
         let db_value = db_row.get("bar").unwrap();
         pool.execute(
@@ -918,9 +1160,233 @@ mod tests {
         let db_row = db_rows.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
-            "DbRow { map: {\"bar\": Other(\"_text\", [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 25, 0, 0, \
+            "DbRow { \
+             map: {\
+             \"bar\": Other(\
+             \"_text\", \
+             [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 25, 0, 0, \
              0, 2, 0, 0, 0, 1, 0, 0, 0, 7, 109, 101, 101, 116, 105, 110, 103, 0, 0, 0, 5, 108, \
-             117, 110, 99, 104]), \"foo\": Boolean(true)} }"
+             117, 110, 99, 104], \
+             Some(\"\\0\\0\\0\\u{1}\\0\\0\\0\\0\\0\\0\\0\\u{19}\\0\\0\\0\\u{2}\\0\\0\\0\
+             \\u{1}\\0\\0\\0\\u{7}meeting\\0\\0\\0\\u{5}lunch\")), \
+             \"foo\": Boolean(true)} \
+             }"
+        );
+
+        // INT8[]
+        pool.drop_table("test_other_types").await.unwrap();
+        pool.execute(
+            r#"CREATE TABLE test_other_types (bar INT8[], foo BOOL DEFAULT FALSE)"#,
+            (),
+        )
+        .await
+        .unwrap();
+        pool.execute(r#"INSERT INTO test_other_types VALUES ('{1, 2}')"#, ())
+            .await
+            .unwrap();
+
+        // Get the value that was just inserted and use it to edit the table and verify the result:
+        let mut db_rows: Vec<DbRow> = pool
+            .query(r#"SELECT * FROM test_other_types"#, ())
+            .await
+            .unwrap();
+        let db_row = db_rows.pop().unwrap();
+        assert_eq!(
+            format!("{db_row:?}"),
+            "DbRow { \
+             map: {\
+             \"bar\": Other(\
+             \"_int8\", \
+             [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 20, 0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0, 8, 0, 0, \
+             0, 0, 0, 0, 0, 1, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 2], \
+             Some(\"\\0\\0\\0\\u{1}\\0\\0\\0\\0\\0\\0\\0\\u{14}\\0\\0\\0\\u{2}\\0\\0\\0\
+             \\u{1}\\0\\0\\0\\u{8}\\0\\0\\0\\0\\0\\0\\0\\u{1}\\0\\0\\0\\u{8}\\0\\0\\0\\0\
+             \\0\\0\\0\\u{2}\")), \
+             \"foo\": Boolean(false)} \
+             }"
+        );
+        let db_value = db_row.get("bar").unwrap();
+        pool.execute(
+            r#"UPDATE test_other_types SET foo = TRUE WHERE bar = $1"#,
+            params![db_value],
+        )
+        .await
+        .unwrap();
+        let mut db_rows: Vec<DbRow> = pool
+            .query(r#"SELECT * FROM test_other_types"#, ())
+            .await
+            .unwrap();
+        let db_row = db_rows.pop().unwrap();
+        assert_eq!(
+            format!("{db_row:?}"),
+            "DbRow { \
+             map: {\
+             \"bar\": Other(\
+             \"_int8\", \
+             [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 20, 0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0, 8, 0, 0, \
+             0, 0, 0, 0, 0, 1, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 2], \
+             Some(\"\\0\\0\\0\\u{1}\\0\\0\\0\\0\\0\\0\\0\\u{14}\\0\\0\\0\\u{2}\\0\\0\\0\
+             \\u{1}\\0\\0\\0\\u{8}\\0\\0\\0\\0\\0\\0\\0\\u{1}\\0\\0\\0\\u{8}\\0\\0\\0\\0\
+             \\0\\0\\0\\u{2}\")), \
+             \"foo\": Boolean(true)} \
+             }"
+        );
+
+        // FLOAT8[]
+        pool.drop_table("test_other_types").await.unwrap();
+        pool.execute(
+            r#"CREATE TABLE test_other_types (bar FLOAT8[], foo BOOL DEFAULT FALSE)"#,
+            (),
+        )
+        .await
+        .unwrap();
+        pool.execute(r#"INSERT INTO test_other_types VALUES ('{1, 2}')"#, ())
+            .await
+            .unwrap();
+
+        // Get the value that was just inserted and use it to edit the table and verify the result:
+        let mut db_rows: Vec<DbRow> = pool
+            .query(r#"SELECT * FROM test_other_types"#, ())
+            .await
+            .unwrap();
+        let db_row = db_rows.pop().unwrap();
+        assert_eq!(
+            format!("{db_row:?}"),
+            "DbRow { \
+             map: {\
+             \"bar\": Other(\
+             \"_float8\", \
+             [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 2, 189, 0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0, 8, 63, \
+             240, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 64, 0, 0, 0, 0, 0, 0, 0], None), \
+             \"foo\": Boolean(false)} \
+             }"
+        );
+        let db_value = db_row.get("bar").unwrap();
+        pool.execute(
+            r#"UPDATE test_other_types SET foo = TRUE WHERE bar = $1"#,
+            params![db_value],
+        )
+        .await
+        .unwrap();
+        let mut db_rows: Vec<DbRow> = pool
+            .query(r#"SELECT * FROM test_other_types"#, ())
+            .await
+            .unwrap();
+        let db_row = db_rows.pop().unwrap();
+        assert_eq!(
+            format!("{db_row:?}"),
+            "DbRow { \
+             map: {\
+             \"bar\": Other(\
+             \"_float8\", \
+             [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 2, 189, 0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0, 8, 63, \
+             240, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 64, 0, 0, 0, 0, 0, 0, 0], None), \
+             \"foo\": Boolean(true)} \
+             }"
+        );
+
+        // NUMERIC[]
+        pool.drop_table("test_other_types").await.unwrap();
+        pool.execute(
+            r#"CREATE TABLE test_other_types (bar NUMERIC[], foo BOOL DEFAULT FALSE)"#,
+            (),
+        )
+        .await
+        .unwrap();
+        pool.execute(r#"INSERT INTO test_other_types VALUES ('{1, 2}')"#, ())
+            .await
+            .unwrap();
+
+        // Get the value that was just inserted and use it to edit the table and verify the result:
+        let mut db_rows: Vec<DbRow> = pool
+            .query(r#"SELECT * FROM test_other_types"#, ())
+            .await
+            .unwrap();
+        let db_row = db_rows.pop().unwrap();
+        assert_eq!(
+            format!("{db_row:?}"),
+            "DbRow { \
+             map: {\
+             \"bar\": Other(\
+             \"_numeric\", \
+             [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 6, 164, 0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0, 10, 0, 1, \
+             0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 10, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2], None), \
+             \"foo\": Boolean(false)} \
+             }"
+        );
+        let db_value = db_row.get("bar").unwrap();
+        pool.execute(
+            r#"UPDATE test_other_types SET foo = TRUE WHERE bar = $1"#,
+            params![db_value],
+        )
+        .await
+        .unwrap();
+        let mut db_rows: Vec<DbRow> = pool
+            .query(r#"SELECT * FROM test_other_types"#, ())
+            .await
+            .unwrap();
+        let db_row = db_rows.pop().unwrap();
+        assert_eq!(
+            format!("{db_row:?}"),
+            "DbRow { \
+             map: {\
+             \"bar\": Other(\
+             \"_numeric\", \
+             [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 6, 164, 0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0, 10, 0, 1, \
+             0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 10, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2], None), \
+             \"foo\": Boolean(true)} \
+             }"
+        );
+
+        // CIRCLE
+        pool.drop_table("test_other_types").await.unwrap();
+        pool.execute(
+            r#"CREATE TABLE test_other_types (bar CIRCLE, foo BOOL DEFAULT FALSE)"#,
+            (),
+        )
+        .await
+        .unwrap();
+        pool.execute(r#"INSERT INTO test_other_types VALUES ('<(0,0),1>')"#, ())
+            .await
+            .unwrap();
+
+        // Get the value that was just inserted and use it to edit the table and verify the result:
+        let mut db_rows: Vec<DbRow> = pool
+            .query(r#"SELECT * FROM test_other_types"#, ())
+            .await
+            .unwrap();
+        let db_row = db_rows.pop().unwrap();
+        assert_eq!(
+            format!("{db_row:?}"),
+            "DbRow { \
+             map: {\
+             \"bar\": Other(\
+             \"circle\", \
+             [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 63, 240, 0, 0, 0, 0, 0, 0], None), \
+             \"foo\": Boolean(false)} \
+             }"
+        );
+        let db_value = db_row.get("bar").unwrap();
+        pool.execute(
+            r#"UPDATE test_other_types SET foo = TRUE WHERE bar = $1"#,
+            params![db_value],
+        )
+        .await
+        .unwrap();
+        let mut db_rows: Vec<DbRow> = pool
+            .query(r#"SELECT * FROM test_other_types"#, ())
+            .await
+            .unwrap();
+        let db_row = db_rows.pop().unwrap();
+        assert_eq!(
+            format!("{db_row:?}"),
+            "DbRow { \
+             map: {\
+             \"bar\": Other(\
+             \"circle\", \
+             [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 63, 240, 0, 0, 0, 0, 0, 0], None), \
+             \"foo\": Boolean(true)} \
+             }"
         );
 
         // Other types that are NULLs
