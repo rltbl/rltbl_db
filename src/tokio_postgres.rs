@@ -247,8 +247,8 @@ impl DbQuery for TokioPostgresPool {
         Ok(())
     }
 
-    /// Implements [DbQuery::query_no_cache()] for PostgreSQL.
-    async fn query_no_cache<T: FromDbRows>(
+    /// Implements [DbQuery::query_no_cache_clean()] for PostgreSQL.
+    async fn query_no_cache_clean<T: FromDbRows>(
         &self,
         sql: &str,
         into_db_params: impl IntoDbParams + Send,

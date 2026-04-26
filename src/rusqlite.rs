@@ -252,8 +252,8 @@ impl DbQuery for RusqlitePool {
         }
     }
 
-    /// Implements [DbQuery::query_no_cache()] for SQLite.
-    async fn query_no_cache<T: FromDbRows>(
+    /// Implements [DbQuery::query_no_cache_clean()] for SQLite.
+    async fn query_no_cache_clean<T: FromDbRows>(
         &self,
         sql: &str,
         params: impl IntoDbParams + Send,

@@ -6,7 +6,7 @@ use crate::{
 };
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
-use std::fmt::Display;
+use std::{fmt::Display, str::FromStr};
 
 /// The [maximum number of parameters](https://www.sqlite.org/limits.html#max_variable_number)
 /// that can be bound to a SQLite query
@@ -20,6 +20,7 @@ pub static MAX_PARAMS_POSTGRES: usize = 32765;
 
 /// Defines the supported database kinds.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+#[non_exhaustive]
 pub enum DbKind {
     SQLite,
     PostgreSQL,
@@ -92,10 +93,15 @@ impl DbKind {
             };
             match sql_type.to_lowercase().as_str() {
                 "text" => Ok(DbValue::Text(value.to_string())),
-                "bool" | "boolean" => match value.to_lowercase().as_str() {
-                    // TODO: improve this
-                    "true" | "1" => Ok(DbValue::Boolean(true)),
-                    _ => Ok(DbValue::Boolean(false)),
+                "bool" | "boolean" => match bool::from_str(&value.to_lowercase()) {
+                    Ok(flag) => Ok(DbValue::Boolean(flag)),
+                    Err(_) => match value.parse::<u64>() {
+                        Ok(num) if num == 0 => Ok(DbValue::Boolean(false)),
+                        Ok(num) if num == 1 => Ok(DbValue::Boolean(true)),
+                        _ => Err(DbError::InputError(format!(
+                            "Can't parse as boolean: {value}"
+                        ))),
+                    },
                 },
                 "smallint" | "smallinteger" => match value.parse::<i16>() {
                     Ok(int) => Ok(DbValue::SmallInteger(int)),

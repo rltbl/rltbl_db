@@ -22,6 +22,7 @@ async fn run_axum(url: &str) {
     let cascade = match pool.kind() {
         DbKind::SQLite => "",
         DbKind::PostgreSQL => " CASCADE",
+        _ => unimplemented!(),
     };
     pool.execute_batch(&format!(
         "DROP TABLE IF EXISTS test{cascade};\

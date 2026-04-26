@@ -170,18 +170,18 @@ impl DbQuery for AnyPool {
         }
     }
 
-    async fn query_no_cache<T: FromDbRows>(
+    async fn query_no_cache_clean<T: FromDbRows>(
         &self,
         sql: &str,
         params: impl IntoDbParams + Send,
     ) -> Result<T, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
-            AnyPool::Rusqlite(pool) => pool.query_no_cache(sql, params).await,
+            AnyPool::Rusqlite(pool) => pool.query_no_cache_clean(sql, params).await,
             #[cfg(feature = "tokio-postgres")]
-            AnyPool::TokioPostgres(pool) => pool.query_no_cache(sql, params).await,
+            AnyPool::TokioPostgres(pool) => pool.query_no_cache_clean(sql, params).await,
             #[cfg(feature = "libsql")]
-            AnyPool::LibSQL(pool) => pool.query_no_cache(sql, params).await,
+            AnyPool::LibSQL(pool) => pool.query_no_cache_clean(sql, params).await,
         }
     }
 
@@ -1965,7 +1965,7 @@ mod tests {
             .await
             .unwrap();
 
-        pool.execute_no_cache(
+        pool.execute_no_cache_clean(
             "CREATE TABLE test_vcaching_table ( \
                foo BIGINT, \
                bar BIGINT, \
@@ -1975,10 +1975,10 @@ mod tests {
         )
         .await
         .unwrap();
-        pool.execute_no_cache("INSERT INTO test_vcaching_table VALUES (1, 1000)", ())
+        pool.execute_no_cache_clean("INSERT INTO test_vcaching_table VALUES (1, 1000)", ())
             .await
             .unwrap();
-        pool.execute_no_cache(
+        pool.execute_no_cache_clean(
             "CREATE VIEW test_vcaching_view_1 AS \
              SELECT bar \
              FROM test_vcaching_table",
@@ -1987,7 +1987,7 @@ mod tests {
         .await
         .unwrap();
 
-        pool.execute_no_cache(
+        pool.execute_no_cache_clean(
             "CREATE VIEW test_vcaching_view_2 AS \
              SELECT bar \
              FROM test_vcaching_table",

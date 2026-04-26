@@ -16,6 +16,7 @@ pub type ColumnMap = IndexMap<String, String>;
 
 /// Value types for [query parameters](DbParams) and [rows](DbRow)
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[non_exhaustive]
 pub enum DbValue {
     /// Represents a NULL value. Can be used with any column type.
     #[default]

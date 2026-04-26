@@ -379,3 +379,224 @@ pub fn get_affected_tables(sql: &str) -> Result<(HashSet<String>, HashSet<String
 
     Ok((edited_tables.clone(), dropped_tables.clone()))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_table_names() {
+        // Valid table names:
+        assert_eq!(
+            validate_table_name(r#"table"#).expect("Expected table name to be valid"),
+            "table"
+        );
+        assert_eq!(
+            validate_table_name(r#"my_table"#).expect("Expected table name to be valid"),
+            "my_table"
+        );
+        assert_eq!(
+            validate_table_name(r#"my_2nd_table"#).expect("Expected table name to be valid"),
+            "my_2nd_table"
+        );
+        assert_eq!(
+            validate_table_name(r#"my_table_2"#).expect("Expected table name to be valid"),
+            "my_table_2"
+        );
+        assert_eq!(
+            validate_table_name(r#"my_table2"#).expect("Expected table name to be valid"),
+            "my_table2"
+        );
+        assert_eq!(
+            validate_table_name(r#"My_Table_2"#).expect("Expected table name to be valid"),
+            "My_Table_2"
+        );
+
+        // Valid table name surrounded by quotes:
+        assert_eq!(
+            validate_table_name(r#""table""#).expect("Expected table name to be valid"),
+            "table"
+        );
+
+        // Invalid first character:
+        if let Ok(_) = validate_table_name(r#"1table"#) {
+            panic!("Expected an error");
+        };
+        if let Ok(_) = validate_table_name(r#""1table""#) {
+            panic!("Expected an error");
+        }
+
+        // Beginning or trailing double-quote is missing:
+        if let Ok(_) = validate_table_name(r#"table""#) {
+            panic!("Expected an error");
+        }
+        if let Ok(_) = validate_table_name(r#""table"#) {
+            panic!("Expected an error");
+        }
+
+        // Table name with spaces:
+        if let Ok(_) = validate_table_name(r#"my table"#) {
+            panic!("Expected an error");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_sql_parsing() {
+        // Single statements, possibly with parameters:
+
+        let (edited_tables, dropped_tables) =
+            get_affected_tables(&format!(r#"INSERT INTO "alpha" VALUES ($1, $2, $3)"#)).unwrap();
+        let edited_tables: Vec<_> = edited_tables.into_iter().collect();
+        assert_eq!(edited_tables, ["alpha"]);
+        assert_eq!(dropped_tables, [].into());
+
+        let (edited_tables, dropped_tables) = get_affected_tables(
+            r#"WITH bar AS (SELECT * FROM alpha),
+                        mar AS (SELECT * FROM beta)
+                   INSERT INTO gamma
+                   SELECT alpha.*
+                   FROM alpha, beta
+                   WHERE alpha.value = beta.value"#,
+        )
+        .unwrap();
+        let edited_tables: Vec<_> = edited_tables.into_iter().collect();
+        assert_eq!(edited_tables, ["gamma"]);
+        assert_eq!(dropped_tables, [].into());
+
+        let (edited_tables, dropped_tables) =
+            get_affected_tables(&format!(r#"UPDATE "delta" set bar = $1 WHERE bar = $2"#)).unwrap();
+        let edited_tables: Vec<_> = edited_tables.into_iter().collect();
+        assert_eq!(edited_tables, ["delta"]);
+        assert_eq!(dropped_tables, [].into());
+
+        let (edited_tables, dropped_tables) = get_affected_tables(&format!(
+            r#"WITH bar AS (SELECT * FROM test),
+                        mar AS (SELECT * FROM test)
+                   UPDATE delta
+                   SET value = bar.value
+                   FROM bar, mar
+                   WHERE bar.value = $1 AND bar.value = mar.value"#,
+        ))
+        .unwrap();
+        let edited_tables: Vec<_> = edited_tables.into_iter().collect();
+        assert_eq!(edited_tables, ["delta"]);
+        assert_eq!(dropped_tables, [].into());
+
+        let (edited_tables, dropped_tables) =
+            get_affected_tables(&format!(r#"DELETE FROM "epsilon" WHERE bar >= $1"#)).unwrap();
+        let edited_tables: Vec<_> = edited_tables.into_iter().collect();
+        assert_eq!(edited_tables, ["epsilon"]);
+        assert_eq!(dropped_tables, [].into());
+
+        let (edited_tables, dropped_tables) = get_affected_tables(
+            r#"WITH bar AS (SELECT * FROM test),
+                        mar AS (SELECT * FROM test)
+                   DELETE FROM lambda WHERE value IN (SELECT value FROM bar)"#,
+        )
+        .unwrap();
+        let edited_tables: Vec<_> = edited_tables.into_iter().collect();
+        assert_eq!(edited_tables, ["lambda"]);
+        assert_eq!(dropped_tables, [].into());
+
+        let (edited_tables, dropped_tables) = get_affected_tables(r#"DROP TABLE "rho""#).unwrap();
+        let dropped_tables: Vec<_> = dropped_tables.into_iter().collect();
+        assert_eq!(dropped_tables, ["rho"]);
+        assert_eq!(edited_tables, [].into());
+
+        let (edited_tables, dropped_tables) =
+            get_affected_tables(r#"DROP TABLE IF EXISTS "phi" CASCADE"#).unwrap();
+        let dropped_tables: Vec<_> = dropped_tables.into_iter().collect();
+        assert_eq!(dropped_tables, ["phi"]);
+        assert_eq!(edited_tables, [].into());
+
+        let (edited_tables, dropped_tables) =
+            get_affected_tables("TRUNCATE TABLE mu, nu CASCADE").unwrap();
+        let mut edited_tables: Vec<_> = edited_tables.into_iter().collect();
+        edited_tables.sort();
+        assert_eq!(edited_tables, ["mu", "nu"]);
+        assert_eq!(dropped_tables, [].into());
+
+        let (edited_tables, dropped_tables) =
+            get_affected_tables("ALTER TABLE phi ADD COLUMN varphi INT").unwrap();
+        let mut edited_tables: Vec<_> = edited_tables.into_iter().collect();
+        edited_tables.sort();
+        assert_eq!(edited_tables, ["phi"]);
+        assert_eq!(dropped_tables, [].into());
+
+        let (edited_tables, dropped_tables) = get_affected_tables("DROP VIEW theta").unwrap();
+        let mut dropped_tables: Vec<_> = dropped_tables.into_iter().collect();
+        dropped_tables.sort();
+        assert_eq!(edited_tables, [].into());
+        assert_eq!(dropped_tables, ["theta"]);
+
+        let (edited_tables, dropped_tables) = get_affected_tables(
+            r#"UPDATE epsilon
+               SET alpha = new_beta
+               FROM (
+                 SELECT 9 AS new_alpha, 3 AS new_beta, 2 AS new_gamma, 1 AS new_delta
+                 UNION ALL
+                 SELECT 4 AS new_alpha, 3 as new_beta, 2 AS new_gamma, 1 AS new_delta
+               ) foo_alias
+               WHERE alpha = new_alpha"#,
+        )
+        .unwrap();
+        let edited_tables: Vec<_> = edited_tables.into_iter().collect();
+        assert_eq!(edited_tables, ["epsilon"]);
+        assert_eq!(dropped_tables, [].into());
+
+        // Multiple statements, no parameters:
+
+        let sql = r#"
+            BEGIN TRANSACTION;
+
+            INSERT INTO "alpha" VALUES (1, 2, 3), (4, 5, 6);
+
+            INSERT INTO gamma
+            SELECT alpha.*
+            FROM alpha, beta
+            WHERE alpha.value = beta.value;
+
+            WITH t AS (
+              SELECT * from delta_base ORDER BY quality LIMIT 1
+            )
+            UPDATE delta SET price = t.price * 1.05;
+
+            WITH t AS (
+              SELECT * FROM phi_base
+              WHERE
+                "date" >= '2010-10-01' AND
+                "date" < '2010-11-01'
+            )
+            INSERT INTO phi
+            SELECT * FROM t;
+
+            DELETE FROM "psi" WHERE bar >= 10;
+
+            WITH RECURSIVE included_lambda(sub_lambda, lambda) AS (
+                SELECT sub_lambda, lambda FROM lambda WHERE lambda = 'our_product'
+              UNION ALL
+                SELECT p.sub_lambda, p.lambda
+                FROM included_lambda pr, lambda p
+                WHERE p.lambda = pr.sub_lambda
+            )
+            DELETE FROM lambda
+              WHERE lambda IN (SELECT lambda FROM included_lambda);
+
+            DROP TABLE "rho";
+
+            DROP TABLE "sigma" CASCADE;
+
+            COMMIT"#;
+
+        let (edited_tables, dropped_tables) = get_affected_tables(&sql).unwrap();
+        let mut edited_tables: Vec<_> = edited_tables.into_iter().collect();
+        let mut dropped_tables: Vec<_> = dropped_tables.into_iter().collect();
+        edited_tables.sort();
+        dropped_tables.sort();
+        assert_eq!(
+            edited_tables,
+            ["alpha", "delta", "gamma", "lambda", "phi", "psi",]
+        );
+        assert_eq!(dropped_tables, ["rho", "sigma",]);
+    }
+}
