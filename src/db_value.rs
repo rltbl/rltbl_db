@@ -1,3 +1,5 @@
+//! Code related to database values.
+
 use crate::core::DbError;
 use indexmap::{self, IndexMap};
 use rust_decimal::Decimal;
@@ -128,7 +130,7 @@ impl DbValue {
     }
 
     /// Note that db_value.as_str() and db_value.to_string() differ in more than just their
-    /// return type. The latter will format db_value as a string regardless of its type.
+    /// return type. The latter will format a [DbValue] as a string regardless of its type.
     /// This method returns a string slice only if the underlying type is [DbValue::Text].
     pub fn as_str(&self) -> Option<&str> {
         match self {
