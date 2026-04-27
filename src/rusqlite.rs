@@ -105,7 +105,8 @@ fn query_prepared(
                     }
                     DbValue::Other(type_name, bytes, string_opt) => {
                         return Err(DbError::InputError(format!(
-                            "Not supported: DbValue::Other({type_name}, {bytes:?}, {string_opt:?})"
+                            "Not supported for SQLite: \
+                             DbValue::Other({type_name}, {bytes:?}, {string_opt:?})"
                         )));
                     }
                 };
