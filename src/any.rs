@@ -1,4 +1,6 @@
-/// Connect to any supported database using a URL.
+//! Implements an opaque database connection pool.
+
+/// To connect to any supported database using a URL:
 ///
 /// ```
 /// use rltbl_db::{any::AnyPool, core::{DbError, DbQuery}};
@@ -104,6 +106,7 @@ impl AnyPool {
 }
 
 impl DbQuery for AnyPool {
+    /// Implements [DbQuery::kind()]
     fn kind(&self) -> DbKind {
         match self {
             #[cfg(feature = "rusqlite")]
@@ -115,6 +118,7 @@ impl DbQuery for AnyPool {
         }
     }
 
+    /// Implements [DbQuery::set_caching_strategy()]
     fn set_caching_strategy(&mut self, strategy: &CachingStrategy) {
         match self {
             #[cfg(feature = "rusqlite")]
@@ -126,6 +130,7 @@ impl DbQuery for AnyPool {
         }
     }
 
+    /// Implements [DbQuery::get_caching_strategy()]
     fn get_caching_strategy(&self) -> CachingStrategy {
         match self {
             #[cfg(feature = "rusqlite")]
@@ -137,6 +142,7 @@ impl DbQuery for AnyPool {
         }
     }
 
+    /// Implements [DbQuery::set_cache_aware_query()]
     fn set_cache_aware_query(&mut self, value: bool) {
         match self {
             #[cfg(feature = "rusqlite")]
@@ -148,6 +154,7 @@ impl DbQuery for AnyPool {
         }
     }
 
+    /// Implements [DbQuery::get_cache_aware_query()]
     fn get_cache_aware_query(&self) -> bool {
         match self {
             #[cfg(feature = "rusqlite")]
@@ -159,6 +166,7 @@ impl DbQuery for AnyPool {
         }
     }
 
+    /// Implements [DbQuery::execute_batch()]
     async fn execute_batch(&self, sql: &str) -> Result<(), DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
@@ -170,6 +178,7 @@ impl DbQuery for AnyPool {
         }
     }
 
+    /// Implements [DbQuery::query_no_cache_clean()]
     async fn query_no_cache_clean<T: FromDbRows>(
         &self,
         sql: &str,
@@ -185,6 +194,7 @@ impl DbQuery for AnyPool {
         }
     }
 
+    /// Implements [DbQuery::insert()]
     async fn insert(
         &self,
         table: &str,
@@ -201,6 +211,7 @@ impl DbQuery for AnyPool {
         }
     }
 
+    /// Implements [DbQuery::insert_returning()]
     async fn insert_returning<T: FromDbRows>(
         &self,
         table: &str,
@@ -220,6 +231,7 @@ impl DbQuery for AnyPool {
         }
     }
 
+    /// Implements [DbQuery::update()]
     async fn update(
         &self,
         table: &str,
@@ -236,6 +248,7 @@ impl DbQuery for AnyPool {
         }
     }
 
+    /// Implements [DbQuery::update_returning()]
     async fn update_returning<T: FromDbRows>(
         &self,
         table: &str,
@@ -255,6 +268,7 @@ impl DbQuery for AnyPool {
         }
     }
 
+    /// Implements [DbQuery::upsert()]
     async fn upsert(
         &self,
         table: &str,
@@ -271,6 +285,7 @@ impl DbQuery for AnyPool {
         }
     }
 
+    /// Implements [DbQuery::upsert_returning()]
     async fn upsert_returning<T: FromDbRows>(
         &self,
         table: &str,

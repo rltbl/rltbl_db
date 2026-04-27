@@ -1,3 +1,5 @@
+//! Code for the in-memory query, table, and meta caches.
+
 use crate::{core::DbError, db_value::DbRow};
 use indexmap::IndexMap;
 use lazy_static::lazy_static;
@@ -10,6 +12,10 @@ use std::{
 
 /// Default size for the in-memory query cache
 pub static DEFAULT_MEMORY_QUERY_CACHE_SIZE: usize = 1000;
+
+// Maximum number of times to try to retrieve a cache (retrieval will fail when the cache is locked
+// by another thread).
+static MAX_RETRIEVAL_ATTEMPTS: usize = 20;
 
 lazy_static! {
     /// The in-memory query cache, used by [CachingStrategy::Memory].
@@ -41,8 +47,7 @@ pub struct MemoryQueryCacheValue {
 
 /// Retrieve the in-memory meta-cache [MEMORY_META_CACHE].
 pub fn get_meta_cache<'a>() -> Result<MutexGuard<'a, HashSet<String>>, DbError> {
-    let max_attempts = 20;
-    let mut remaining_attempts = max_attempts;
+    let mut remaining_attempts = MAX_RETRIEVAL_ATTEMPTS;
     let mut meta_cache = MEMORY_META_CACHE.try_lock();
     while let Err(err) = meta_cache {
         meta_cache = MEMORY_META_CACHE.try_lock();
@@ -52,7 +57,7 @@ pub fn get_meta_cache<'a>() -> Result<MutexGuard<'a, HashSet<String>>, DbError> 
         remaining_attempts -= 1;
         if remaining_attempts == 0 {
             return Err(DbError::ConnectError(format!(
-                "Error locking cache: {err} (retried {max_attempts} times)"
+                "Error locking cache: {err} (retried {MAX_RETRIEVAL_ATTEMPTS} times)"
             )));
         } else {
             thread::sleep(Duration::from_millis(5));
@@ -80,8 +85,7 @@ pub fn exists_in_meta_cache(object: &str) -> Result<bool, DbError> {
 /// Retrieve the in-memory query cache (see [MEMORY_QUERY_CACHE]).
 pub fn get_memory_query_cache<'a>()
 -> Result<MutexGuard<'a, IndexMap<MemoryQueryCacheKey, MemoryQueryCacheValue>>, DbError> {
-    let max_attempts = 20;
-    let mut remaining_attempts = max_attempts;
+    let mut remaining_attempts = MAX_RETRIEVAL_ATTEMPTS;
     let mut memory_cache = MEMORY_QUERY_CACHE.try_lock();
     while let Err(err) = memory_cache {
         memory_cache = MEMORY_QUERY_CACHE.try_lock();
@@ -91,7 +95,7 @@ pub fn get_memory_query_cache<'a>()
         remaining_attempts -= 1;
         if remaining_attempts == 0 {
             return Err(DbError::ConnectError(format!(
-                "Error locking cache: {err} (retried {max_attempts} times)"
+                "Error locking cache: {err} (retried {MAX_RETRIEVAL_ATTEMPTS} times)"
             )));
         } else {
             thread::sleep(Duration::from_millis(5));
@@ -103,8 +107,7 @@ pub fn get_memory_query_cache<'a>()
 
 /// Retrieve the in-memory table cache (see [MEMORY_TABLE_CACHE]).
 pub fn get_memory_table_cache<'a>() -> Result<MutexGuard<'a, HashMap<String, u128>>, DbError> {
-    let max_attempts = 20;
-    let mut remaining_attempts = max_attempts;
+    let mut remaining_attempts = MAX_RETRIEVAL_ATTEMPTS;
     let mut memory_cache = MEMORY_TABLE_CACHE.try_lock();
     while let Err(err) = memory_cache {
         memory_cache = MEMORY_TABLE_CACHE.try_lock();
@@ -114,7 +117,7 @@ pub fn get_memory_table_cache<'a>() -> Result<MutexGuard<'a, HashMap<String, u12
         remaining_attempts -= 1;
         if remaining_attempts == 0 {
             return Err(DbError::ConnectError(format!(
-                "Error locking cache: {err} (retried {max_attempts} times)"
+                "Error locking cache: {err} (retried {MAX_RETRIEVAL_ATTEMPTS} times)"
             )));
         } else {
             thread::sleep(Duration::from_millis(5));
