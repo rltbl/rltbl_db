@@ -1,4 +1,4 @@
-//! rusqlite implementation for rltbl_db.
+//! [rusqlite](<https://crates.io/crates/deadpool-sqlite>) implementation for rltbl_db.
 
 use crate::{
     core::{CachingStrategy, DbError, DbQuery},
@@ -181,6 +181,7 @@ pub struct RusqlitePool {
     /// When set to true, SQL statements sent to the [DbQuery::query()] and [DbQuery::execute()]
     /// functions will be parsed and if they will result in tables being edited and/or dropped,
     /// the cache will be maintained in accordance with the given [CachingStrategy].
+    /// For further information, see [DbQuery::set_cache_aware_query()].
     cache_aware_query: bool,
 }
 
@@ -225,7 +226,7 @@ impl DbQuery for RusqlitePool {
         self.cache_aware_query
     }
 
-    /// Implements [DbQuery::execute_batch()] for PostgreSQL
+    /// Implements [DbQuery::execute_batch()] for SQLite.
     async fn execute_batch(&self, sql: &str) -> Result<(), DbError> {
         let conn = self
             .pool

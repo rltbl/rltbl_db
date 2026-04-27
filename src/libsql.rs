@@ -1,4 +1,4 @@
-//! libsql implementation for rltbl_db.
+//! [libsql](<https://crates.io/crates/deadpool-libsql>) implementation for rltbl_db.
 
 use crate::{
     core::{CachingStrategy, DbError, DbQuery},
@@ -80,6 +80,7 @@ pub struct LibSQLPool {
     /// When set to true, SQL statements sent to the [DbQuery::query()] and [DbQuery::execute()]
     /// functions will be parsed and if they will result in tables being edited and/or dropped,
     /// the cache will be maintained in accordance with the given [CachingStrategy].
+    /// For further information, see [DbQuery::set_cache_aware_query()].
     cache_aware_query: bool,
 }
 
@@ -127,7 +128,7 @@ impl DbQuery for LibSQLPool {
         self.cache_aware_query
     }
 
-    /// Implements [DbQuery::execute_batch()] for PostgreSQL
+    /// Implements [DbQuery::execute_batch()] for SQLite
     async fn execute_batch(&self, sql: &str) -> Result<(), DbError> {
         let conn = self
             .pool

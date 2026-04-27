@@ -1,4 +1,4 @@
-//! tokio-postgres implementation for rltbl_db.
+//! [tokio-postgres](<https://crates.io/crates/deadpool-postgres>) implementation for rltbl_db.
 
 use crate::{
     core::{CachingStrategy, DbError, DbQuery},
@@ -20,7 +20,10 @@ use rust_decimal::Decimal;
 // Represents a PostgreSQL datatype that is not explicitly handled in extract_value() and query().
 #[derive(Clone, Debug)]
 struct GenericTypeValue {
+    // Raw representation of the value.
     bytes: Option<Vec<u8>>,
+    // String representation of the value, when available. This is not used internally but can
+    // be extracted by the caller if useful (e.g., a JSON value).
     string: Option<String>,
 }
 
@@ -174,6 +177,10 @@ fn extract_value(row: &Row, idx: usize) -> Result<DbValue, DbError> {
 pub struct TokioPostgresPool {
     pool: Pool,
     caching_strategy: CachingStrategy,
+    /// When set to true, SQL statements sent to the [DbQuery::query()] and [DbQuery::execute()]
+    /// functions will be parsed and if they will result in tables being edited and/or dropped,
+    /// the cache will be maintained in accordance with the given [CachingStrategy].
+    /// For further information, see [DbQuery::set_cache_aware_query()].
     cache_aware_query: bool,
 }
 
