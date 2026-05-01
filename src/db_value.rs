@@ -182,9 +182,7 @@ impl Hash for DbValue {
                 }
             }
             DbValue::Numeric(num) => num.hash(h),
-            DbValue::Other(type_name, bytes, string_opt) => {
-                format!("{type_name}{bytes:?}{string_opt:?}").hash(h)
-            }
+            DbValue::Other(_, _, _) => format!("{self:?}").hash(h),
         }
     }
 }
@@ -210,9 +208,7 @@ impl Into<JsonValue> for DbValue {
             DbValue::BigReal(value) => json!(value),
             DbValue::Numeric(value) => json!(value),
             DbValue::Text(value) => JsonValue::String(value),
-            DbValue::Other(type_name, bytes, string_opt) => {
-                JsonValue::String(format!("{type_name}: {bytes:?}, {string_opt:?}"))
-            }
+            DbValue::Other(_, _, _) => JsonValue::String(format!("{self:?}")),
         }
     }
 }
@@ -235,8 +231,8 @@ impl Into<String> for DbValue {
             DbValue::BigReal(number) => number.to_string(),
             DbValue::Numeric(decimal) => decimal.to_string(),
             DbValue::Text(string) => string.to_string(),
-            DbValue::Other(type_name, bytes, string_opt) => {
-                format!("{type_name}: {bytes:?}, {string_opt:?}")
+            DbValue::Other(_, _, _) => {
+                format!("{self:?}")
             }
         }
     }
@@ -783,6 +779,7 @@ impl PartialEq for DbValue {
             }
             (DbValue::Numeric(a), DbValue::Numeric(b)) => a == b,
             (DbValue::Text(a), DbValue::Text(b)) => a == b,
+            (DbValue::Other(a, b, c), DbValue::Other(d, e, f)) => a == d && b == e && c == f,
             _ => false,
         }
     }
@@ -1071,6 +1068,7 @@ mod tests {
             DbValue::BigReal(0.123f64),
             DbValue::BigReal(0.0f64),
             DbValue::Numeric(dec!(1)),
+            DbValue::Other("bpchar".to_string(), vec![97], Some("a".to_string())),
         ]
         .iter()
         .enumerate()
