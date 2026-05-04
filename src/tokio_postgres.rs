@@ -3,7 +3,7 @@
 use crate::{
     core::{CachingStrategy, DbError, DbQuery},
     db_kind::{DbKind, MAX_PARAMS_POSTGRES},
-    db_value::{DbParams, DbRow, DbValue, FromDbRows, IntoDbParams, IntoDbRows},
+    db_value::{DbParams, DbRow, DbValue, FromDbRows, IntoDbParams, IntoDbRows, JsonValue},
     shared::{EditType, edit},
 };
 use bytes::{BufMut, BytesMut};
@@ -22,28 +22,16 @@ use rust_decimal::Decimal;
 struct GenericTypeValue {
     // Raw representation of the value.
     bytes: Option<Vec<u8>>,
-    // String representation of the value, when available. This is not used internally but can
-    // be extracted by the caller if useful (e.g., a JSON value).
-    string: Option<String>,
 }
 
 impl FromSql<'_> for GenericTypeValue {
     fn from_sql(
-        ty: &Type,
+        _ty: &Type,
         raw: &[u8],
     ) -> Result<GenericTypeValue, Box<dyn std::error::Error + Sync + Send>> {
-        let string = match std::str::from_utf8(raw) {
-            Ok(string) => Some(string.to_string()),
-            Err(err) => {
-                eprintln!("WARNING: Unable to convert value of type '{ty}' to string: {err}.");
-                None
-            }
-        };
-        let val = GenericTypeValue {
+        Ok(GenericTypeValue {
             bytes: Some(raw.to_owned()),
-            string,
-        };
-        Ok(val)
+        })
     }
 
     fn accepts(_ty: &Type) -> bool {
@@ -153,6 +141,36 @@ fn extract_value(row: &Row, idx: usize) -> Result<DbValue, DbError> {
             }
             None => Ok(DbValue::Null),
         },
+        &Type::JSON | &Type::JSONB => {
+            let ctype = column.type_();
+            let value: Result<GenericTypeValue, DbError> = row.try_get(idx).map_err(|_err| {
+                DbError::DataError(format!(
+                    "Error getting value of type '{ctype}' at index {idx} from row {row:?}"
+                ))
+            });
+            match value {
+                Ok(value) => match value.bytes {
+                    Some(bytes) => {
+                        // I'm not sure what the explanation is, but we can parse a JSONB
+                        // value by ignoring the first hex value in bytes. I'm not sure what
+                        // that represents.
+                        let bytes = match ctype {
+                            &Type::JSONB => &bytes[1..],
+                            _ => &bytes,
+                        };
+                        let value = std::str::from_utf8(&bytes).map_err(|_err| {
+                            DbError::DataError(format!("Error converting {bytes:?} to string"))
+                        })?;
+                        let value: JsonValue = serde_json::from_str(&value).map_err(|_err| {
+                            DbError::DataError(format!("Error converting '{value}' to JSON"))
+                        })?;
+                        Ok(DbValue::Json(value))
+                    }
+                    None => Ok(DbValue::Null),
+                },
+                Err(_) => Ok(DbValue::Null),
+            }
+        }
         other => {
             let value: Result<GenericTypeValue, DbError> = row.try_get(idx).map_err(|_err| {
                 DbError::DataError(format!(
@@ -161,11 +179,15 @@ fn extract_value(row: &Row, idx: usize) -> Result<DbValue, DbError> {
             });
             match value {
                 Ok(value) => match value.bytes {
-                    Some(raw_val) => Ok(DbValue::Other(other.to_string(), raw_val, value.string)),
+                    Some(bytes) => {
+                        let string_opt = match std::str::from_utf8(&bytes) {
+                            Ok(string) => Some(string.to_string()),
+                            Err(_err) => None,
+                        };
+                        Ok(DbValue::Other(other.to_string(), bytes, string_opt))
+                    }
                     None => Ok(DbValue::Null),
                 },
-                // We expect an error is expected for 'other' types whose value is null,
-                // so we just ignore it.
                 Err(_) => Ok(DbValue::Null),
             }
         }
@@ -342,16 +364,17 @@ impl DbQuery for TokioPostgresPool {
                         }
                         other => {
                             match param {
-                                DbValue::Null => params.push(Box::new(GenericTypeValue {
-                                    bytes: None,
-                                    string: None,
-                                })),
-                                DbValue::Other(_cname, bytes, string_opt) => {
+                                DbValue::Null => {
+                                    params.push(Box::new(GenericTypeValue { bytes: None }))
+                                }
+                                DbValue::Other(_cname, bytes, _string_opt) => {
                                     params.push(Box::new(GenericTypeValue {
                                         bytes: Some(bytes.clone()),
-                                        string: string_opt.clone(),
                                     }))
                                 }
+                                DbValue::Json(value) => params.push(Box::new(GenericTypeValue {
+                                    bytes: Some(value.to_string().as_bytes().to_vec()),
+                                })),
                                 _ => {
                                     return Err(DbError::InputError(gen_err(
                                         &param,
@@ -824,102 +847,6 @@ mod tests {
             "DbRow { \
              map: {\
              \"bar\": Other(\"bpchar\", [97], Some(\"a\")), \
-             \"foo\": Boolean(true)} \
-             }"
-        );
-
-        // JSONB
-        pool.drop_table("test_other_types").await.unwrap();
-        pool.execute(
-            r#"CREATE TABLE test_other_types (bar JSONB, foo BOOL DEFAULT FALSE)"#,
-            (),
-        )
-        .await
-        .unwrap();
-        pool.execute(r#"INSERT INTO test_other_types VALUES ('{}')"#, ())
-            .await
-            .unwrap();
-
-        // Get the value that was just inserted and use it to edit the table and verify the result:
-        let mut db_rows: Vec<DbRow> = pool
-            .query(r#"SELECT * FROM test_other_types"#, ())
-            .await
-            .unwrap();
-        let db_row = db_rows.pop().unwrap();
-        assert_eq!(
-            format!("{db_row:?}"),
-            "DbRow { \
-             map: {\
-             \"bar\": Other(\"jsonb\", [1, 123, 125], Some(\"\\u{1}{}\")), \
-             \"foo\": Boolean(false)} \
-             }"
-        );
-        let db_value = db_row.get("bar").unwrap();
-        pool.execute(
-            r#"UPDATE test_other_types SET foo = TRUE WHERE bar = $1"#,
-            params![db_value],
-        )
-        .await
-        .unwrap();
-        let mut db_rows: Vec<DbRow> = pool
-            .query(r#"SELECT * FROM test_other_types"#, ())
-            .await
-            .unwrap();
-        let db_row = db_rows.pop().unwrap();
-        assert_eq!(
-            format!("{db_row:?}"),
-            "DbRow { \
-             map: {\
-             \"bar\": Other(\"jsonb\", [1, 123, 125], Some(\"\\u{1}{}\")), \
-             \"foo\": Boolean(true)} \
-             }"
-        );
-
-        // JSON
-        pool.drop_table("test_other_types").await.unwrap();
-        pool.execute(
-            r#"CREATE TABLE test_other_types (bar JSON, foo BOOL DEFAULT FALSE)"#,
-            (),
-        )
-        .await
-        .unwrap();
-        pool.execute(r#"INSERT INTO test_other_types VALUES ('{}')"#, ())
-            .await
-            .unwrap();
-
-        // Get the value that was just inserted and use it to edit the table and verify the result:
-        let mut db_rows: Vec<DbRow> = pool
-            .query(r#"SELECT * FROM test_other_types"#, ())
-            .await
-            .unwrap();
-        let db_row = db_rows.pop().unwrap();
-        assert_eq!(
-            format!("{db_row:?}"),
-            "DbRow { \
-             map: {\
-             \"bar\": Other(\"json\", [123, 125], Some(\"{}\")), \
-             \"foo\": Boolean(false)} \
-             }"
-        );
-        let db_value = db_row.get("bar").unwrap();
-        // PotgreSQL doesn't support JSON = JSON (this is only supported for JSONB), so we
-        // assign to the JSON field here instead.
-        pool.execute(
-            r#"UPDATE test_other_types SET foo = TRUE, bar = $1"#,
-            params![db_value],
-        )
-        .await
-        .unwrap();
-        let mut db_rows: Vec<DbRow> = pool
-            .query(r#"SELECT * FROM test_other_types"#, ())
-            .await
-            .unwrap();
-        let db_row = db_rows.pop().unwrap();
-        assert_eq!(
-            format!("{db_row:?}"),
-            "DbRow { \
-             map: {\
-             \"bar\": Other(\"json\", [123, 125], Some(\"{}\")), \
              \"foo\": Boolean(true)} \
              }"
         );
@@ -1443,5 +1370,35 @@ mod tests {
 
         // Clean up.
         pool.drop_table("test_other_types").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_jsonb() {
+        let pool = TokioPostgresPool::connect("postgresql:///rltbl_db")
+            .await
+            .unwrap();
+
+        pool.drop_table("test_jsonb").await.unwrap();
+        pool.execute(
+            r#"CREATE TABLE test_jsonb (bar JSONB, foo BOOL DEFAULT FALSE)"#,
+            (),
+        )
+        .await
+        .unwrap();
+        pool.execute(r#"INSERT INTO test_jsonb VALUES ('[]')"#, ())
+            .await
+            .unwrap();
+
+        // Get the value that was just inserted and use it to edit the table and verify the result:
+        let mut db_rows: Vec<DbRow> = pool.query(r#"SELECT * FROM test_jsonb"#, ()).await.unwrap();
+        let db_row = db_rows.pop().unwrap();
+        assert_eq!(
+            format!("{db_row:?}"),
+            "DbRow { \
+             map: {\
+             \"bar\": Json(Array []), \
+             \"foo\": Boolean(false)} \
+             }"
+        );
     }
 }

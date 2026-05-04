@@ -3,7 +3,7 @@
 use crate::{
     core::{CachingStrategy, DbError, DbQuery},
     db_kind::{DbKind, MAX_PARAMS_SQLITE},
-    db_value::{DbParams, DbRow, DbValue, FromDbRows, IntoDbParams, IntoDbRows},
+    db_value::{DbParams, DbRow, DbValue, FromDbRows, IntoDbParams, IntoDbRows, JsonValue},
     shared::{EditType, edit},
 };
 use deadpool_sqlite::{
@@ -98,6 +98,17 @@ fn query_prepared(
                     }
                     DbValue::Null => {
                         stmt.raw_bind_parameter(i + 1, &Null).map_err(|err| {
+                            DbError::InputError(format!(
+                                "Error binding parameter '{param:?}': {err}"
+                            ))
+                        })?;
+                    }
+                    DbValue::Json(value) => {
+                        let value = match value {
+                            JsonValue::String(value) => value.to_string(),
+                            _ => value.to_string(),
+                        };
+                        stmt.raw_bind_parameter(i + 1, value).map_err(|err| {
                             DbError::InputError(format!(
                                 "Error binding parameter '{param:?}': {err}"
                             ))

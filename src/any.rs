@@ -312,7 +312,7 @@ mod tests {
     use crate::{
         core::{CachingStrategy, QUERY_CACHE_TABLE, TABLE_CACHE_TABLE},
         db_row,
-        db_value::{ColumnMap, DbRow, DbValue, StringRow},
+        db_value::{ColumnMap, DbRow, DbValue, JsonValue, StringRow},
         memory::{
             clear_memory_query_cache, clear_memory_table_cache, clear_meta_cache,
             get_memory_query_cache_contents, get_memory_table_cache_contents,
@@ -325,6 +325,7 @@ mod tests {
         rngs::StdRng,
     };
     use rust_decimal::dec;
+    use serde_json::json;
     use std::{
         collections::BTreeMap,
         str::FromStr,
@@ -2312,5 +2313,67 @@ mod tests {
             pool.drop_table(table).await.unwrap();
         }
         elapsed
+    }
+
+    #[tokio::test]
+    async fn test_json_values() {
+        #[cfg(feature = "rusqlite")]
+        json_values(":memory:").await;
+        #[cfg(feature = "tokio-postgres")]
+        json_values("postgresql:///rltbl_db").await;
+        #[cfg(feature = "libsql")]
+        json_values(":memory:").await;
+    }
+
+    async fn json_values(url: &str) {
+        clear_meta_cache().unwrap();
+        let pool = AnyPool::connect(url).await.unwrap();
+
+        pool.drop_table("test_json_values").await.unwrap();
+        pool.execute(
+            r#"CREATE TABLE test_json_values (bar JSON, foo BIGINT DEFAULT 0)"#,
+            (),
+        )
+        .await
+        .unwrap();
+        pool.execute(
+            r#"INSERT INTO test_json_values (bar) VALUES ('{"alpha":1}')"#,
+            (),
+        )
+        .await
+        .unwrap();
+
+        // Get the value that was just inserted and use it to edit the table and verify the result:
+        let mut db_rows: Vec<DbRow> = pool
+            .query(r#"SELECT * FROM test_json_values"#, ())
+            .await
+            .unwrap();
+        let db_row = db_rows.pop().unwrap();
+        let bar: JsonValue = serde_json::from_str(&db_row.get("bar").unwrap().to_string()).unwrap();
+        assert_eq!(bar, json!({"alpha":1}));
+        let foo = db_row.get("foo").unwrap();
+        assert_eq!(foo, DbValue::BigInteger(0));
+
+        let db_value = db_row.get("bar").unwrap();
+        pool.execute(
+            r#"UPDATE test_json_values SET foo = 1, bar = $1"#,
+            params![db_value],
+        )
+        .await
+        .unwrap();
+        let mut db_rows: Vec<DbRow> = pool
+            .query(r#"SELECT * FROM test_json_values"#, ())
+            .await
+            .unwrap();
+        let db_row = db_rows.pop().unwrap();
+        // Because SQLite doesn't actually have a JSON datatye (other than as an alias for TEXT),
+        // the DbValue corresponding to "bar" will be DbValue::Text, while it will be DbValue::Json
+        // for PostgreSQL. Either way, it should parse as valid json, so we call
+        // serde_json::from_str() here to do so and test that the result is what we expect. It
+        // should be the same either way.
+        let bar: JsonValue = serde_json::from_str(&db_row.get("bar").unwrap().to_string()).unwrap();
+        assert_eq!(bar, json!({"alpha":1}));
+        let foo = db_row.get("foo").unwrap();
+        assert_eq!(foo, DbValue::BigInteger(1));
     }
 }

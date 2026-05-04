@@ -3,7 +3,7 @@
 use crate::{
     core::{CachingStrategy, DbError, DbQuery},
     db_kind::{DbKind, MAX_PARAMS_SQLITE},
-    db_value::{DbParams, DbRow, DbValue, FromDbRows, IntoDbParams, IntoDbRows},
+    db_value::{DbParams, DbRow, DbValue, FromDbRows, IntoDbParams, IntoDbRows, JsonValue},
     shared::{EditType, edit},
 };
 use deadpool_libsql::{
@@ -58,6 +58,13 @@ impl TryFrom<DbParams> for Vec<Value> {
                             values.push(Value::Real(pvalue.into()))
                         }
                         DbValue::Text(pvalue) => values.push(Value::Text(pvalue)),
+                        DbValue::Json(value) => {
+                            let value = match value {
+                                JsonValue::String(value) => value.to_string(),
+                                _ => value.to_string(),
+                            };
+                            values.push(Value::Text(value))
+                        }
                         DbValue::Other(type_name, bytes, string_opt) => {
                             return Err(DbError::InputError(format!(
                                 "Not supported: \
