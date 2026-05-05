@@ -2,7 +2,7 @@
 
 use crate::{
     core::DbError,
-    db_value::{DbRow, DbValue, JsonValue},
+    db_value::{DbRow, DbValue, JsonRow, JsonValue},
 };
 use serde::{
     Deserialize, Serialize,
@@ -562,12 +562,7 @@ impl<'a> ser::SerializeSeq for &'a mut DbRowSerializer {
     }
 }
 
-// Unsupported implementations
-
-// Although a [DbRow] is essentially a wrapper around an IndexMap, when one is serialized,
-// the serialization begins with our implementation of SerializeStruct and thus does not require
-// us to explicitly implement actually working code for the implemetation of SerializeMap, because
-// the map is serialized, instead, via the call to value.serialize() (see above).
+// This might be called when serializing a JSON value that happens to be a map.
 impl<'a> ser::SerializeMap for &'a mut DbRowSerializer {
     // These need to match the `Ok` and `Error` types of DbRowSerializer:
     type Ok = ();
@@ -577,23 +572,27 @@ impl<'a> ser::SerializeMap for &'a mut DbRowSerializer {
     where
         T: ?Sized + Serialize,
     {
+        // If this is the first entry, create a new inner map:
         if self.inner_value == JsonValue::Null {
             self.inner_value = json!({
                 "keys": [],
                 "values": [],
             });
         }
-
-        let inner = match self.inner_value.get_mut("keys").unwrap().as_array_mut() {
-            Some(inner) => inner,
+        // Add the key to the keys list:
+        match self
+            .inner_value
+            .get_mut("keys")
+            .and_then(|k| k.as_array_mut())
+        {
+            Some(inner) => inner.push(json!(key)),
             None => {
                 return Err(DbError::SerdeError(format!(
-                    "Not a JSON Array: {}",
+                    "Invalid inner value: {:?}",
                     self.inner_value
                 )));
             }
         };
-        inner.push(json!(key));
         Ok(())
     }
 
@@ -601,57 +600,80 @@ impl<'a> ser::SerializeMap for &'a mut DbRowSerializer {
     where
         T: ?Sized + Serialize,
     {
-        let inner = match self.inner_value.get_mut("values").unwrap().as_array_mut() {
-            Some(inner) => inner,
+        // Add the value to the values list:
+        match self
+            .inner_value
+            .get_mut("values")
+            .and_then(|v| v.as_array_mut())
+        {
+            Some(inner) => inner.push(json!(value)),
             None => {
                 return Err(DbError::SerdeError(format!(
-                    "Not a JSON Array: {}",
+                    "Invalid inner value: {:?}",
                     self.inner_value
                 )));
             }
         };
-        inner.push(json!(value));
         Ok(())
     }
 
     fn end(self) -> Result<(), DbError> {
-        let keys = match self.inner_value.get("keys").unwrap().as_array() {
-            Some(inner) => inner,
-            None => {
-                return Err(DbError::SerdeError(format!(
-                    "Not a JSON Array: {}",
-                    self.inner_value
-                )));
+        // This is an inner version of the algorithm used in to_db_row().
+        let empty_vec = vec![];
+        let keys = {
+            if self.inner_value == JsonValue::Null {
+                &empty_vec
+            } else {
+                match self.inner_value.get("keys").and_then(|k| k.as_array()) {
+                    Some(inner) => inner,
+                    None => {
+                        return Err(DbError::SerdeError(format!(
+                            "Invalid inner value: {:?}",
+                            self.inner_value
+                        )));
+                    }
+                }
             }
         };
-        let values = match self.inner_value.get("values").unwrap().as_array() {
-            Some(inner) => inner,
-            None => {
-                return Err(DbError::SerdeError(format!(
-                    "Not a JSON Array: {}",
-                    self.inner_value
-                )));
+        let values = {
+            if self.inner_value == JsonValue::Null {
+                &empty_vec
+            } else {
+                match self.inner_value.get("values").and_then(|k| k.as_array()) {
+                    Some(inner) => inner,
+                    None => {
+                        return Err(DbError::SerdeError(format!(
+                            "Invalid inner value: {:?}",
+                            self.inner_value
+                        )));
+                    }
+                }
             }
         };
         if keys.len() != values.len() {
             return Err(DbError::SerdeError(format!(
-                "Keys and values have different lengths: \
+                "Inner keys and values have different lengths: \
                  Keys: {keys:?} (length: {klen}), \
                  Values: {values:?} (length: {vlen})",
                 klen = keys.len(),
                 vlen = values.len(),
             )));
         }
-        let mut json_row = json!({});
-        let json_row = json_row.as_object_mut().unwrap();
+        let mut json_row = JsonRow::new();
         for (i, key) in keys.iter().enumerate() {
-            json_row.insert(key.as_str().unwrap().to_string(), values[i].clone());
+            let key = key
+                .as_str()
+                .ok_or(DbError::SerdeError(format!("Not a string: {key}")))?
+                .to_string();
+            json_row.insert(key, values[i].clone());
         }
         self.values.push(DbValue::Json(json!(json_row)));
         self.inner_value = JsonValue::Null;
         Ok(())
     }
 }
+
+// Unsupported implementations
 
 impl<'a> ser::SerializeStructVariant for &'a mut DbRowSerializer {
     // These need to match the `Ok` and `Error` types of DbRowSerializer:
@@ -904,7 +926,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
                 let value = self.pop_value()?;
                 let value = value
                     .as_str()
-                    .ok_or(DbError::SerdeError(format!("Not a string string: {value}")))?;
+                    .ok_or(DbError::SerdeError(format!("Not a string: {value}")))?;
                 visitor.visit_borrowed_str(value)
             }
         }
@@ -964,12 +986,16 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
                 )),
                 DbValue::Json(value) => match value {
                     JsonValue::Array(_) => value.deserialize_seq(visitor).map_err(|err| {
-                        DbError::SerdeError(format!("Error '{err}'. Add a better message"))
+                        DbError::SerdeError(format!("Error deserializing array: '{err}'."))
                     }),
                     JsonValue::Object(_) => value.deserialize_map(visitor).map_err(|err| {
-                        DbError::SerdeError(format!("Error '{err}'. Add a better message"))
+                        DbError::SerdeError(format!("Error deserializing object: '{err}'."))
                     }),
-                    _ => visitor.visit_str(&value.to_string()),
+                    _ => {
+                        return Err(DbError::SerdeError(format!(
+                            "Invalid JSON value: {value:?}"
+                        )));
+                    }
                 },
                 DbValue::Other(type_name, bytes, string_opt) => Err(DbError::SerdeError(format!(
                     "Deserialization not supported for \
@@ -1026,14 +1052,18 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
                 }
                 DbValue::Json(value) => match value {
                     JsonValue::Array(_) => value.deserialize_map(visitor).map_err(|err| {
-                        DbError::SerdeError(format!("Error '{err}'. Add a better message"))
+                        DbError::SerdeError(format!("Error deserializing array: '{err}'."))
                     }),
                     JsonValue::Object(_) => value.deserialize_map(visitor).map_err(|err| {
-                        DbError::SerdeError(format!("Error '{err}'. Add a better message"))
+                        DbError::SerdeError(format!("Error deserializing object: '{err}'."))
                     }),
-                    _ => panic!(),
+                    _ => {
+                        return Err(DbError::SerdeError(format!(
+                            "Invalid JSON value: {value:?}"
+                        )));
+                    }
                 },
-                _ => panic!(),
+                _ => return Err(DbError::SerdeError(format!("Invalid DB value: {value:?}"))),
             }
         }
     }
@@ -1113,18 +1143,22 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
                         value
                             .deserialize_enum(name, variants, visitor)
                             .map_err(|err| {
-                                DbError::SerdeError(format!("Error '{err}'. Add a better message"))
+                                DbError::SerdeError(format!("Error deserializing array: '{err}'."))
                             })
                     }
                     JsonValue::Object(_) => value
                         .deserialize_enum(name, variants, visitor)
                         .map_err(|err| {
-                            DbError::SerdeError(format!("Error '{err}'. Add a better message"))
+                            DbError::SerdeError(format!("Error deserializing object: '{err}'."))
                         }),
-                    _ => panic!(),
+                    _ => {
+                        return Err(DbError::SerdeError(format!(
+                            "Invalid JSON value: {value:?}"
+                        )));
+                    }
                 }
             }
-            _ => panic!(),
+            _ => return Err(DbError::SerdeError(format!("Invalid DB value: {value:?}"))),
         }
     }
 
@@ -1141,14 +1175,18 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
             }
             DbValue::Json(value) => match value {
                 JsonValue::Array(_) => value.deserialize_seq(visitor).map_err(|err| {
-                    DbError::SerdeError(format!("Error '{err}'. Add a better message"))
+                    DbError::SerdeError(format!("Error deserializing array: '{err}'."))
                 }),
                 JsonValue::Object(_) => value.deserialize_seq(visitor).map_err(|err| {
-                    DbError::SerdeError(format!("Error '{err}'. Add a better message"))
+                    DbError::SerdeError(format!("Error deserializing object: '{err}'."))
                 }),
-                _ => panic!(),
+                _ => {
+                    return Err(DbError::SerdeError(format!(
+                        "Invalid JSON value: {value:?}"
+                    )));
+                }
             },
-            _ => panic!(),
+            _ => return Err(DbError::SerdeError(format!("Invalid DB value: {value:?}"))),
         }
     }
 
@@ -1165,14 +1203,18 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
             }
             DbValue::Json(value) => match value {
                 JsonValue::Array(_) => value.deserialize_seq(visitor).map_err(|err| {
-                    DbError::SerdeError(format!("Error '{err}'. Add a better message"))
+                    DbError::SerdeError(format!("Error deserializing array: '{err}'."))
                 }),
                 JsonValue::Object(_) => value.deserialize_seq(visitor).map_err(|err| {
-                    DbError::SerdeError(format!("Error '{err}'. Add a better message"))
+                    DbError::SerdeError(format!("Error deserializing object: '{err}'."))
                 }),
-                _ => panic!(),
+                _ => {
+                    return Err(DbError::SerdeError(format!(
+                        "Invalid JSON value: {value:?}"
+                    )));
+                }
             },
-            _ => panic!(),
+            _ => return Err(DbError::SerdeError(format!("Invalid DB value: {value:?}"))),
         }
     }
 
@@ -1283,7 +1325,10 @@ mod tests {
         #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
         struct TestStruct {
             // json
-            json_simple: JsonValue,
+            json_simple_1: JsonValue,
+            json_simple_2: JsonValue,
+            json_simple_3: JsonValue,
+            json_simple_4: JsonValue,
             json_complex: JsonValue,
             json_opt_none: Option<JsonValue>,
             json_opt_some: Option<JsonValue>,
@@ -1405,10 +1450,13 @@ mod tests {
         }
 
         let expected_struct = TestStruct {
-            json_simple: json!(1724),
+            json_simple_1: json!(1724),
+            json_simple_2: JsonValue::Null,
+            json_simple_3: JsonValue::Bool(true),
+            json_simple_4: JsonValue::String("foo".into()),
             json_complex: json!({"alpha": 10}),
             json_opt_none: None,
-            json_opt_some: Some(json!(1724)),
+            json_opt_some: Some(json!({})),
 
             boolean: true,
             boolean_opt_none: None,
@@ -1488,7 +1536,7 @@ mod tests {
                 bar: 1,
                 list: vec![1, 2, 3],
                 tuple: (1, String::from("bar")),
-                json: json!([]),
+                json: json!([13, 14.0]),
             },
             structure_opt_none: None,
             structure_opt_some: Some(NormalStruct {
@@ -1496,7 +1544,7 @@ mod tests {
                 bar: 1,
                 list: vec![1, 2, 3],
                 tuple: (1, String::from("bar")),
-                json: json!([]),
+                json: json!({"foo": 13.2, "bar": "yes"}),
             }),
 
             newtype_struct: NewTypeStruct(1),
@@ -1526,7 +1574,7 @@ mod tests {
                     bar: 1,
                     list: vec![1, 2, 3],
                     tuple: (1, String::from("bar")),
-                    json: json!([]),
+                    json: json!([JsonValue::Null, json!({})]),
                 }],
                 bar_tuple: (1, 1, String::from("bar")),
             },
@@ -1538,7 +1586,7 @@ mod tests {
                     bar: 1,
                     list: vec![1, 2, 3],
                     tuple: (1, String::from("bar")),
-                    json: json!([]),
+                    json: JsonValue::Null,
                 },
                 foo_list: vec![Enumeration::NewTypeVariant(1.0)],
                 bar_list: vec![NormalStruct {
@@ -1546,17 +1594,20 @@ mod tests {
                     bar: 1,
                     list: vec![1, 2, 3],
                     tuple: (1, String::from("bar")),
-                    json: json!([]),
+                    json: json!("Semmelweis"),
                 }],
                 bar_tuple: (1, 1, String::from("bar")),
             }),
         };
 
         let expected_db_row = db_row! {
-            "json_simple" => json!(1724),
+            "json_simple_1" => json!(1724),
+            "json_simple_2" => JsonValue::Null,
+            "json_simple_3" => JsonValue::Bool(true),
+            "json_simple_4" => JsonValue::String("foo".into()),
             "json_complex" => json!({"alpha": 10}),
             "json_opt_none" => DbValue::Null,
-            "json_opt_some" => json!(1724),
+            "json_opt_some" => json!({}),
 
             "boolean" => true,
             "boolean_opt_none" => DbValue::Null,
@@ -1613,21 +1664,21 @@ mod tests {
 
             // Complex types:
 
-            "sequence" => json!([0,1,2]),
+            "sequence" => json!([0, 1, 2]),
             "sequence_opt_none" => DbValue::Null,
-            "sequence_opt_some" => json!([0,1,2]),
+            "sequence_opt_some" => json!([0, 1, 2]),
 
-            "enumeration" => json!({"NewTypeVariant":1.0}),
+            "enumeration" => json!({"NewTypeVariant": 1.0}),
             "enumeration_opt_none" => DbValue::Null,
             "enumeration_opt_some" => "\"UnitVariant\"",
 
-            "struct_variant" => json!({"StructVariant":{"foo":1}}),
+            "struct_variant" => json!({"StructVariant":{"foo": 1}}),
             "struct_variant_opt_none" => DbValue::Null,
-            "struct_variant_opt_some" => json!({"StructVariant":{"foo":1}}),
+            "struct_variant_opt_some" => json!({"StructVariant":{"foo": 1}}),
 
             "tuple_variant" => json!({"TupleVariant":[1,1]}),
             "tuple_variant_opt_none" => DbValue::Null,
-            "tuple_variant_opt_some" => json!({"TupleVariant":[1,1]}),
+            "tuple_variant_opt_some" => json!({"TupleVariant":[1, 1]}),
 
             "unit_struct" => "UnitStruct",
             "unit_struct_opt_none" => DbValue::Null,
@@ -1636,17 +1687,17 @@ mod tests {
             "structure" => json!({
                 "foo": "bar",
                 "bar": 1,
-                "list": [1,2,3],
+                "list": [1, 2, 3],
                 "tuple": [1,"bar"],
-                "json": []
+                "json": [13, 14.0]
             }),
             "structure_opt_none" => DbValue::Null,
             "structure_opt_some" => json!({
                 "foo": "bar",
                 "bar": 1,
-                "list": [1,2,3],
-                "tuple": [1,"bar"],
-                "json": []
+                "list": [1, 2, 3],
+                "tuple": [1, "bar"],
+                "json": {"foo": 13.2, "bar": "yes"}
             }),
 
             "newtype_struct" => 1_i64,
@@ -1676,7 +1727,7 @@ mod tests {
                      "bar": 1,
                      "list": [1, 2, 3],
                      "tuple": [1, "bar"],
-                     "json":[]
+                     "json": [JsonValue::Null, json!({})]
                  }],
                  "bar_tuple": [1, 1, "bar"]
                 }
@@ -1689,7 +1740,7 @@ mod tests {
                      "bar": 1,
                      "list": [1, 2, 3],
                      "tuple": [1, "bar"],
-                     "json": []
+                     "json": JsonValue::Null
                  },
                  "foo_list":[{"NewTypeVariant": 1.0}],
                  "bar_list":[{
@@ -1697,7 +1748,7 @@ mod tests {
                      "bar": 1,
                      "list": [1, 2, 3],
                      "tuple": [1, "bar"],
-                     "json":[]
+                     "json": "Semmelweis"
                  }],
                  "bar_tuple": [1, 1, "bar"]
                 }

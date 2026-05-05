@@ -367,14 +367,32 @@ impl DbQuery for TokioPostgresPool {
                                 DbValue::Null => {
                                     params.push(Box::new(GenericTypeValue { bytes: None }))
                                 }
+                                DbValue::Json(value) => {
+                                    // I'm not sure exactly what the underlying rationale is,
+                                    // but it seems that the first byte of any JSONB value is
+                                    // always the hex value 1.
+                                    let bytes = match other {
+                                        &Type::JSONB => {
+                                            let mut bytes: Vec<u8> = vec![1];
+                                            bytes
+                                                .append(&mut value.to_string().as_bytes().to_vec());
+                                            bytes
+                                        }
+                                        &Type::JSON => value.to_string().as_bytes().to_vec(),
+                                        _ => {
+                                            return Err(DbError::InputError(gen_err(
+                                                &param,
+                                                &other.to_string(),
+                                            )));
+                                        }
+                                    };
+                                    params.push(Box::new(GenericTypeValue { bytes: Some(bytes) }))
+                                }
                                 DbValue::Other(_cname, bytes, _string_opt) => {
                                     params.push(Box::new(GenericTypeValue {
                                         bytes: Some(bytes.clone()),
                                     }))
                                 }
-                                DbValue::Json(value) => params.push(Box::new(GenericTypeValue {
-                                    bytes: Some(value.to_string().as_bytes().to_vec()),
-                                })),
                                 _ => {
                                     return Err(DbError::InputError(gen_err(
                                         &param,
@@ -1385,7 +1403,7 @@ mod tests {
         )
         .await
         .unwrap();
-        pool.execute(r#"INSERT INTO test_jsonb VALUES ('[]')"#, ())
+        pool.execute(r#"INSERT INTO test_jsonb VALUES ('["foo", 1]')"#, ())
             .await
             .unwrap();
 
@@ -1396,8 +1414,29 @@ mod tests {
             format!("{db_row:?}"),
             "DbRow { \
              map: {\
-             \"bar\": Json(Array []), \
+             \"bar\": Json(Array [String(\"foo\"), Number(1)]), \
              \"foo\": Boolean(false)} \
+             }"
+        );
+
+        let db_value = db_row.get("bar").unwrap();
+        println!("DB VALUE: {db_value:?}");
+
+        pool.execute(
+            r#"UPDATE test_jsonb SET foo = TRUE WHERE bar = $1"#,
+            params![db_value],
+        )
+        .await
+        .unwrap();
+
+        let mut db_rows: Vec<DbRow> = pool.query(r#"SELECT * FROM test_jsonb"#, ()).await.unwrap();
+        let db_row = db_rows.pop().unwrap();
+        assert_eq!(
+            format!("{db_row:?}"),
+            "DbRow { \
+             map: {\
+             \"bar\": Json(Array [String(\"foo\"), Number(1)]), \
+             \"foo\": Boolean(true)} \
              }"
         );
     }

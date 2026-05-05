@@ -38,7 +38,7 @@ pub enum DbValue {
     Numeric(Decimal),
     /// Use with TEXT and VARCHAR column types or equivalent.
     Text(String),
-    /// TODO: Add docstring.
+    /// Use with JSON or JSONB column types or equivalent.
     Json(JsonValue),
     /// Other types that are not explicitly supported, represented by the triple
     /// (other type, raw representation, optional string representation)
@@ -74,6 +74,18 @@ impl DbValue {
 
     pub fn is_u8(&self) -> bool {
         self.as_u8().is_some()
+    }
+
+    pub fn is_u16(&self) -> bool {
+        self.as_u16().is_some()
+    }
+
+    pub fn is_u32(&self) -> bool {
+        self.as_u32().is_some()
+    }
+
+    pub fn is_u64(&self) -> bool {
+        self.as_u64().is_some()
     }
 
     pub fn is_f32(&self) -> bool {
@@ -126,6 +138,18 @@ impl DbValue {
         self.try_into().ok()
     }
 
+    pub fn as_u16(&self) -> Option<u16> {
+        self.try_into().ok()
+    }
+
+    pub fn as_u32(&self) -> Option<u32> {
+        self.try_into().ok()
+    }
+
+    pub fn as_u64(&self) -> Option<u64> {
+        self.try_into().ok()
+    }
+
     pub fn as_f32(&self) -> Option<f32> {
         self.try_into().ok()
     }
@@ -146,18 +170,6 @@ impl DbValue {
             DbValue::Text(txt) => Some(txt),
             _ => None,
         }
-    }
-
-    pub fn as_u16(&self) -> Option<u16> {
-        self.try_into().ok()
-    }
-
-    pub fn as_u32(&self) -> Option<u32> {
-        self.try_into().ok()
-    }
-
-    pub fn as_u64(&self) -> Option<u64> {
-        self.try_into().ok()
     }
 
     /// Note that: db_value.as_json() gives a different result from into().
@@ -214,7 +226,7 @@ impl Display for DbValue {
     }
 }
 
-// Implementations of attempted conversion of DbValues into various types:
+// Implementations of conversions of DbValues into various types:
 
 // Note that it does not seem possible to implement both Into and TryInto for the same
 // type - we get a conflicting implementation compile error. Since we want to have (i) a
@@ -623,7 +635,7 @@ impl TryInto<bool> for &DbValue {
     }
 }
 
-// Implementations of attempted conversions of various types into DbValues:
+// Implementations of conversions of various types into DbValues:
 
 impl From<&str> for DbValue {
     fn from(item: &str) -> Self {

@@ -2349,6 +2349,11 @@ mod tests {
             .await
             .unwrap();
         let db_row = db_rows.pop().unwrap();
+        // Because SQLite doesn't actually have a JSON datatye (other than as an alias for TEXT),
+        // the DbValue corresponding to "bar" will be DbValue::Text, while it will be DbValue::Json
+        // for PostgreSQL. Either way, it should parse as valid json, so we call
+        // serde_json::from_str() here to do so and test that the result is what we expect. It
+        // should be the same either way.
         let bar: JsonValue = serde_json::from_str(&db_row.get("bar").unwrap().to_string()).unwrap();
         assert_eq!(bar, json!({"alpha":1}));
         let foo = db_row.get("foo").unwrap();
@@ -2366,11 +2371,6 @@ mod tests {
             .await
             .unwrap();
         let db_row = db_rows.pop().unwrap();
-        // Because SQLite doesn't actually have a JSON datatye (other than as an alias for TEXT),
-        // the DbValue corresponding to "bar" will be DbValue::Text, while it will be DbValue::Json
-        // for PostgreSQL. Either way, it should parse as valid json, so we call
-        // serde_json::from_str() here to do so and test that the result is what we expect. It
-        // should be the same either way.
         let bar: JsonValue = serde_json::from_str(&db_row.get("bar").unwrap().to_string()).unwrap();
         assert_eq!(bar, json!({"alpha":1}));
         let foo = db_row.get("foo").unwrap();

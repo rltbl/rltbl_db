@@ -80,6 +80,11 @@ impl DbKind {
                     Ok(float) => Ok(DbValue::BigReal(float)),
                     Err(_) => err(),
                 },
+                "json" => {
+                    let json_value = serde_json::from_str(value)
+                        .map_err(|err| DbError::SerdeError(err.to_string()))?;
+                    Ok(DbValue::Json(json_value))
+                }
                 _ => Err(DbError::DatatypeError(format!(
                     "Unhandled SQL type: {sql_type}"
                 ))),
@@ -131,6 +136,11 @@ impl DbKind {
                     )),
                     Err(_) => err(),
                 },
+                "json" | "jsonb" => {
+                    let json_value = serde_json::from_str(value)
+                        .map_err(|err| DbError::SerdeError(err.to_string()))?;
+                    Ok(DbValue::Json(json_value))
+                }
                 _ => Err(DbError::DatatypeError(format!(
                     "Unhandled SQL type: {sql_type}"
                 ))),
