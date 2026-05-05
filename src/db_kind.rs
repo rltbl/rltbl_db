@@ -22,7 +22,6 @@ pub static MAX_PARAMS_POSTGRES: usize = 32765;
 
 /// Defines the supported database kinds.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
-#[non_exhaustive]
 pub enum DbKind {
     SQLite,
     PostgreSQL,
