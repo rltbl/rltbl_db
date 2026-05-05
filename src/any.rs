@@ -1,4 +1,6 @@
-/// Connect to any supported database using a URL.
+//! Implements an opaque database connection pool.
+
+/// To connect to any supported database using a URL:
 ///
 /// ```
 /// use rltbl_db::{any::AnyPool, core::{DbError, DbQuery}};
@@ -104,6 +106,7 @@ impl AnyPool {
 }
 
 impl DbQuery for AnyPool {
+    /// Implements [DbQuery::kind()]
     fn kind(&self) -> DbKind {
         match self {
             #[cfg(feature = "rusqlite")]
@@ -115,6 +118,7 @@ impl DbQuery for AnyPool {
         }
     }
 
+    /// Implements [DbQuery::set_caching_strategy()]
     fn set_caching_strategy(&mut self, strategy: &CachingStrategy) {
         match self {
             #[cfg(feature = "rusqlite")]
@@ -126,6 +130,7 @@ impl DbQuery for AnyPool {
         }
     }
 
+    /// Implements [DbQuery::get_caching_strategy()]
     fn get_caching_strategy(&self) -> CachingStrategy {
         match self {
             #[cfg(feature = "rusqlite")]
@@ -137,6 +142,7 @@ impl DbQuery for AnyPool {
         }
     }
 
+    /// Implements [DbQuery::set_cache_aware_query()]
     fn set_cache_aware_query(&mut self, value: bool) {
         match self {
             #[cfg(feature = "rusqlite")]
@@ -148,6 +154,7 @@ impl DbQuery for AnyPool {
         }
     }
 
+    /// Implements [DbQuery::get_cache_aware_query()]
     fn get_cache_aware_query(&self) -> bool {
         match self {
             #[cfg(feature = "rusqlite")]
@@ -159,6 +166,7 @@ impl DbQuery for AnyPool {
         }
     }
 
+    /// Implements [DbQuery::execute_batch()]
     async fn execute_batch(&self, sql: &str) -> Result<(), DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
@@ -170,21 +178,23 @@ impl DbQuery for AnyPool {
         }
     }
 
-    async fn query_no_cache<T: FromDbRows>(
+    /// Implements [DbQuery::query_no_cache_clean()]
+    async fn query_no_cache_clean<T: FromDbRows>(
         &self,
         sql: &str,
         params: impl IntoDbParams + Send,
     ) -> Result<T, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
-            AnyPool::Rusqlite(pool) => pool.query_no_cache(sql, params).await,
+            AnyPool::Rusqlite(pool) => pool.query_no_cache_clean(sql, params).await,
             #[cfg(feature = "tokio-postgres")]
-            AnyPool::TokioPostgres(pool) => pool.query_no_cache(sql, params).await,
+            AnyPool::TokioPostgres(pool) => pool.query_no_cache_clean(sql, params).await,
             #[cfg(feature = "libsql")]
-            AnyPool::LibSQL(pool) => pool.query_no_cache(sql, params).await,
+            AnyPool::LibSQL(pool) => pool.query_no_cache_clean(sql, params).await,
         }
     }
 
+    /// Implements [DbQuery::insert()]
     async fn insert(
         &self,
         table: &str,
@@ -201,6 +211,7 @@ impl DbQuery for AnyPool {
         }
     }
 
+    /// Implements [DbQuery::insert_returning()]
     async fn insert_returning<T: FromDbRows>(
         &self,
         table: &str,
@@ -220,6 +231,7 @@ impl DbQuery for AnyPool {
         }
     }
 
+    /// Implements [DbQuery::update()]
     async fn update(
         &self,
         table: &str,
@@ -236,6 +248,7 @@ impl DbQuery for AnyPool {
         }
     }
 
+    /// Implements [DbQuery::update_returning()]
     async fn update_returning<T: FromDbRows>(
         &self,
         table: &str,
@@ -255,6 +268,7 @@ impl DbQuery for AnyPool {
         }
     }
 
+    /// Implements [DbQuery::upsert()]
     async fn upsert(
         &self,
         table: &str,
@@ -271,6 +285,7 @@ impl DbQuery for AnyPool {
         }
     }
 
+    /// Implements [DbQuery::upsert_returning()]
     async fn upsert_returning<T: FromDbRows>(
         &self,
         table: &str,
@@ -297,7 +312,7 @@ mod tests {
     use crate::{
         core::{CachingStrategy, QUERY_CACHE_TABLE, TABLE_CACHE_TABLE},
         db_row,
-        db_value::{ColumnMap, DbRow, DbValue, StringRow},
+        db_value::{ColumnMap, DbRow, DbValue, JsonValue, StringRow},
         memory::{
             clear_memory_query_cache, clear_memory_table_cache, clear_meta_cache,
             get_memory_query_cache_contents, get_memory_table_cache_contents,
@@ -310,6 +325,7 @@ mod tests {
         rngs::StdRng,
     };
     use rust_decimal::dec;
+    use serde_json::json;
     use std::{
         collections::BTreeMap,
         str::FromStr,
@@ -1965,7 +1981,7 @@ mod tests {
             .await
             .unwrap();
 
-        pool.execute_no_cache(
+        pool.execute_no_cache_clean(
             "CREATE TABLE test_vcaching_table ( \
                foo BIGINT, \
                bar BIGINT, \
@@ -1975,10 +1991,10 @@ mod tests {
         )
         .await
         .unwrap();
-        pool.execute_no_cache("INSERT INTO test_vcaching_table VALUES (1, 1000)", ())
+        pool.execute_no_cache_clean("INSERT INTO test_vcaching_table VALUES (1, 1000)", ())
             .await
             .unwrap();
-        pool.execute_no_cache(
+        pool.execute_no_cache_clean(
             "CREATE VIEW test_vcaching_view_1 AS \
              SELECT bar \
              FROM test_vcaching_table",
@@ -1987,7 +2003,7 @@ mod tests {
         .await
         .unwrap();
 
-        pool.execute_no_cache(
+        pool.execute_no_cache_clean(
             "CREATE VIEW test_vcaching_view_2 AS \
              SELECT bar \
              FROM test_vcaching_table",
@@ -2297,5 +2313,67 @@ mod tests {
             pool.drop_table(table).await.unwrap();
         }
         elapsed
+    }
+
+    #[tokio::test]
+    async fn test_json_values() {
+        #[cfg(feature = "rusqlite")]
+        json_values(":memory:").await;
+        #[cfg(feature = "tokio-postgres")]
+        json_values("postgresql:///rltbl_db").await;
+        #[cfg(feature = "libsql")]
+        json_values(":memory:").await;
+    }
+
+    async fn json_values(url: &str) {
+        clear_meta_cache().unwrap();
+        let pool = AnyPool::connect(url).await.unwrap();
+
+        pool.drop_table("test_json_values").await.unwrap();
+        pool.execute(
+            r#"CREATE TABLE test_json_values (bar JSON, foo BIGINT DEFAULT 0)"#,
+            (),
+        )
+        .await
+        .unwrap();
+        pool.execute(
+            r#"INSERT INTO test_json_values (bar) VALUES ('{"alpha":1}')"#,
+            (),
+        )
+        .await
+        .unwrap();
+
+        // Get the value that was just inserted and use it to edit the table and verify the result:
+        let mut db_rows: Vec<DbRow> = pool
+            .query(r#"SELECT * FROM test_json_values"#, ())
+            .await
+            .unwrap();
+        let db_row = db_rows.pop().unwrap();
+        let bar: JsonValue = serde_json::from_str(&db_row.get("bar").unwrap().to_string()).unwrap();
+        assert_eq!(bar, json!({"alpha":1}));
+        let foo = db_row.get("foo").unwrap();
+        assert_eq!(foo, DbValue::BigInteger(0));
+
+        let db_value = db_row.get("bar").unwrap();
+        pool.execute(
+            r#"UPDATE test_json_values SET foo = 1, bar = $1"#,
+            params![db_value],
+        )
+        .await
+        .unwrap();
+        let mut db_rows: Vec<DbRow> = pool
+            .query(r#"SELECT * FROM test_json_values"#, ())
+            .await
+            .unwrap();
+        let db_row = db_rows.pop().unwrap();
+        // Because SQLite doesn't actually have a JSON datatye (other than as an alias for TEXT),
+        // the DbValue corresponding to "bar" will be DbValue::Text, while it will be DbValue::Json
+        // for PostgreSQL. Either way, it should parse as valid json, so we call
+        // serde_json::from_str() here to do so and test that the result is what we expect. It
+        // should be the same either way.
+        let bar: JsonValue = serde_json::from_str(&db_row.get("bar").unwrap().to_string()).unwrap();
+        assert_eq!(bar, json!({"alpha":1}));
+        let foo = db_row.get("foo").unwrap();
+        assert_eq!(foo, DbValue::BigInteger(1));
     }
 }

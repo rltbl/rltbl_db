@@ -152,7 +152,7 @@ impl Display for CachingStrategy {
 
 #[async_trait]
 pub trait DbQuery {
-    /// Get the kind of SQL database: SQLite or PostgreSQL.
+    /// Get the kind of SQL database. See [DbKind] for the supported database kinds.
     fn kind(&self) -> DbKind;
 
     /// Set the caching strategy.
@@ -165,12 +165,21 @@ pub trait DbQuery {
     /// SQL commands executed through the API will be automatically checked to see if they
     /// involve edits and/or drops of database tables. If they do then the cache will be
     /// automatically updated in accordance with the current [CachingStrategy].
+    /// Note that setting this flag does not imply that the results of queries should be
+    /// cached. Setting this flag only means that the current contents, if any, of the cache
+    /// table should be kept up to date whenever the data in the database is edited
+    /// via one of the query_* or execute() methods in [DbQuery]. To add new content to the cache
+    /// that can be later be reused you must explicitly use the [DbQuery::cache()] method.
+    /// To explicitly skip the housekeeping implied by setting the cache-aware-query flag, even
+    /// when it is set to on, use [DbQuery::execute_no_cache_clean()] or
+    /// [DbQuery::query_no_cache_clean()].
     fn set_cache_aware_query(&mut self, value: bool);
 
-    /// Returns true if the cache_aware_query option is currently on.
+    /// Returns true if the cache-aware-query option is currently on.
     fn get_cache_aware_query(&self) -> bool;
 
-    /// Ensure that the query cache table and the table cache table exist.
+    /// Ensure that the query cache table and the table cache table exist (see
+    /// [QUERY_CACHE_TABLE] and [TABLE_CACHE_TABLE]).
     async fn ensure_cache_tables_exist(&self) -> Result<(), DbError> {
         if !exists_in_meta_cache(QUERY_CACHE_TABLE)? || !exists_in_meta_cache(TABLE_CACHE_TABLE)? {
             for special_table in [QUERY_CACHE_TABLE, TABLE_CACHE_TABLE] {
@@ -183,7 +192,7 @@ pub trait DbQuery {
                     }
                     _ => unreachable!(),
                 };
-                match self.execute_no_cache(&sql, ()).await {
+                match self.execute_no_cache_clean(&sql, ()).await {
                     Ok(_) => (),
                     Err(_) => {
                         // Since we are not using transactions, a race condition could occur in
@@ -220,11 +229,10 @@ pub trait DbQuery {
                 .join(";\n");
             self.execute_batch(&sql).await?;
 
-            // Indicate that triggers exist for `table`:
+            // Indicate that triggers exist for `table` in the meta-cache:
             let mut cache = get_meta_cache()?;
             cache.insert(table_triggers_name);
         }
-
         Ok(())
     }
 
@@ -289,7 +297,7 @@ pub trait DbQuery {
     // https://sqlite.org/lang_createtrigger.html. Note that PostgreSQL has the concept
     // of an "event trigger":
     // https://www.pgtutorial.com/postgresql-tutorial/postgresql-event-triggers/ which could
-    // be used, but SQLite has no such capability. To workaround the limitation in SQLite, we
+    // be used, but SQLite has no such capability. To workaround this limitation, we
     // define two clear_cache_() functions, one for edited tables, and one for dropped tables.
     // In the case of a dropped table, unlike an edit, we cannot rely on the caching trigger,
     // when we are using the [CachingStategy::Trigger] strategy, to automatically delete the
@@ -299,9 +307,9 @@ pub trait DbQuery {
     // limitation, for simplicity we will not be creating a PostgreSQL event trigger and we will
     // use both functions below for both database types.
 
-    /// Clear the entries from the cache table for the given list of tables, using the
-    /// current [CachingStrategy], under the assumption that the tables in the given list have
-    /// all just been edited (i.e., truncated, deleted from, inserted to, or updated).
+    /// Update the cache tables, for the given list of tables, using the current [CachingStrategy],
+    /// under the assumption that the tables in the given list have all just been edited (i.e.,
+    /// truncated, deleted from, inserted to, or updated).
     async fn clear_cache_for_edited_tables(&self, tables: &[&str]) -> Result<(), DbError> {
         match self.get_caching_strategy() {
             CachingStrategy::None | CachingStrategy::Trigger => (),
@@ -321,9 +329,8 @@ pub trait DbQuery {
         Ok(())
     }
 
-    /// Clear the entries from the cache table for the given list of tables, using the
-    /// current [CachingStrategy], under the assumption that the tables in the given list have
-    /// all just been dropped.
+    /// Update the cache tables for the given list of tables, using the current [CachingStrategy],
+    /// under the assumption that the tables in the given list have all just been dropped.
     async fn clear_cache_for_dropped_tables(&self, tables: &[&str]) -> Result<(), DbError> {
         if let CachingStrategy::Memory(_) = self.get_caching_strategy() {
             self.update_last_modified_times(tables).await?;
@@ -348,7 +355,7 @@ pub trait DbQuery {
                 }
             }
         }
-        // Update the meta-cache:
+        // Update the meta-cache to remove any entries associated with tables that no longer exist:
         let mut meta_cache = get_meta_cache()?;
         for table in tables {
             if *table == QUERY_CACHE_TABLE {
@@ -455,7 +462,7 @@ pub trait DbQuery {
                             prefix = self.kind().param_prefix(),
                             ts = self.kind().get_epoch_time_sql(),
                         );
-                        self.execute_no_cache(&sql, params![table]).await?;
+                        self.execute_no_cache_clean(&sql, params![table]).await?;
                     }
                 }
             }
@@ -464,8 +471,8 @@ pub trait DbQuery {
     }
 
     /// Delete the entries for the tables in the given list (independently of the current
-    /// caching strategy) from the cache table, if it exists. If the given list is empty,
-    /// clear the entire cache.
+    /// caching strategy) from the query cache table, if it exists. If the given list is empty,
+    /// clear the entire query cache table.
     async fn delete_query_cache_entries(&self, tables: &[&str]) -> Result<(), DbError> {
         if self.table_exists(QUERY_CACHE_TABLE).await? {
             if tables.is_empty() {
@@ -493,7 +500,7 @@ pub trait DbQuery {
         let view_sql = {
             let rows: Vec<DbRow> = {
                 let (sql, params) = self.kind().view_sql_sql(view);
-                self.query_no_cache(&sql, &params).await?
+                self.query_no_cache_clean(&sql, &params).await?
             };
             match rows.first() {
                 Some(row) => row
@@ -586,7 +593,7 @@ pub trait DbQuery {
                        ORDER BY "last_modified" DESC
                        LIMIT 1"#,
                 );
-                let rows: Vec<DbRow> = self.query_no_cache(&sql, parameters).await?;
+                let rows: Vec<DbRow> = self.query_no_cache_clean(&sql, parameters).await?;
                 match rows.len() {
                     0 => Ok(0),
                     1 => {
@@ -627,7 +634,7 @@ pub trait DbQuery {
                     p = self.kind().param_prefix(),
                 );
                 let table_param = format!(r#"%"{table}"%"#);
-                let rows: Vec<DbRow> = self.query_no_cache(&sql, &[&table_param]).await?;
+                let rows: Vec<DbRow> = self.query_no_cache_clean(&sql, &[&table_param]).await?;
                 match rows.first() {
                     Some(row) => match row.get("last_verified") {
                         Some(value) if value == DbValue::Null => Ok(0),
@@ -643,9 +650,10 @@ pub trait DbQuery {
         }
     }
 
-    /// Execute a SQL command, returning a vector of rows. If the result of the command exists
-    /// in the cache, get the value from it instead of from the table(s) actually mentioned in the
-    /// command, using the given [CachingStrategy].
+    /// Execute the given SQL command with the given parameters on the given list of tables,
+    /// returning a vector of rows. If the result of the command exists in the query cache for the
+    /// given tables, get the value from there instead of from the tables themselves,
+    /// in accordance with the given [CachingStrategy].
     async fn cache<T: FromDbRows>(
         &self,
         tables: &[&str],
@@ -687,7 +695,7 @@ pub trait DbQuery {
             let cache_params = &["[", "]", &tables_param, sql, &params_param];
 
             let strings = {
-                let rows: Vec<DbRow> = self.query_no_cache(&cache_sql, cache_params).await?;
+                let rows: Vec<DbRow> = self.query_no_cache_clean(&cache_sql, cache_params).await?;
                 let strings = rows
                     .iter()
                     .map(|row| match row.values().nth(0) {
@@ -711,7 +719,7 @@ pub trait DbQuery {
                     Ok(db_rows)
                 }
                 None => {
-                    let db_rows: Vec<DbRow> = self.query_no_cache(sql, params).await?;
+                    let db_rows: Vec<DbRow> = self.query_no_cache_clean(sql, params).await?;
                     let rows_as_string = {
                         let mut rows_as_string = vec![];
                         for db_row in &db_rows {
@@ -724,12 +732,13 @@ pub trait DbQuery {
                     };
                     let insert_sql = format!(
                         r#"INSERT INTO "{QUERY_CACHE_TABLE}"
-                               ("tables", "statement", "parameters", "value")
-                               VALUES ({prefix}1, {prefix}2, {prefix}3, {prefix}4)"#,
+                           ("tables", "statement", "parameters", "value")
+                           VALUES ({prefix}1, {prefix}2, {prefix}3, {prefix}4)"#,
                         prefix = self.kind().param_prefix(),
                     );
                     let insert_params = [&tables_param, sql, &params_param, &rows_as_string];
-                    self.execute_no_cache(&insert_sql, &insert_params).await?;
+                    self.execute_no_cache_clean(&insert_sql, &insert_params)
+                        .await?;
                     Ok(db_rows)
                 }
             }
@@ -770,7 +779,7 @@ pub trait DbQuery {
                     Ok(db_rows)
                 }
                 None => {
-                    let db_rows: Vec<DbRow> = self.query_no_cache(sql, params).await?;
+                    let db_rows: Vec<DbRow> = self.query_no_cache_clean(sql, params).await?;
                     let mut cache = get_memory_query_cache()?;
                     // If the number of entries exceeds the allowed cache size, remove the oldest
                     // keys first.
@@ -797,10 +806,9 @@ pub trait DbQuery {
             }
         };
 
-        // Now proceed to lookup the given query for the given tables in the cache:
         match self.get_caching_strategy() {
             CachingStrategy::None => {
-                let rows: Vec<DbRow> = self.query_no_cache(sql, params).await?;
+                let rows: Vec<DbRow> = self.query_no_cache_clean(sql, params).await?;
                 Ok(FromDbRows::from(rows))
             }
             CachingStrategy::TruncateAll | CachingStrategy::Truncate => {
@@ -838,11 +846,11 @@ pub trait DbQuery {
         }
     }
 
-    /// Given a table, return a map from column names to column SQL types.
+    /// Given a table, return a [ColumnMap] from column names to column SQL types.
     async fn columns(&self, table: &str) -> Result<ColumnMap, DbError> {
         let mut columns = ColumnMap::new();
         let (sql, params) = self.kind().columns_sql(table);
-        let rows: Vec<DbRow> = self.query_no_cache(&sql, params).await?;
+        let rows: Vec<DbRow> = self.query_no_cache_clean(&sql, params).await?;
         for row in &rows {
             match (
                 row.get("column_name")
@@ -869,10 +877,10 @@ pub trait DbQuery {
         }
     }
 
-    /// Retrieve the primary key columns for a given table.
+    /// Retrieve the primary key column names for a given table.
     async fn primary_keys(&self, table: &str) -> Result<Vec<String>, DbError> {
         let (sql, params) = self.kind().primary_keys_sql(table);
-        let rows: Vec<DbRow> = self.query_no_cache(&sql, params).await?;
+        let rows: Vec<DbRow> = self.query_no_cache_clean(&sql, params).await?;
         rows.iter()
             .map(|row| {
                 match row
@@ -886,7 +894,7 @@ pub trait DbQuery {
             .collect()
     }
 
-    /// Execute a SQL command, returning nothing.
+    /// Execute the given SQL command with the given parameters, returning nothing.
     async fn execute(&self, sql: &str, params: impl IntoDbParams + Send) -> Result<(), DbError> {
         let params = params.into_db_params();
         let _: Vec<DbRow> = match params {
@@ -896,17 +904,18 @@ pub trait DbQuery {
         Ok(())
     }
 
-    /// Execute a SQL command, returning nothing, without updating the cache, regardless of
-    /// whether cache_aware_query option (see [DbQuery::set_cache_aware_query()]) has been set.
-    async fn execute_no_cache(
+    /// Execute the given SQL command with the given parameters, returning nothing, and without
+    /// updating the cache, regardless of whether the cache-aware-query option
+    /// (see [DbQuery::set_cache_aware_query()]) has been set.
+    async fn execute_no_cache_clean(
         &self,
         sql: &str,
         params: impl IntoDbParams + Send,
     ) -> Result<(), DbError> {
         let params = params.into_db_params();
         let _: Vec<DbRow> = match params {
-            DbParams::None => self.query_no_cache(sql, ()).await?,
-            _ => self.query_no_cache(sql, params).await?,
+            DbParams::None => self.query_no_cache_clean(sql, ()).await?,
+            _ => self.query_no_cache_clean(sql, params).await?,
         };
         Ok(())
     }
@@ -914,29 +923,30 @@ pub trait DbQuery {
     /// Sequentially execute a semicolon-delimited list of statements, without parameters.
     fn execute_batch(&self, sql: &str) -> impl Future<Output = Result<(), DbError>> + Send;
 
-    /// Execute a SQL command, returning a vector of rows.
+    /// Execute the given SQL command, with the given parameters, returning a vector of rows.
     async fn query<T: FromDbRows + Send>(
         &self,
         sql: &str,
         params: impl IntoDbParams + Send,
     ) -> Result<T, DbError> {
-        let rows = self.query_no_cache(sql, params).await?;
+        let rows = self.query_no_cache_clean(sql, params).await?;
         if self.get_cache_aware_query() {
             self.clear_cache_for_affected_tables(sql).await?;
         }
         Ok(rows)
     }
 
-    /// Execute a SQL command, returning a vector of rows, without updating the cache,
-    /// regardless of whether the cache_aware_query option (see [DbQuery::set_cache_aware_query()])
-    /// has been set.
-    fn query_no_cache<T: FromDbRows>(
+    /// Execute the given SQL command using the given parameters, returning a vector of rows,
+    /// without updating the cache, regardless of whether the cache-aware-query option
+    /// (see [DbQuery::set_cache_aware_query()]) has been set.
+    fn query_no_cache_clean<T: FromDbRows>(
         &self,
         sql: &str,
         params: impl IntoDbParams + Send,
     ) -> impl Future<Output = Result<T, DbError>> + Send;
 
-    /// Execute a SQL command, returning a single row.
+    /// Execute the given SQL command, using the given parameters, returning a single row.
+    /// An error is returned if there is more than one row of data.
     async fn query_row<T: FromDbRow>(
         &self,
         sql: &str,
@@ -954,7 +964,8 @@ pub trait DbQuery {
         }
     }
 
-    /// Execute a SQL command, returning a single value.
+    /// Execute the given SQL command, using the given parameters, returning a single value.
+    /// If the data has more than one value, an error is returned.
     async fn query_value(
         &self,
         sql: &str,
@@ -972,7 +983,8 @@ pub trait DbQuery {
         }
     }
 
-    /// Execute a SQL command, returning a single string.
+    /// Execute the given SQL command, using the given parameters, returning a single string.
+    /// If the data has more than one value, an error is returned.
     async fn query_string(
         &self,
         sql: &str,
@@ -982,7 +994,8 @@ pub trait DbQuery {
         Ok(value.into())
     }
 
-    /// Execute a SQL command, returning a vector of strings: the first value for each row.
+    /// Execute the given SQL command, using the given parameters, returning a vector of
+    /// strings representing the first value of each row.
     async fn query_strings(
         &self,
         sql: &str,
@@ -997,7 +1010,8 @@ pub trait DbQuery {
             .collect()
     }
 
-    /// Execute a SQL command, returning a row of strings.
+    /// Execute the given SQL command, using the given parameters, returning a row of strings.
+    /// An error is returned if there is more than one row of data.
     async fn query_string_row(
         &self,
         sql: &str,
@@ -1010,7 +1024,8 @@ pub trait DbQuery {
             .collect())
     }
 
-    /// Execute a SQL command, returning a vector of rows of strings.
+    /// Execute the given SQL command, using the given parameters, returning a vector of rows of
+    /// strings.
     async fn query_string_rows(
         &self,
         sql: &str,
@@ -1020,26 +1035,30 @@ pub trait DbQuery {
         Ok(<Vec<StringRow> as FromDbRows>::from(rows))
     }
 
-    /// Execute a SQL command, returning a single unsigned integer.
+    /// Execute the given SQL command, using the given parameters, returning a single unsigned
+    /// integer. If the data has more than one value, an error is returned.
     async fn query_u64(&self, sql: &str, params: impl IntoDbParams + Send) -> Result<u64, DbError> {
         let value = self.query_value(sql, params).await?;
         Ok(value.try_into()?)
     }
 
-    /// Execute a SQL command, returning a single signed integer.
+    /// Execute the given SQL command, using the given parameters, returning a single signed
+    /// integer. If the data has more than one value, an error is returned.
     async fn query_i64(&self, sql: &str, params: impl IntoDbParams + Send) -> Result<i64, DbError> {
         let value = self.query_value(sql, params).await?;
         Ok(value.try_into()?)
     }
 
-    /// Execute a SQL command, returning a single float.
+    /// Execute the given SQL command, using the given parameters, returning a single float.
+    /// If the data has more than one value, an error is returned.
     async fn query_f64(&self, sql: &str, params: impl IntoDbParams + Send) -> Result<f64, DbError> {
         let value = self.query_value(sql, params).await?;
         Ok(value.try_into()?)
     }
 
-    /// Insert rows into the given table. If an input row does not have a key for a column,
-    /// use NULL as the value of that column when inserting the row to the table.
+    /// Insert rows into the given columns of the given table. If an input row does not have a
+    /// key corresponding to one of the given columns, use NULL as the value of that column when
+    /// inserting the row to the table.
     fn insert(
         &self,
         table: &str,
@@ -1047,9 +1066,9 @@ pub trait DbQuery {
         rows: impl IntoDbRows,
     ) -> impl Future<Output = Result<(), DbError>>;
 
-    /// Like [DbQuery::insert()], but in addition this function also returns the columns from the
-    /// inserted data that are included in `returning`, or all of the inserted data if `returning`
-    /// is an empty list.
+    /// Like [DbQuery::insert()], but in addition this function also returns the data that was
+    /// inserted into the columns included in `returning`, or all of the inserted data if
+    /// `returning` is an empty list.
     fn insert_returning<T: FromDbRows>(
         &self,
         table: &str,
@@ -1058,10 +1077,10 @@ pub trait DbQuery {
         returning: &[&str],
     ) -> impl Future<Output = Result<T, DbError>>;
 
-    /// Update the given table using the given rows. The table should have a primary key
-    /// and any columns included in the primary key should be present within each input row.
-    /// The primary key column values will be used as a way of identifying the rows to update,
-    /// while the other columns in the row will be updated to the given new values.
+    /// Update the given columns of the given table using the given rows. The table should have a
+    /// primary key and any columns that are part of the primary key should be present within each
+    /// input row. The primary key column values will be used as a way of identifying the rows to
+    /// update, while the other columns in the row will be updated to the given new values.
     fn update(
         &self,
         table: &str,
@@ -1069,9 +1088,9 @@ pub trait DbQuery {
         rows: impl IntoDbRows,
     ) -> impl Future<Output = Result<(), DbError>>;
 
-    /// Like [DbQuery::update()], but in addition this function also returns the columns from the
-    /// updated data that are included in `returning`, or all of the updated data if `returning`
-    /// is an empty list.
+    /// Like [DbQuery::update()], but in addition this function also returns the data that was
+    /// updated for the columns included in `returning`, or all of the updated data if
+    /// `returning` is an empty list.
     fn update_returning<T: FromDbRows>(
         &self,
         table: &str,
@@ -1089,9 +1108,9 @@ pub trait DbQuery {
         rows: impl IntoDbRows,
     ) -> impl Future<Output = Result<(), DbError>>;
 
-    /// Like [DbQuery::upsert()], but in addition this function also returns the columns from the
-    /// upserted data that are included in `returning`, or all of the upserted data if `returning`
-    /// is an empty list.
+    /// Like [DbQuery::upsert()], but in addition this function also returns the data that was
+    /// upserted for the columns included in `returning`, or all of the upserted data if
+    /// `returning` is an empty list.
     fn upsert_returning<T: FromDbRows>(
         &self,
         table: &str,
@@ -1114,6 +1133,7 @@ pub trait DbQuery {
     async fn which_are_tables(&self, objects: &[&str]) -> Result<Vec<String>, DbError> {
         let mut tables = vec![];
         let mut unknowns = vec![];
+        // Start by looking for the given objects in the meta cache:
         for object in objects {
             if exists_in_meta_cache(&format!("{object}_TABLE"))? {
                 tables.push(object.to_string());
@@ -1127,7 +1147,7 @@ pub trait DbQuery {
             let (sql, params) = self
                 .kind()
                 .which_are_tables_sql(&unknowns.iter().map(|s| s.as_str()).collect::<Vec<_>>());
-            let rows: Vec<DbRow> = self.query_no_cache(&sql, params).await?;
+            let rows: Vec<DbRow> = self.query_no_cache_clean(&sql, params).await?;
             for row in &rows {
                 let table = row
                     .get("table_name")
@@ -1141,7 +1161,7 @@ pub trait DbQuery {
             let (sql, params) = self
                 .kind()
                 .which_are_views_sql(&unknowns.iter().map(|s| s.as_str()).collect::<Vec<_>>());
-            let rows: Vec<DbRow> = self.query_no_cache(&sql, params).await?;
+            let rows: Vec<DbRow> = self.query_no_cache_clean(&sql, params).await?;
             for row in &rows {
                 let view = row
                     .get("view_name")
@@ -1158,6 +1178,7 @@ pub trait DbQuery {
     async fn which_are_views(&self, objects: &[&str]) -> Result<Vec<String>, DbError> {
         let mut views = vec![];
         let mut unknowns = vec![];
+        // Start by looking for the given objects in the meta cache:
         for object in objects {
             if exists_in_meta_cache(&format!("{object}_VIEW"))? {
                 views.push(object.to_string());
@@ -1171,7 +1192,7 @@ pub trait DbQuery {
             let (sql, params) = self
                 .kind()
                 .which_are_views_sql(&unknowns.iter().map(|s| s.as_str()).collect::<Vec<_>>());
-            let rows: Vec<DbRow> = self.query_no_cache(&sql, params).await?;
+            let rows: Vec<DbRow> = self.query_no_cache_clean(&sql, params).await?;
             for row in &rows {
                 let view = row
                     .get("view_name")
@@ -1185,7 +1206,7 @@ pub trait DbQuery {
             let (sql, params) = self
                 .kind()
                 .which_are_tables_sql(&unknowns.iter().map(|s| s.as_str()).collect::<Vec<_>>());
-            let rows: Vec<DbRow> = self.query_no_cache(&sql, params).await?;
+            let rows: Vec<DbRow> = self.query_no_cache_clean(&sql, params).await?;
             for row in &rows {
                 let table = row
                     .get("table_name")
@@ -1199,19 +1220,22 @@ pub trait DbQuery {
     }
 
     /// Drop the given table from the database. Note that for PostgreSQL (see
-    /// <https://www.postgresql.org/docs/current/sql-droptable.html>), in the case of a
-    /// dependent foreign key constraint, only the constraint will be removed, not the dependent
-    /// table itself.
+    /// <https://www.postgresql.org/docs/current/sql-droptable.html>), if the dropped table,
+    /// say table1, appears in a foreign key constraint for another table, say table2, then
+    /// table2's foreign constraint will be removed, but table2 will not be dropped.
     async fn drop_table(&self, table: &str) -> Result<(), DbError> {
         let table = validate_table_name(table)?;
         // Drop the table:
         match self.kind() {
             DbKind::PostgreSQL => {
-                self.execute_no_cache(&format!(r#"DROP TABLE IF EXISTS "{table}" CASCADE"#), ())
-                    .await?
+                self.execute_no_cache_clean(
+                    &format!(r#"DROP TABLE IF EXISTS "{table}" CASCADE"#),
+                    (),
+                )
+                .await?
             }
             DbKind::SQLite => {
-                self.execute_no_cache(&format!(r#"DROP TABLE IF EXISTS "{table}""#), ())
+                self.execute_no_cache_clean(&format!(r#"DROP TABLE IF EXISTS "{table}""#), ())
                     .await?
             }
         };
@@ -1227,11 +1251,11 @@ pub trait DbQuery {
         // Drop the view:
         match self.kind() {
             DbKind::PostgreSQL => {
-                self.execute_no_cache(&format!(r#"DROP VIEW IF EXISTS "{view}" CASCADE"#), ())
+                self.execute_no_cache_clean(&format!(r#"DROP VIEW IF EXISTS "{view}" CASCADE"#), ())
                     .await?
             }
             DbKind::SQLite => {
-                self.execute_no_cache(&format!(r#"DROP VIEW IF EXISTS "{view}""#), ())
+                self.execute_no_cache_clean(&format!(r#"DROP VIEW IF EXISTS "{view}""#), ())
                     .await?
             }
         };
@@ -1239,226 +1263,5 @@ pub trait DbQuery {
         // Delete dirty entries from the cache in accordance with our caching strategy:
         self.clear_cache_for_dropped_tables(&[&view]).await?;
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_table_names() {
-        // Valid table names:
-        assert_eq!(
-            validate_table_name(r#"table"#).expect("Expected table name to be valid"),
-            "table"
-        );
-        assert_eq!(
-            validate_table_name(r#"my_table"#).expect("Expected table name to be valid"),
-            "my_table"
-        );
-        assert_eq!(
-            validate_table_name(r#"my_2nd_table"#).expect("Expected table name to be valid"),
-            "my_2nd_table"
-        );
-        assert_eq!(
-            validate_table_name(r#"my_table_2"#).expect("Expected table name to be valid"),
-            "my_table_2"
-        );
-        assert_eq!(
-            validate_table_name(r#"my_table2"#).expect("Expected table name to be valid"),
-            "my_table2"
-        );
-        assert_eq!(
-            validate_table_name(r#"My_Table_2"#).expect("Expected table name to be valid"),
-            "My_Table_2"
-        );
-
-        // Valid table name surrounded by quotes:
-        assert_eq!(
-            validate_table_name(r#""table""#).expect("Expected table name to be valid"),
-            "table"
-        );
-
-        // Invalid first character:
-        if let Ok(_) = validate_table_name(r#"1table"#) {
-            panic!("Expected an error");
-        };
-        if let Ok(_) = validate_table_name(r#""1table""#) {
-            panic!("Expected an error");
-        }
-
-        // Beginning or trailing double-quote is missing:
-        if let Ok(_) = validate_table_name(r#"table""#) {
-            panic!("Expected an error");
-        }
-        if let Ok(_) = validate_table_name(r#""table"#) {
-            panic!("Expected an error");
-        }
-
-        // Table name with spaces:
-        if let Ok(_) = validate_table_name(r#"my table"#) {
-            panic!("Expected an error");
-        }
-    }
-
-    #[tokio::test]
-    async fn test_sql_parsing() {
-        // Single statements, possibly with parameters:
-
-        let (edited_tables, dropped_tables) =
-            get_affected_tables(&format!(r#"INSERT INTO "alpha" VALUES ($1, $2, $3)"#)).unwrap();
-        let edited_tables: Vec<_> = edited_tables.into_iter().collect();
-        assert_eq!(edited_tables, ["alpha"]);
-        assert_eq!(dropped_tables, [].into());
-
-        let (edited_tables, dropped_tables) = get_affected_tables(
-            r#"WITH bar AS (SELECT * FROM alpha),
-                        mar AS (SELECT * FROM beta)
-                   INSERT INTO gamma
-                   SELECT alpha.*
-                   FROM alpha, beta
-                   WHERE alpha.value = beta.value"#,
-        )
-        .unwrap();
-        let edited_tables: Vec<_> = edited_tables.into_iter().collect();
-        assert_eq!(edited_tables, ["gamma"]);
-        assert_eq!(dropped_tables, [].into());
-
-        let (edited_tables, dropped_tables) =
-            get_affected_tables(&format!(r#"UPDATE "delta" set bar = $1 WHERE bar = $2"#)).unwrap();
-        let edited_tables: Vec<_> = edited_tables.into_iter().collect();
-        assert_eq!(edited_tables, ["delta"]);
-        assert_eq!(dropped_tables, [].into());
-
-        let (edited_tables, dropped_tables) = get_affected_tables(&format!(
-            r#"WITH bar AS (SELECT * FROM test),
-                        mar AS (SELECT * FROM test)
-                   UPDATE delta
-                   SET value = bar.value
-                   FROM bar, mar
-                   WHERE bar.value = $1 AND bar.value = mar.value"#,
-        ))
-        .unwrap();
-        let edited_tables: Vec<_> = edited_tables.into_iter().collect();
-        assert_eq!(edited_tables, ["delta"]);
-        assert_eq!(dropped_tables, [].into());
-
-        let (edited_tables, dropped_tables) =
-            get_affected_tables(&format!(r#"DELETE FROM "epsilon" WHERE bar >= $1"#)).unwrap();
-        let edited_tables: Vec<_> = edited_tables.into_iter().collect();
-        assert_eq!(edited_tables, ["epsilon"]);
-        assert_eq!(dropped_tables, [].into());
-
-        let (edited_tables, dropped_tables) = get_affected_tables(
-            r#"WITH bar AS (SELECT * FROM test),
-                        mar AS (SELECT * FROM test)
-                   DELETE FROM lambda WHERE value IN (SELECT value FROM bar)"#,
-        )
-        .unwrap();
-        let edited_tables: Vec<_> = edited_tables.into_iter().collect();
-        assert_eq!(edited_tables, ["lambda"]);
-        assert_eq!(dropped_tables, [].into());
-
-        let (edited_tables, dropped_tables) = get_affected_tables(r#"DROP TABLE "rho""#).unwrap();
-        let dropped_tables: Vec<_> = dropped_tables.into_iter().collect();
-        assert_eq!(dropped_tables, ["rho"]);
-        assert_eq!(edited_tables, [].into());
-
-        let (edited_tables, dropped_tables) =
-            get_affected_tables(r#"DROP TABLE IF EXISTS "phi" CASCADE"#).unwrap();
-        let dropped_tables: Vec<_> = dropped_tables.into_iter().collect();
-        assert_eq!(dropped_tables, ["phi"]);
-        assert_eq!(edited_tables, [].into());
-
-        let (edited_tables, dropped_tables) =
-            get_affected_tables("TRUNCATE TABLE mu, nu CASCADE").unwrap();
-        let mut edited_tables: Vec<_> = edited_tables.into_iter().collect();
-        edited_tables.sort();
-        assert_eq!(edited_tables, ["mu", "nu"]);
-        assert_eq!(dropped_tables, [].into());
-
-        let (edited_tables, dropped_tables) =
-            get_affected_tables("ALTER TABLE phi ADD COLUMN varphi INT").unwrap();
-        let mut edited_tables: Vec<_> = edited_tables.into_iter().collect();
-        edited_tables.sort();
-        assert_eq!(edited_tables, ["phi"]);
-        assert_eq!(dropped_tables, [].into());
-
-        let (edited_tables, dropped_tables) = get_affected_tables("DROP VIEW theta").unwrap();
-        let mut dropped_tables: Vec<_> = dropped_tables.into_iter().collect();
-        dropped_tables.sort();
-        assert_eq!(edited_tables, [].into());
-        assert_eq!(dropped_tables, ["theta"]);
-
-        let (edited_tables, dropped_tables) = get_affected_tables(
-            r#"UPDATE epsilon
-               SET alpha = new_beta
-               FROM (
-                 SELECT 9 AS new_alpha, 3 AS new_beta, 2 AS new_gamma, 1 AS new_delta
-                 UNION ALL
-                 SELECT 4 AS new_alpha, 3 as new_beta, 2 AS new_gamma, 1 AS new_delta
-               ) foo_alias
-               WHERE alpha = new_alpha"#,
-        )
-        .unwrap();
-        let edited_tables: Vec<_> = edited_tables.into_iter().collect();
-        assert_eq!(edited_tables, ["epsilon"]);
-        assert_eq!(dropped_tables, [].into());
-
-        // Multiple statements, no parameters:
-
-        let sql = r#"
-            BEGIN TRANSACTION;
-
-            INSERT INTO "alpha" VALUES (1, 2, 3), (4, 5, 6);
-
-            INSERT INTO gamma
-            SELECT alpha.*
-            FROM alpha, beta
-            WHERE alpha.value = beta.value;
-
-            WITH t AS (
-              SELECT * from delta_base ORDER BY quality LIMIT 1
-            )
-            UPDATE delta SET price = t.price * 1.05;
-
-            WITH t AS (
-              SELECT * FROM phi_base
-              WHERE
-                "date" >= '2010-10-01' AND
-                "date" < '2010-11-01'
-            )
-            INSERT INTO phi
-            SELECT * FROM t;
-
-            DELETE FROM "psi" WHERE bar >= 10;
-
-            WITH RECURSIVE included_lambda(sub_lambda, lambda) AS (
-                SELECT sub_lambda, lambda FROM lambda WHERE lambda = 'our_product'
-              UNION ALL
-                SELECT p.sub_lambda, p.lambda
-                FROM included_lambda pr, lambda p
-                WHERE p.lambda = pr.sub_lambda
-            )
-            DELETE FROM lambda
-              WHERE lambda IN (SELECT lambda FROM included_lambda);
-
-            DROP TABLE "rho";
-
-            DROP TABLE "sigma" CASCADE;
-
-            COMMIT"#;
-
-        let (edited_tables, dropped_tables) = get_affected_tables(&sql).unwrap();
-        let mut edited_tables: Vec<_> = edited_tables.into_iter().collect();
-        let mut dropped_tables: Vec<_> = dropped_tables.into_iter().collect();
-        edited_tables.sort();
-        dropped_tables.sort();
-        assert_eq!(
-            edited_tables,
-            ["alpha", "delta", "gamma", "lambda", "phi", "psi",]
-        );
-        assert_eq!(dropped_tables, ["rho", "sigma",]);
     }
 }
