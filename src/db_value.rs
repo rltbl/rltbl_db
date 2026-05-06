@@ -228,12 +228,6 @@ impl Display for DbValue {
 
 // Implementations of conversions of DbValues into various types:
 
-// Note that it does not seem possible to implement both Into and TryInto for the same
-// type - we get a conflicting implementation compile error. Since we want to have (i) a
-// function for converting a DbValue to JSON regardless of its actual type, and (ii) a function
-// to convert a DbValue to a JSON only when it actually is a JSON value, we use the as_json()
-// method (see above) for use case (ii), and into() for use case (i).
-
 impl Into<JsonValue> for DbValue {
     fn into(self) -> JsonValue {
         match self {
@@ -1113,7 +1107,7 @@ mod tests {
 
         let db_val = DbValue::Text(json!([]).to_string());
         let json_val: JsonValue = db_val.into();
-        assert_eq!(json_val, "[]");
+        assert_eq!(json_val, JsonValue::String("[]".into()));
     }
 
     #[test]

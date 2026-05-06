@@ -2330,6 +2330,8 @@ mod tests {
         let pool = AnyPool::connect(url).await.unwrap();
 
         pool.drop_table("test_json_values").await.unwrap();
+        // We only test the JSON type here and not JSONB since the latter is used only in
+        // PostgreSQL, and is therefore tested in tokio_postgres.rs rather than here.
         pool.execute(
             r#"CREATE TABLE test_json_values (bar JSON, foo BIGINT DEFAULT 0)"#,
             (),
@@ -2359,6 +2361,8 @@ mod tests {
         let foo = db_row.get("foo").unwrap();
         assert_eq!(foo, DbValue::BigInteger(0));
 
+        // Retrieve the DbValue from the query results, then send it back as a parameter to a
+        // further UPDATE statement:
         let db_value = db_row.get("bar").unwrap();
         pool.execute(
             r#"UPDATE test_json_values SET foo = 1, bar = $1"#,
@@ -2366,6 +2370,8 @@ mod tests {
         )
         .await
         .unwrap();
+
+        // Query the column again and make sure that the value is what we expect:
         let mut db_rows: Vec<DbRow> = pool
             .query(r#"SELECT * FROM test_json_values"#, ())
             .await

@@ -639,7 +639,7 @@ impl<'a> ser::SerializeMap for &'a mut DbRowSerializer {
             if self.inner_value == JsonValue::Null {
                 &empty_vec
             } else {
-                match self.inner_value.get("values").and_then(|k| k.as_array()) {
+                match self.inner_value.get("values").and_then(|v| v.as_array()) {
                     Some(inner) => inner,
                     None => {
                         return Err(DbError::SerdeError(format!(
