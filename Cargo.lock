@@ -502,6 +502,7 @@ dependencies = [
  "deadpool-runtime",
  "lazy_static",
  "num_cpus",
+ "serde",
  "tokio",
 ]
 
@@ -526,6 +527,7 @@ dependencies = [
  "async-trait",
  "deadpool",
  "getrandom 0.2.16",
+ "serde",
  "tokio",
  "tokio-postgres",
  "tracing",
@@ -1578,6 +1580,8 @@ dependencies = [
  "bytes",
  "fallible-iterator 0.2.0",
  "postgres-protocol",
+ "serde_core",
+ "serde_json",
 ]
 
 [[package]]
@@ -1860,6 +1864,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "tokio-postgres",
  "tower-service",
  "tree-sitter",
  "tree-sitter-sequel",

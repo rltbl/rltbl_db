@@ -142,34 +142,10 @@ fn extract_value(row: &Row, idx: usize) -> Result<DbValue, DbError> {
             None => Ok(DbValue::Null),
         },
         &Type::JSON | &Type::JSONB => {
-            let ctype = column.type_();
-            let value: Result<GenericTypeValue, DbError> = row.try_get(idx).map_err(|_err| {
-                DbError::DataError(format!(
-                    "Error getting value of type '{ctype}' at index {idx} from row {row:?}"
-                ))
-            });
-            match value {
-                Ok(value) => match value.bytes {
-                    Some(bytes) => {
-                        // I'm not sure what the explanation is, but we can parse a JSONB
-                        // value by ignoring the first hex value in bytes. I'm not sure what
-                        // that represents.
-                        let bytes = match ctype {
-                            &Type::JSONB => &bytes[1..],
-                            _ => &bytes,
-                        };
-                        let value = std::str::from_utf8(&bytes).map_err(|_err| {
-                            DbError::DataError(format!("Error converting {bytes:?} to string"))
-                        })?;
-                        let value: JsonValue = serde_json::from_str(&value).map_err(|_err| {
-                            DbError::DataError(format!("Error converting '{value}' to JSON"))
-                        })?;
-                        Ok(DbValue::Json(value))
-                    }
-                    None => Ok(DbValue::Null),
-                },
-                Err(_) => Ok(DbValue::Null),
-            }
+            let value = row
+                .try_get::<usize, JsonValue>(idx)
+                .map_err(|err| DbError::DataError(err.to_string()))?;
+            Ok(DbValue::Json(value))
         }
         other => {
             let value: Result<GenericTypeValue, DbError> = row.try_get(idx).map_err(|_err| {
@@ -362,31 +338,20 @@ impl DbQuery for TokioPostgresPool {
                                 _ => return Err(DbError::InputError(gen_err(&param, "BOOL"))),
                             };
                         }
+                        &Type::JSON | &Type::JSONB => match param {
+                            DbValue::Null => params.push(Box::new(None::<JsonValue>)),
+                            DbValue::Json(value) => params.push(Box::new(value.clone())),
+                            _ => {
+                                return Err(DbError::InputError(gen_err(
+                                    &param,
+                                    &pg_type.to_string(),
+                                )));
+                            }
+                        },
                         other => {
                             match param {
                                 DbValue::Null => {
                                     params.push(Box::new(GenericTypeValue { bytes: None }))
-                                }
-                                DbValue::Json(value) => {
-                                    // I'm not sure exactly what the underlying rationale is,
-                                    // but it seems that the first byte of any JSONB value is
-                                    // always the hex value 1.
-                                    let bytes = match other {
-                                        &Type::JSONB => {
-                                            let mut bytes: Vec<u8> = vec![1];
-                                            bytes
-                                                .append(&mut value.to_string().as_bytes().to_vec());
-                                            bytes
-                                        }
-                                        &Type::JSON => value.to_string().as_bytes().to_vec(),
-                                        _ => {
-                                            return Err(DbError::InputError(gen_err(
-                                                &param,
-                                                &other.to_string(),
-                                            )));
-                                        }
-                                    };
-                                    params.push(Box::new(GenericTypeValue { bytes: Some(bytes) }))
                                 }
                                 DbValue::Other(_cname, bytes, _string_opt) => {
                                     params.push(Box::new(GenericTypeValue {
