@@ -16,6 +16,10 @@ pub type JsonRow = JsonMap<String, JsonValue>;
 pub type StringRow = IndexMap<String, String>;
 pub type ColumnMap = IndexMap<String, String>;
 
+//////////////////////////////////////////////////////////////////////
+// Database values
+//////////////////////////////////////////////////////////////////////
+
 /// Value types for [query parameters](DbParams) and [rows](DbRow)
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub enum DbValue {
@@ -43,6 +47,18 @@ pub enum DbValue {
     /// Other types that are not explicitly supported, represented by the triple
     /// (other type, raw representation, optional string representation)
     Other(String, Vec<u8>, Option<String>),
+}
+
+/// Types that implement this trait can be converted into a [DbValue].
+pub trait IntoDbValue {
+    fn into_db_value(self) -> DbValue;
+}
+
+/// Implements [IntoDbValue] for types that implement [TryFrom] for [DbValue].
+impl<T: Into<DbValue>> IntoDbValue for T {
+    fn into_db_value(self) -> DbValue {
+        self.into()
+    }
 }
 
 impl DbValue {
@@ -822,19 +838,11 @@ impl PartialEq for DbValue {
 
 impl Eq for DbValue {}
 
-/// Types that implement this trait can be converted into a [DbValue].
-pub trait IntoDbValue {
-    fn into_db_value(self) -> DbValue;
-}
+//////////////////////////////////////////////////////////////////////
+// Database query parameters
+//////////////////////////////////////////////////////////////////////
 
-/// Implements [IntoDbValue] for types that implement [TryFrom] for [DbValue].
-impl<T: Into<DbValue>> IntoDbValue for T {
-    fn into_db_value(self) -> DbValue {
-        self.into()
-    }
-}
-
-/// Query parameters
+/// Database query parameters
 #[derive(Debug, Clone)]
 pub enum DbParams {
     None,
@@ -893,7 +901,9 @@ impl<T: IntoDbValue> IntoDbParams for Vec<T> {
     }
 }
 
+//////////////////////////////////////////////////////////////////////
 // Database rows
+//////////////////////////////////////////////////////////////////////
 
 /// A row of database values indexed by column name.
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
@@ -902,18 +912,24 @@ pub struct DbRow {
     pub map: IndexMap<String, DbValue>,
 }
 
-impl Deref for DbRow {
-    type Target = IndexMap<String, DbValue>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.map
-    }
+/// Enables conversion from something into a [DbRow]
+pub trait IntoDbRow {
+    fn into_db_row(self) -> DbRow;
 }
 
-impl DerefMut for DbRow {
-    fn deref_mut(&mut self) -> &mut IndexMap<String, DbValue> {
-        &mut self.map
-    }
+/// Enables conversion from a [DbRow] into something.
+pub trait FromDbRow {
+    fn from(row: DbRow) -> Self;
+}
+
+/// Enables conversion from something into a vector of [DbRow]s
+pub trait IntoDbRows {
+    fn into_db_rows(self) -> Vec<DbRow>;
+}
+
+/// Enables conversion from a vector of [DbRow]s into something.
+pub trait FromDbRows {
+    fn from(rows: Vec<DbRow>) -> Self;
 }
 
 impl DbRow {
@@ -929,6 +945,20 @@ impl DbRow {
 
     pub fn get(&self, key: &str) -> Option<DbValue> {
         self.map.get(key).cloned()
+    }
+}
+
+impl Deref for DbRow {
+    type Target = IndexMap<String, DbValue>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.map
+    }
+}
+
+impl DerefMut for DbRow {
+    fn deref_mut(&mut self) -> &mut IndexMap<String, DbValue> {
+        &mut self.map
     }
 }
 
@@ -949,11 +979,32 @@ impl FromIterator<(String, DbValue)> for DbRow {
     }
 }
 
-// Traits for converting to and from vectors of DbRows:
+impl IntoDbRow for DbRow {
+    fn into_db_row(self) -> DbRow {
+        self
+    }
+}
 
-/// Enables conversion from something into a vector of [DbRow]s
-pub trait IntoDbRows {
-    fn into_db_rows(self) -> Vec<DbRow>;
+impl IntoDbRow for JsonRow {
+    fn into_db_row(self) -> DbRow {
+        self.into_iter()
+            .map(|(key, val)| (key, val.into()))
+            .collect()
+    }
+}
+
+impl FromDbRow for DbRow {
+    fn from(row: DbRow) -> Self {
+        row
+    }
+}
+
+impl FromDbRow for JsonRow {
+    fn from(row: DbRow) -> Self {
+        row.into_iter()
+            .map(|(key, val)| (key, val.into()))
+            .collect()
+    }
 }
 
 impl IntoDbRows for Vec<DbRow> {
@@ -1010,11 +1061,6 @@ impl IntoDbRows for &Vec<JsonRow> {
     }
 }
 
-/// Enables conversion from a vector of [DbRow]s into something.
-pub trait FromDbRows {
-    fn from(rows: Vec<DbRow>) -> Self;
-}
-
 impl FromDbRows for Vec<StringRow> {
     fn from(rows: Vec<DbRow>) -> Self {
         rows.iter()
@@ -1042,44 +1088,6 @@ impl FromDbRows for Vec<JsonRow> {
 impl FromDbRows for Vec<DbRow> {
     fn from(rows: Vec<DbRow>) -> Self {
         rows
-    }
-}
-
-/// Enables conversion from something into a [DbRow]
-pub trait IntoDbRow {
-    fn into_db_row(self) -> DbRow;
-}
-
-impl IntoDbRow for DbRow {
-    fn into_db_row(self) -> DbRow {
-        self
-    }
-}
-
-impl IntoDbRow for JsonRow {
-    fn into_db_row(self) -> DbRow {
-        self.into_iter()
-            .map(|(key, val)| (key, val.into()))
-            .collect()
-    }
-}
-
-/// Enables conversion from a [DbRow] into something.
-pub trait FromDbRow {
-    fn from(row: DbRow) -> Self;
-}
-
-impl FromDbRow for DbRow {
-    fn from(row: DbRow) -> Self {
-        row
-    }
-}
-
-impl FromDbRow for JsonRow {
-    fn from(row: DbRow) -> Self {
-        row.into_iter()
-            .map(|(key, val)| (key, val.into()))
-            .collect()
     }
 }
 
