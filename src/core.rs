@@ -2,10 +2,7 @@
 
 use crate::{
     db_kind::DbKind,
-    db_value::{
-        ColumnMap, DbParams, DbRow, DbValue, FromDbRow, FromDbRows, IntoDbParams, IntoDbRows,
-        StringRow,
-    },
+    db_value::{ColumnMap, DbParams, DbRow, DbRows, DbValue, IntoDbParams, IntoDbRows, StringRow},
     memory::{
         DEFAULT_MEMORY_QUERY_CACHE_SIZE, MemoryQueryCacheKey, MemoryQueryCacheValue,
         clear_memory_query_cache, exists_in_meta_cache, get_memory_query_cache,
@@ -498,7 +495,7 @@ pub trait DbQuery {
     /// Get the SQL code that is used to define the given view.
     async fn get_view_sql(&self, view: &str) -> Result<String, DbError> {
         let view_sql = {
-            let rows: Vec<DbRow> = {
+            let rows = {
                 let (sql, params) = self.kind().view_sql_sql(view);
                 self.query_no_cache_clean(&sql, &params).await?
             };
@@ -593,7 +590,7 @@ pub trait DbQuery {
                        ORDER BY "last_modified" DESC
                        LIMIT 1"#,
                 );
-                let rows: Vec<DbRow> = self.query_no_cache_clean(&sql, parameters).await?;
+                let rows = self.query_no_cache_clean(&sql, parameters).await?;
                 match rows.len() {
                     0 => Ok(0),
                     1 => {
@@ -634,7 +631,7 @@ pub trait DbQuery {
                     p = self.kind().param_prefix(),
                 );
                 let table_param = format!(r#"%"{table}"%"#);
-                let rows: Vec<DbRow> = self.query_no_cache_clean(&sql, &[&table_param]).await?;
+                let rows = self.query_no_cache_clean(&sql, &[&table_param]).await?;
                 match rows.first() {
                     Some(row) => match row.get("last_verified") {
                         Some(value) if value == DbValue::Null => Ok(0),
@@ -654,16 +651,16 @@ pub trait DbQuery {
     /// returning a vector of rows. If the result of the command exists in the query cache for the
     /// given tables, get the value from there instead of from the tables themselves,
     /// in accordance with the given [CachingStrategy].
-    async fn cache<T: FromDbRows>(
+    async fn cache(
         &self,
         tables: &[&str],
         sql: &str,
         params: impl IntoDbParams + Send + Copy + Sync,
-    ) -> Result<T, DbError> {
+    ) -> Result<DbRows, DbError> {
         let db_cache = async |tables: &[&str],
                               sql: &str,
                               params: &DbParams|
-               -> Result<Vec<DbRow>, DbError> {
+               -> Result<DbRows, DbError> {
             // Look in the cache to see if there is an entry corresponding to the given SQL
             // string for the given tables and parameters. If so, return the data from the
             // cache, otherwise execute the given SQL statement on the actualy specified
@@ -695,7 +692,7 @@ pub trait DbQuery {
             let cache_params = &["[", "]", &tables_param, sql, &params_param];
 
             let strings = {
-                let rows: Vec<DbRow> = self.query_no_cache_clean(&cache_sql, cache_params).await?;
+                let rows = self.query_no_cache_clean(&cache_sql, cache_params).await?;
                 let strings = rows
                     .iter()
                     .map(|row| match row.values().nth(0) {
@@ -716,13 +713,13 @@ pub trait DbQuery {
                     if self.which_are_views(tables).await?.len() > 0 {
                         self.update_last_verified(tables, sql, &params).await?;
                     }
-                    Ok(db_rows)
+                    Ok(DbRows { content: db_rows })
                 }
                 None => {
-                    let db_rows: Vec<DbRow> = self.query_no_cache_clean(sql, params).await?;
+                    let db_rows = self.query_no_cache_clean(sql, params).await?;
                     let rows_as_string = {
                         let mut rows_as_string = vec![];
-                        for db_row in &db_rows {
+                        for db_row in db_rows.iter() {
                             let db_row = serde_json::to_string(db_row).map_err(|err| {
                                 DbError::DataError(format!("Invalid data ({err}): {db_row:?}"))
                             })?;
@@ -748,7 +745,7 @@ pub trait DbQuery {
                                sql: &str,
                                params: &DbParams,
                                cache_size: usize|
-               -> Result<Vec<DbRow>, DbError> {
+               -> Result<DbRows, DbError> {
             let params = &params.into_db_params();
             let mem_key = MemoryQueryCacheKey {
                 tables: format!(
@@ -776,10 +773,10 @@ pub trait DbQuery {
                     if self.which_are_views(tables).await?.len() > 0 {
                         self.update_last_verified(tables, sql, &params).await?;
                     }
-                    Ok(db_rows)
+                    Ok(DbRows { content: db_rows })
                 }
                 None => {
-                    let db_rows: Vec<DbRow> = self.query_no_cache_clean(sql, params).await?;
+                    let db_rows = self.query_no_cache_clean(sql, params).await?;
                     let mut cache = get_memory_query_cache()?;
                     // If the number of entries exceeds the allowed cache size, remove the oldest
                     // keys first.
@@ -808,14 +805,14 @@ pub trait DbQuery {
 
         match self.get_caching_strategy() {
             CachingStrategy::None => {
-                let rows: Vec<DbRow> = self.query_no_cache_clean(sql, params).await?;
-                Ok(FromDbRows::from(rows))
+                let rows = self.query_no_cache_clean(sql, params).await?;
+                Ok(rows)
             }
             CachingStrategy::TruncateAll | CachingStrategy::Truncate => {
                 self.ensure_cache_tables_exist().await?;
                 self.update_cached_views(tables).await?;
-                let rows: Vec<DbRow> = db_cache(tables, sql, &params.into_db_params()).await?;
-                Ok(FromDbRows::from(rows))
+                let rows = db_cache(tables, sql, &params.into_db_params()).await?;
+                Ok(rows)
             }
             CachingStrategy::Trigger => {
                 let views = self
@@ -835,13 +832,13 @@ pub trait DbQuery {
                 for view in &views {
                     self.ensure_caching_triggers_exist_for_view(view).await?;
                 }
-                let rows: Vec<DbRow> = db_cache(&tables, sql, &params.into_db_params()).await?;
-                Ok(FromDbRows::from(rows))
+                let rows = db_cache(&tables, sql, &params.into_db_params()).await?;
+                Ok(rows)
             }
             CachingStrategy::Memory(cache_size) => {
                 self.update_cached_views(tables).await?;
                 let rows = mem_cache(tables, sql, &params.into_db_params(), cache_size).await?;
-                Ok(FromDbRows::from(rows))
+                Ok(rows)
             }
         }
     }
@@ -850,8 +847,8 @@ pub trait DbQuery {
     async fn columns(&self, table: &str) -> Result<ColumnMap, DbError> {
         let mut columns = ColumnMap::new();
         let (sql, params) = self.kind().columns_sql(table);
-        let rows: Vec<DbRow> = self.query_no_cache_clean(&sql, params).await?;
-        for row in &rows {
+        let rows = self.query_no_cache_clean(&sql, params).await?;
+        for row in rows.iter() {
             match (
                 row.get("column_name")
                     .and_then(|value| Some::<String>(value.into())),
@@ -880,7 +877,7 @@ pub trait DbQuery {
     /// Retrieve the primary key column names for a given table.
     async fn primary_keys(&self, table: &str) -> Result<Vec<String>, DbError> {
         let (sql, params) = self.kind().primary_keys_sql(table);
-        let rows: Vec<DbRow> = self.query_no_cache_clean(&sql, params).await?;
+        let rows = self.query_no_cache_clean(&sql, params).await?;
         rows.iter()
             .map(|row| {
                 match row
@@ -897,7 +894,7 @@ pub trait DbQuery {
     /// Execute the given SQL command with the given parameters, returning nothing.
     async fn execute(&self, sql: &str, params: impl IntoDbParams + Send) -> Result<(), DbError> {
         let params = params.into_db_params();
-        let _: Vec<DbRow> = match params {
+        match params {
             DbParams::None => self.query(sql, ()).await?,
             _ => self.query(sql, params).await?,
         };
@@ -913,7 +910,7 @@ pub trait DbQuery {
         params: impl IntoDbParams + Send,
     ) -> Result<(), DbError> {
         let params = params.into_db_params();
-        let _: Vec<DbRow> = match params {
+        match params {
             DbParams::None => self.query_no_cache_clean(sql, ()).await?,
             _ => self.query_no_cache_clean(sql, params).await?,
         };
@@ -924,11 +921,7 @@ pub trait DbQuery {
     fn execute_batch(&self, sql: &str) -> impl Future<Output = Result<(), DbError>> + Send;
 
     /// Execute the given SQL command, with the given parameters, returning a vector of rows.
-    async fn query<T: FromDbRows + Send>(
-        &self,
-        sql: &str,
-        params: impl IntoDbParams + Send,
-    ) -> Result<T, DbError> {
+    async fn query(&self, sql: &str, params: impl IntoDbParams + Send) -> Result<DbRows, DbError> {
         let rows = self.query_no_cache_clean(sql, params).await?;
         if self.get_cache_aware_query() {
             self.clear_cache_for_affected_tables(sql).await?;
@@ -939,27 +932,27 @@ pub trait DbQuery {
     /// Execute the given SQL command using the given parameters, returning a vector of rows,
     /// without updating the cache, regardless of whether the cache-aware-query option
     /// (see [DbQuery::set_cache_aware_query()]) has been set.
-    fn query_no_cache_clean<T: FromDbRows>(
+    fn query_no_cache_clean(
         &self,
         sql: &str,
         params: impl IntoDbParams + Send,
-    ) -> impl Future<Output = Result<T, DbError>> + Send;
+    ) -> impl Future<Output = Result<DbRows, DbError>> + Send;
 
     /// Execute the given SQL command, using the given parameters, returning a single row.
     /// An error is returned if there is more than one row of data.
-    async fn query_row<T: FromDbRow>(
+    async fn query_row(
         &self,
         sql: &str,
         params: impl IntoDbParams + Send,
-    ) -> Result<T, DbError> {
-        let rows: Vec<DbRow> = self.query(&sql, params).await?;
+    ) -> Result<DbRow, DbError> {
+        let rows = self.query(&sql, params).await?;
         if rows.len() > 1 {
             return Err(DbError::DataError(
                 "More than one row returned for query_row()".to_string(),
             ));
         }
-        match rows.into_iter().next() {
-            Some(row) => Ok(FromDbRow::from(row)),
+        match rows.content.into_iter().next() {
+            Some(row) => Ok(row),
             None => Err(DbError::DataError("No row found".to_string())),
         }
     }
@@ -1001,7 +994,7 @@ pub trait DbQuery {
         sql: &str,
         params: impl IntoDbParams + Send,
     ) -> Result<Vec<String>, DbError> {
-        let rows: Vec<DbRow> = self.query(sql, params).await?;
+        let rows = self.query(sql, params).await?;
         rows.iter()
             .map(|row| match row.values().nth(0) {
                 Some(value) => Ok(value.into()),
@@ -1031,8 +1024,15 @@ pub trait DbQuery {
         sql: &str,
         params: impl IntoDbParams + Send,
     ) -> Result<Vec<StringRow>, DbError> {
-        let rows: Vec<DbRow> = self.query(sql, params).await?;
-        Ok(<Vec<StringRow> as FromDbRows>::from(rows))
+        let rows = self.query(sql, params).await?;
+        Ok(rows
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|(key, value)| (key.clone(), value.into()))
+                    .collect()
+            })
+            .collect())
     }
 
     /// Execute the given SQL command, using the given parameters, returning a single unsigned
@@ -1069,13 +1069,13 @@ pub trait DbQuery {
     /// Like [DbQuery::insert()], but in addition this function also returns the data that was
     /// inserted into the columns included in `returning`, or all of the inserted data if
     /// `returning` is an empty list.
-    fn insert_returning<T: FromDbRows>(
+    fn insert_returning(
         &self,
         table: &str,
         columns: &[&str],
         rows: impl IntoDbRows,
         returning: &[&str],
-    ) -> impl Future<Output = Result<T, DbError>>;
+    ) -> impl Future<Output = Result<DbRows, DbError>>;
 
     /// Update the given columns of the given table using the given rows. The table should have a
     /// primary key and any columns that are part of the primary key should be present within each
@@ -1091,13 +1091,13 @@ pub trait DbQuery {
     /// Like [DbQuery::update()], but in addition this function also returns the data that was
     /// updated for the columns included in `returning`, or all of the updated data if
     /// `returning` is an empty list.
-    fn update_returning<T: FromDbRows>(
+    fn update_returning(
         &self,
         table: &str,
         columns: &[&str],
         rows: impl IntoDbRows,
         returning: &[&str],
-    ) -> impl Future<Output = Result<T, DbError>>;
+    ) -> impl Future<Output = Result<DbRows, DbError>>;
 
     /// Attempt to insert the given rows to the given table, similarly to [DbQuery::insert()].
     /// In case there is a conflict, update the table instead, similarly to [DbQuery::update()].
@@ -1111,13 +1111,13 @@ pub trait DbQuery {
     /// Like [DbQuery::upsert()], but in addition this function also returns the data that was
     /// upserted for the columns included in `returning`, or all of the upserted data if
     /// `returning` is an empty list.
-    fn upsert_returning<T: FromDbRows>(
+    fn upsert_returning(
         &self,
         table: &str,
         columns: &[&str],
         rows: impl IntoDbRows,
         returning: &[&str],
-    ) -> impl Future<Output = Result<T, DbError>>;
+    ) -> impl Future<Output = Result<DbRows, DbError>>;
 
     /// Check whether the given table exists in the database.
     async fn table_exists(&self, table: &str) -> Result<bool, DbError> {
@@ -1147,8 +1147,8 @@ pub trait DbQuery {
             let (sql, params) = self
                 .kind()
                 .which_are_tables_sql(&unknowns.iter().map(|s| s.as_str()).collect::<Vec<_>>());
-            let rows: Vec<DbRow> = self.query_no_cache_clean(&sql, params).await?;
-            for row in &rows {
+            let rows = self.query_no_cache_clean(&sql, params).await?;
+            for row in rows.iter() {
                 let table = row
                     .get("table_name")
                     .ok_or(DbError::DataError("No table_name found in row".to_string()))?
@@ -1161,8 +1161,8 @@ pub trait DbQuery {
             let (sql, params) = self
                 .kind()
                 .which_are_views_sql(&unknowns.iter().map(|s| s.as_str()).collect::<Vec<_>>());
-            let rows: Vec<DbRow> = self.query_no_cache_clean(&sql, params).await?;
-            for row in &rows {
+            let rows = self.query_no_cache_clean(&sql, params).await?;
+            for row in rows.iter() {
                 let view = row
                     .get("view_name")
                     .ok_or(DbError::DataError("No view_name found in row".to_string()))?
@@ -1192,8 +1192,8 @@ pub trait DbQuery {
             let (sql, params) = self
                 .kind()
                 .which_are_views_sql(&unknowns.iter().map(|s| s.as_str()).collect::<Vec<_>>());
-            let rows: Vec<DbRow> = self.query_no_cache_clean(&sql, params).await?;
-            for row in &rows {
+            let rows = self.query_no_cache_clean(&sql, params).await?;
+            for row in rows.iter() {
                 let view = row
                     .get("view_name")
                     .ok_or(DbError::DataError("No view_name found in row".to_string()))?
@@ -1206,8 +1206,8 @@ pub trait DbQuery {
             let (sql, params) = self
                 .kind()
                 .which_are_tables_sql(&unknowns.iter().map(|s| s.as_str()).collect::<Vec<_>>());
-            let rows: Vec<DbRow> = self.query_no_cache_clean(&sql, params).await?;
-            for row in &rows {
+            let rows = self.query_no_cache_clean(&sql, params).await?;
+            for row in rows.iter() {
                 let table = row
                     .get("table_name")
                     .ok_or(DbError::DataError("No table_name found in row".to_string()))?

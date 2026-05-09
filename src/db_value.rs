@@ -912,6 +912,11 @@ pub struct DbRow {
     pub map: IndexMap<String, DbValue>,
 }
 
+#[derive(Debug, Clone)]
+pub struct DbRows {
+    pub content: Vec<DbRow>,
+}
+
 /// Enables conversion from something into a [DbRow]
 pub trait IntoDbRow {
     fn into_db_row(self) -> DbRow;
@@ -924,12 +929,12 @@ pub trait FromDbRow {
 
 /// Enables conversion from something into a vector of [DbRow]s
 pub trait IntoDbRows {
-    fn into_db_rows(self) -> Vec<DbRow>;
+    fn into_db_rows(self) -> DbRows;
 }
 
 /// Enables conversion from a vector of [DbRow]s into something.
 pub trait FromDbRows {
-    fn from(rows: Vec<DbRow>) -> Self;
+    fn from(rows: DbRows) -> Self;
 }
 
 impl DbRow {
@@ -1007,63 +1012,105 @@ impl FromDbRow for JsonRow {
     }
 }
 
-impl IntoDbRows for Vec<DbRow> {
-    fn into_db_rows(self) -> Vec<DbRow> {
+impl Deref for DbRows {
+    type Target = Vec<DbRow>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.content
+    }
+}
+
+impl DerefMut for DbRows {
+    fn deref_mut(&mut self) -> &mut Vec<DbRow> {
+        &mut self.content
+    }
+}
+
+impl IntoDbRows for DbRows {
+    fn into_db_rows(self) -> DbRows {
         self
     }
 }
 
-impl IntoDbRows for &Vec<DbRow> {
-    fn into_db_rows(self) -> Vec<DbRow> {
+impl IntoDbRows for &DbRows {
+    fn into_db_rows(self) -> DbRows {
         self.clone()
     }
 }
 
+impl IntoDbRows for Vec<DbRow> {
+    fn into_db_rows(self) -> DbRows {
+        DbRows { content: self }
+    }
+}
+
+impl IntoDbRows for &Vec<DbRow> {
+    fn into_db_rows(self) -> DbRows {
+        DbRows {
+            content: self.clone(),
+        }
+    }
+}
+
 impl IntoDbRows for &[DbRow] {
-    fn into_db_rows(self) -> Vec<DbRow> {
-        self.to_vec()
+    fn into_db_rows(self) -> DbRows {
+        DbRows {
+            content: self.to_vec(),
+        }
     }
 }
 
 impl IntoDbRows for &[&DbRow] {
-    fn into_db_rows(self) -> Vec<DbRow> {
-        self.into_iter()
-            .cloned()
-            .map(|row| row.clone())
-            .collect::<Vec<_>>()
+    fn into_db_rows(self) -> DbRows {
+        DbRows {
+            content: self
+                .into_iter()
+                .cloned()
+                .map(|row| row.clone())
+                .collect::<Vec<_>>(),
+        }
     }
 }
 
 impl<const N: usize> IntoDbRows for &[&DbRow; N] {
-    fn into_db_rows(self) -> Vec<DbRow> {
-        self.into_iter()
-            .cloned()
-            .map(|row| row.clone())
-            .collect::<Vec<_>>()
+    fn into_db_rows(self) -> DbRows {
+        DbRows {
+            content: self
+                .into_iter()
+                .cloned()
+                .map(|row| row.clone())
+                .collect::<Vec<_>>(),
+        }
     }
 }
 
 impl IntoDbRows for Vec<JsonRow> {
-    fn into_db_rows(self) -> Vec<DbRow> {
-        self.into_iter()
-            .map(|row| {
-                row.into_iter()
-                    .map(|(key, val)| (key, DbValue::from(val)))
-                    .collect()
-            })
-            .collect::<Vec<_>>()
+    fn into_db_rows(self) -> DbRows {
+        DbRows {
+            content: self
+                .into_iter()
+                .map(|row| {
+                    row.into_iter()
+                        .map(|(key, val)| (key, DbValue::from(val)))
+                        .collect()
+                })
+                .collect::<Vec<_>>(),
+        }
     }
 }
 
 impl IntoDbRows for &Vec<JsonRow> {
-    fn into_db_rows(self) -> Vec<DbRow> {
-        self.clone().into_db_rows()
+    fn into_db_rows(self) -> DbRows {
+        DbRows {
+            content: self.clone().into_db_rows().content,
+        }
     }
 }
 
 impl FromDbRows for Vec<StringRow> {
-    fn from(rows: Vec<DbRow>) -> Self {
-        rows.iter()
+    fn from(rows: DbRows) -> Self {
+        rows.content
+            .iter()
             .map(|row| {
                 row.iter()
                     .map(|(key, value)| (key.clone(), value.into()))
@@ -1074,8 +1121,9 @@ impl FromDbRows for Vec<StringRow> {
 }
 
 impl FromDbRows for Vec<JsonRow> {
-    fn from(rows: Vec<DbRow>) -> Self {
-        rows.into_iter()
+    fn from(rows: DbRows) -> Self {
+        rows.content
+            .into_iter()
             .map(|row| {
                 row.into_iter()
                     .map(|(key, val)| (key, val.into()))
@@ -1086,8 +1134,8 @@ impl FromDbRows for Vec<JsonRow> {
 }
 
 impl FromDbRows for Vec<DbRow> {
-    fn from(rows: Vec<DbRow>) -> Self {
-        rows
+    fn from(rows: DbRows) -> Self {
+        rows.content
     }
 }
 

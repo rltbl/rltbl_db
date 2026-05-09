@@ -3,7 +3,7 @@
 use crate::{
     core::{CachingStrategy, DbError, DbQuery},
     db_kind::{DbKind, MAX_PARAMS_POSTGRES},
-    db_value::{DbParams, DbRow, DbValue, FromDbRows, IntoDbParams, IntoDbRows, JsonValue},
+    db_value::{DbParams, DbRow, DbRows, DbValue, IntoDbParams, IntoDbRows, JsonValue},
     shared::{EditType, edit},
 };
 use bytes::{BufMut, BytesMut};
@@ -253,11 +253,11 @@ impl DbQuery for TokioPostgresPool {
     }
 
     /// Implements [DbQuery::query_no_cache_clean()] for PostgreSQL.
-    async fn query_no_cache_clean<T: FromDbRows>(
+    async fn query_no_cache_clean(
         &self,
         sql: &str,
         into_db_params: impl IntoDbParams + Send,
-    ) -> Result<T, DbError> {
+    ) -> Result<DbRows, DbError> {
         let into_db_params = into_db_params.into_db_params();
         let client =
             self.pool.get().await.map_err(|err| {
@@ -399,7 +399,7 @@ impl DbQuery for TokioPostgresPool {
             db_rows.push(db_row);
         }
 
-        Ok(FromDbRows::from(db_rows))
+        Ok(DbRows { content: db_rows })
     }
 
     /// Implements [DbQuery::insert()] for PostgreSQL
@@ -409,7 +409,7 @@ impl DbQuery for TokioPostgresPool {
         columns: &[&str],
         rows: impl IntoDbRows,
     ) -> Result<(), DbError> {
-        let _: Vec<DbRow> = edit(
+        edit(
             self,
             &EditType::Insert,
             &MAX_PARAMS_POSTGRES,
@@ -424,13 +424,13 @@ impl DbQuery for TokioPostgresPool {
     }
 
     /// Implements [DbQuery::insert_returning()] for PostgreSQL
-    async fn insert_returning<T: FromDbRows>(
+    async fn insert_returning(
         &self,
         table: &str,
         columns: &[&str],
         rows: impl IntoDbRows,
         returning: &[&str],
-    ) -> Result<T, DbError> {
+    ) -> Result<DbRows, DbError> {
         edit(
             self,
             &EditType::Insert,
@@ -451,7 +451,7 @@ impl DbQuery for TokioPostgresPool {
         columns: &[&str],
         rows: impl IntoDbRows,
     ) -> Result<(), DbError> {
-        let _: Vec<DbRow> = edit(
+        edit(
             self,
             &EditType::Update,
             &MAX_PARAMS_POSTGRES,
@@ -466,13 +466,13 @@ impl DbQuery for TokioPostgresPool {
     }
 
     /// Implements [DbQuery::update_returning()] for PostgreSQL.
-    async fn update_returning<T: FromDbRows>(
+    async fn update_returning(
         &self,
         table: &str,
         columns: &[&str],
         rows: impl IntoDbRows,
         returning: &[&str],
-    ) -> Result<T, DbError> {
+    ) -> Result<DbRows, DbError> {
         edit(
             self,
             &EditType::Update,
@@ -493,7 +493,7 @@ impl DbQuery for TokioPostgresPool {
         columns: &[&str],
         rows: impl IntoDbRows,
     ) -> Result<(), DbError> {
-        let _: Vec<DbRow> = edit(
+        edit(
             self,
             &EditType::Upsert,
             &MAX_PARAMS_POSTGRES,
@@ -508,13 +508,13 @@ impl DbQuery for TokioPostgresPool {
     }
 
     /// Implements [DbQuery::upsert_returning()] for PostgreSQL.
-    async fn upsert_returning<T: FromDbRows>(
+    async fn upsert_returning(
         &self,
         table: &str,
         columns: &[&str],
         rows: impl IntoDbRows,
         returning: &[&str],
-    ) -> Result<T, DbError> {
+    ) -> Result<DbRows, DbError> {
         edit(
             self,
             &EditType::Upsert,
@@ -534,7 +534,7 @@ mod tests {
     use super::*;
     use crate::{db_row, params};
     use pretty_assertions::assert_eq;
-    use std::str::FromStr;
+    use std::{ops::Deref, str::FromStr};
 
     #[tokio::test]
     async fn test_aliases_and_builtin_functions() {
@@ -563,19 +563,19 @@ mod tests {
         .unwrap();
 
         // Test aggregate:
-        let rows: Vec<DbRow> = pool
+        let rows = pool
             .query("SELECT MAX(int_value) FROM test_table_indirect", ())
             .await
             .unwrap();
         assert_eq!(
-            rows,
+            *rows.deref(),
             [db_row! {
                 "max" => 1_i64,
             }]
         );
 
         // Test alias:
-        let rows: Vec<DbRow> = pool
+        let rows = pool
             .query(
                 "SELECT bool_value AS bool_value_alias FROM test_table_indirect",
                 (),
@@ -583,14 +583,14 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            rows,
+            *rows.deref(),
             [db_row! {
                 "bool_value_alias" => true,
             }]
         );
 
         // Test aggregate with alias:
-        let rows: Vec<DbRow> = pool
+        let rows = pool
             .query(
                 "SELECT MAX(int_value) AS max_int_value FROM test_table_indirect",
                 (),
@@ -598,14 +598,14 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            rows,
+            *rows.deref(),
             [db_row! {
                 "max_int_value" => 1_i64,
             }]
         );
 
         // Test non-aggregate function:
-        let rows: Vec<DbRow> = pool
+        let rows = pool
             .query(
                 "SELECT CAST(int_value AS TEXT) FROM test_table_indirect",
                 (),
@@ -613,14 +613,14 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            rows,
+            *rows.deref(),
             [db_row! {
                 "int_value" => "1",
             }]
         );
 
         // Test non-aggregate function with alias:
-        let rows: Vec<DbRow> = pool
+        let rows = pool
             .query(
                 "SELECT CAST(int_value AS TEXT) AS int_value_cast FROM test_table_indirect",
                 (),
@@ -628,7 +628,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            rows,
+            *rows.deref(),
             [db_row! {
                 "int_value_cast" => "1",
             }]
@@ -745,7 +745,7 @@ mod tests {
             _ => panic!(),
         };
 
-        let rows: Vec<DbRow> = pool
+        let rows = pool
             .query(
                 r#"select bar from test_special_floats where bar = $1"#,
                 params![DbValue::BigReal(f64::NEG_INFINITY)],
@@ -763,7 +763,7 @@ mod tests {
             _ => panic!(),
         };
 
-        let rows: Vec<DbRow> = pool
+        let rows = pool
             .query(
                 r#"select pseudo_bar from test_special_floats where pseudo_bar = $1"#,
                 &["-Infinity"],
@@ -800,11 +800,11 @@ mod tests {
             .unwrap();
 
         // Get the value that was just inserted and use it to edit the table and verify the result:
-        let mut db_rows: Vec<DbRow> = pool
+        let mut db_rows = pool
             .query(r#"SELECT * FROM test_other_types"#, ())
             .await
             .unwrap();
-        let db_row = db_rows.pop().unwrap();
+        let db_row = db_rows.content.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
             "DbRow { \
@@ -820,11 +820,11 @@ mod tests {
         )
         .await
         .unwrap();
-        let mut db_rows: Vec<DbRow> = pool
+        let mut db_rows = pool
             .query(r#"SELECT * FROM test_other_types"#, ())
             .await
             .unwrap();
-        let db_row = db_rows.pop().unwrap();
+        let db_row = db_rows.content.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
             "DbRow { \
@@ -847,11 +847,11 @@ mod tests {
             .unwrap();
 
         // Get the value that was just inserted and use it to edit the table and verify the result:
-        let mut db_rows: Vec<DbRow> = pool
+        let mut db_rows = pool
             .query(r#"SELECT * FROM test_other_types"#, ())
             .await
             .unwrap();
-        let db_row = db_rows.pop().unwrap();
+        let db_row = db_rows.content.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
             "DbRow { \
@@ -867,11 +867,11 @@ mod tests {
         )
         .await
         .unwrap();
-        let mut db_rows: Vec<DbRow> = pool
+        let mut db_rows = pool
             .query(r#"SELECT * FROM test_other_types"#, ())
             .await
             .unwrap();
-        let db_row = db_rows.pop().unwrap();
+        let db_row = db_rows.content.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
             "DbRow { \
@@ -897,11 +897,11 @@ mod tests {
         .unwrap();
 
         // Get the value that was just inserted and use it to edit the table and verify the result:
-        let mut db_rows: Vec<DbRow> = pool
+        let mut db_rows = pool
             .query(r#"SELECT * FROM test_other_types"#, ())
             .await
             .unwrap();
-        let db_row = db_rows.pop().unwrap();
+        let db_row = db_rows.content.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
             "DbRow { \
@@ -916,11 +916,11 @@ mod tests {
         )
         .await
         .unwrap();
-        let mut db_rows: Vec<DbRow> = pool
+        let mut db_rows = pool
             .query(r#"SELECT * FROM test_other_types"#, ())
             .await
             .unwrap();
-        let db_row = db_rows.pop().unwrap();
+        let db_row = db_rows.content.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
             "DbRow { \
@@ -943,11 +943,11 @@ mod tests {
             .unwrap();
 
         // Get the value that was just inserted and use it to edit the table and verify the result:
-        let mut db_rows: Vec<DbRow> = pool
+        let mut db_rows = pool
             .query(r#"SELECT * FROM test_other_types"#, ())
             .await
             .unwrap();
-        let db_row = db_rows.pop().unwrap();
+        let db_row = db_rows.content.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
             "DbRow { \
@@ -964,11 +964,11 @@ mod tests {
         )
         .await
         .unwrap();
-        let mut db_rows: Vec<DbRow> = pool
+        let mut db_rows = pool
             .query(r#"SELECT * FROM test_other_types"#, ())
             .await
             .unwrap();
-        let db_row = db_rows.pop().unwrap();
+        let db_row = db_rows.content.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
             "DbRow { \
@@ -992,11 +992,11 @@ mod tests {
             .unwrap();
 
         // Get the value that was just inserted and use it to edit the table and verify the result:
-        let mut db_rows: Vec<DbRow> = pool
+        let mut db_rows = pool
             .query(r#"SELECT * FROM test_other_types"#, ())
             .await
             .unwrap();
-        let db_row = db_rows.pop().unwrap();
+        let db_row = db_rows.content.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
             "DbRow { \
@@ -1013,11 +1013,11 @@ mod tests {
         )
         .await
         .unwrap();
-        let mut db_rows: Vec<DbRow> = pool
+        let mut db_rows = pool
             .query(r#"SELECT * FROM test_other_types"#, ())
             .await
             .unwrap();
-        let db_row = db_rows.pop().unwrap();
+        let db_row = db_rows.content.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
             "DbRow { \
@@ -1044,11 +1044,11 @@ mod tests {
         .unwrap();
 
         // Get the value that was just inserted and use it to edit the table and verify the result:
-        let mut db_rows: Vec<DbRow> = pool
+        let mut db_rows = pool
             .query(r#"SELECT * FROM test_other_types"#, ())
             .await
             .unwrap();
-        let db_row = db_rows.pop().unwrap();
+        let db_row = db_rows.content.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
             "DbRow { \
@@ -1070,11 +1070,11 @@ mod tests {
         )
         .await
         .unwrap();
-        let mut db_rows: Vec<DbRow> = pool
+        let mut db_rows = pool
             .query(r#"SELECT * FROM test_other_types"#, ())
             .await
             .unwrap();
-        let db_row = db_rows.pop().unwrap();
+        let db_row = db_rows.content.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
             "DbRow { \
@@ -1103,11 +1103,11 @@ mod tests {
             .unwrap();
 
         // Get the value that was just inserted and use it to edit the table and verify the result:
-        let mut db_rows: Vec<DbRow> = pool
+        let mut db_rows = pool
             .query(r#"SELECT * FROM test_other_types"#, ())
             .await
             .unwrap();
-        let db_row = db_rows.pop().unwrap();
+        let db_row = db_rows.content.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
             "DbRow { \
@@ -1129,11 +1129,11 @@ mod tests {
         )
         .await
         .unwrap();
-        let mut db_rows: Vec<DbRow> = pool
+        let mut db_rows = pool
             .query(r#"SELECT * FROM test_other_types"#, ())
             .await
             .unwrap();
-        let db_row = db_rows.pop().unwrap();
+        let db_row = db_rows.content.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
             "DbRow { \
@@ -1162,11 +1162,11 @@ mod tests {
             .unwrap();
 
         // Get the value that was just inserted and use it to edit the table and verify the result:
-        let mut db_rows: Vec<DbRow> = pool
+        let mut db_rows = pool
             .query(r#"SELECT * FROM test_other_types"#, ())
             .await
             .unwrap();
-        let db_row = db_rows.pop().unwrap();
+        let db_row = db_rows.content.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
             "DbRow { \
@@ -1185,11 +1185,11 @@ mod tests {
         )
         .await
         .unwrap();
-        let mut db_rows: Vec<DbRow> = pool
+        let mut db_rows = pool
             .query(r#"SELECT * FROM test_other_types"#, ())
             .await
             .unwrap();
-        let db_row = db_rows.pop().unwrap();
+        let db_row = db_rows.content.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
             "DbRow { \
@@ -1215,11 +1215,11 @@ mod tests {
             .unwrap();
 
         // Get the value that was just inserted and use it to edit the table and verify the result:
-        let mut db_rows: Vec<DbRow> = pool
+        let mut db_rows = pool
             .query(r#"SELECT * FROM test_other_types"#, ())
             .await
             .unwrap();
-        let db_row = db_rows.pop().unwrap();
+        let db_row = db_rows.content.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
             "DbRow { \
@@ -1238,11 +1238,11 @@ mod tests {
         )
         .await
         .unwrap();
-        let mut db_rows: Vec<DbRow> = pool
+        let mut db_rows = pool
             .query(r#"SELECT * FROM test_other_types"#, ())
             .await
             .unwrap();
-        let db_row = db_rows.pop().unwrap();
+        let db_row = db_rows.content.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
             "DbRow { \
@@ -1268,11 +1268,11 @@ mod tests {
             .unwrap();
 
         // Get the value that was just inserted and use it to edit the table and verify the result:
-        let mut db_rows: Vec<DbRow> = pool
+        let mut db_rows = pool
             .query(r#"SELECT * FROM test_other_types"#, ())
             .await
             .unwrap();
-        let db_row = db_rows.pop().unwrap();
+        let db_row = db_rows.content.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
             "DbRow { \
@@ -1290,11 +1290,11 @@ mod tests {
         )
         .await
         .unwrap();
-        let mut db_rows: Vec<DbRow> = pool
+        let mut db_rows = pool
             .query(r#"SELECT * FROM test_other_types"#, ())
             .await
             .unwrap();
-        let db_row = db_rows.pop().unwrap();
+        let db_row = db_rows.content.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
             "DbRow { \
@@ -1315,7 +1315,7 @@ mod tests {
         .await
         .unwrap();
 
-        let db_rows: Vec<DbRow> = pool
+        let db_rows = pool
             .query(
                 r#"SELECT * FROM test_other_types WHERE bar = $1"#,
                 params![DbValue::Null],
@@ -1338,14 +1338,14 @@ mod tests {
         .await
         .unwrap();
 
-        let mut db_rows: Vec<DbRow> = pool
+        let mut db_rows = pool
             .query(
                 r#"SELECT * FROM test_other_types WHERE bar IS NOT DISTINCT FROM $1"#,
                 params![DbValue::Null],
             )
             .await
             .unwrap();
-        let db_row = db_rows.pop().unwrap();
+        let db_row = db_rows.content.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
             r#"DbRow { map: {"bar": Null, "foo": Boolean(false)} }"#
@@ -1373,8 +1373,8 @@ mod tests {
             .unwrap();
 
         // Get the value that was just inserted and use it to edit the table and verify the result:
-        let mut db_rows: Vec<DbRow> = pool.query(r#"SELECT * FROM test_jsonb"#, ()).await.unwrap();
-        let db_row = db_rows.pop().unwrap();
+        let mut db_rows = pool.query(r#"SELECT * FROM test_jsonb"#, ()).await.unwrap();
+        let db_row = db_rows.content.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
             "DbRow { \
@@ -1394,8 +1394,8 @@ mod tests {
         .await
         .unwrap();
 
-        let mut db_rows: Vec<DbRow> = pool.query(r#"SELECT * FROM test_jsonb"#, ()).await.unwrap();
-        let db_row = db_rows.pop().unwrap();
+        let mut db_rows = pool.query(r#"SELECT * FROM test_jsonb"#, ()).await.unwrap();
+        let db_row = db_rows.content.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
             "DbRow { \
