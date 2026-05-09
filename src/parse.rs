@@ -199,15 +199,36 @@ pub fn get_accessed_tables(
     // Determine the tables that will be modified:
     let mut edited_tables = HashSet::new();
     let mut dropped_tables = HashSet::new();
-    let mut read_tables = HashSet::<String>::new();
+    let mut read_tables = HashSet::new();
     for statement in &statements {
         validate_node(&statement, sql)?;
         for instruction in statement.children(&mut tree.walk()) {
             validate_node(&instruction, sql)?;
             match instruction.kind().to_lowercase().as_str() {
                 "select" => {
-                    println!("INSTRUCTION: {instruction:?}");
-                    todo!()
+                    let from = instruction
+                        .next_sibling()
+                        .ok_or(DbError::InputError(format!("Invalid SQL: {sql}")))?;
+
+                    let relations = from
+                        .children(&mut from.walk())
+                        .filter(|child| child.kind().to_lowercase() == "relation")
+                        .collect::<Vec<_>>();
+                    for relation in relations {
+                        validate_node(&relation, &sql)?;
+                        let object_ref = relation
+                            .children(&mut relation.walk())
+                            .filter(|child| child.kind().to_lowercase() == "object_reference")
+                            .collect::<Vec<_>>();
+                        validate_list_len(&object_ref, 1)?;
+                        let object_ref = object_ref[0];
+                        validate_node(&object_ref, &sql)?;
+
+                        let source_table = validate_table_name(
+                            &sql.to_string()[object_ref.start_byte()..object_ref.end_byte()],
+                        )?;
+                        read_tables.insert(source_table.to_string());
+                    }
                 }
                 "insert" => {
                     let table_name = {
@@ -387,11 +408,10 @@ pub fn get_accessed_tables(
         .filter(|table| ![QUERY_CACHE_TABLE, TABLE_CACHE_TABLE].contains(&table.as_str()))
         .collect::<HashSet<_>>();
 
-    // TODO: return read_tables.
     Ok((
         edited_tables.clone(),
         dropped_tables.clone(),
-        HashSet::new(),
+        read_tables.clone(),
     ))
 }
 
@@ -459,12 +479,17 @@ mod tests {
     async fn test_sql_parsing() {
         // Single statements, possibly with parameters:
 
-        let (edited_tables, dropped_tables, read_tables) =
-            get_accessed_tables(&format!(r#"SELECT * FROM "alpha""#)).unwrap();
-        let read_tables: Vec<_> = read_tables.into_iter().collect();
+        // TODO: We should be able to support more complex selects, including UNIONs, etc.
+        let (edited_tables, dropped_tables, read_tables) = get_accessed_tables(&format!(
+            r#"SELECT * FROM "alpha", "beta"
+                   WHERE "alpha".foo = "beta".foo""#
+        ))
+        .unwrap();
+        let mut read_tables: Vec<_> = read_tables.into_iter().collect();
+        read_tables.sort();
         assert_eq!(edited_tables, [].into());
         assert_eq!(dropped_tables, [].into());
-        assert_eq!(read_tables, ["alpha"]);
+        assert_eq!(read_tables, ["alpha", "beta"]);
 
         let (edited_tables, dropped_tables, read_tables) =
             get_accessed_tables(&format!(r#"INSERT INTO "alpha" VALUES ($1, $2, $3)"#)).unwrap();
@@ -475,11 +500,11 @@ mod tests {
 
         let (edited_tables, dropped_tables, read_tables) = get_accessed_tables(
             r#"WITH bar AS (SELECT * FROM alpha),
-                        mar AS (SELECT * FROM beta)
-                   INSERT INTO gamma
-                   SELECT alpha.*
-                   FROM alpha, beta
-                   WHERE alpha.value = beta.value"#,
+                                mar AS (SELECT * FROM beta)
+                           INSERT INTO gamma
+                           SELECT alpha.*
+                           FROM alpha, beta
+                           WHERE alpha.value = beta.value"#,
         )
         .unwrap();
         let edited_tables: Vec<_> = edited_tables.into_iter().collect();
@@ -496,11 +521,11 @@ mod tests {
 
         let (edited_tables, dropped_tables, read_tables) = get_accessed_tables(&format!(
             r#"WITH bar AS (SELECT * FROM test),
-                        mar AS (SELECT * FROM test)
-                   UPDATE delta
-                   SET value = bar.value
-                   FROM bar, mar
-                   WHERE bar.value = $1 AND bar.value = mar.value"#,
+                                mar AS (SELECT * FROM test)
+                           UPDATE delta
+                           SET value = bar.value
+                           FROM bar, mar
+                           WHERE bar.value = $1 AND bar.value = mar.value"#,
         ))
         .unwrap();
         let edited_tables: Vec<_> = edited_tables.into_iter().collect();
@@ -517,8 +542,8 @@ mod tests {
 
         let (edited_tables, dropped_tables, read_tables) = get_accessed_tables(
             r#"WITH bar AS (SELECT * FROM test),
-                        mar AS (SELECT * FROM test)
-                   DELETE FROM lambda WHERE value IN (SELECT value FROM bar)"#,
+                                mar AS (SELECT * FROM test)
+                           DELETE FROM lambda WHERE value IN (SELECT value FROM bar)"#,
         )
         .unwrap();
         let edited_tables: Vec<_> = edited_tables.into_iter().collect();
@@ -566,13 +591,13 @@ mod tests {
 
         let (edited_tables, dropped_tables, read_tables) = get_accessed_tables(
             r#"UPDATE epsilon
-               SET alpha = new_beta
-               FROM (
-                 SELECT 9 AS new_alpha, 3 AS new_beta, 2 AS new_gamma, 1 AS new_delta
-                 UNION ALL
-                 SELECT 4 AS new_alpha, 3 as new_beta, 2 AS new_gamma, 1 AS new_delta
-               ) foo_alias
-               WHERE alpha = new_alpha"#,
+                       SET alpha = new_beta
+                       FROM (
+                         SELECT 9 AS new_alpha, 3 AS new_beta, 2 AS new_gamma, 1 AS new_delta
+                         UNION ALL
+                         SELECT 4 AS new_alpha, 3 as new_beta, 2 AS new_gamma, 1 AS new_delta
+                       ) foo_alias
+                       WHERE alpha = new_alpha"#,
         )
         .unwrap();
         let edited_tables: Vec<_> = edited_tables.into_iter().collect();
@@ -582,47 +607,46 @@ mod tests {
 
         // Multiple statements, no parameters:
 
-        let sql = r#"
-            BEGIN TRANSACTION;
+        let sql = r#"BEGIN TRANSACTION;
 
-            INSERT INTO "alpha" VALUES (1, 2, 3), (4, 5, 6);
+                     INSERT INTO "alpha" VALUES (1, 2, 3), (4, 5, 6);
 
-            INSERT INTO gamma
-            SELECT alpha.*
-            FROM alpha, beta
-            WHERE alpha.value = beta.value;
+                     INSERT INTO gamma
+                     SELECT alpha.*
+                     FROM alpha, beta
+                     WHERE alpha.value = beta.value;
 
-            WITH t AS (
-              SELECT * from delta_base ORDER BY quality LIMIT 1
-            )
-            UPDATE delta SET price = t.price * 1.05;
+                     WITH t AS (
+                       SELECT * from delta_base ORDER BY quality LIMIT 1
+                     )
+                     UPDATE delta SET price = t.price * 1.05;
 
-            WITH t AS (
-              SELECT * FROM phi_base
-              WHERE
-                "date" >= '2010-10-01' AND
-                "date" < '2010-11-01'
-            )
-            INSERT INTO phi
-            SELECT * FROM t;
+                     WITH t AS (
+                       SELECT * FROM phi_base
+                       WHERE
+                         "date" >= '2010-10-01' AND
+                         "date" < '2010-11-01'
+                     )
+                     INSERT INTO phi
+                     SELECT * FROM t;
 
-            DELETE FROM "psi" WHERE bar >= 10;
+                     DELETE FROM "psi" WHERE bar >= 10;
 
-            WITH RECURSIVE included_lambda(sub_lambda, lambda) AS (
-                SELECT sub_lambda, lambda FROM lambda WHERE lambda = 'our_product'
-              UNION ALL
-                SELECT p.sub_lambda, p.lambda
-                FROM included_lambda pr, lambda p
-                WHERE p.lambda = pr.sub_lambda
-            )
-            DELETE FROM lambda
-              WHERE lambda IN (SELECT lambda FROM included_lambda);
+                     WITH RECURSIVE included_lambda(sub_lambda, lambda) AS (
+                         SELECT sub_lambda, lambda FROM lambda WHERE lambda = 'our_product'
+                       UNION ALL
+                         SELECT p.sub_lambda, p.lambda
+                         FROM included_lambda pr, lambda p
+                         WHERE p.lambda = pr.sub_lambda
+                     )
+                     DELETE FROM lambda
+                       WHERE lambda IN (SELECT lambda FROM included_lambda);
 
-            DROP TABLE "rho";
+                     DROP TABLE "rho";
 
-            DROP TABLE "sigma" CASCADE;
+                     DROP TABLE "sigma" CASCADE;
 
-            COMMIT"#;
+                     COMMIT"#;
 
         let (edited_tables, dropped_tables, read_tables) = get_accessed_tables(&sql).unwrap();
         let mut edited_tables: Vec<_> = edited_tables.into_iter().collect();
