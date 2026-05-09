@@ -145,17 +145,19 @@ pub fn get_view_tables(view_sql: &str) -> Result<Vec<String>, DbError> {
 }
 
 /// Parse the given string, representing a series of (semi-colon-separated) SQL commands,
-/// into their constituents and determine the tables and views that will be affected when
-/// the commands are executed, if any. Two sets are returned. The first contains tables
+/// into their constituents and determine the tables and views that will be accessed when
+/// the commands are executed, if any. Three sets are returned. The first contains tables
 /// and views that are going to be edited (targets of commands like INSERT, UPDATE, DELETE,
 /// ALTER, and TRUNCATE), the second contains tables and views that are going to be dropped
-/// (targets of a DROP TABLE command). All other kinds of statements are silently ignored.
-/// In particular, table modifications that occur _within_ a common table expression (CTE) are
-/// not recognized by this function. Such table-modifying CTEs are supported in principle by
-/// PostgreSQL (see
+/// (targets of a DROP TABLE or DROP VIEW command). The third contains tables and views that
+/// are only going to be read (targets of most other commands). Note table modifications that
+/// occur _within_ a common table expression (CTE) are not recognized by this function. Such
+/// table-modifying CTEs are supported in principle by PostgreSQL (see
 /// <https://www.postgresql.org/docs/current/queries-with.html#QUERIES-WITH-MODIFYING>) but
 /// seemingly not by SQLite (see <https://sqlite.org/lang_with.html>).
-pub fn get_affected_tables(sql: &str) -> Result<(HashSet<String>, HashSet<String>), DbError> {
+pub fn get_accessed_tables(
+    sql: &str,
+) -> Result<(HashSet<String>, HashSet<String>, HashSet<String>), DbError> {
     // Instantiate the parser and read in the given sql string:
     let mut parser = Parser::new();
     parser
@@ -197,11 +199,16 @@ pub fn get_affected_tables(sql: &str) -> Result<(HashSet<String>, HashSet<String
     // Determine the tables that will be modified:
     let mut edited_tables = HashSet::new();
     let mut dropped_tables = HashSet::new();
+    let mut read_tables = HashSet::<String>::new();
     for statement in &statements {
         validate_node(&statement, sql)?;
         for instruction in statement.children(&mut tree.walk()) {
             validate_node(&instruction, sql)?;
             match instruction.kind().to_lowercase().as_str() {
+                "select" => {
+                    println!("INSTRUCTION: {instruction:?}");
+                    todo!()
+                }
                 "insert" => {
                     let table_name = {
                         let object_ref = instruction
@@ -380,7 +387,12 @@ pub fn get_affected_tables(sql: &str) -> Result<(HashSet<String>, HashSet<String
         .filter(|table| ![QUERY_CACHE_TABLE, TABLE_CACHE_TABLE].contains(&table.as_str()))
         .collect::<HashSet<_>>();
 
-    Ok((edited_tables.clone(), dropped_tables.clone()))
+    // TODO: return read_tables.
+    Ok((
+        edited_tables.clone(),
+        dropped_tables.clone(),
+        HashSet::new(),
+    ))
 }
 
 #[cfg(test)]
@@ -447,13 +459,21 @@ mod tests {
     async fn test_sql_parsing() {
         // Single statements, possibly with parameters:
 
-        let (edited_tables, dropped_tables) =
-            get_affected_tables(&format!(r#"INSERT INTO "alpha" VALUES ($1, $2, $3)"#)).unwrap();
+        let (edited_tables, dropped_tables, read_tables) =
+            get_accessed_tables(&format!(r#"SELECT * FROM "alpha""#)).unwrap();
+        let read_tables: Vec<_> = read_tables.into_iter().collect();
+        assert_eq!(edited_tables, [].into());
+        assert_eq!(dropped_tables, [].into());
+        assert_eq!(read_tables, ["alpha"]);
+
+        let (edited_tables, dropped_tables, read_tables) =
+            get_accessed_tables(&format!(r#"INSERT INTO "alpha" VALUES ($1, $2, $3)"#)).unwrap();
         let edited_tables: Vec<_> = edited_tables.into_iter().collect();
         assert_eq!(edited_tables, ["alpha"]);
         assert_eq!(dropped_tables, [].into());
+        assert_eq!(read_tables, [].into());
 
-        let (edited_tables, dropped_tables) = get_affected_tables(
+        let (edited_tables, dropped_tables, read_tables) = get_accessed_tables(
             r#"WITH bar AS (SELECT * FROM alpha),
                         mar AS (SELECT * FROM beta)
                    INSERT INTO gamma
@@ -465,14 +485,16 @@ mod tests {
         let edited_tables: Vec<_> = edited_tables.into_iter().collect();
         assert_eq!(edited_tables, ["gamma"]);
         assert_eq!(dropped_tables, [].into());
+        assert_eq!(read_tables, [].into());
 
-        let (edited_tables, dropped_tables) =
-            get_affected_tables(&format!(r#"UPDATE "delta" set bar = $1 WHERE bar = $2"#)).unwrap();
+        let (edited_tables, dropped_tables, read_tables) =
+            get_accessed_tables(&format!(r#"UPDATE "delta" set bar = $1 WHERE bar = $2"#)).unwrap();
         let edited_tables: Vec<_> = edited_tables.into_iter().collect();
         assert_eq!(edited_tables, ["delta"]);
         assert_eq!(dropped_tables, [].into());
+        assert_eq!(read_tables, [].into());
 
-        let (edited_tables, dropped_tables) = get_affected_tables(&format!(
+        let (edited_tables, dropped_tables, read_tables) = get_accessed_tables(&format!(
             r#"WITH bar AS (SELECT * FROM test),
                         mar AS (SELECT * FROM test)
                    UPDATE delta
@@ -484,14 +506,16 @@ mod tests {
         let edited_tables: Vec<_> = edited_tables.into_iter().collect();
         assert_eq!(edited_tables, ["delta"]);
         assert_eq!(dropped_tables, [].into());
+        assert_eq!(read_tables, [].into());
 
-        let (edited_tables, dropped_tables) =
-            get_affected_tables(&format!(r#"DELETE FROM "epsilon" WHERE bar >= $1"#)).unwrap();
+        let (edited_tables, dropped_tables, read_tables) =
+            get_accessed_tables(&format!(r#"DELETE FROM "epsilon" WHERE bar >= $1"#)).unwrap();
         let edited_tables: Vec<_> = edited_tables.into_iter().collect();
         assert_eq!(edited_tables, ["epsilon"]);
         assert_eq!(dropped_tables, [].into());
+        assert_eq!(read_tables, [].into());
 
-        let (edited_tables, dropped_tables) = get_affected_tables(
+        let (edited_tables, dropped_tables, read_tables) = get_accessed_tables(
             r#"WITH bar AS (SELECT * FROM test),
                         mar AS (SELECT * FROM test)
                    DELETE FROM lambda WHERE value IN (SELECT value FROM bar)"#,
@@ -500,39 +524,47 @@ mod tests {
         let edited_tables: Vec<_> = edited_tables.into_iter().collect();
         assert_eq!(edited_tables, ["lambda"]);
         assert_eq!(dropped_tables, [].into());
+        assert_eq!(read_tables, [].into());
 
-        let (edited_tables, dropped_tables) = get_affected_tables(r#"DROP TABLE "rho""#).unwrap();
+        let (edited_tables, dropped_tables, read_tables) =
+            get_accessed_tables(r#"DROP TABLE "rho""#).unwrap();
         let dropped_tables: Vec<_> = dropped_tables.into_iter().collect();
         assert_eq!(dropped_tables, ["rho"]);
         assert_eq!(edited_tables, [].into());
+        assert_eq!(read_tables, [].into());
 
-        let (edited_tables, dropped_tables) =
-            get_affected_tables(r#"DROP TABLE IF EXISTS "phi" CASCADE"#).unwrap();
+        let (edited_tables, dropped_tables, read_tables) =
+            get_accessed_tables(r#"DROP TABLE IF EXISTS "phi" CASCADE"#).unwrap();
         let dropped_tables: Vec<_> = dropped_tables.into_iter().collect();
         assert_eq!(dropped_tables, ["phi"]);
         assert_eq!(edited_tables, [].into());
+        assert_eq!(read_tables, [].into());
 
-        let (edited_tables, dropped_tables) =
-            get_affected_tables("TRUNCATE TABLE mu, nu CASCADE").unwrap();
+        let (edited_tables, dropped_tables, read_tables) =
+            get_accessed_tables("TRUNCATE TABLE mu, nu CASCADE").unwrap();
         let mut edited_tables: Vec<_> = edited_tables.into_iter().collect();
         edited_tables.sort();
         assert_eq!(edited_tables, ["mu", "nu"]);
         assert_eq!(dropped_tables, [].into());
+        assert_eq!(read_tables, [].into());
 
-        let (edited_tables, dropped_tables) =
-            get_affected_tables("ALTER TABLE phi ADD COLUMN varphi INT").unwrap();
+        let (edited_tables, dropped_tables, read_tables) =
+            get_accessed_tables("ALTER TABLE phi ADD COLUMN varphi INT").unwrap();
         let mut edited_tables: Vec<_> = edited_tables.into_iter().collect();
         edited_tables.sort();
         assert_eq!(edited_tables, ["phi"]);
         assert_eq!(dropped_tables, [].into());
+        assert_eq!(read_tables, [].into());
 
-        let (edited_tables, dropped_tables) = get_affected_tables("DROP VIEW theta").unwrap();
+        let (edited_tables, dropped_tables, read_tables) =
+            get_accessed_tables("DROP VIEW theta").unwrap();
         let mut dropped_tables: Vec<_> = dropped_tables.into_iter().collect();
         dropped_tables.sort();
         assert_eq!(edited_tables, [].into());
         assert_eq!(dropped_tables, ["theta"]);
+        assert_eq!(read_tables, [].into());
 
-        let (edited_tables, dropped_tables) = get_affected_tables(
+        let (edited_tables, dropped_tables, read_tables) = get_accessed_tables(
             r#"UPDATE epsilon
                SET alpha = new_beta
                FROM (
@@ -546,6 +578,7 @@ mod tests {
         let edited_tables: Vec<_> = edited_tables.into_iter().collect();
         assert_eq!(edited_tables, ["epsilon"]);
         assert_eq!(dropped_tables, [].into());
+        assert_eq!(read_tables, [].into());
 
         // Multiple statements, no parameters:
 
@@ -591,7 +624,7 @@ mod tests {
 
             COMMIT"#;
 
-        let (edited_tables, dropped_tables) = get_affected_tables(&sql).unwrap();
+        let (edited_tables, dropped_tables, read_tables) = get_accessed_tables(&sql).unwrap();
         let mut edited_tables: Vec<_> = edited_tables.into_iter().collect();
         let mut dropped_tables: Vec<_> = dropped_tables.into_iter().collect();
         edited_tables.sort();
@@ -601,5 +634,6 @@ mod tests {
             ["alpha", "delta", "gamma", "lambda", "phi", "psi",]
         );
         assert_eq!(dropped_tables, ["rho", "sigma",]);
+        assert_eq!(read_tables, [].into());
     }
 }

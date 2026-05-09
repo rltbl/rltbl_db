@@ -9,7 +9,7 @@ use crate::{
         get_memory_table_cache, get_meta_cache,
     },
     params,
-    parse::{get_affected_tables, get_view_tables, validate_table_name},
+    parse::{get_accessed_tables, get_view_tables, validate_table_name},
 };
 
 use async_trait::async_trait;
@@ -271,7 +271,7 @@ pub trait DbQuery {
     async fn clear_cache_for_affected_tables(&self, sql: &str) -> Result<(), DbError> {
         if self.get_caching_strategy() != CachingStrategy::None {
             let (edited_tables, dropped_tables): (Vec<_>, Vec<_>) = {
-                let (edited_tables, dropped_tables) = get_affected_tables(sql)?;
+                let (edited_tables, dropped_tables, _) = get_accessed_tables(sql)?;
                 (
                     edited_tables.into_iter().collect(),
                     dropped_tables.into_iter().collect(),
@@ -647,11 +647,22 @@ pub trait DbQuery {
         }
     }
 
+    /// TODO: Add docstring here.
+    async fn cache(
+        &self,
+        tables_remove_these_later: &[&str],
+        sql: &str,
+        params: impl IntoDbParams + Send + Copy + Sync,
+    ) -> Result<DbRows, DbError> {
+        self.cache_tables(tables_remove_these_later, sql, params)
+            .await
+    }
+
     /// Execute the given SQL command with the given parameters on the given list of tables,
     /// returning a vector of rows. If the result of the command exists in the query cache for the
     /// given tables, get the value from there instead of from the tables themselves,
     /// in accordance with the given [CachingStrategy].
-    async fn cache(
+    async fn cache_tables(
         &self,
         tables: &[&str],
         sql: &str,
