@@ -647,6 +647,14 @@ pub trait DbQuery {
         }
     }
 
+    // TODO: Note that this version of cache() is much slower (because of the parsing step)
+    // than cache_table(). Are there optimizations we can implement?
+    //
+    // Comparison (SQLite):
+    // ----
+    // cache_tables(): None: 53s, Truncate all: 25s, Truncate: 20s, Trigger: 19s, Memory: 16s
+    // cache():        None: 65s, Truncate all: 62s, Truncate: 55s, Trigger: 85s (!)
+    //
     /// TODO: Add docstring here.
     async fn cache(
         &self,
@@ -656,7 +664,7 @@ pub trait DbQuery {
         let (_, _, read_tables) = get_accessed_tables(sql)?;
         let mut read_tables: Vec<_> = read_tables.into_iter().collect();
         read_tables.sort();
-        println!("READ TABLES FOR SQL: '{sql}' ARE {read_tables:?}");
+        // println!("READ TABLES FOR SQL: '{sql}' ARE {read_tables:?}");
         let read_tables: Vec<_> = read_tables.iter().map(|s| s.as_str()).collect();
         match read_tables.is_empty() {
             false => self.cache_tables(&read_tables, sql, params).await,
