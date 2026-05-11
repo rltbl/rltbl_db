@@ -366,8 +366,10 @@ mod tests {
         .unwrap();
         let select_sql = format!("SELECT value FROM test_table_text WHERE value = {p}1");
         let value: String = pool
-            .query_value(&select_sql, &["foo"])
+            .query(&select_sql, &["foo"])
             .await
+            .unwrap()
+            .value()
             .unwrap()
             .into();
         assert_eq!("foo", value);
@@ -390,8 +392,9 @@ mod tests {
             string_rows
         );
 
-        let row: DbRow = pool.query_row(&select_sql, &["foo"]).await.unwrap();
-        assert_eq!(row, db_row! {"value" => "foo",});
+        let rows = pool.query(&select_sql, &["foo"]).await.unwrap();
+        let row = rows.row().unwrap();
+        assert_eq!(*row, db_row! {"value" => "foo",});
 
         let rows = pool.query(&select_sql, &["foo"]).await.unwrap();
         assert_eq!(*rows.deref(), [db_row! {"value" => "foo",}]);
@@ -440,14 +443,17 @@ mod tests {
                 _ => unreachable!(),
             };
             let select_sql = format!("SELECT {column} FROM test_table_int WHERE {column} = {p}1");
-            let value = pool.query_value(&select_sql, params.clone()).await.unwrap();
+            let value = pool.query(&select_sql, params.clone()).await.unwrap();
+            let value = value.value().unwrap();
             let value = TryInto::<i64>::try_into(value).unwrap();
             assert_eq!(1, value);
 
-            let unsigned = pool.query_u64(&select_sql, params.clone()).await.unwrap();
+            let rows = pool.query(&select_sql, params.clone()).await.unwrap();
+            let unsigned: u64 = rows.value().unwrap().try_into().unwrap();
             assert_eq!(1, unsigned);
 
-            let signed = pool.query_i64(&select_sql, params.clone()).await.unwrap();
+            let rows = pool.query(&select_sql, params.clone()).await.unwrap();
+            let signed: i64 = rows.value().unwrap().try_into().unwrap();
             assert_eq!(1, signed);
 
             let string = pool
@@ -500,11 +506,13 @@ mod tests {
         .await
         .unwrap();
         let select_sql = format!("SELECT value FROM test_table_float WHERE value > {p}1");
-        let value = pool.query_value(&select_sql, &[1.0_f64]).await.unwrap();
+        let value = pool.query(&select_sql, &[1.0_f64]).await.unwrap();
+        let value = value.value().unwrap();
         let value = TryInto::<f64>::try_into(value).unwrap();
         assert_eq!("1.05", format!("{value:.2}"));
 
-        let float = pool.query_f64(&select_sql, &[1.0_f64]).await.unwrap();
+        let rows = pool.query(&select_sql, &[1.0_f64]).await.unwrap();
+        let float: f64 = rows.value().unwrap().try_into().unwrap();
         assert_eq!(1.05, float);
 
         let string = pool.query_string(&select_sql, &[1.0_f64]).await.unwrap();
@@ -513,8 +521,9 @@ mod tests {
         let strings = pool.query_strings(&select_sql, &[1.0_f64]).await.unwrap();
         assert_eq!(vec!["1.05".to_owned()], strings);
 
-        let row: DbRow = pool.query_row(&select_sql, &[1.0_f64]).await.unwrap();
-        assert_eq!(row, db_row! {"value" => 1.05,});
+        let rows = pool.query(&select_sql, &[1.0_f64]).await.unwrap();
+        let row = rows.row().unwrap();
+        assert_eq!(*row, db_row! {"value" => 1.05,});
 
         let rows = pool.query(&select_sql, &[1.0_f64]).await.unwrap();
         assert_eq!(*rows.deref(), [db_row! {"value" => 1.05,}]);
@@ -537,7 +546,8 @@ mod tests {
         .await
         .unwrap();
         let select_sql = format!("SELECT value FROM test_table_float WHERE value > {p}1");
-        let value = pool.query_value(&select_sql, &[1.0_f32]).await.unwrap();
+        let value = pool.query(&select_sql, &[1.0_f32]).await.unwrap();
+        let value = value.value().unwrap();
         let value = TryInto::<f32>::try_into(value).unwrap();
         assert_eq!("1.05", format!("{value:.2}"));
 
@@ -603,7 +613,13 @@ mod tests {
         .unwrap();
 
         let select_sql = format!("SELECT text_value FROM test_table_mixed WHERE text_value = {p}1");
-        let value: String = pool.query_value(&select_sql, ["foo"]).await.unwrap().into();
+        let value: String = pool
+            .query(&select_sql, ["foo"])
+            .await
+            .unwrap()
+            .value()
+            .unwrap()
+            .into();
         assert_eq!("foo", value);
 
         let select_sql = format!(
@@ -628,9 +644,10 @@ mod tests {
         );
         let params = params!["foo", (), 1.0_f64, 0_i64, true, dec!(0.999)];
 
-        let row: DbRow = pool.query_row(&select_sql, params.clone()).await.unwrap();
+        let rows = pool.query(&select_sql, params.clone()).await.unwrap();
+        let row = rows.row().unwrap();
         assert_eq!(
-            row,
+            *row,
             db_row! {
                 "text_value" => "foo",
                 "alt_text_value" => DbValue::Null,
@@ -1606,15 +1623,21 @@ mod tests {
     }
 
     async fn count_query_cache_rows(pool: &mut AnyPool) -> u64 {
-        pool.query_u64(&format!("SELECT COUNT(1) from {QUERY_CACHE_TABLE}"), ())
+        let rows = pool
+            .query(&format!("SELECT COUNT(1) from {QUERY_CACHE_TABLE}"), ())
             .await
-            .unwrap()
+            .unwrap();
+        let value: u64 = rows.value().unwrap().try_into().unwrap();
+        value
     }
 
     async fn count_table_cache_rows(pool: &mut AnyPool) -> u64 {
-        pool.query_u64(&format!("SELECT COUNT(1) from {TABLE_CACHE_TABLE}"), ())
+        let rows = pool
+            .query(&format!("SELECT COUNT(1) from {TABLE_CACHE_TABLE}"), ())
             .await
-            .unwrap()
+            .unwrap();
+        let value: u64 = rows.value().unwrap().try_into().unwrap();
+        value
     }
 
     fn count_memory_query_cache_rows() -> u64 {

@@ -922,6 +922,34 @@ pub trait IntoDbRows {
     fn into_db_rows(self) -> DbRows;
 }
 
+impl Deref for DbRow {
+    type Target = IndexMap<String, DbValue>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.map
+    }
+}
+
+impl DerefMut for DbRow {
+    fn deref_mut(&mut self) -> &mut IndexMap<String, DbValue> {
+        &mut self.map
+    }
+}
+
+impl Deref for DbRows {
+    type Target = Vec<DbRow>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.content
+    }
+}
+
+impl DerefMut for DbRows {
+    fn deref_mut(&mut self) -> &mut Vec<DbRow> {
+        &mut self.content
+    }
+}
+
 impl DbRow {
     pub fn new() -> Self {
         DbRow {
@@ -985,6 +1013,24 @@ impl DbRows {
     // }
 }
 
+impl TryInto<JsonValue> for DbRows {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<JsonValue, Self::Error> {
+        // TODO: Note that this conversion is aggressive. Is this what we want, or do we
+        // want to call .as_json() instead here?
+        Ok(self.value()?.into())
+    }
+}
+
+impl TryInto<JsonValue> for &DbRows {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<JsonValue, Self::Error> {
+        Ok(self.clone().value()?.into())
+    }
+}
+
 impl TryInto<String> for DbRows {
     type Error = DbError;
 
@@ -993,7 +1039,23 @@ impl TryInto<String> for DbRows {
     }
 }
 
+impl TryInto<String> for &DbRows {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<String, Self::Error> {
+        Ok(self.clone().value()?.into())
+    }
+}
+
 impl TryInto<u64> for DbRows {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<u64, Self::Error> {
+        Ok(self.value()?.try_into()?)
+    }
+}
+
+impl TryInto<u64> for &DbRows {
     type Error = DbError;
 
     fn try_into(self) -> Result<u64, Self::Error> {
@@ -1009,6 +1071,14 @@ impl TryInto<i64> for DbRows {
     }
 }
 
+impl TryInto<i64> for &DbRows {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<i64, Self::Error> {
+        Ok(self.value()?.try_into()?)
+    }
+}
+
 impl TryInto<f64> for DbRows {
     type Error = DbError;
 
@@ -1017,31 +1087,11 @@ impl TryInto<f64> for DbRows {
     }
 }
 
-impl Deref for DbRow {
-    type Target = IndexMap<String, DbValue>;
+impl TryInto<f64> for &DbRows {
+    type Error = DbError;
 
-    fn deref(&self) -> &Self::Target {
-        &self.map
-    }
-}
-
-impl DerefMut for DbRow {
-    fn deref_mut(&mut self) -> &mut IndexMap<String, DbValue> {
-        &mut self.map
-    }
-}
-
-impl Deref for DbRows {
-    type Target = Vec<DbRow>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.content
-    }
-}
-
-impl DerefMut for DbRows {
-    fn deref_mut(&mut self) -> &mut Vec<DbRow> {
-        &mut self.content
+    fn try_into(self) -> Result<f64, Self::Error> {
+        Ok(self.value()?.try_into()?)
     }
 }
 

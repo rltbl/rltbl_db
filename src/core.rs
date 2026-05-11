@@ -957,44 +957,6 @@ pub trait DbQuery {
         params: impl IntoDbParams + Send,
     ) -> impl Future<Output = Result<DbRows, DbError>> + Send;
 
-    /// Execute the given SQL command, using the given parameters, returning a single row.
-    /// An error is returned if there is more than one row of data.
-    async fn query_row(
-        &self,
-        sql: &str,
-        params: impl IntoDbParams + Send,
-    ) -> Result<DbRow, DbError> {
-        let rows = self.query(&sql, params).await?;
-        if rows.len() > 1 {
-            return Err(DbError::DataError(
-                "More than one row returned for query_row()".to_string(),
-            ));
-        }
-        match rows.content.into_iter().next() {
-            Some(row) => Ok(row),
-            None => Err(DbError::DataError("No row found".to_string())),
-        }
-    }
-
-    /// Execute the given SQL command, using the given parameters, returning a single value.
-    /// If the data has more than one value, an error is returned.
-    async fn query_value(
-        &self,
-        sql: &str,
-        params: impl IntoDbParams + Send,
-    ) -> Result<DbValue, DbError> {
-        let row: DbRow = self.query_row(sql, params).await?;
-        if row.len() > 1 {
-            return Err(DbError::DataError(
-                "More than one value returned for query_value()".to_string(),
-            ));
-        }
-        match row.values().next() {
-            Some(value) => Ok(value.clone()),
-            None => Err(DbError::DataError("No values found".to_string())),
-        }
-    }
-
     /// Execute the given SQL command, using the given parameters, returning a single string.
     /// If the data has more than one value, an error is returned.
     async fn query_string(
@@ -1002,7 +964,8 @@ pub trait DbQuery {
         sql: &str,
         params: impl IntoDbParams + Send,
     ) -> Result<String, DbError> {
-        let value = self.query_value(sql, params).await?;
+        let value = self.query(sql, params).await?;
+        let value = value.value()?;
         Ok(value.into())
     }
 
@@ -1029,7 +992,8 @@ pub trait DbQuery {
         sql: &str,
         params: impl IntoDbParams + Send,
     ) -> Result<StringRow, DbError> {
-        let row: DbRow = self.query_row(sql, params).await?;
+        let rows = self.query(sql, params).await?;
+        let row = rows.row()?;
         Ok(row
             .iter()
             .map(|(key, value)| (key.clone(), value.into()))
@@ -1052,27 +1016,6 @@ pub trait DbQuery {
                     .collect()
             })
             .collect())
-    }
-
-    /// Execute the given SQL command, using the given parameters, returning a single unsigned
-    /// integer. If the data has more than one value, an error is returned.
-    async fn query_u64(&self, sql: &str, params: impl IntoDbParams + Send) -> Result<u64, DbError> {
-        let value = self.query_value(sql, params).await?;
-        Ok(value.try_into()?)
-    }
-
-    /// Execute the given SQL command, using the given parameters, returning a single signed
-    /// integer. If the data has more than one value, an error is returned.
-    async fn query_i64(&self, sql: &str, params: impl IntoDbParams + Send) -> Result<i64, DbError> {
-        let value = self.query_value(sql, params).await?;
-        Ok(value.try_into()?)
-    }
-
-    /// Execute the given SQL command, using the given parameters, returning a single float.
-    /// If the data has more than one value, an error is returned.
-    async fn query_f64(&self, sql: &str, params: impl IntoDbParams + Send) -> Result<f64, DbError> {
-        let value = self.query_value(sql, params).await?;
-        Ok(value.try_into()?)
     }
 
     /// Insert rows into the given columns of the given table. If an input row does not have a
