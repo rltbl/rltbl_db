@@ -650,12 +650,20 @@ pub trait DbQuery {
     /// TODO: Add docstring here.
     async fn cache(
         &self,
-        tables_remove_these_later: &[&str],
         sql: &str,
         params: impl IntoDbParams + Send + Copy + Sync,
     ) -> Result<DbRows, DbError> {
-        self.cache_tables(tables_remove_these_later, sql, params)
-            .await
+        let (_, _, read_tables) = get_accessed_tables(sql)?;
+        let mut read_tables: Vec<_> = read_tables.into_iter().collect();
+        read_tables.sort();
+        println!("READ TABLES FOR SQL: '{sql}' ARE {read_tables:?}");
+        let read_tables: Vec<_> = read_tables.iter().map(|s| s.as_str()).collect();
+        match read_tables.is_empty() {
+            false => self.cache_tables(&read_tables, sql, params).await,
+            true => Err(DbError::InputError(format!(
+                "No tables are read from in SQL: {sql}"
+            ))),
+        }
     }
 
     /// Execute the given SQL command with the given parameters on the given list of tables,

@@ -1707,11 +1707,7 @@ mod tests {
         .unwrap();
 
         let rows = pool
-            .cache(
-                &["test_table_caching_1"],
-                "SELECT * from test_table_caching_1",
-                (),
-            )
+            .cache("SELECT * from test_table_caching_1", ())
             .await
             .unwrap();
 
@@ -1733,11 +1729,7 @@ mod tests {
         );
 
         let rows = pool
-            .cache(
-                &["test_table_caching_1"],
-                "SELECT * from test_table_caching_1",
-                (),
-            )
+            .cache("SELECT * from test_table_caching_1", ())
             .await
             .unwrap();
 
@@ -1780,11 +1772,7 @@ mod tests {
         };
 
         let rows = pool
-            .cache(
-                &["test_table_caching_1"],
-                "SELECT * from test_table_caching_1",
-                (),
-            )
+            .cache("SELECT * from test_table_caching_1", ())
             .await
             .unwrap();
 
@@ -1812,11 +1800,7 @@ mod tests {
         );
 
         let rows = pool
-            .cache(
-                &["test_table_caching_1"],
-                "SELECT * from test_table_caching_1",
-                (),
-            )
+            .cache("SELECT * from test_table_caching_1", ())
             .await
             .unwrap();
 
@@ -1838,21 +1822,13 @@ mod tests {
             ]
         );
 
-        pool.cache(
-            &["test_table_caching_1"],
-            "SELECT COUNT(1) FROM test_table_caching_1",
-            (),
-        )
-        .await
-        .unwrap();
+        pool.cache("SELECT COUNT(1) FROM test_table_caching_1", ())
+            .await
+            .unwrap();
 
-        pool.cache(
-            &["test_table_caching_2"],
-            "SELECT COUNT(1) FROM test_table_caching_2",
-            (),
-        )
-        .await
-        .unwrap();
+        pool.cache("SELECT COUNT(1) FROM test_table_caching_2", ())
+            .await
+            .unwrap();
 
         match strategy {
             CachingStrategy::None => (),
@@ -1877,11 +1853,7 @@ mod tests {
         };
 
         let rows = pool
-            .cache(
-                &["test_table_caching_1"],
-                "SELECT * from test_table_caching_1",
-                (),
-            )
+            .cache("SELECT * from test_table_caching_1", ())
             .await
             .unwrap();
 
@@ -1919,7 +1891,6 @@ mod tests {
 
         let rows = pool
             .cache(
-                &["test_table_caching_1", "test_table_caching_2"],
                 "SELECT * FROM test_table_caching_1 t1, test_table_caching_2 t2 \
                  WHERE t1.value = t2.value",
                 (),
@@ -1938,7 +1909,6 @@ mod tests {
 
         let rows = pool
             .cache(
-                &["test_table_caching_1", "test_table_caching_2"],
                 "SELECT * FROM test_table_caching_1 t1, test_table_caching_2 t2 \
                  WHERE t1.value = t2.value",
                 (),
@@ -2014,13 +1984,9 @@ mod tests {
         pool.set_caching_strategy(strategy);
         pool.set_cache_aware_query(true);
 
-        pool.cache(
-            &["test_vcaching_view_1"],
-            "SELECT * FROM test_vcaching_view_1",
-            (),
-        )
-        .await
-        .unwrap();
+        pool.cache("SELECT * FROM test_vcaching_view_1", ())
+            .await
+            .unwrap();
 
         match strategy {
             CachingStrategy::None => unimplemented!(),
@@ -2061,13 +2027,9 @@ mod tests {
             _ => assert_eq!(count_table_cache_rows(pool).await, 1),
         };
 
-        pool.cache(
-            &["test_vcaching_view_1"],
-            "SELECT * FROM test_vcaching_view_1",
-            (),
-        )
-        .await
-        .unwrap();
+        pool.cache("SELECT * FROM test_vcaching_view_1", ())
+            .await
+            .unwrap();
 
         match strategy {
             CachingStrategy::None => unimplemented!(),
@@ -2075,13 +2037,9 @@ mod tests {
             _ => assert_eq!(count_query_cache_rows(pool).await, 1),
         };
 
-        pool.cache(
-            &["test_vcaching_view_2"],
-            "SELECT * FROM test_vcaching_view_2",
-            (),
-        )
-        .await
-        .unwrap();
+        pool.cache("SELECT * FROM test_vcaching_view_2", ())
+            .await
+            .unwrap();
 
         match strategy {
             CachingStrategy::None => unimplemented!(),
@@ -2089,13 +2047,9 @@ mod tests {
             _ => assert_eq!(count_query_cache_rows(pool).await, 2),
         };
 
-        pool.cache(
-            &["test_vcaching_table"],
-            "SELECT * FROM test_vcaching_table",
-            (),
-        )
-        .await
-        .unwrap();
+        pool.cache("SELECT * FROM test_vcaching_table", ())
+            .await
+            .unwrap();
 
         match strategy {
             CachingStrategy::None => unimplemented!(),
@@ -2270,7 +2224,6 @@ mod tests {
         while i < runs {
             let select_table = random_table(&tables_to_choose_from);
             pool.cache(
-                &[select_table],
                 &format!("SELECT foo, SUM(bar) FROM {select_table}_view GROUP BY foo ORDER BY foo"),
                 (),
             )
