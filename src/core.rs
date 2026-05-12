@@ -261,6 +261,8 @@ pub trait DbQuery {
                 let source_triggers_name = format!("{source_table}_triggers");
                 cache.insert(source_triggers_name);
             }
+            let mut cache = get_meta_cache()?;
+            cache.insert(view_triggers_name);
         }
         Ok(())
     }
@@ -664,7 +666,6 @@ pub trait DbQuery {
         let (_, _, read_tables) = get_accessed_tables(sql)?;
         let mut read_tables: Vec<_> = read_tables.into_iter().collect();
         read_tables.sort();
-        // println!("READ TABLES FOR SQL: '{sql}' ARE {read_tables:?}");
         let read_tables: Vec<_> = read_tables.iter().map(|s| s.as_str()).collect();
         match read_tables.is_empty() {
             false => self.cache_tables(&read_tables, sql, params).await,

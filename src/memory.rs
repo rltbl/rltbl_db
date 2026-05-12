@@ -45,6 +45,14 @@ pub struct MemoryQueryCacheValue {
     pub last_verified: u128,
 }
 
+/// Returns true if the given object exists in the meta-cache.
+pub fn exists_in_meta_cache(object: &str) -> Result<bool, DbError> {
+    match get_meta_cache()?.get(object) {
+        Some(_) => Ok(true),
+        None => Ok(false),
+    }
+}
+
 /// Retrieve the in-memory meta-cache [MEMORY_META_CACHE].
 pub fn get_meta_cache<'a>() -> Result<MutexGuard<'a, HashSet<String>>, DbError> {
     let mut remaining_attempts = MAX_RETRIEVAL_ATTEMPTS;
@@ -65,21 +73,6 @@ pub fn get_meta_cache<'a>() -> Result<MutexGuard<'a, HashSet<String>>, DbError> 
     }
     let meta_cache = meta_cache.unwrap();
     Ok(meta_cache)
-}
-
-/// Clear the meta cache.
-pub fn clear_meta_cache() -> Result<(), DbError> {
-    let mut cache = get_meta_cache()?;
-    cache.clear();
-    Ok(())
-}
-
-/// Returns true if the given object exists in the meta-cache.
-pub fn exists_in_meta_cache(object: &str) -> Result<bool, DbError> {
-    match get_meta_cache()?.get(object) {
-        Some(_) => Ok(true),
-        None => Ok(false),
-    }
 }
 
 /// Retrieve the in-memory query cache (see [MEMORY_QUERY_CACHE]).
@@ -127,6 +120,12 @@ pub fn get_memory_table_cache<'a>() -> Result<MutexGuard<'a, HashMap<String, u12
     Ok(memory_cache)
 }
 
+/// Retrieve a copy of the contents of the meta cache.
+pub fn get_meta_cache_contents() -> Result<HashSet<String>, DbError> {
+    let cache = get_meta_cache()?;
+    Ok(cache.clone())
+}
+
 /// Retrieve a copy of the contents of the memory query cache.
 pub fn get_memory_query_cache_contents()
 -> Result<IndexMap<MemoryQueryCacheKey, MemoryQueryCacheValue>, DbError> {
@@ -138,6 +137,13 @@ pub fn get_memory_query_cache_contents()
 pub fn get_memory_table_cache_contents() -> Result<HashMap<String, u128>, DbError> {
     let cache = get_memory_table_cache()?;
     Ok(cache.clone())
+}
+
+/// Clear the meta cache.
+pub fn clear_meta_cache() -> Result<(), DbError> {
+    let mut cache = get_meta_cache()?;
+    cache.clear();
+    Ok(())
 }
 
 /// Clear the memory query cache.
