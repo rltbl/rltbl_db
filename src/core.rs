@@ -5,11 +5,11 @@ use crate::{
     db_value::{ColumnMap, DbParams, DbRow, DbRows, DbValue, IntoDbParams, IntoDbRows, StringRow},
     memory::{
         DEFAULT_MEMORY_QUERY_CACHE_SIZE, MemoryQueryCacheKey, MemoryQueryCacheValue,
-        clear_memory_query_cache, exists_in_meta_cache, get_memory_query_cache,
-        get_memory_table_cache, get_meta_cache,
+        clear_memory_query_cache, exists_in_meta_cache, get_entry_from_parse_cache,
+        get_memory_query_cache, get_memory_table_cache, get_meta_cache, get_parse_cache,
     },
     params,
-    parse::{get_accessed_tables, get_view_tables, validate_table_name},
+    parse::{get_accessed_tables, get_affected_tables, get_view_tables, validate_table_name},
 };
 
 use async_trait::async_trait;
@@ -273,7 +273,7 @@ pub trait DbQuery {
     async fn clear_cache_for_affected_tables(&self, sql: &str) -> Result<(), DbError> {
         if self.get_caching_strategy() != CachingStrategy::None {
             let (edited_tables, dropped_tables): (Vec<_>, Vec<_>) = {
-                let (edited_tables, dropped_tables, _) = get_accessed_tables(sql)?;
+                let (edited_tables, dropped_tables) = get_affected_tables(sql)?;
                 (
                     edited_tables.into_iter().collect(),
                     dropped_tables.into_iter().collect(),
@@ -663,12 +663,26 @@ pub trait DbQuery {
         sql: &str,
         params: impl IntoDbParams + Send + Copy + Sync,
     ) -> Result<DbRows, DbError> {
-        let (_, _, read_tables) = get_accessed_tables(sql)?;
-        let mut read_tables: Vec<_> = read_tables.into_iter().collect();
-        read_tables.sort();
-        let read_tables: Vec<_> = read_tables.iter().map(|s| s.as_str()).collect();
+        let read_tables = match get_entry_from_parse_cache(sql)? {
+            Some(tables) => {
+                // println!("CACHE HIT!");
+                tables
+            }
+            _ => {
+                println!("CACHE MISS!");
+                let read_tables = get_accessed_tables(sql)?;
+                let mut read_tables: Vec<_> = read_tables.into_iter().collect();
+                read_tables.sort();
+                let mut parse_cache = get_parse_cache()?;
+                parse_cache.insert(sql.to_string(), read_tables.clone());
+                read_tables
+            }
+        };
         match read_tables.is_empty() {
-            false => self.cache_tables(&read_tables, sql, params).await,
+            false => {
+                let read_tables = read_tables.iter().map(|s| s.as_str()).collect::<Vec<_>>();
+                self.cache_tables(&read_tables, sql, params).await
+            }
             true => Err(DbError::InputError(format!(
                 "No tables are read from in SQL: {sql}"
             ))),

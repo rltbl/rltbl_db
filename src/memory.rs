@@ -25,6 +25,10 @@ lazy_static! {
     /// The in-memory table cache, used by [CachingStrategy::Memory].
     pub static ref MEMORY_TABLE_CACHE: Mutex<HashMap<String, u128>> = Mutex::new(HashMap::new());
 
+    /// TODO: Add docstring
+    pub static ref MEMORY_PARSE_CACHE: Mutex<HashMap<String, Vec<String>>> =
+        Mutex::new(HashMap::new());
+
     /// The in-memory meta cache. It holds a set of things known to exist.
     pub static ref MEMORY_META_CACHE: Mutex<HashSet<String>>
         = Mutex::new(HashSet::new());
@@ -53,6 +57,11 @@ pub fn exists_in_meta_cache(object: &str) -> Result<bool, DbError> {
     }
 }
 
+/// Returns true if the given object exists in the meta-cache.
+pub fn get_entry_from_parse_cache(entry: &str) -> Result<Option<Vec<String>>, DbError> {
+    Ok(get_parse_cache()?.get(entry).cloned())
+}
+
 /// Retrieve the in-memory meta-cache [MEMORY_META_CACHE].
 pub fn get_meta_cache<'a>() -> Result<MutexGuard<'a, HashSet<String>>, DbError> {
     let mut remaining_attempts = MAX_RETRIEVAL_ATTEMPTS;
@@ -73,6 +82,28 @@ pub fn get_meta_cache<'a>() -> Result<MutexGuard<'a, HashSet<String>>, DbError> 
     }
     let meta_cache = meta_cache.unwrap();
     Ok(meta_cache)
+}
+
+/// TODO: Add docstring
+pub fn get_parse_cache<'a>() -> Result<MutexGuard<'a, HashMap<String, Vec<String>>>, DbError> {
+    let mut remaining_attempts = MAX_RETRIEVAL_ATTEMPTS;
+    let mut parse_cache = MEMORY_PARSE_CACHE.try_lock();
+    while let Err(err) = parse_cache {
+        parse_cache = MEMORY_PARSE_CACHE.try_lock();
+        if let Ok(_) = parse_cache {
+            break;
+        }
+        remaining_attempts -= 1;
+        if remaining_attempts == 0 {
+            return Err(DbError::ConnectError(format!(
+                "Error locking cache: {err} (retried {MAX_RETRIEVAL_ATTEMPTS} times)"
+            )));
+        } else {
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
+    let parse_cache = parse_cache.unwrap();
+    Ok(parse_cache)
 }
 
 /// Retrieve the in-memory query cache (see [MEMORY_QUERY_CACHE]).
