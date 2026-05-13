@@ -144,6 +144,7 @@ pub fn get_view_tables(view_sql: &str) -> Result<Vec<String>, DbError> {
     Ok(view_tables)
 }
 
+/// TODO: Add docstring.
 pub fn get_accessed_tables(sql: &str) -> Result<HashSet<String>, DbError> {
     // Instantiate the parser and read in the given sql string:
     let mut parser = Parser::new();
