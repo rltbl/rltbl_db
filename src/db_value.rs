@@ -848,8 +848,135 @@ impl<T: IntoDbValue> IntoDbParams for Vec<T> {
 
 // Database rows
 
+#[derive(Debug, Default, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(transparent)] // See https://serde.rs/container-attrs.html#transparent
+pub struct DbRows {
+    pub rows: Vec<DbRow>,
+}
+
+impl Deref for DbRows {
+    type Target = Vec<DbRow>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.rows
+    }
+}
+
+impl DerefMut for DbRows {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.rows
+    }
+}
+
+impl DbRows {
+    pub fn row(&self) -> Result<&DbRow, DbError> {
+        // error unless exactly one row?
+        match self.rows.first() {
+            Some(row) => Ok(row),
+            None => Err(DbError::DataError(format!("Missing row"))),
+        }
+    }
+
+    pub fn value(&self) -> Result<&DbValue, DbError> {
+        // error unless exactly one value?
+        match self.row()?.first() {
+            Some((_key, value)) => Ok(value),
+            None => Err(DbError::DataError(format!("Missing value"))),
+        }
+    }
+
+    pub fn remove_nulls(mut self) -> Self {
+        self.rows = self
+            .rows
+            .into_iter()
+            .map(|row| row.remove_nulls())
+            .collect();
+        self
+    }
+
+    pub fn to_strings(&self) -> Result<Vec<String>, DbError> {
+        self.rows
+            .iter()
+            .map(|row| match row.first() {
+                Some((_key, value)) => Ok(value.to_string()),
+                None => Err(DbError::DataError(format!("Missing value"))),
+            })
+            .collect()
+    }
+
+    pub fn try_into_value<T>(&self) -> Result<T, DbError>
+    where
+        T: TryFrom<DbValue, Error = DbError>,
+    {
+        self.value()?.clone().try_into()
+    }
+
+    pub fn try_into_vec<T>(&self) -> Result<Vec<T>, DbError>
+    where
+        T: for<'de> Deserialize<'de>,
+    {
+        self.rows.iter().map(|row| row.try_into()).collect()
+    }
+}
+
+impl TryInto<String> for DbRows {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<String, Self::Error> {
+        Ok(self.value()?.to_string())
+    }
+}
+
+impl TryInto<u64> for DbRows {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<u64, Self::Error> {
+        Ok(self.value()?.try_into()?)
+    }
+}
+
+impl TryInto<i32> for DbRows {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<i32, Self::Error> {
+        Ok(self.value()?.try_into()?)
+    }
+}
+
+impl TryInto<i64> for DbRows {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<i64, Self::Error> {
+        Ok(self.value()?.try_into()?)
+    }
+}
+
+impl TryInto<f64> for DbRows {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<f64, Self::Error> {
+        Ok(self.value()?.try_into()?)
+    }
+}
+
+// impl TryFrom<DbRows> for f64 {
+//     type Error = DbError;
+
+//     fn try_from(value: DbRows) -> Result<Self, Self::Error> {
+//         value.value()?.try_into()
+//     }
+// }
+
+// impl<T: TryFrom<DbValue, Error = DbError>> TryInto<T> for DbRows {
+//     type Error = DbError;
+
+//     fn try_into(self) -> Result<T, DbError> {
+//         self.value()?.clone().try_into()
+//     }
+// }
+
 /// A row of database values indexed by column name.
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(transparent)] // See https://serde.rs/container-attrs.html#transparent
 pub struct DbRow {
     pub map: IndexMap<String, DbValue>,
@@ -882,6 +1009,36 @@ impl DbRow {
 
     pub fn get(&self, key: &str) -> Option<DbValue> {
         self.map.get(key).cloned()
+    }
+
+    pub fn remove_nulls(mut self) -> Self {
+        self.map = self
+            .map
+            .into_iter()
+            .filter(|(_key, value)| !value.is_null())
+            .collect();
+        self
+    }
+
+    pub fn try_into<T>(&self) -> Result<T, DbError>
+    where
+        T: for<'de> Deserialize<'de>,
+    {
+        let mut deserializer = crate::serde::DbRowDeserializer::from_db_row(self);
+        // let t =
+        //     T::deserialize(&mut deserializer).map_err(|err| DbError::SerdeError(err.to_string()));
+        let t = T::deserialize(&mut deserializer)
+            .map_err(|err| DbError::SerdeError(format!("{err} while deserializing {self:?}")));
+        t
+    }
+}
+
+impl Into<JsonRow> for DbRow {
+    fn into(self) -> JsonRow {
+        self.map
+            .into_iter()
+            .map(|(key, value)| (key, value.into()))
+            .collect()
     }
 }
 
@@ -963,41 +1120,6 @@ impl IntoDbRows for &Vec<JsonRow> {
     }
 }
 
-/// Enables conversion from a vector of [DbRow]s into something.
-pub trait FromDbRows {
-    fn from(rows: Vec<DbRow>) -> Self;
-}
-
-impl FromDbRows for Vec<StringRow> {
-    fn from(rows: Vec<DbRow>) -> Self {
-        rows.iter()
-            .map(|row| {
-                row.iter()
-                    .map(|(key, value)| (key.clone(), value.into()))
-                    .collect()
-            })
-            .collect()
-    }
-}
-
-impl FromDbRows for Vec<JsonRow> {
-    fn from(rows: Vec<DbRow>) -> Self {
-        rows.into_iter()
-            .map(|row| {
-                row.into_iter()
-                    .map(|(key, val)| (key, val.into()))
-                    .collect()
-            })
-            .collect::<Vec<_>>()
-    }
-}
-
-impl FromDbRows for Vec<DbRow> {
-    fn from(rows: Vec<DbRow>) -> Self {
-        rows
-    }
-}
-
 /// Enables conversion from something into a [DbRow]
 pub trait IntoDbRow {
     fn into_db_row(self) -> DbRow;
@@ -1012,25 +1134,6 @@ impl IntoDbRow for DbRow {
 impl IntoDbRow for JsonRow {
     fn into_db_row(self) -> DbRow {
         self.into_iter()
-            .map(|(key, val)| (key, val.into()))
-            .collect()
-    }
-}
-
-/// Enables conversion from a [DbRow] into something.
-pub trait FromDbRow {
-    fn from(row: DbRow) -> Self;
-}
-
-impl FromDbRow for DbRow {
-    fn from(row: DbRow) -> Self {
-        row
-    }
-}
-
-impl FromDbRow for JsonRow {
-    fn from(row: DbRow) -> Self {
-        row.into_iter()
             .map(|(key, val)| (key, val.into()))
             .collect()
     }

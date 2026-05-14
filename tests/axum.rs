@@ -10,8 +10,10 @@ use tower_service::Service;
 
 async fn get_root(State(pool): State<Arc<impl DbQuery + Sync>>) -> impl IntoResponse {
     let value: String = pool
-        .query_value("SELECT value FROM test LIMIT 1", ())
+        .query("SELECT value FROM test LIMIT 1", ())
         .await
+        .unwrap()
+        .value()
         .unwrap()
         .into();
     Html(value)
@@ -40,12 +42,10 @@ async fn run_axum(url: &str) {
     .await
     .unwrap();
 
-    let _: Vec<DbRow> = pool
-        .cache(&["test"], "SELECT 1 FROM test", ())
+    pool.cache(&["test"], "SELECT 1 FROM test", ())
         .await
         .unwrap();
-    let _: Vec<DbRow> = pool
-        .cache(&["test"], "SELECT 1 FROM test", ())
+    pool.cache(&["test"], "SELECT 1 FROM test", ())
         .await
         .unwrap();
 

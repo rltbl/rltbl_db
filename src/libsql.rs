@@ -3,7 +3,7 @@
 use crate::{
     core::{CachingStrategy, DbError, DbQuery},
     db_kind::{DbKind, MAX_PARAMS_SQLITE},
-    db_value::{DbParams, DbRow, DbValue, FromDbRows, IntoDbParams, IntoDbRows},
+    db_value::{DbParams, DbRow, DbRows, DbValue, IntoDbParams, IntoDbRows},
     shared::{EditType, edit},
 };
 use deadpool_libsql::{
@@ -136,12 +136,8 @@ impl DbQuery for LibSQLPool {
         }
     }
 
-    /// Implements [DbQuery::query_no_cache()] for SQLite.
-    async fn query_no_cache<T: FromDbRows>(
-        &self,
-        sql: &str,
-        params: impl IntoDbParams + Send,
-    ) -> Result<T, DbError> {
+    /// Implements [DbQuery::query()] for SQLite.
+    async fn query(&self, sql: &str, params: impl IntoDbParams + Send) -> Result<DbRows, DbError> {
         let conn = self
             .pool
             .get()
@@ -173,7 +169,10 @@ impl DbQuery for LibSQLPool {
             db_rows.push(db_row);
         }
 
-        Ok(FromDbRows::from(db_rows))
+        if self.get_cache_aware_query() {
+            self.clear_cache_for_affected_tables(sql).await?;
+        }
+        Ok(DbRows { rows: db_rows })
     }
 
     /// Implements [DbQuery::insert()] for SQLite.
@@ -183,7 +182,7 @@ impl DbQuery for LibSQLPool {
         columns: &[&str],
         rows: impl IntoDbRows,
     ) -> Result<(), DbError> {
-        let _: Vec<DbRow> = edit(
+        let _: DbRows = edit(
             self,
             &EditType::Insert,
             &MAX_PARAMS_SQLITE,
@@ -198,13 +197,13 @@ impl DbQuery for LibSQLPool {
     }
 
     /// Implements [DbQuery::insert_returning()] for SQLite.
-    async fn insert_returning<T: FromDbRows>(
+    async fn insert_returning(
         &self,
         table: &str,
         columns: &[&str],
         rows: impl IntoDbRows,
         returning: &[&str],
-    ) -> Result<T, DbError> {
+    ) -> Result<DbRows, DbError> {
         edit(
             self,
             &EditType::Insert,
@@ -225,7 +224,7 @@ impl DbQuery for LibSQLPool {
         columns: &[&str],
         rows: impl IntoDbRows,
     ) -> Result<(), DbError> {
-        let _: Vec<DbRow> = edit(
+        let _: DbRows = edit(
             self,
             &EditType::Update,
             &MAX_PARAMS_SQLITE,
@@ -240,13 +239,13 @@ impl DbQuery for LibSQLPool {
     }
 
     /// Implements [DbQuery::update_returning()] for SQLite.
-    async fn update_returning<T: FromDbRows>(
+    async fn update_returning(
         &self,
         table: &str,
         columns: &[&str],
         rows: impl IntoDbRows,
         returning: &[&str],
-    ) -> Result<T, DbError> {
+    ) -> Result<DbRows, DbError> {
         edit(
             self,
             &EditType::Update,
@@ -267,7 +266,7 @@ impl DbQuery for LibSQLPool {
         columns: &[&str],
         rows: impl IntoDbRows,
     ) -> Result<(), DbError> {
-        let _: Vec<DbRow> = edit(
+        let _: DbRows = edit(
             self,
             &EditType::Upsert,
             &MAX_PARAMS_SQLITE,
@@ -282,13 +281,13 @@ impl DbQuery for LibSQLPool {
     }
 
     /// Implements [DbQuery::upsert_returning()] for SQLite.
-    async fn upsert_returning<T: FromDbRows>(
+    async fn upsert_returning(
         &self,
         table: &str,
         columns: &[&str],
         rows: impl IntoDbRows,
         returning: &[&str],
-    ) -> Result<T, DbError> {
+    ) -> Result<DbRows, DbError> {
         edit(
             self,
             &EditType::Upsert,
@@ -334,19 +333,19 @@ mod tests {
         .unwrap();
 
         // Test aggregate:
-        let rows: Vec<DbRow> = pool
+        let rows: DbRows = pool
             .query("SELECT MAX(int_value) FROM test_table_indirect", ())
             .await
             .unwrap();
         assert_eq!(
-            rows,
+            rows.rows,
             [db_row! {
                 "MAX(int_value)" => 1_i64,
             }]
         );
 
         // Test alias:
-        let rows: Vec<DbRow> = pool
+        let rows: DbRows = pool
             .query(
                 "SELECT bool_value AS bool_value_alias FROM test_table_indirect",
                 (),
@@ -354,14 +353,14 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            rows,
+            rows.rows,
             [db_row! {
                 "bool_value_alias" => 1_i64,
             }]
         );
 
         // Test aggregate with alias:
-        let rows: Vec<DbRow> = pool
+        let rows: DbRows = pool
             .query(
                 "SELECT MAX(int_value) AS max_int_value FROM test_table_indirect",
                 (),
@@ -370,34 +369,34 @@ mod tests {
             .unwrap();
         // Note that the alias is not shown in the results:
         assert_eq!(
-            rows,
+            rows.rows,
             [db_row! {
                 "max_int_value" => 1_i64,
             }]
         );
 
         // Test non-aggregate function:
-        let rows: Vec<DbRow> = pool
+        let rows: DbRows = pool
             .query(
                 "SELECT CAST(int_value AS TEXT) FROM test_table_indirect",
                 (),
             )
             .await
             .unwrap();
-        assert_eq!(rows, [db_row! {"CAST(int_value AS TEXT)" => "1",}]);
+        assert_eq!(rows.rows, [db_row! {"CAST(int_value AS TEXT)" => "1",}]);
 
         // Test non-aggregate function with alias:
-        let rows: Vec<DbRow> = pool
+        let rows: DbRows = pool
             .query(
                 "SELECT CAST(int_value AS TEXT) AS int_value_cast FROM test_table_indirect",
                 (),
             )
             .await
             .unwrap();
-        assert_eq!(rows, [db_row! {"int_value_cast" => "1",}]);
+        assert_eq!(rows.rows, [db_row! {"int_value_cast" => "1",}]);
 
         // Test functions over booleans:
-        let rows: Vec<DbRow> = pool
+        let rows: DbRows = pool
             .query("SELECT MAX(bool_value) FROM test_table_indirect", ())
             .await
             .unwrap();
@@ -410,7 +409,7 @@ mod tests {
         //          name and argument types. You might need to add explicit type casts.
         // So, perhaps, this is tu quoque an argument that the behaviour below is acceptable for
         // sqlite.
-        assert_eq!(rows, [db_row! {"MAX(bool_value)" => 1_i64,}]);
+        assert_eq!(rows.rows, [db_row! {"MAX(bool_value)" => 1_i64,}]);
     }
 
     /// This test is resource intensive and therefore ignored by default. It verifies that

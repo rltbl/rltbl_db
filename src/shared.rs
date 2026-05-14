@@ -1,7 +1,7 @@
 use crate::{
     core::{DbError, DbQuery},
     db_kind::DbKind,
-    db_value::{DbRow, DbValue, FromDbRows, IntoDbRows},
+    db_value::{DbRow, DbRows, DbValue, IntoDbRows},
     parse::validate_table_name,
 };
 use std::fmt::Display;
@@ -129,7 +129,7 @@ ON CONFLICT ({constraint_clause}) DO UPDATE SET {set_clause}{returning_clause}"#
 /// clause (set with_returning = false to turn this off). When generating the SQL statements
 /// used to edit the table, do not use more than max_params bound parameters at a time. If more
 /// than max_params are required, multiple SQL statements will be generated.
-pub(crate) async fn edit<T: FromDbRows>(
+pub(crate) async fn edit(
     pool: &(impl DbQuery + Sync),
     edit_type: &EditType,
     max_params: &usize,
@@ -138,7 +138,7 @@ pub(crate) async fn edit<T: FromDbRows>(
     rows: impl IntoDbRows,
     with_returning: bool,
     returning: &[&str],
-) -> Result<T, DbError> {
+) -> Result<DbRows, DbError> {
     // Begin by verifying that the given table name is valid, which has the side-effect of
     // removing any enclosing double-quotes:
     let table = validate_table_name(table)?;
@@ -253,9 +253,7 @@ pub(crate) async fn edit<T: FromDbRows>(
                     .as_slice(),
             ),
         };
-        let rows: Vec<DbRow> = pool
-            .query_no_cache(&sql, params_to_be_bound.clone())
-            .await?;
+        let rows: Vec<DbRow> = pool.query(&sql, params_to_be_bound.clone()).await?.rows;
         lines_to_bind.clear();
         params_to_be_bound.clear();
         *param_idx = 0;
@@ -324,5 +322,7 @@ pub(crate) async fn edit<T: FromDbRows>(
     // Delete dirty entries from the cache in accordance with our caching strategy:
     pool.clear_cache_for_edited_tables(&[&table]).await?;
 
-    Ok(FromDbRows::from(rows_to_return))
+    Ok(DbRows {
+        rows: rows_to_return,
+    })
 }
