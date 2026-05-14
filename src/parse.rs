@@ -3,7 +3,7 @@
 use crate::core::{DbError, QUERY_CACHE_TABLE, TABLE_CACHE_TABLE};
 use lazy_static::lazy_static;
 use regex::Regex;
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 use tree_sitter::{Node, Parser};
 use tree_sitter_sequel::LANGUAGE as SQL_LANGUAGE;
 
@@ -145,7 +145,7 @@ pub fn get_view_tables(view_sql: &str) -> Result<Vec<String>, DbError> {
 }
 
 /// TODO: Add docstring.
-pub fn get_accessed_tables(sql: &str) -> Result<HashSet<String>, DbError> {
+pub fn get_accessed_tables(sql: &str) -> Result<BTreeSet<String>, DbError> {
     // Instantiate the parser and read in the given sql string:
     let mut parser = Parser::new();
     parser
@@ -185,7 +185,7 @@ pub fn get_accessed_tables(sql: &str) -> Result<HashSet<String>, DbError> {
     };
 
     // Determine the tables that will be modified:
-    let mut read_tables = HashSet::new();
+    let mut read_tables = BTreeSet::new();
     for statement in &statements {
         validate_node(&statement, sql)?;
         for instruction in statement.children(&mut tree.walk()) {
@@ -234,7 +234,7 @@ pub fn get_accessed_tables(sql: &str) -> Result<HashSet<String>, DbError> {
 /// table-modifying CTEs are supported in principle by PostgreSQL (see
 /// <https://www.postgresql.org/docs/current/queries-with.html#QUERIES-WITH-MODIFYING>) but
 /// seemingly not by SQLite (see <https://sqlite.org/lang_with.html>).
-pub fn get_affected_tables(sql: &str) -> Result<(HashSet<String>, HashSet<String>), DbError> {
+pub fn get_affected_tables(sql: &str) -> Result<(BTreeSet<String>, BTreeSet<String>), DbError> {
     // Instantiate the parser and read in the given sql string:
     let mut parser = Parser::new();
     parser
@@ -274,8 +274,8 @@ pub fn get_affected_tables(sql: &str) -> Result<(HashSet<String>, HashSet<String
     };
 
     // Determine the tables that will be modified:
-    let mut edited_tables = HashSet::new();
-    let mut dropped_tables = HashSet::new();
+    let mut edited_tables = BTreeSet::new();
+    let mut dropped_tables = BTreeSet::new();
     for statement in &statements {
         validate_node(&statement, sql)?;
         for instruction in statement.children(&mut tree.walk()) {
@@ -457,7 +457,7 @@ pub fn get_affected_tables(sql: &str) -> Result<(HashSet<String>, HashSet<String
     let edited_tables = edited_tables
         .into_iter()
         .filter(|table| ![QUERY_CACHE_TABLE, TABLE_CACHE_TABLE].contains(&table.as_str()))
-        .collect::<HashSet<_>>();
+        .collect::<BTreeSet<_>>();
 
     Ok((edited_tables.clone(), dropped_tables.clone()))
 }
@@ -532,8 +532,7 @@ mod tests {
                WHERE "alpha".foo = "beta".foo""#
         ))
         .unwrap();
-        let mut read_tables: Vec<_> = read_tables.into_iter().collect();
-        read_tables.sort();
+        let read_tables: Vec<_> = read_tables.into_iter().collect();
         assert_eq!(read_tables, ["alpha", "beta"]);
 
         let (edited_tables, dropped_tables) =
@@ -603,21 +602,18 @@ mod tests {
 
         let (edited_tables, dropped_tables) =
             get_affected_tables("TRUNCATE TABLE mu, nu CASCADE").unwrap();
-        let mut edited_tables: Vec<_> = edited_tables.into_iter().collect();
-        edited_tables.sort();
+        let edited_tables: Vec<_> = edited_tables.into_iter().collect();
         assert_eq!(edited_tables, ["mu", "nu"]);
         assert_eq!(dropped_tables, [].into());
 
         let (edited_tables, dropped_tables) =
             get_affected_tables("ALTER TABLE phi ADD COLUMN varphi INT").unwrap();
-        let mut edited_tables: Vec<_> = edited_tables.into_iter().collect();
-        edited_tables.sort();
+        let edited_tables: Vec<_> = edited_tables.into_iter().collect();
         assert_eq!(edited_tables, ["phi"]);
         assert_eq!(dropped_tables, [].into());
 
         let (edited_tables, dropped_tables) = get_affected_tables("DROP VIEW theta").unwrap();
-        let mut dropped_tables: Vec<_> = dropped_tables.into_iter().collect();
-        dropped_tables.sort();
+        let dropped_tables: Vec<_> = dropped_tables.into_iter().collect();
         assert_eq!(edited_tables, [].into());
         assert_eq!(dropped_tables, ["theta"]);
 
@@ -680,10 +676,8 @@ mod tests {
                      COMMIT"#;
 
         let (edited_tables, dropped_tables) = get_affected_tables(&sql).unwrap();
-        let mut edited_tables: Vec<_> = edited_tables.into_iter().collect();
-        let mut dropped_tables: Vec<_> = dropped_tables.into_iter().collect();
-        edited_tables.sort();
-        dropped_tables.sort();
+        let edited_tables: Vec<_> = edited_tables.into_iter().collect();
+        let dropped_tables: Vec<_> = dropped_tables.into_iter().collect();
         assert_eq!(
             edited_tables,
             ["alpha", "delta", "gamma", "lambda", "phi", "psi",]

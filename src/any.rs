@@ -2124,13 +2124,13 @@ mod tests {
     async fn test_caching_performance() {
         let runs = 2500;
         let edit_rate = 25;
-        let timeout = 10000; // TODO: Change this back to a lower value (~45s) later.
+        let fail_after = 100;
         #[cfg(feature = "rusqlite")]
-        perform_caching(":memory:", runs, edit_rate, timeout).await;
+        perform_caching(":memory:", runs, edit_rate, fail_after).await;
         #[cfg(feature = "tokio-postgres")]
-        perform_caching("postgresql:///rltbl_db", runs, edit_rate, timeout).await;
+        perform_caching("postgresql:///rltbl_db", runs, edit_rate, fail_after).await;
         #[cfg(feature = "libsql")]
-        perform_caching(":memory:", runs, edit_rate, timeout).await;
+        perform_caching(":memory:", runs, edit_rate, fail_after).await;
     }
 
     // Performs the caching performance test on the database located at the given url, using
@@ -2160,23 +2160,38 @@ mod tests {
             }
         );
         let mut times = BTreeMap::new();
-        // TODO: Remove the underscore from the start of elapsed_none.
-        let mut _elapsed_none: u64 = 0;
+        let mut elapsed_none: u64 = 0;
+        let mut actual_edits_none: usize = 0;
         for strategy in &all_strategies {
             println!("{this_test} Using strategy: {strategy}.");
             pool.set_caching_strategy(&strategy);
-            let elapsed: u64 = perform_caching_detail(&pool, runs, fail_after, edit_rate).await;
+            let fail_after = match strategy {
+                CachingStrategy::None => 0,
+                _ => fail_after,
+            };
+            let (elapsed, actual_edits) =
+                perform_caching_detail(&pool, runs, fail_after, edit_rate).await;
             times.insert(format!("{strategy}"), elapsed);
             if *strategy == CachingStrategy::None {
-                _elapsed_none = elapsed;
+                elapsed_none = elapsed;
+                actual_edits_none = actual_edits;
             } else {
                 // The elapsed time for strategy 'none' should always be greater than for the
                 // other caching strategies. Note that it is assumed that the None strategy
                 // is always tested before any of the other strategies (otherwise this assertion
                 // is certain to fail).
                 //
-                // TODO: Re-enable this assert later.
-                // assert!(elapsed_none > elapsed);
+                if actual_edits <= actual_edits_none {
+                    assert!(elapsed_none > elapsed);
+                } else {
+                    if elapsed >= elapsed_none {
+                        println!(
+                            "WARNING: elapsed time for {strategy} took longer or just as long \
+                             as none, but there were more edits for {strategy}: \
+                             {actual_edits} vs. {actual_edits_none}."
+                        );
+                    }
+                }
             }
         }
 
@@ -2191,7 +2206,7 @@ mod tests {
         runs: usize,
         fail_after: usize,
         edit_rate: usize,
-    ) -> u64 {
+    ) -> (u64, usize) {
         fn random_between(min: usize, max: usize, seed: &mut i64) -> usize {
             let between = Uniform::try_from(min..max).unwrap();
             let mut rng = if *seed < 0 {
@@ -2230,7 +2245,7 @@ mod tests {
             // Add a few tens of thousands of values to the table:
             let mut values = vec![];
             for i in 0..5 {
-                for j in 0..random_between(20000, 30000, &mut -1) {
+                for j in 0..random_between(34000, 35000, &mut -1) {
                     values.push(format!("({i}, {j})"));
                 }
             }
@@ -2256,7 +2271,7 @@ mod tests {
             .await
             .unwrap();
             elapsed = now.elapsed().as_secs();
-            if elapsed > fail_after as u64 {
+            if fail_after != 0 && elapsed > fail_after as u64 {
                 panic!("Taking longer than {fail_after}s. Timing out.");
             }
             if edit_rate != 0 && random_between(0, edit_rate, &mut -1) == 0 {
@@ -2283,7 +2298,7 @@ mod tests {
         for table in tables_to_choose_from.iter() {
             pool.drop_table(table).await.unwrap();
         }
-        elapsed
+        (elapsed, actual_edits)
     }
 
     #[tokio::test]
