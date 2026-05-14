@@ -1,3 +1,5 @@
+//! Code specific to supported database kinds.
+
 use crate::{
     core::{DbError, QUERY_CACHE_TABLE, TABLE_CACHE_TABLE},
     db_value::DbValue,
@@ -6,7 +8,7 @@ use crate::{
 };
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
-use std::fmt::Display;
+use std::{fmt::Display, str::FromStr};
 
 /// The [maximum number of parameters](https://www.sqlite.org/limits.html#max_variable_number)
 /// that can be bound to a SQLite query
@@ -35,10 +37,10 @@ impl Display for DbKind {
 }
 
 impl DbKind {
-    // Although SQLite allows '$' as a prefix, it is required to use '?' to represent integer
-    // literals (see https://sqlite.org/c3ref/bind_blob.html) which is what we are using here.
     /// Get the prefix to use for parameters to queries that need to be bound.
     pub fn param_prefix(&self) -> &str {
+        // Although SQLite allows '$' as a prefix, it is required to use '?' to represent integer
+        // literals (see https://sqlite.org/c3ref/bind_blob.html) which is what we are using here.
         match self {
             DbKind::SQLite => "?",
             DbKind::PostgreSQL => "$",
@@ -53,13 +55,13 @@ impl DbKind {
         }
     }
 
-    /// Given a SQL type for this database and a string, parse the string into the right
+    /// Given a SQL type for this database and a string, convert the string into the right
     /// DbValue.
-    pub fn parse(&self, sql_type: &str, value: &str) -> Result<DbValue, DbError> {
-        fn parse_sqlite(sql_type: &str, value: &str) -> Result<DbValue, DbError> {
+    pub fn to_db_value(&self, sql_type: &str, value: &str) -> Result<DbValue, DbError> {
+        fn to_db_value_sqlite(sql_type: &str, value: &str) -> Result<DbValue, DbError> {
             let err = || {
-                Err(DbError::ParseError(format!(
-                    "Could not parse '{sql_type}' from '{value}'"
+                Err(DbError::InputError(format!(
+                    "Error converting '{value}' to a '{sql_type}'"
                 )))
             };
             match sql_type.to_lowercase().as_str() {
@@ -78,24 +80,34 @@ impl DbKind {
                     Ok(float) => Ok(DbValue::BigReal(float)),
                     Err(_) => err(),
                 },
+                "json" => {
+                    let json_value = serde_json::from_str(value)
+                        .map_err(|err| DbError::SerdeError(err.to_string()))?;
+                    Ok(DbValue::Json(json_value))
+                }
                 _ => Err(DbError::DatatypeError(format!(
                     "Unhandled SQL type: {sql_type}"
                 ))),
             }
         }
 
-        fn parse_postgresql(sql_type: &str, value: &str) -> Result<DbValue, DbError> {
+        fn to_db_value_postgresql(sql_type: &str, value: &str) -> Result<DbValue, DbError> {
             let err = || {
-                Err(DbError::ParseError(format!(
-                    "Could not parse '{sql_type}' from '{value}'"
+                Err(DbError::InputError(format!(
+                    "Error converting '{value}' to a '{sql_type}'"
                 )))
             };
             match sql_type.to_lowercase().as_str() {
                 "text" => Ok(DbValue::Text(value.to_string())),
-                "bool" | "boolean" => match value.to_lowercase().as_str() {
-                    // TODO: improve this
-                    "true" | "1" => Ok(DbValue::Boolean(true)),
-                    _ => Ok(DbValue::Boolean(false)),
+                "bool" | "boolean" => match bool::from_str(&value.to_lowercase()) {
+                    Ok(flag) => Ok(DbValue::Boolean(flag)),
+                    Err(_) => match value.parse::<u64>() {
+                        Ok(num) if num == 0 => Ok(DbValue::Boolean(false)),
+                        Ok(num) if num == 1 => Ok(DbValue::Boolean(true)),
+                        _ => Err(DbError::InputError(format!(
+                            "Can't parse as boolean: {value}"
+                        ))),
+                    },
                 },
                 "smallint" | "smallinteger" => match value.parse::<i16>() {
                     Ok(int) => Ok(DbValue::SmallInteger(int)),
@@ -124,6 +136,11 @@ impl DbKind {
                     )),
                     Err(_) => err(),
                 },
+                "json" | "jsonb" => {
+                    let json_value = serde_json::from_str(value)
+                        .map_err(|err| DbError::SerdeError(err.to_string()))?;
+                    Ok(DbValue::Json(json_value))
+                }
                 _ => Err(DbError::DatatypeError(format!(
                     "Unhandled SQL type: {sql_type}"
                 ))),
@@ -131,12 +148,12 @@ impl DbKind {
         }
 
         match self {
-            DbKind::SQLite => parse_sqlite(sql_type, value),
-            DbKind::PostgreSQL => parse_postgresql(sql_type, value),
+            DbKind::SQLite => to_db_value_sqlite(sql_type, value),
+            DbKind::PostgreSQL => to_db_value_postgresql(sql_type, value),
         }
     }
 
-    /// Generate the SQL and parameters needed to query the database's metadata for names and
+    /// Generate the SQL and parameters needed to query the database's metadata for the names and
     /// types of the columns of the given table.
     pub fn columns_sql(&self, table: &str) -> (String, [DbValue; 1]) {
         match self {
@@ -301,7 +318,7 @@ impl DbKind {
         }
     }
 
-    /// Generate the SQL needed to create the cache table.
+    /// Generate the SQL needed to create the query cache.
     pub fn create_query_cache_table_sql(&self) -> String {
         let get_epoch_now = self.get_epoch_time_sql();
         format!(
@@ -316,7 +333,7 @@ impl DbKind {
         )
     }
 
-    /// Generate the SQL needed to create a table table, which is needed for caching.
+    /// Generate the SQL needed to create the table cache.
     pub fn create_table_cache_table_sql(&self) -> String {
         let get_epoch_now = self.get_epoch_time_sql();
         format!(
@@ -327,7 +344,7 @@ impl DbKind {
         )
     }
 
-    /// Generate the SQL statements needed to create the caching triggers for the given table.
+    /// Generate the SQL statements needed to create caching triggers for the given table.
     pub fn create_table_caching_triggers_for_table_sql(
         &self,
         table: &str,
@@ -341,8 +358,8 @@ impl DbKind {
         self.wrap_trigger_content(&table, &trigger_basename, &trigger_content)
     }
 
-    /// Generate the SQL statements needed to create caching triggers for the given table which
-    /// is a source table for the given view.
+    /// Generate the SQL statements needed to create caching triggers for the given table, which
+    /// is assumed to be a source table for the given view.
     pub fn create_table_caching_triggers_for_view_sql(
         &self,
         table: &str,
@@ -371,7 +388,7 @@ impl DbKind {
     }
 
     /// Generate the SQL statements to create a caching function and triggers with the given
-    /// trigger content for the given table using the given trigger and function name.
+    /// trigger content for the given table using the given trigger basename.
     fn wrap_trigger_content(
         &self,
         table: &str,

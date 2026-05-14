@@ -1,9 +1,9 @@
-//! rusqlite implementation for rltbl_db.
+//! [rusqlite](<https://crates.io/crates/deadpool-sqlite>) implementation for rltbl_db.
 
 use crate::{
     core::{CachingStrategy, DbError, DbQuery},
     db_kind::{DbKind, MAX_PARAMS_SQLITE},
-    db_value::{DbParams, DbRow, DbValue, FromDbRows, IntoDbParams, IntoDbRows},
+    db_value::{DbParams, DbRow, DbValue, FromDbRows, IntoDbParams, IntoDbRows, JsonValue},
     shared::{EditType, edit},
 };
 use deadpool_sqlite::{
@@ -103,6 +103,23 @@ fn query_prepared(
                             ))
                         })?;
                     }
+                    DbValue::Json(value) => {
+                        let value = match value {
+                            JsonValue::String(value) => value.to_string(),
+                            _ => value.to_string(),
+                        };
+                        stmt.raw_bind_parameter(i + 1, value).map_err(|err| {
+                            DbError::InputError(format!(
+                                "Error binding parameter '{param:?}': {err}"
+                            ))
+                        })?;
+                    }
+                    DbValue::Other(type_name, bytes, string_opt) => {
+                        return Err(DbError::InputError(format!(
+                            "Not supported for SQLite: \
+                             DbValue::Other({type_name}, {bytes:?}, {string_opt:?})"
+                        )));
+                    }
                 };
             }
         }
@@ -176,6 +193,7 @@ pub struct RusqlitePool {
     /// When set to true, SQL statements sent to the [DbQuery::query()] and [DbQuery::execute()]
     /// functions will be parsed and if they will result in tables being edited and/or dropped,
     /// the cache will be maintained in accordance with the given [CachingStrategy].
+    /// For further information, see [DbQuery::set_cache_aware_query()].
     cache_aware_query: bool,
 }
 
@@ -220,7 +238,7 @@ impl DbQuery for RusqlitePool {
         self.cache_aware_query
     }
 
-    /// Implements [DbQuery::execute_batch()] for PostgreSQL
+    /// Implements [DbQuery::execute_batch()] for SQLite.
     async fn execute_batch(&self, sql: &str) -> Result<(), DbError> {
         let conn = self
             .pool
@@ -247,8 +265,8 @@ impl DbQuery for RusqlitePool {
         }
     }
 
-    /// Implements [DbQuery::query_no_cache()] for SQLite.
-    async fn query_no_cache<T: FromDbRows>(
+    /// Implements [DbQuery::query_no_cache_clean()] for SQLite.
+    async fn query_no_cache_clean<T: FromDbRows>(
         &self,
         sql: &str,
         params: impl IntoDbParams + Send,

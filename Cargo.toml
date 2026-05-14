@@ -10,7 +10,8 @@ readme = "README.md"
 
 [dependencies]
 async-trait = "0.1.89"
-deadpool-postgres = { version = "0.14.1", features = ["rt_tokio_1"], optional = true }
+bytes = "1.11"
+deadpool-postgres = { version = "0.14.1", features = ["rt_tokio_1", "serde"], optional = true }
 deadpool-sqlite = { version = "0.12.1", features = ["bundled"], optional = true }
 deadpool-libsql = { version = "0.1.0", optional = true }
 indexmap = { version = "2.12.0", features = ["serde"] }
@@ -20,6 +21,7 @@ regex = "1.12.2"
 rust_decimal = { version = "1.39.0", features = ["db-tokio-postgres", "macros"], optional = true }
 serde = { version = "1.0.226", features = ["derive"] }
 serde_json = { version = "1.0.145", features = ["preserve_order"] }
+tokio-postgres = { version = "0.7", features = ["with-serde_json-1"], optional = true }
 tree-sitter = "0.26.3"
 tree-sitter-sequel = "0.3.11"
 
@@ -33,5 +35,5 @@ tower-service = "0.3.3"
 [features]
 default = ["rusqlite", "tokio-postgres"]
 rusqlite = ["dep:deadpool-sqlite", "rust_decimal/macros"]
-tokio-postgres = ["dep:deadpool-postgres", "rust_decimal/macros"]
+tokio-postgres = ["dep:deadpool-postgres", "dep:tokio-postgres", "rust_decimal/macros"]
 libsql = ["dep:deadpool-libsql", "rust_decimal/macros"]

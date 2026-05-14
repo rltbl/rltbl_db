@@ -1,9 +1,9 @@
-//! libsql implementation for rltbl_db.
+//! [libsql](<https://crates.io/crates/deadpool-libsql>) implementation for rltbl_db.
 
 use crate::{
     core::{CachingStrategy, DbError, DbQuery},
     db_kind::{DbKind, MAX_PARAMS_SQLITE},
-    db_value::{DbParams, DbRow, DbValue, FromDbRows, IntoDbParams, IntoDbRows},
+    db_value::{DbParams, DbRow, DbValue, FromDbRows, IntoDbParams, IntoDbRows, JsonValue},
     shared::{EditType, edit},
 };
 use deadpool_libsql::{
@@ -58,6 +58,19 @@ impl TryFrom<DbParams> for Vec<Value> {
                             values.push(Value::Real(pvalue.into()))
                         }
                         DbValue::Text(pvalue) => values.push(Value::Text(pvalue)),
+                        DbValue::Json(value) => {
+                            let value = match value {
+                                JsonValue::String(value) => value.to_string(),
+                                _ => value.to_string(),
+                            };
+                            values.push(Value::Text(value))
+                        }
+                        DbValue::Other(type_name, bytes, string_opt) => {
+                            return Err(DbError::InputError(format!(
+                                "Not supported for SQLite: \
+                                 DbValue::Other({type_name}, {bytes:?}, {string_opt:?})"
+                            )));
+                        }
                     };
                 }
                 Ok(values)
@@ -74,6 +87,7 @@ pub struct LibSQLPool {
     /// When set to true, SQL statements sent to the [DbQuery::query()] and [DbQuery::execute()]
     /// functions will be parsed and if they will result in tables being edited and/or dropped,
     /// the cache will be maintained in accordance with the given [CachingStrategy].
+    /// For further information, see [DbQuery::set_cache_aware_query()].
     cache_aware_query: bool,
 }
 
@@ -121,7 +135,7 @@ impl DbQuery for LibSQLPool {
         self.cache_aware_query
     }
 
-    /// Implements [DbQuery::execute_batch()] for PostgreSQL
+    /// Implements [DbQuery::execute_batch()] for SQLite
     async fn execute_batch(&self, sql: &str) -> Result<(), DbError> {
         let conn = self
             .pool
@@ -136,8 +150,8 @@ impl DbQuery for LibSQLPool {
         }
     }
 
-    /// Implements [DbQuery::query_no_cache()] for SQLite.
-    async fn query_no_cache<T: FromDbRows>(
+    /// Implements [DbQuery::query_no_cache_clean()] for SQLite.
+    async fn query_no_cache_clean<T: FromDbRows>(
         &self,
         sql: &str,
         params: impl IntoDbParams + Send,

@@ -1,3 +1,5 @@
+//! Code related to database values.
+
 use crate::core::DbError;
 use indexmap::{self, IndexMap};
 use rust_decimal::Decimal;
@@ -36,9 +38,16 @@ pub enum DbValue {
     Numeric(Decimal),
     /// Use with TEXT and VARCHAR column types or equivalent.
     Text(String),
+    /// Use with JSON or JSONB column types or equivalent.
+    Json(JsonValue),
+    /// Other types that are not explicitly supported, represented by the triple
+    /// (other type, raw representation, optional string representation)
+    Other(String, Vec<u8>, Option<String>),
 }
 
 impl DbValue {
+    // is_*() methods
+
     pub fn is_null(&self) -> bool {
         self.as_null().is_some()
     }
@@ -67,6 +76,18 @@ impl DbValue {
         self.as_u8().is_some()
     }
 
+    pub fn is_u16(&self) -> bool {
+        self.as_u16().is_some()
+    }
+
+    pub fn is_u32(&self) -> bool {
+        self.as_u32().is_some()
+    }
+
+    pub fn is_u64(&self) -> bool {
+        self.as_u64().is_some()
+    }
+
     pub fn is_f32(&self) -> bool {
         self.as_f32().is_some()
     }
@@ -82,6 +103,12 @@ impl DbValue {
     pub fn is_string(&self) -> bool {
         self.as_str().is_some()
     }
+
+    pub fn is_json(&self) -> bool {
+        self.as_json().is_some()
+    }
+
+    // as_*() methods
 
     pub fn as_null(&self) -> Option<()> {
         self.try_into().ok()
@@ -111,6 +138,18 @@ impl DbValue {
         self.try_into().ok()
     }
 
+    pub fn as_u16(&self) -> Option<u16> {
+        self.try_into().ok()
+    }
+
+    pub fn as_u32(&self) -> Option<u32> {
+        self.try_into().ok()
+    }
+
+    pub fn as_u64(&self) -> Option<u64> {
+        self.try_into().ok()
+    }
+
     pub fn as_f32(&self) -> Option<f32> {
         self.try_into().ok()
     }
@@ -124,7 +163,7 @@ impl DbValue {
     }
 
     /// Note that db_value.as_str() and db_value.to_string() differ in more than just their
-    /// return type. The latter will format db_value as a string regardless of its type.
+    /// return type. The latter will format a [DbValue] as a string regardless of its type.
     /// This method returns a string slice only if the underlying type is [DbValue::Text].
     pub fn as_str(&self) -> Option<&str> {
         match self {
@@ -133,16 +172,14 @@ impl DbValue {
         }
     }
 
-    pub fn as_u16(&self) -> Option<u16> {
-        self.try_into().ok()
-    }
-
-    pub fn as_u32(&self) -> Option<u32> {
-        self.try_into().ok()
-    }
-
-    pub fn as_u64(&self) -> Option<u64> {
-        self.try_into().ok()
+    /// Note that: db_value.as_json() gives a different result from into().
+    /// The latter will format a [DbValue] as a string regardless of its type.
+    /// The as_json() method returns a JsonValue only if the underlying type is [DbValue::Json].
+    pub fn as_json(&self) -> Option<JsonValue> {
+        match self {
+            DbValue::Json(value) => Some(value.clone()),
+            _ => None,
+        }
     }
 }
 
@@ -176,6 +213,8 @@ impl Hash for DbValue {
                 }
             }
             DbValue::Numeric(num) => num.hash(h),
+            DbValue::Json(value) => value.hash(h),
+            DbValue::Other(_, _, _) => format!("{self:?}").hash(h),
         }
     }
 }
@@ -187,7 +226,7 @@ impl Display for DbValue {
     }
 }
 
-// Implementations of attempted conversion of DbValues into various types:
+// Implementations of conversions of DbValues into various types:
 
 impl Into<JsonValue> for DbValue {
     fn into(self) -> JsonValue {
@@ -201,6 +240,8 @@ impl Into<JsonValue> for DbValue {
             DbValue::BigReal(value) => json!(value),
             DbValue::Numeric(value) => json!(value),
             DbValue::Text(value) => JsonValue::String(value),
+            DbValue::Json(value) => value,
+            DbValue::Other(_, _, _) => JsonValue::String(format!("{self:?}")),
         }
     }
 }
@@ -223,6 +264,10 @@ impl Into<String> for DbValue {
             DbValue::BigReal(number) => number.to_string(),
             DbValue::Numeric(decimal) => decimal.to_string(),
             DbValue::Text(string) => string.to_string(),
+            DbValue::Json(value) => value.to_string(),
+            DbValue::Other(_, _, _) => {
+                format!("{self:?}")
+            }
         }
     }
 }
@@ -584,7 +629,7 @@ impl TryInto<bool> for &DbValue {
     }
 }
 
-// Implementations of attempted conversions of various types into DbValues:
+// Implementations of conversions of various types into DbValues:
 
 impl From<&str> for DbValue {
     fn from(item: &str) -> Self {
@@ -725,8 +770,8 @@ impl From<JsonValue> for DbValue {
                 }
             }
             JsonValue::String(string) => Self::Text(string.to_string()),
-            JsonValue::Array(_) => Self::Text(item.to_string()),
-            JsonValue::Object(_) => Self::Text(item.to_string()),
+            JsonValue::Array(_) => Self::Json(item),
+            JsonValue::Object(_) => Self::Json(item),
         }
     }
 }
@@ -768,6 +813,8 @@ impl PartialEq for DbValue {
             }
             (DbValue::Numeric(a), DbValue::Numeric(b)) => a == b,
             (DbValue::Text(a), DbValue::Text(b)) => a == b,
+            (DbValue::Json(a), DbValue::Json(b)) => a == b,
+            (DbValue::Other(a, b, c), DbValue::Other(d, e, f)) => a == d && b == e && c == f,
             _ => false,
         }
     }
@@ -1042,8 +1089,29 @@ mod tests {
     use rust_decimal::dec;
     use std::collections::HashMap;
 
-    #[tokio::test]
-    async fn test_hashing() {
+    #[test]
+    fn test_json() {
+        // Test is_json(), as_json() methods:
+        let db_val = DbValue::Json(json!([]));
+        assert_eq!(db_val.is_json(), true);
+        assert_eq!(db_val.as_json(), Some(json!([])));
+
+        let db_val = DbValue::Text(json!([]).to_string());
+        assert_eq!(db_val.is_json(), false);
+        assert_eq!(db_val.as_json(), None);
+
+        // Test into() method:
+        let db_val = DbValue::Json(json!([]));
+        let json_val: JsonValue = db_val.into();
+        assert_eq!(json_val, json!([]));
+
+        let db_val = DbValue::Text(json!([]).to_string());
+        let json_val: JsonValue = db_val.into();
+        assert_eq!(json_val, JsonValue::String("[]".into()));
+    }
+
+    #[test]
+    fn test_hashing() {
         let mut test_map = HashMap::new();
         for (i, value) in [
             DbValue::Null,
@@ -1056,6 +1124,8 @@ mod tests {
             DbValue::BigReal(0.123f64),
             DbValue::BigReal(0.0f64),
             DbValue::Numeric(dec!(1)),
+            DbValue::Json(json!({"foo":1})),
+            DbValue::Other("bpchar".to_string(), vec![97], Some("a".to_string())),
         ]
         .iter()
         .enumerate()
