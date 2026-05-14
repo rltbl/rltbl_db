@@ -144,7 +144,9 @@ pub fn get_view_tables(view_sql: &str) -> Result<Vec<String>, DbError> {
     Ok(view_tables)
 }
 
-/// TODO: Add docstring.
+/// Parse the given string, representing a series of (semi-colon-separated) SQL commands,
+/// into their constituents and determine the tables and views that will be read from when
+/// the commands are executed, if any.
 pub fn get_accessed_tables(sql: &str) -> Result<BTreeSet<String>, DbError> {
     // Instantiate the parser and read in the given sql string:
     let mut parser = Parser::new();
@@ -224,7 +226,7 @@ pub fn get_accessed_tables(sql: &str) -> Result<BTreeSet<String>, DbError> {
 }
 
 /// Parse the given string, representing a series of (semi-colon-separated) SQL commands,
-/// into their constituents and determine the tables and views that will be accessed when
+/// into their constituents and determine the tables and views that will be affected when
 /// the commands are executed, if any. Three sets are returned. The first contains tables
 /// and views that are going to be edited (targets of commands like INSERT, UPDATE, DELETE,
 /// ALTER, and TRUNCATE), the second contains tables and views that are going to be dropped

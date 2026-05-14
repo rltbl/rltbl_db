@@ -965,15 +965,15 @@ impl DbRow {
         self.map.get(key).cloned()
     }
 
-    // pub fn try_into<T>(&self) -> Result<T, DbError>
-    // where
-    //     T: for<'de> Deserialize<'de>,
-    // {
-    //     let mut deserializer = crate::serde::DbRowDeserializer::from_db_row(self);
-    //     let t =
-    //         T::deserialize(&mut deserializer).map_err(|err| DbError::SerdeError(err.to_string()));
-    //     t
-    // }
+    pub fn try_into<T>(&self) -> Result<T, DbError>
+    where
+        T: for<'de> Deserialize<'de>,
+    {
+        let mut deserializer = crate::serde::DbRowDeserializer::from_db_row(self);
+        let t =
+            T::deserialize(&mut deserializer).map_err(|err| DbError::SerdeError(err.to_string()));
+        t
+    }
 }
 
 impl DbRows {
@@ -1005,21 +1005,23 @@ impl DbRows {
         Ok(value)
     }
 
-    // pub fn try_into_vec<T>(&self) -> Result<Vec<T>, DbError>
-    // where
-    //     T: for<'de> Deserialize<'de>,
-    // {
-    //     self.content.iter().map(|row| row.try_into()).collect()
-    // }
+    pub fn try_into_vec<T>(&self) -> Result<Vec<T>, DbError>
+    where
+        T: for<'de> Deserialize<'de>,
+    {
+        self.content.iter().map(|row| row.try_into()).collect()
+    }
 }
 
 impl TryInto<JsonValue> for DbRows {
     type Error = DbError;
 
     fn try_into(self) -> Result<JsonValue, Self::Error> {
-        // TODO: Note that this conversion is aggressive. Is this what we want, or do we
-        // want to call .as_json() instead here?
-        Ok(self.value()?.into())
+        let value = self.value()?;
+        match value.as_json() {
+            Some(json_value) => Ok(json_value),
+            None => Err(DbError::InputError(format!("Not a JSON value: {value}"))),
+        }
     }
 }
 

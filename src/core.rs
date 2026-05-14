@@ -649,14 +649,16 @@ pub trait DbQuery {
         }
     }
 
-    /// TODO: Add docstring here.
+    /// Execute the given SQL command with the given parameters, returning a vector of rows.
+    /// If the result of the command exists in the query cache for the given tables, get the
+    /// value from there instead of from the tables themselves, in accordance with the given
+    /// [CachingStrategy].
     async fn cache(
         &self,
         sql: &str,
         params: impl IntoDbParams + Send + Copy + Sync,
     ) -> Result<DbRows, DbError> {
         let read_tables = get_accessed_tables(sql)?;
-        let read_tables: Vec<_> = read_tables.into_iter().collect();
         let read_tables: Vec<_> = read_tables.iter().map(|s| s.as_str()).collect();
         match read_tables.is_empty() {
             false => self.cache_tables(&read_tables, sql, params).await,
@@ -666,10 +668,8 @@ pub trait DbQuery {
         }
     }
 
-    /// Execute the given SQL command with the given parameters on the given list of tables,
-    /// returning a vector of rows. If the result of the command exists in the query cache for the
-    /// given tables, get the value from there instead of from the tables themselves,
-    /// in accordance with the given [CachingStrategy].
+    /// Similar to [DbQuery::cache()]. This version accepts an explicit list of tables, which
+    /// must correspond to the tables queried from in the given SQL command(s).
     async fn cache_tables(
         &self,
         tables: &[&str],
