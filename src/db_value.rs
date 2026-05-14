@@ -848,7 +848,7 @@ impl<T: IntoDbValue> IntoDbParams for Vec<T> {
 
 // Database rows
 
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(transparent)] // See https://serde.rs/container-attrs.html#transparent
 pub struct DbRows {
     pub rows: Vec<DbRow>,
@@ -885,6 +885,32 @@ impl DbRows {
         }
     }
 
+    pub fn remove_nulls(mut self) -> Self {
+        self.rows = self
+            .rows
+            .into_iter()
+            .map(|row| row.remove_nulls())
+            .collect();
+        self
+    }
+
+    pub fn to_strings(&self) -> Result<Vec<String>, DbError> {
+        self.rows
+            .iter()
+            .map(|row| match row.first() {
+                Some((_key, value)) => Ok(value.to_string()),
+                None => Err(DbError::DataError(format!("Missing value"))),
+            })
+            .collect()
+    }
+
+    pub fn try_into_value<T>(&self) -> Result<T, DbError>
+    where
+        T: TryFrom<DbValue, Error = DbError>,
+    {
+        self.value()?.clone().try_into()
+    }
+
     pub fn try_into_vec<T>(&self) -> Result<Vec<T>, DbError>
     where
         T: for<'de> Deserialize<'de>,
@@ -909,6 +935,14 @@ impl TryInto<u64> for DbRows {
     }
 }
 
+impl TryInto<i32> for DbRows {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<i32, Self::Error> {
+        Ok(self.value()?.try_into()?)
+    }
+}
+
 impl TryInto<i64> for DbRows {
     type Error = DbError;
 
@@ -925,8 +959,24 @@ impl TryInto<f64> for DbRows {
     }
 }
 
+// impl TryFrom<DbRows> for f64 {
+//     type Error = DbError;
+
+//     fn try_from(value: DbRows) -> Result<Self, Self::Error> {
+//         value.value()?.try_into()
+//     }
+// }
+
+// impl<T: TryFrom<DbValue, Error = DbError>> TryInto<T> for DbRows {
+//     type Error = DbError;
+
+//     fn try_into(self) -> Result<T, DbError> {
+//         self.value()?.clone().try_into()
+//     }
+// }
+
 /// A row of database values indexed by column name.
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(transparent)] // See https://serde.rs/container-attrs.html#transparent
 pub struct DbRow {
     pub map: IndexMap<String, DbValue>,
@@ -961,14 +1011,34 @@ impl DbRow {
         self.map.get(key).cloned()
     }
 
+    pub fn remove_nulls(mut self) -> Self {
+        self.map = self
+            .map
+            .into_iter()
+            .filter(|(_key, value)| !value.is_null())
+            .collect();
+        self
+    }
+
     pub fn try_into<T>(&self) -> Result<T, DbError>
     where
         T: for<'de> Deserialize<'de>,
     {
         let mut deserializer = crate::serde::DbRowDeserializer::from_db_row(self);
-        let t =
-            T::deserialize(&mut deserializer).map_err(|err| DbError::SerdeError(err.to_string()));
+        // let t =
+        //     T::deserialize(&mut deserializer).map_err(|err| DbError::SerdeError(err.to_string()));
+        let t = T::deserialize(&mut deserializer)
+            .map_err(|err| DbError::SerdeError(format!("{err} while deserializing {self:?}")));
         t
+    }
+}
+
+impl Into<JsonRow> for DbRow {
+    fn into(self) -> JsonRow {
+        self.map
+            .into_iter()
+            .map(|(key, value)| (key, value.into()))
+            .collect()
     }
 }
 

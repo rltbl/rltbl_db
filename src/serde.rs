@@ -638,6 +638,7 @@ impl<'a> ser::SerializeStructVariant for &'a mut DbRowSerializer {
 
 #[derive(Debug)]
 pub(crate) struct DbRowDeserializer<'de> {
+    first: bool,
     /// The keys of the input [DbRow].
     keys: Vec<&'de str>,
     /// The values of the input [DbRow].
@@ -647,6 +648,7 @@ pub(crate) struct DbRowDeserializer<'de> {
 impl<'de> DbRowDeserializer<'de> {
     pub(crate) fn from_db_row(input: &'de DbRow) -> Self {
         DbRowDeserializer {
+            first: true,
             keys: input.map.keys().map(|s| s.as_str()).collect::<Vec<_>>(),
             values: input.map.values().collect::<Vec<_>>(),
         }
@@ -958,14 +960,21 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        if self.keys == fields {
+        if self.first {
+            self.first = false;
             self.deserialize_map(visitor)
         } else {
             let value = self.pop_value()?;
             match value.as_str() {
                 Some(value) => serde_json::Deserializer::from_str(value)
                     .deserialize_struct(name, fields, visitor)
-                    .map_err(|err| DbError::SerdeError(err.to_string())),
+                    // .map_err(|err| DbError::SerdeError(err.to_string())),
+                    .map_err(|err| {
+                        println!("{err:?}");
+                        DbError::SerdeError(format!(
+                            "{err} while deserializing struct {name} with fields {fields:?} from {value}"
+                        ))
+                    }),
                 None => Err(DbError::SerdeError(format!("Not a string: {value:?}"))),
             }
         }
@@ -1542,5 +1551,24 @@ mod tests {
             from_db_row(&expected_db_row).unwrap(),
             "test deserialize"
         );
+    }
+    #[test]
+    fn test_serde_default() {
+        #[derive(Deserialize, Serialize, PartialEq, Debug, Clone, Default)]
+        #[serde(default)]
+        struct TestStruct {
+            foo: String,
+            bar: String,
+        }
+
+        let expected_struct = TestStruct {
+            foo: "FOO".to_string(),
+            bar: "".to_string(),
+        };
+        let db_row = db_row! {
+            "foo" => "FOO",
+            // "bar" => "",
+        };
+        assert_eq!(Ok(expected_struct), from_db_row(&db_row));
     }
 }
