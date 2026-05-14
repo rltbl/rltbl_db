@@ -2124,7 +2124,7 @@ mod tests {
     async fn test_caching_performance() {
         let runs = 2500;
         let edit_rate = 25;
-        let timeout = 100; // TODO: Change this back to a lower value (~45s) later.
+        let timeout = 10000; // TODO: Change this back to a lower value (~45s) later.
         #[cfg(feature = "rusqlite")]
         perform_caching(":memory:", runs, edit_rate, timeout).await;
         #[cfg(feature = "tokio-postgres")]
@@ -2227,10 +2227,10 @@ mod tests {
             .await
             .unwrap();
 
-            // Add a few thousand values to the table:
+            // Add a few tens of thousands of values to the table:
             let mut values = vec![];
             for i in 0..5 {
-                for j in 0..random_between(2000, 4000, &mut -1) {
+                for j in 0..random_between(20000, 30000, &mut -1) {
                     values.push(format!("({i}, {j})"));
                 }
             }

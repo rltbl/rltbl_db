@@ -323,12 +323,12 @@ impl DbKind {
         let get_epoch_now = self.get_epoch_time_sql();
         format!(
             r#"CREATE TABLE IF NOT EXISTS "{QUERY_CACHE_TABLE}" (
-                 "tables" TEXT,
                  "statement" TEXT,
                  "parameters" TEXT,
+                 "tables" TEXT,
                  "value" TEXT,
                  "last_verified" BIGINT DEFAULT ({get_epoch_now}),
-                 PRIMARY KEY ("tables", "statement", "parameters")
+                 PRIMARY KEY ("statement", "parameters")
              )"#
         )
     }
