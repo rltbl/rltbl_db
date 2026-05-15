@@ -519,6 +519,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_sql_parsing() {
+        // TODO: Try get_accessed_tables() with subqueries and CTEs.
+
         let tables_read = get_accessed_tables(&format!(
             r#"SELECT alpha.foo
                  FROM alpha, beta

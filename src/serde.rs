@@ -708,6 +708,8 @@ impl<'a> ser::SerializeStructVariant for &'a mut DbRowSerializer {
 
 #[derive(Debug)]
 pub(crate) struct DbRowDeserializer<'de> {
+    /// TODO: Add docstring
+    first: bool,
     /// The keys of the input [DbRow].
     keys: Vec<&'de str>,
     /// The values of the input [DbRow].
@@ -717,6 +719,7 @@ pub(crate) struct DbRowDeserializer<'de> {
 impl<'de> DbRowDeserializer<'de> {
     pub(crate) fn from_db_row(input: &'de DbRow) -> Self {
         DbRowDeserializer {
+            first: true,
             keys: input.map.keys().map(|s| s.as_str()).collect::<Vec<_>>(),
             values: input.map.values().collect::<Vec<_>>(),
         }
@@ -1045,7 +1048,8 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     where
         V: Visitor<'de>,
     {
-        if self.keys == fields {
+        if self.first {
+            self.first = false;
             self.deserialize_map(visitor)
         } else {
             let value = self.pop_value()?;
@@ -1283,6 +1287,26 @@ mod tests {
     };
     use rust_decimal::{Decimal, dec};
     use serde::Deserialize;
+
+    #[test]
+    fn test_serde_default() {
+        #[derive(Deserialize, Serialize, PartialEq, Debug, Clone, Default)]
+        #[serde(default)]
+        struct TestStruct {
+            foo: String,
+            bar: String,
+        }
+
+        let expected_struct = TestStruct {
+            foo: "FOO".to_string(),
+            bar: "".to_string(),
+        };
+        let db_row = db_row! {
+            "foo" => "FOO",
+            // "bar" => "",
+        };
+        assert_eq!(Ok(expected_struct), from_db_row(&db_row));
+    }
 
     #[test]
     fn test_serde() {
