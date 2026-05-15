@@ -801,7 +801,8 @@ pub trait DbQuery {
                     // keys first.
                     // TODO: We may want to do something smarter here. E.g., we could record the
                     // length of time a query takes and/or the number of times it was requested
-                    // in order to determine which entries to delete.
+                    // in order to determine which entries to delete (and/or the size of the
+                    // result).
                     while cache.len() > cache_size {
                         cache.shift_remove_index(0);
                     }

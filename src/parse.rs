@@ -126,6 +126,87 @@ pub fn get_view_tables(view_sql: &str) -> Result<Vec<String>, DbError> {
 /// into their constituents and determine the tables and views that will be read from when
 /// the commands are executed, if any.
 pub fn get_accessed_tables(sql: &str) -> Result<BTreeSet<String>, DbError> {
+    fn process_select_clause(
+        sql: &str,
+        select_clause: Node<'_>,
+        tables_read: &mut BTreeSet<String>,
+    ) -> Result<(), DbError> {
+        let from = select_clause
+            .next_sibling()
+            .ok_or(DbError::InputError(format!("Invalid SQL: {sql}")))?;
+
+        let relations = from
+            .children(&mut from.walk())
+            .filter(|child| child.kind().to_lowercase() == "relation")
+            .collect::<Vec<_>>();
+
+        for relation in relations {
+            validate_node(&relation, &sql)?;
+            let object_ref = relation
+                .children(&mut relation.walk())
+                .filter(|child| child.kind().to_lowercase() == "object_reference")
+                .collect::<Vec<_>>();
+            validate_list_len(&object_ref, 1)?;
+            let object_ref = object_ref[0];
+            validate_node(&object_ref, &sql)?;
+
+            let table = validate_table_name(
+                &sql.to_string()[object_ref.start_byte()..object_ref.end_byte()],
+            )?;
+            tables_read.insert(table.to_string());
+        }
+
+        let where_clause = from
+            .children(&mut from.walk())
+            .filter(|child| child.kind().to_lowercase() == "where")
+            .collect::<Vec<_>>();
+        if where_clause.len() > 0 {
+            validate_list_len(&where_clause, 1)?;
+            let where_clause = where_clause[0];
+            process_where_clause(sql, where_clause, tables_read)?;
+        }
+        Ok(())
+    }
+
+    fn process_where_clause(
+        sql: &str,
+        where_clause: Node<'_>,
+        tables_read: &mut BTreeSet<String>,
+    ) -> Result<(), DbError> {
+        let expressions = where_clause
+            .children(&mut where_clause.walk())
+            .filter(|child| {
+                ["unary_expression", "binary_expression"]
+                    .contains(&child.kind().to_lowercase().as_str())
+            })
+            .collect::<Vec<_>>();
+
+        for expression in expressions {
+            process_expression(sql, expression, tables_read)?;
+        }
+        Ok(())
+    }
+
+    fn process_expression(
+        sql: &str,
+        expression: Node<'_>,
+        tables_read: &mut BTreeSet<String>,
+    ) -> Result<(), DbError> {
+        let children = expression
+            .children(&mut expression.walk())
+            .collect::<Vec<_>>();
+        for child in children {
+            if ["unary_expression", "binary_expression", "subquery"]
+                .contains(&child.kind().to_lowercase().as_str())
+            {
+                process_expression(sql, child, tables_read)?;
+            } else if child.kind().to_lowercase() == "select" {
+                process_select_clause(sql, child, tables_read)?;
+            }
+        }
+        Ok(())
+    }
+
     // Instantiate the parser and read in the given sql string:
     let mut parser = Parser::new();
     parser
@@ -164,37 +245,8 @@ pub fn get_accessed_tables(sql: &str) -> Result<BTreeSet<String>, DbError> {
         }
     };
 
-    // Holds all the table names that are read from in this query:
-    let mut tables_read = BTreeSet::new();
-
-    let mut process_select_instruction = |instruction: Node<'_>| -> Result<(), DbError> {
-        let from = instruction
-            .next_sibling()
-            .ok_or(DbError::InputError(format!("Invalid SQL: {sql}")))?;
-
-        let relations = from
-            .children(&mut from.walk())
-            .filter(|child| child.kind().to_lowercase() == "relation")
-            .collect::<Vec<_>>();
-        for relation in relations {
-            validate_node(&relation, &sql)?;
-            let object_ref = relation
-                .children(&mut relation.walk())
-                .filter(|child| child.kind().to_lowercase() == "object_reference")
-                .collect::<Vec<_>>();
-            validate_list_len(&object_ref, 1)?;
-            let object_ref = object_ref[0];
-            validate_node(&object_ref, &sql)?;
-
-            let source_table = validate_table_name(
-                &sql.to_string()[object_ref.start_byte()..object_ref.end_byte()],
-            )?;
-            tables_read.insert(source_table.to_string());
-        }
-        Ok(())
-    };
-
     // Determine the tables that will be modified:
+    let mut tables_read = BTreeSet::new();
     for statement in &statements {
         validate_node(&statement, sql)?;
         for instruction in statement.children(&mut tree.walk()) {
@@ -206,11 +258,11 @@ pub fn get_accessed_tables(sql: &str) -> Result<BTreeSet<String>, DbError> {
                         .collect::<Vec<_>>();
                     for child in children {
                         if child.kind().to_lowercase() == "select" {
-                            process_select_instruction(child)?;
+                            process_select_clause(sql, child, &mut tables_read)?;
                         }
                     }
                 }
-                "select" => process_select_instruction(instruction)?,
+                "select" => process_select_clause(sql, instruction, &mut tables_read)?,
                 _ => (),
             }
         }
@@ -519,16 +571,30 @@ mod tests {
 
     #[tokio::test]
     async fn test_sql_parsing() {
-        // TODO: Try get_accessed_tables() with subqueries and CTEs.
+        // TODO: Try get_accessed_tables() with CTEs.
 
         let tables_read = get_accessed_tables(&format!(
-            r#"SELECT alpha.foo
-                 FROM alpha, beta
-                 WHERE alpha.foo = beta.foo"#
+            r#"SELECT t1.foo
+                 FROM alpha t1, beta t2
+                 WHERE t1.foo = t2.foo"#
         ))
         .unwrap();
         let tables_read: Vec<_> = tables_read.into_iter().collect();
         assert_eq!(tables_read, ["alpha", "beta"]);
+
+        let tables_read = get_accessed_tables(&format!(
+            r#"SELECT t1.foo
+                 FROM alpha t1, beta t2
+                 WHERE t1.foo = t2.foo
+                   AND t2.foo in (
+                     SELECT t3.foo
+                       FROM gamma t3
+                   )
+                   AND NOT t1.foo"#
+        ))
+        .unwrap();
+        let tables_read: Vec<_> = tables_read.into_iter().collect();
+        assert_eq!(tables_read, ["alpha", "beta", "gamma"]);
 
         let view_sql = r#"CREATE VIEW greek_letter_foo AS
                           SELECT alpha.foo
@@ -537,12 +603,12 @@ mod tests {
         assert_eq!(view_tables, ["alpha", "beta"]);
 
         let tables_read = get_accessed_tables(&format!(
-            r#"SELECT alpha.foo
-                 FROM alpha, beta
-                 WHERE alpha.foo = beta.foo
+            r#"SELECT t1.foo
+                 FROM alpha t1, beta t2
+                 WHERE t1.foo = t2.foo
                UNION ALL
-               SELECT gamma.foo
-                 FROM gamma"#
+               SELECT t3.foo
+                 FROM gamma t3"#
         ))
         .unwrap();
         let tables_read: Vec<_> = tables_read.into_iter().collect();

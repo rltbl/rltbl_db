@@ -11,11 +11,6 @@ use serde::{
 };
 use serde_json::{json, value::Serializer as JsonValueSerializer};
 
-// TODO (from James):
-// The changes to serde.rs in this commit:
-// https://github.com/rltbl/rltbl_db/pull/65/changes/8efcc479a546205717ffa9b4ea00487b13c30c49
-// are important because they allow for missing fields and defaults. The other changes aren't urgent.
-
 /// Convert the given supported struct to a [DbRow]. For this to be successful, the struct
 /// must be a struct of the form:
 ///
