@@ -93,7 +93,6 @@ pub fn get_view_tables(view_sql: &str) -> Result<Vec<String>, DbError> {
             .collect::<Vec<_>>()
     };
 
-    let mut view_tables = vec![];
     for statement in &statements {
         validate_node(&statement, &view_sql)?;
         for instruction in statement.children(&mut tree.walk()) {
@@ -106,42 +105,21 @@ pub fn get_view_tables(view_sql: &str) -> Result<Vec<String>, DbError> {
                         .collect::<Vec<_>>();
                     validate_list_len(&create_query, 1)?;
                     let create_query = create_query[0];
-                    validate_node(&create_query, &view_sql)?;
-
-                    let from = create_query
-                        .children(&mut create_query.walk())
-                        .filter(|child| child.kind().to_lowercase() == "from")
+                    let create_sql = view_sql.to_string()
+                        [create_query.start_byte()..create_query.end_byte()]
+                        .to_string();
+                    let view_tables = get_accessed_tables(&create_sql)?
+                        .into_iter()
                         .collect::<Vec<_>>();
-                    validate_list_len(&from, 1)?;
-                    let from = from[0];
-                    validate_node(&from, &view_sql)?;
-
-                    let relations = from
-                        .children(&mut from.walk())
-                        .filter(|child| child.kind().to_lowercase() == "relation")
-                        .collect::<Vec<_>>();
-                    for relation in relations {
-                        validate_node(&relation, &view_sql)?;
-                        let object_ref = relation
-                            .children(&mut relation.walk())
-                            .filter(|child| child.kind().to_lowercase() == "object_reference")
-                            .collect::<Vec<_>>();
-                        validate_list_len(&object_ref, 1)?;
-                        let object_ref = object_ref[0];
-                        validate_node(&object_ref, &view_sql)?;
-
-                        let source_table = view_sql.to_string()
-                            [object_ref.start_byte()..object_ref.end_byte()]
-                            .to_string();
-                        view_tables.push(source_table);
-                    }
-                    break;
+                    return Ok(view_tables);
                 }
                 _ => (),
             }
         }
     }
-    Ok(view_tables)
+    Err(DbError::InputError(format!(
+        "Not a valid CREATE VIEW statement: {view_sql}"
+    )))
 }
 
 /// Parse the given string, representing a series of (semi-colon-separated) SQL commands,
@@ -186,43 +164,58 @@ pub fn get_accessed_tables(sql: &str) -> Result<BTreeSet<String>, DbError> {
         }
     };
 
+    // Holds all the table names that are read from in this query:
+    let mut tables_read = BTreeSet::new();
+
+    let mut process_select_instruction = |instruction: Node<'_>| -> Result<(), DbError> {
+        let from = instruction
+            .next_sibling()
+            .ok_or(DbError::InputError(format!("Invalid SQL: {sql}")))?;
+
+        let relations = from
+            .children(&mut from.walk())
+            .filter(|child| child.kind().to_lowercase() == "relation")
+            .collect::<Vec<_>>();
+        for relation in relations {
+            validate_node(&relation, &sql)?;
+            let object_ref = relation
+                .children(&mut relation.walk())
+                .filter(|child| child.kind().to_lowercase() == "object_reference")
+                .collect::<Vec<_>>();
+            validate_list_len(&object_ref, 1)?;
+            let object_ref = object_ref[0];
+            validate_node(&object_ref, &sql)?;
+
+            let source_table = validate_table_name(
+                &sql.to_string()[object_ref.start_byte()..object_ref.end_byte()],
+            )?;
+            tables_read.insert(source_table.to_string());
+        }
+        Ok(())
+    };
+
     // Determine the tables that will be modified:
-    let mut read_tables = BTreeSet::new();
     for statement in &statements {
         validate_node(&statement, sql)?;
         for instruction in statement.children(&mut tree.walk()) {
             validate_node(&instruction, sql)?;
             match instruction.kind().to_lowercase().as_str() {
-                "select" => {
-                    let from = instruction
-                        .next_sibling()
-                        .ok_or(DbError::InputError(format!("Invalid SQL: {sql}")))?;
-
-                    let relations = from
-                        .children(&mut from.walk())
-                        .filter(|child| child.kind().to_lowercase() == "relation")
+                "set_operation" => {
+                    let children = instruction
+                        .children(&mut instruction.walk())
                         .collect::<Vec<_>>();
-                    for relation in relations {
-                        validate_node(&relation, &sql)?;
-                        let object_ref = relation
-                            .children(&mut relation.walk())
-                            .filter(|child| child.kind().to_lowercase() == "object_reference")
-                            .collect::<Vec<_>>();
-                        validate_list_len(&object_ref, 1)?;
-                        let object_ref = object_ref[0];
-                        validate_node(&object_ref, &sql)?;
-
-                        let source_table = validate_table_name(
-                            &sql.to_string()[object_ref.start_byte()..object_ref.end_byte()],
-                        )?;
-                        read_tables.insert(source_table.to_string());
+                    for child in children {
+                        if child.kind().to_lowercase() == "select" {
+                            process_select_instruction(child)?;
+                        }
                     }
                 }
+                "select" => process_select_instruction(instruction)?,
                 _ => (),
             }
         }
     }
-    Ok(read_tables)
+    Ok(tables_read)
 }
 
 /// Parse the given string, representing a series of (semi-colon-separated) SQL commands,
@@ -526,16 +519,42 @@ mod tests {
 
     #[tokio::test]
     async fn test_sql_parsing() {
-        // Single statements, possibly with parameters:
-
-        // TODO: We should be able to support more complex selects, including UNIONs, etc.
-        let read_tables = get_accessed_tables(&format!(
-            r#"SELECT * FROM "alpha", "beta"
-               WHERE "alpha".foo = "beta".foo""#
+        let tables_read = get_accessed_tables(&format!(
+            r#"SELECT alpha.foo
+                 FROM alpha, beta
+                 WHERE alpha.foo = beta.foo"#
         ))
         .unwrap();
-        let read_tables: Vec<_> = read_tables.into_iter().collect();
-        assert_eq!(read_tables, ["alpha", "beta"]);
+        let tables_read: Vec<_> = tables_read.into_iter().collect();
+        assert_eq!(tables_read, ["alpha", "beta"]);
+
+        let view_sql = r#"CREATE VIEW greek_letter_foo AS
+                          SELECT alpha.foo
+                          FROM alpha, beta"#;
+        let view_tables = get_view_tables(&view_sql).unwrap();
+        assert_eq!(view_tables, ["alpha", "beta"]);
+
+        let tables_read = get_accessed_tables(&format!(
+            r#"SELECT alpha.foo
+                 FROM alpha, beta
+                 WHERE alpha.foo = beta.foo
+               UNION ALL
+               SELECT gamma.foo
+                 FROM gamma"#
+        ))
+        .unwrap();
+        let tables_read: Vec<_> = tables_read.into_iter().collect();
+        assert_eq!(tables_read, ["alpha", "beta", "gamma"]);
+
+        let view_sql = r#"CREATE VIEW greek_letter_foo AS
+                          SELECT alpha.foo
+                          FROM alpha, beta
+                          WHERE alpha.foo = beta.foo
+                          UNION ALL
+                          SELECT gamma.foo
+                          FROM gamma"#;
+        let view_tables = get_view_tables(&view_sql).unwrap();
+        assert_eq!(view_tables, ["alpha", "beta", "gamma"]);
 
         let (edited_tables, dropped_tables) =
             get_affected_tables(&format!(r#"INSERT INTO "alpha" VALUES ($1, $2, $3)"#)).unwrap();
