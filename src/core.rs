@@ -475,12 +475,12 @@ pub trait DbQuery {
     async fn delete_query_cache_entries(&self, tables: &[&str]) -> Result<(), DbError> {
         if self.table_exists(QUERY_CACHE_TABLE).await? {
             if tables.is_empty() {
-                self.execute(&format!(r#"DELETE FROM "{QUERY_CACHE_TABLE}""#), ())
+                self.execute_no_cache_clean(&format!(r#"DELETE FROM "{QUERY_CACHE_TABLE}""#), ())
                     .await?;
             } else {
                 for table in tables {
                     let table_param = format!(r#"%"{table}"%"#);
-                    self.execute(
+                    self.execute_no_cache_clean(
                         &format!(
                             r#"DELETE FROM "{QUERY_CACHE_TABLE}" WHERE "tables" LIKE {}1"#,
                             self.kind().param_prefix()
@@ -658,13 +658,18 @@ pub trait DbQuery {
         sql: &str,
         params: impl IntoDbParams + Send + Copy + Sync,
     ) -> Result<DbRows, DbError> {
-        let read_tables = get_accessed_tables(sql)?;
-        let read_tables: Vec<_> = read_tables.iter().map(|s| s.as_str()).collect();
-        match read_tables.is_empty() {
-            false => self.cache_tables(&read_tables, sql, params).await,
-            true => Err(DbError::InputError(format!(
-                "No tables are read from in SQL: {sql}"
-            ))),
+        match self.get_caching_strategy() {
+            CachingStrategy::None => self.cache_tables(&[], sql, params).await,
+            _ => {
+                let tables_read = get_accessed_tables(sql)?;
+                let tables_read: Vec<_> = tables_read.iter().map(|s| s.as_str()).collect();
+                match tables_read.is_empty() {
+                    false => self.cache_tables(&tables_read, sql, params).await,
+                    true => Err(DbError::InputError(format!(
+                        "No tables are read from in SQL: {sql}"
+                    ))),
+                }
+            }
         }
     }
 

@@ -703,7 +703,6 @@ impl<'a> ser::SerializeStructVariant for &'a mut DbRowSerializer {
 
 #[derive(Debug)]
 pub(crate) struct DbRowDeserializer<'de> {
-    /// TODO: Add docstring
     first: bool,
     /// The keys of the input [DbRow].
     keys: Vec<&'de str>,
