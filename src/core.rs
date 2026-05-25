@@ -2,7 +2,7 @@
 
 use crate::{
     db_kind::DbKind,
-    db_value::{ColumnMap, DbParams, DbRow, DbRows, DbValue, IntoDbParams, IntoDbRows, StringRow},
+    db_value::{ColumnMap, DbParams, DbRow, DbRows, DbValue, IntoDbParams, IntoDbRows},
     memory::{
         DEFAULT_MEMORY_QUERY_CACHE_SIZE, MemoryQueryCacheKey, MemoryQueryCacheValue,
         clear_memory_query_cache, exists_in_meta_cache, get_memory_query_cache,
@@ -957,67 +957,6 @@ pub trait DbQuery {
         sql: &str,
         params: impl IntoDbParams + Send,
     ) -> impl Future<Output = Result<DbRows, DbError>> + Send;
-
-    /// Execute the given SQL command, using the given parameters, returning a single string.
-    /// If the data has more than one value, an error is returned.
-    async fn query_string(
-        &self,
-        sql: &str,
-        params: impl IntoDbParams + Send,
-    ) -> Result<String, DbError> {
-        let value = self.query(sql, params).await?;
-        let value = value.value()?;
-        Ok(value.into())
-    }
-
-    /// Execute the given SQL command, using the given parameters, returning a vector of
-    /// strings representing the first value of each row.
-    async fn query_strings(
-        &self,
-        sql: &str,
-        params: impl IntoDbParams + Send,
-    ) -> Result<Vec<String>, DbError> {
-        let rows = self.query(sql, params).await?;
-        rows.iter()
-            .map(|row| match row.values().nth(0) {
-                Some(value) => Ok(value.into()),
-                None => Err(DbError::DataError("Empty row".to_owned())),
-            })
-            .collect()
-    }
-
-    /// Execute the given SQL command, using the given parameters, returning a row of strings.
-    /// An error is returned if there is more than one row of data.
-    async fn query_string_row(
-        &self,
-        sql: &str,
-        params: impl IntoDbParams + Send,
-    ) -> Result<StringRow, DbError> {
-        let rows = self.query(sql, params).await?;
-        let row = rows.row()?;
-        Ok(row
-            .iter()
-            .map(|(key, value)| (key.clone(), value.into()))
-            .collect())
-    }
-
-    /// Execute the given SQL command, using the given parameters, returning a vector of rows of
-    /// strings.
-    async fn query_string_rows(
-        &self,
-        sql: &str,
-        params: impl IntoDbParams + Send,
-    ) -> Result<Vec<StringRow>, DbError> {
-        let rows = self.query(sql, params).await?;
-        Ok(rows
-            .iter()
-            .map(|row| {
-                row.iter()
-                    .map(|(key, value)| (key.clone(), value.into()))
-                    .collect()
-            })
-            .collect())
-    }
 
     /// Insert rows into the given columns of the given table. If an input row does not have a
     /// key corresponding to one of the given columns, use NULL as the value of that column when

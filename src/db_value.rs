@@ -1048,6 +1048,32 @@ impl DbRows {
     }
 }
 
+impl Into<StringRow> for DbRow {
+    fn into(self) -> StringRow {
+        self.iter()
+            .map(|(key, value)| (key.clone(), value.into()))
+            .collect()
+    }
+}
+
+impl Into<StringRow> for &DbRow {
+    fn into(self) -> StringRow {
+        self.clone().into()
+    }
+}
+
+impl Into<Vec<StringRow>> for DbRows {
+    fn into(self) -> Vec<StringRow> {
+        self.content.iter().map(|row| row.into()).collect()
+    }
+}
+
+impl Into<Vec<StringRow>> for &DbRows {
+    fn into(self) -> Vec<StringRow> {
+        self.clone().into()
+    }
+}
+
 impl Into<JsonRow> for DbRow {
     fn into(self) -> JsonRow {
         self.map

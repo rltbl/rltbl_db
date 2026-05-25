@@ -12,7 +12,10 @@
 ///          CREATE TABLE test ( value TEXT );\
 ///          INSERT INTO test VALUES ('foo');",
 ///     ).await?;
-///     let value = pool.query_string("SELECT value FROM test;", ()).await?;
+///     let value: String = pool.query("SELECT value FROM test;", ())
+///         .await?
+///         .value()?
+///         .into();
 ///     Ok(value)
 /// }
 /// ```
@@ -374,19 +377,36 @@ mod tests {
             .into();
         assert_eq!("foo", value);
 
-        let string = pool.query_string(&select_sql, &["foo"]).await.unwrap();
+        let string: String = pool
+            .query(&select_sql, &["foo"])
+            .await
+            .unwrap()
+            .value()
+            .unwrap()
+            .into();
         assert_eq!("foo", string);
 
-        let strings = pool.query_strings(&select_sql, &["foo"]).await.unwrap();
+        let strings = pool
+            .query(&select_sql, &["foo"])
+            .await
+            .unwrap()
+            .to_strings()
+            .unwrap();
         assert_eq!(vec!["foo".to_owned()], strings);
 
-        let string_row = pool.query_string_row(&select_sql, &["foo"]).await.unwrap();
+        let string_row: StringRow = pool
+            .query(&select_sql, &["foo"])
+            .await
+            .unwrap()
+            .row()
+            .unwrap()
+            .into();
         assert_eq!(
             StringRow::from([("value".to_owned(), "foo".to_owned())]),
             string_row
         );
 
-        let string_rows = pool.query_string_rows(&select_sql, &["foo"]).await.unwrap();
+        let string_rows: Vec<StringRow> = pool.query(&select_sql, &["foo"]).await.unwrap().into();
         assert_eq!(
             vec![StringRow::from([("value".to_owned(), "foo".to_owned())])],
             string_rows
@@ -456,15 +476,20 @@ mod tests {
             let signed: i64 = rows.value().unwrap().try_into().unwrap();
             assert_eq!(1, signed);
 
-            let string = pool
-                .query_string(&select_sql, params.clone())
+            let string: String = pool
+                .query(&select_sql, params.clone())
                 .await
-                .unwrap();
+                .unwrap()
+                .value()
+                .unwrap()
+                .into();
             assert_eq!("1", string);
 
             let strings = pool
-                .query_strings(&select_sql, params.clone())
+                .query(&select_sql, params.clone())
                 .await
+                .unwrap()
+                .to_strings()
                 .unwrap();
             assert_eq!(vec!["1".to_owned()], strings);
         }
@@ -515,10 +540,21 @@ mod tests {
         let float: f64 = rows.value().unwrap().try_into().unwrap();
         assert_eq!(1.05, float);
 
-        let string = pool.query_string(&select_sql, &[1.0_f64]).await.unwrap();
+        let string: String = pool
+            .query(&select_sql, &[1.0_f64])
+            .await
+            .unwrap()
+            .value()
+            .unwrap()
+            .into();
         assert_eq!("1.05", string);
 
-        let strings = pool.query_strings(&select_sql, &[1.0_f64]).await.unwrap();
+        let strings = pool
+            .query(&select_sql, &[1.0_f64])
+            .await
+            .unwrap()
+            .to_strings()
+            .unwrap();
         assert_eq!(vec!["1.05".to_owned()], strings);
 
         let rows = pool.query(&select_sql, &[1.0_f64]).await.unwrap();
