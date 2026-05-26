@@ -679,8 +679,8 @@ mod tests {
     async fn test_sql_parsing() {
         let tables_read = get_accessed_tables(&format!(
             r#"SELECT t1.foo
-                 FROM alpha t1, beta t2
-                 WHERE t1.foo = t2.foo"#
+               FROM alpha t1, beta t2
+               WHERE t1.foo = t2.foo"#
         ))
         .unwrap();
         let tables_read: Vec<_> = tables_read.into_iter().collect();
@@ -697,13 +697,13 @@ mod tests {
 
         let tables_read = get_accessed_tables(&format!(
             r#"SELECT t1.foo
-                 FROM alpha t1, beta t2
-                 WHERE t1.foo = t2.foo
-                   AND t2.foo in (
-                     SELECT t3.foo
-                       FROM gamma t3
-                   )
-                   AND NOT t1.foo"#
+               FROM alpha t1
+               INNER JOIN beta t2 ON t1.foo = t2.foo
+               WHERE t2.foo in (
+                 SELECT t3.foo
+                 FROM gamma t3
+               )
+               AND NOT t1.foo"#
         ))
         .unwrap();
         let tables_read: Vec<_> = tables_read.into_iter().collect();
@@ -711,15 +711,15 @@ mod tests {
 
         let tables_read = get_accessed_tables(&format!(
             r#"SELECT t1.foo
-                 FROM alpha t1
-                 INNER JOIN beta t2 ON (
-                   t1.foo = t2.foo
-                   AND t2.foo in (
-                     SELECT t3.foo
-                       FROM gamma t3
-                   )
-                   AND NOT t1.foo
-               )"#
+               FROM alpha t1
+               INNER JOIN beta t2 ON (
+                 t1.foo = t2.foo AND
+                 t2.foo in (
+                   SELECT t3.foo
+                   FROM gamma t3
+                 )
+               )
+               WHERE NOT t1.foo"#
         ))
         .unwrap();
         let tables_read: Vec<_> = tables_read.into_iter().collect();
@@ -749,6 +749,8 @@ mod tests {
                  LEFT JOIN gamma ON gamma.foo = alpha.foo
                ), hoo as (
                  SELECT foo FROM beta
+               ), ioo as (
+                 SELECT foo FROM gamma
                )
                SELECT t1.foo
                FROM goo t1, hoo t2
@@ -756,7 +758,9 @@ mod tests {
                  AND t2.foo in (
                    SELECT t3.foo
                      FROM delta t3
-                 )"#
+                 )
+               UNION ALL
+               SELECT * from ioo"#
         ))
         .unwrap();
         let tables_read: Vec<_> = tables_read.into_iter().collect();
