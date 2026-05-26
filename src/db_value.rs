@@ -189,7 +189,7 @@ impl DbValue {
     }
 
     /// Note that: db_value.as_json() gives a different result from into().
-    /// The latter will format a [DbValue] as a string regardless of its type.
+    /// The latter will format a [DbValue] as a [JsonValue] regardless of its type.
     /// The as_json() method returns a JsonValue only if the underlying type is [DbValue::Json].
     pub fn as_json(&self) -> Option<JsonValue> {
         match self {

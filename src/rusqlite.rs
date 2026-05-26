@@ -160,7 +160,7 @@ fn query_prepared(
                         // (b) the column is an expression. In the latter case it doesn't seem
                         // possible to get the datatype of the expression from the metadata.
                         // So the only thing to do here is just to convert the value
-                        // to using the default method, and since we already know that it
+                        // using the default method, and since we already know that it
                         // is an integer, the result of the conversion will be a number.
                         _ => DbValue::from(value),
                     },
