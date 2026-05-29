@@ -502,18 +502,30 @@ impl DbType {
     }
 
     pub fn parse(&self, value: impl IntoDbValue) -> Result<DbValue, DbError> {
-        let value = value.into_db_value().to_string();
-        self.parse_str(&value)
+        let value = value.into_db_value();
+        self.convert(&value)
     }
 
     pub fn convert(&self, value: &DbValue) -> Result<DbValue, DbError> {
+        // First handle NULLs and Text types:
         match self {
             DbType::Null(_) => match value {
-                DbValue::Null => Ok(DbValue::Null),
-                value => Err(DbError::InputError(format!(
-                    "Can't convert to {self:?} from {value:?}"
-                ))),
+                DbValue::Null => return Ok(DbValue::Null),
+                value => {
+                    return Err(DbError::InputError(format!(
+                        "Can't convert to {self:?} from {value:?}"
+                    )));
+                }
             },
+            _ => {
+                if let DbValue::Text(value) = value {
+                    return Ok(self.parse_str(value)?);
+                }
+            }
+        };
+        // Then handle everything else:
+        match self {
+            DbType::Null(_) => unreachable!(),
             DbType::Boolean(_) => {
                 let value = value.as_bool().ok_or(DbError::InputError(format!(
                     "Can't convert to {self:?} from {value:?}"
@@ -577,10 +589,14 @@ mod tests {
         assert_eq!(db_type, DbType::BigInteger("int2".to_string()));
         let db_value = db_type.parse("11").unwrap();
         assert_eq!(db_value, DbValue::BigInteger(11));
+        let db_value = db_type.parse(11).unwrap();
+        assert_eq!(db_value, DbValue::BigInteger(11));
 
         let db_type = DbKind::PostgreSQL.db_type("int2").unwrap();
         assert_eq!(db_type, DbType::SmallInteger("int2".to_string()));
         let db_value = db_type.parse("11").unwrap();
+        assert_eq!(db_value, DbValue::SmallInteger(11));
+        let db_value = db_type.parse(11).unwrap();
         assert_eq!(db_value, DbValue::SmallInteger(11));
 
         let db_type = DbKind::PostgreSQL.db_type("float8").unwrap();

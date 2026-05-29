@@ -1387,7 +1387,6 @@ mod tests {
         );
 
         let db_value = db_row.get("bar").unwrap();
-        println!("DB VALUE: {db_value:?}");
 
         pool.execute(
             r#"UPDATE test_jsonb SET foo = TRUE WHERE bar = $1"#,
