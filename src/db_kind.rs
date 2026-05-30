@@ -41,7 +41,7 @@ impl Display for DbKind {
 }
 
 impl DbKind {
-    /// TODO: Add docstring.
+    /// Constructs a [DbType] instance using the name of the given sql_type.
     pub fn db_type(&self, sql_type: &str) -> Result<DbType, DbError> {
         match self {
             DbKind::SQLite => match sql_type.to_lowercase().as_str() {
@@ -432,7 +432,8 @@ impl DbKind {
 // Database types
 //////////////////////////////////////////////////////////////////////
 
-/// TODO: Add dcostring.
+/// The supported database types, including information about the name
+/// used to refer to the type in the underlying database.
 #[derive(Clone, Debug, PartialEq)]
 pub enum DbType {
     Null(String),
@@ -448,6 +449,8 @@ pub enum DbType {
 }
 
 impl DbType {
+    /// Parses a given string representing the value of a database field into a [DbValue] of this
+    /// type.
     pub fn parse_str(&self, value: &str) -> Result<DbValue, DbError> {
         match self {
             DbType::Null(_) => Ok(DbValue::Null),
@@ -497,15 +500,19 @@ impl DbType {
         }
     }
 
+    /// Parses a given [JsonValue] representing the value of a database field into a [DbValue] of
+    /// this type.
     pub fn parse_json(&self, value: &JsonValue) -> Result<DbValue, DbError> {
         Ok(DbValue::from(value))
     }
 
+    /// Parses the given value into a [DbValue] of this type.
     pub fn parse(&self, value: impl IntoDbValue) -> Result<DbValue, DbError> {
         let value = value.into_db_value();
         self.convert(&value)
     }
 
+    /// Converts the given [DbValue] into a [DbValue] of this type.
     pub fn convert(&self, value: &DbValue) -> Result<DbValue, DbError> {
         // First handle NULLs and Text types:
         match self {
@@ -523,55 +530,45 @@ impl DbType {
                 }
             }
         };
+
         // Then handle everything else:
+
+        let err_template = |db_value: &DbValue| {
+            DbError::InputError(format!("Can't convert to {self:?} from {db_value:?}"))
+        };
+
         match self {
-            DbType::Null(_) => unreachable!(),
+            DbType::Null(_) => unreachable!(), // Handled above.
             DbType::Boolean(_) => {
-                let value = value.as_bool().ok_or(DbError::InputError(format!(
-                    "Can't convert to {self:?} from {value:?}"
-                )))?;
+                let value = value.as_bool().ok_or(err_template(value))?;
                 Ok(DbValue::Boolean(value))
             }
             DbType::I16(_) => {
-                let value = value.as_i16().ok_or(DbError::InputError(format!(
-                    "Can't convert to {self:?} from {value:?}"
-                )))?;
+                let value = value.as_i16().ok_or(err_template(value))?;
                 Ok(DbValue::SmallInteger(value))
             }
             DbType::SmallInteger(_) => {
-                let value = value.as_i16().ok_or(DbError::InputError(format!(
-                    "Can't convert to {self:?} from {value:?}"
-                )))?;
+                let value = value.as_i16().ok_or(err_template(value))?;
                 Ok(DbValue::SmallInteger(value))
             }
             DbType::Integer(_) => {
-                let value = value.as_i32().ok_or(DbError::InputError(format!(
-                    "Can't convert to {self:?} from {value:?}"
-                )))?;
+                let value = value.as_i32().ok_or(err_template(value))?;
                 Ok(DbValue::Integer(value))
             }
             DbType::BigInteger(_) => {
-                let value = value.as_i64().ok_or(DbError::InputError(format!(
-                    "Can't convert to {self:?} from {value:?}"
-                )))?;
+                let value = value.as_i64().ok_or(err_template(value))?;
                 Ok(DbValue::BigInteger(value))
             }
             DbType::Real(_) => {
-                let value = value.as_f32().ok_or(DbError::InputError(format!(
-                    "Can't convert to {self:?} from {value:?}"
-                )))?;
+                let value = value.as_f32().ok_or(err_template(value))?;
                 Ok(DbValue::Real(value))
             }
             DbType::BigReal(_) => {
-                let value = value.as_f64().ok_or(DbError::InputError(format!(
-                    "Can't convert to {self:?} from {value:?}"
-                )))?;
+                let value = value.as_f64().ok_or(err_template(value))?;
                 Ok(DbValue::BigReal(value))
             }
             DbType::Numeric(_) => {
-                let value = value.as_decimal().ok_or(DbError::InputError(format!(
-                    "Can't convert to {self:?} from {value:?}"
-                )))?;
+                let value = value.as_decimal().ok_or(err_template(value))?;
                 Ok(DbValue::Numeric(value))
             }
             DbType::Text(_) => Ok(DbValue::Text(value.to_string())),
