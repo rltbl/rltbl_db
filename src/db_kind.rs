@@ -8,7 +8,7 @@ use crate::{
 };
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
-use std::fmt::Display;
+use std::{fmt::Display, str::FromStr};
 
 /// The [maximum number of parameters](https://www.sqlite.org/limits.html#max_variable_number)
 /// that can be bound to a SQLite query
@@ -29,6 +29,18 @@ pub static MAX_PARAMS_POSTGRES: usize = 32765;
 pub enum DbKind {
     SQLite,
     PostgreSQL,
+}
+
+impl FromStr for DbKind {
+    type Err = DbError;
+
+    fn from_str(kind_name: &str) -> Result<Self, Self::Err> {
+        match kind_name.trim().to_lowercase().as_str() {
+            "sqlite" => Ok(DbKind::SQLite),
+            "postgresql" | "postgres" => Ok(DbKind::PostgreSQL),
+            invalid => Err(DbError::InputError(format!("Invalid kind name: {invalid}"))),
+        }
+    }
 }
 
 impl Display for DbKind {
