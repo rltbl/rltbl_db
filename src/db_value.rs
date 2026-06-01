@@ -697,13 +697,17 @@ impl From<u8> for DbValue {
 
 impl From<u16> for DbValue {
     fn from(item: u16) -> Self {
-        DbValue::Integer(item.into())
+        if item <= i16::MAX as u16 {
+            DbValue::SmallInteger(item as i16)
+        } else {
+            DbValue::Integer(item as i32)
+        }
     }
 }
 
 impl From<u32> for DbValue {
     fn from(item: u32) -> Self {
-        if usize::BITS <= 31 {
+        if item <= i32::MAX as u32 {
             DbValue::Integer(item as i32)
         } else {
             DbValue::BigInteger(item as i64)
@@ -723,24 +727,24 @@ impl From<u64> for DbValue {
 
 impl From<isize> for DbValue {
     fn from(item: isize) -> Self {
-        if isize::BITS <= 32 {
+        if isize::BITS <= 16 {
+            DbValue::SmallInteger(item as i16)
+        } else if isize::BITS <= 32 {
             DbValue::Integer(item as i32)
-        } else if isize::BITS <= 64 {
-            DbValue::BigInteger(item as i64)
         } else {
-            DbValue::Numeric(Decimal::from(item))
+            DbValue::BigInteger(item as i64)
         }
     }
 }
 
 impl From<usize> for DbValue {
     fn from(item: usize) -> Self {
-        if usize::BITS <= 31 {
-            DbValue::Integer(item as i32)
-        } else if usize::BITS <= 63 {
-            DbValue::BigInteger(item as i64)
+        if usize::BITS <= 16 {
+            DbValue::from(item as u16)
+        } else if usize::BITS <= 32 {
+            DbValue::from(item as u32)
         } else {
-            DbValue::Numeric(Decimal::from(item))
+            DbValue::from(item as u64)
         }
     }
 }

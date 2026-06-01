@@ -594,6 +594,9 @@ mod tests {
 
     #[test]
     fn test_db_type() {
+        // TODO: Add a test for creating a row as in the issue description (and add a method
+        // if convenient).
+
         let db_type = DbKind::SQLite.db_type("int2").unwrap();
         assert_eq!(db_type, DbType::BigInteger("int2".to_string()));
         let db_value = db_type.parse("11").unwrap();
