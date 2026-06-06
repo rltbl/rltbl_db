@@ -70,7 +70,7 @@ impl DbKind {
                 other
                     if ["character", "varchar", "nchar", "nvarchar"]
                         .iter()
-                        .any(|sqlite_type| other.starts_with(sqlite_type)) =>
+                        .any(|other_type| other.starts_with(other_type)) =>
                 {
                     Ok(DbType::Text(sql_type.to_string()))
                 }
@@ -93,7 +93,7 @@ impl DbKind {
                 other
                     if ["character", "varchar", "char", "bpchar"]
                         .iter()
-                        .any(|sqlite_type| other.starts_with(sqlite_type)) =>
+                        .any(|other_type| other.starts_with(other_type)) =>
                 {
                     Ok(DbType::Text(sql_type.to_string()))
                 }
