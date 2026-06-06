@@ -314,6 +314,7 @@ mod tests {
     use super::*;
     use crate::{
         core::{CachingStrategy, QUERY_CACHE_TABLE, TABLE_CACHE_TABLE},
+        db_kind::DbType,
         db_row,
         db_value::{ColumnMap, DbRow, DbValue, JsonValue, StringRow},
         memory::{
@@ -2405,5 +2406,91 @@ mod tests {
         assert_eq!(bar, json!({"alpha":1}));
         let foo = db_row.get("foo").unwrap();
         assert_eq!(foo, DbValue::BigInteger(1));
+    }
+
+    #[tokio::test]
+    async fn test_db_type() {
+        #[cfg(feature = "rusqlite")]
+        db_type(":memory:").await;
+        #[cfg(feature = "tokio-postgres")]
+        db_type("postgresql:///rltbl_db").await;
+        #[cfg(feature = "libsql")]
+        db_type(":memory:").await;
+    }
+
+    async fn db_type(url: &str) {
+        clear_meta_cache().unwrap();
+
+        let pool = AnyPool::connect(url).await.unwrap();
+        pool.drop_table("test_db_type").await.unwrap();
+        pool.execute(
+            r#"CREATE TABLE test_db_type (
+                   alpha TEXT,
+                   beta BIGINT,
+                   gamma SMALLINT,
+                   delta DOUBLE PRECISION
+               )"#,
+            (),
+        )
+        .await
+        .unwrap();
+
+        let columns = pool.columns("test_db_type").await.unwrap();
+
+        let alpha_type = {
+            let alpha_type = columns.get("alpha").unwrap();
+            pool.kind().db_type(alpha_type).unwrap()
+        };
+        assert_eq!(alpha_type, DbType::Text("text".to_string()));
+
+        let beta_type = {
+            let beta_type = columns.get("beta").unwrap();
+            pool.kind().db_type(beta_type).unwrap()
+        };
+        assert_eq!(beta_type, DbType::BigInteger("bigint".to_string()));
+
+        let gamma_type = {
+            let gamma_type = columns.get("gamma").unwrap();
+            pool.kind().db_type(gamma_type).unwrap()
+        };
+        match pool.kind() {
+            DbKind::PostgreSQL => {
+                assert_eq!(gamma_type, DbType::SmallInteger("smallint".to_string()))
+            }
+            DbKind::SQLite => assert_eq!(gamma_type, DbType::BigInteger("smallint".to_string())),
+        };
+
+        let delta_type = {
+            let delta_type = columns.get("delta").unwrap();
+            pool.kind().db_type(delta_type).unwrap()
+        };
+        assert_eq!(delta_type, DbType::BigReal("double precision".to_string()));
+
+        let db_row = db_row! {
+            "alpha" => alpha_type.parse("foo").unwrap(),
+            "beta" => beta_type.parse(json!(11)).unwrap(),
+            "gamma" => gamma_type.convert(&DbValue::Integer(12)).unwrap(),
+            "delta" => delta_type.parse_str("1.32").unwrap(),
+        };
+
+        pool.insert(
+            "test_db_type",
+            &["alpha", "beta", "gamma", "delta"],
+            &vec![db_row.clone()],
+        )
+        .await
+        .unwrap();
+
+        let row = pool
+            .query("SELECT * FROM test_db_type", ())
+            .await
+            .unwrap()
+            .row()
+            .unwrap()
+            .clone();
+        assert_eq!(row, db_row);
+
+        // Clean up:
+        pool.drop_table("test_db_type").await.unwrap();
     }
 }

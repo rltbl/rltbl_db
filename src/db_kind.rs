@@ -86,7 +86,7 @@ impl DbKind {
                 "integer" | "int4" | "serial" => Ok(DbType::Integer(sql_type.to_string())),
                 "bigint" | "int8" | "bigserial" => Ok(DbType::BigInteger(sql_type.to_string())),
                 "decimal" | "numeric" => Ok(DbType::Numeric(sql_type.to_string())),
-                "real" | "float4" => Ok(DbType::Real(sql_type.to_string())),
+                "real" | "float" | "float4" => Ok(DbType::Real(sql_type.to_string())),
                 "double precision" | "float8" => Ok(DbType::BigReal(sql_type.to_string())),
                 "text" | "bpchar" => Ok(DbType::Text(sql_type.to_string())),
                 other if other.starts_with("decimal") => Ok(DbType::Numeric(sql_type.to_string())),
@@ -585,34 +585,5 @@ impl DbType {
             }
             DbType::Text(_) => Ok(DbValue::Text(value.to_string())),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_db_type() {
-        // TODO: Add a test for creating a row as in the issue description (and add a method
-        // if convenient).
-
-        let db_type = DbKind::SQLite.db_type("int2").unwrap();
-        assert_eq!(db_type, DbType::BigInteger("int2".to_string()));
-        let db_value = db_type.parse("11").unwrap();
-        assert_eq!(db_value, DbValue::BigInteger(11));
-        let db_value = db_type.parse(11).unwrap();
-        assert_eq!(db_value, DbValue::BigInteger(11));
-
-        let db_type = DbKind::PostgreSQL.db_type("int2").unwrap();
-        assert_eq!(db_type, DbType::SmallInteger("int2".to_string()));
-        let db_value = db_type.parse("11").unwrap();
-        assert_eq!(db_value, DbValue::SmallInteger(11));
-        let db_value = db_type.parse(11).unwrap();
-        assert_eq!(db_value, DbValue::SmallInteger(11));
-
-        let db_type = DbKind::PostgreSQL.db_type("float8").unwrap();
-        let db_value = db_type.convert(&DbValue::SmallInteger(2)).unwrap();
-        assert_eq!(db_value, DbValue::BigReal(2.0));
     }
 }
