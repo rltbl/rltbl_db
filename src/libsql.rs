@@ -80,7 +80,7 @@ impl TryFrom<DbParams> for Vec<Value> {
 }
 
 /// Represents a SQLite database connection pool
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct LibSQLPool {
     pool: Pool,
     caching_strategy: CachingStrategy,

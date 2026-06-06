@@ -171,7 +171,7 @@ fn extract_value(row: &Row, idx: usize) -> Result<DbValue, DbError> {
 }
 
 /// Represents a PostgreSQL database connection pool
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct TokioPostgresPool {
     pool: Pool,
     caching_strategy: CachingStrategy,

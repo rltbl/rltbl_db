@@ -186,7 +186,7 @@ fn query_prepared(
 }
 
 /// Represents a SQLite database connection pool
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct RusqlitePool {
     pool: Pool,
     caching_strategy: CachingStrategy,
