@@ -1,7 +1,7 @@
 //! # rltbl/rltbl_db
 
 use crate::{
-    db_kind::DbKind,
+    db_kind::{DbKind, DbKindTrait},
     db_value::{ColumnMap, DbParams, DbRow, DbRows, DbValue, IntoDbParams, IntoDbRows},
     memory::{
         DEFAULT_MEMORY_QUERY_CACHE_SIZE, MemoryQueryCacheKey, MemoryQueryCacheValue,
@@ -149,8 +149,7 @@ impl Display for CachingStrategy {
 
 #[async_trait]
 pub trait DbQuery {
-    /// Get the kind of SQL database. See [DbKind] for the supported database kinds.
-    fn kind(&self) -> DbKind;
+    fn kind(&self) -> Box<dyn DbKindTrait>;
 
     /// Set the caching strategy.
     fn set_caching_strategy(&mut self, strategy: &CachingStrategy);
@@ -179,14 +178,11 @@ pub trait DbQuery {
     /// [QUERY_CACHE_TABLE] and [TABLE_CACHE_TABLE]).
     async fn ensure_cache_tables_exist(&self) -> Result<(), DbError> {
         if !exists_in_meta_cache(QUERY_CACHE_TABLE)? || !exists_in_meta_cache(TABLE_CACHE_TABLE)? {
+            let kind = self.kind().kind();
             for special_table in [QUERY_CACHE_TABLE, TABLE_CACHE_TABLE] {
                 let sql = match special_table {
-                    table if table == QUERY_CACHE_TABLE => {
-                        self.kind().create_query_cache_table_sql()
-                    }
-                    table if table == TABLE_CACHE_TABLE => {
-                        self.kind().create_table_cache_table_sql()
-                    }
+                    table if table == QUERY_CACHE_TABLE => kind.create_query_cache_table_sql(),
+                    table if table == TABLE_CACHE_TABLE => kind.create_table_cache_table_sql(),
                     _ => unreachable!(),
                 };
                 match self.execute_no_cache_clean(&sql, ()).await {
@@ -218,10 +214,10 @@ pub trait DbQuery {
     /// [DbQuery::ensure_cache_tables_exist()] implicitly.
     async fn ensure_caching_triggers_exist_for_table(&self, table: &str) -> Result<(), DbError> {
         let table_triggers_name = format!("{table}_triggers");
+        let kind = self.kind().kind();
         if !exists_in_meta_cache(&table_triggers_name)? {
             self.ensure_cache_tables_exist().await?;
-            let sql = self
-                .kind()
+            let sql = kind
                 .create_table_caching_triggers_for_table_sql(&table)?
                 .join(";\n");
             self.execute_batch(&sql).await?;
@@ -238,19 +234,18 @@ pub trait DbQuery {
     async fn ensure_caching_triggers_exist_for_view(&self, view: &str) -> Result<(), DbError> {
         let view_triggers_name = format!("{view}_triggers");
         if !exists_in_meta_cache(&view_triggers_name)? {
+            let kind = self.kind().kind();
             self.ensure_cache_tables_exist().await?;
             let view_sql = self.get_view_sql(&view).await?;
             let source_tables = get_view_tables(&view_sql)?;
             for source_table in source_tables.iter() {
                 // Add a trigger to clean entries from the cache for the source table itself:
-                let sql = self
-                    .kind()
+                let sql = kind
                     .create_table_caching_triggers_for_table_sql(&source_table)?
                     .join(";\n");
                 self.execute_batch(&sql).await?;
                 // Add a trigger to clean entries from the cache for the view:
-                let sql = self
-                    .kind()
+                let sql = kind
                     .create_table_caching_triggers_for_view_sql(&source_table, &view)?
                     .join(";\n");
                 self.execute_batch(&sql).await?;
@@ -413,6 +408,7 @@ pub trait DbQuery {
                             .collect::<Vec<_>>()
                             .join(", ")
                     );
+                    let kind = self.kind().kind();
                     self.execute(
                         &format!(
                             r#"UPDATE "{QUERY_CACHE_TABLE}"
@@ -420,8 +416,8 @@ pub trait DbQuery {
                                WHERE "tables" = {p}1
                                AND "statement" = {p}2
                                AND "parameters" = {p}3"#,
-                            p = self.kind().param_prefix(),
-                            ts = self.kind().get_epoch_time_sql(),
+                            p = kind.param_prefix(),
+                            ts = kind.get_epoch_time_sql(),
                         ),
                         &[
                             &format!("[{tables_param}]"),
@@ -453,13 +449,14 @@ pub trait DbQuery {
             }
             _ => {
                 if self.table_exists(TABLE_CACHE_TABLE).await? {
+                    let kind = self.kind().kind();
                     for table in tables {
                         let sql = format!(
                             r#"INSERT INTO "{TABLE_CACHE_TABLE}" ("table", "last_modified")
                                VALUES ({prefix}1, {ts})
                                ON CONFLICT ("table") DO UPDATE SET "last_modified" = {ts}"#,
-                            prefix = self.kind().param_prefix(),
-                            ts = self.kind().get_epoch_time_sql(),
+                            prefix = kind.param_prefix(),
+                            ts = kind.get_epoch_time_sql(),
                         );
                         self.execute_no_cache_clean(&sql, params![table]).await?;
                     }
@@ -478,12 +475,13 @@ pub trait DbQuery {
                 self.execute_no_cache_clean(&format!(r#"DELETE FROM "{QUERY_CACHE_TABLE}""#), ())
                     .await?;
             } else {
+                let kind = self.kind().kind();
                 for table in tables {
                     let table_param = format!(r#"%"{table}"%"#);
                     self.execute_no_cache_clean(
                         &format!(
                             r#"DELETE FROM "{QUERY_CACHE_TABLE}" WHERE "tables" LIKE {}1"#,
-                            self.kind().param_prefix()
+                            kind.param_prefix()
                         ),
                         &[table_param],
                     )
@@ -497,8 +495,9 @@ pub trait DbQuery {
     /// Get the SQL code that is used to define the given view.
     async fn get_view_sql(&self, view: &str) -> Result<String, DbError> {
         let view_sql = {
+            let kind = self.kind().kind();
             let rows = {
-                let (sql, params) = self.kind().view_sql_sql(view);
+                let (sql, params) = kind.view_sql_sql(view);
                 self.query_no_cache_clean(&sql, &params).await?
             };
             match rows.first() {
@@ -575,7 +574,8 @@ pub trait DbQuery {
     async fn get_latest_last_modified(&self, tables: &[&str]) -> Result<u64, DbError> {
         match self.table_exists(TABLE_CACHE_TABLE).await? {
             true => {
-                let prefix = self.kind().param_prefix().to_string();
+                let kind = self.kind().kind();
+                let prefix = kind.param_prefix().to_string();
                 let mut placeholders = vec![];
                 let mut parameters = vec![];
                 for (i, table) in tables.iter().enumerate() {
@@ -626,11 +626,12 @@ pub trait DbQuery {
     async fn last_verified(&self, table: &str) -> Result<u64, DbError> {
         match self.table_exists(QUERY_CACHE_TABLE).await? {
             true => {
+                let kind = self.kind().kind();
                 let sql = format!(
                     r#"SELECT MAX("last_verified") AS "last_verified"
                        FROM "{QUERY_CACHE_TABLE}"
                        WHERE "tables" LIKE {p}1"#,
-                    p = self.kind().param_prefix(),
+                    p = kind.param_prefix(),
                 );
                 let table_param = format!(r#"%"{table}"%"#);
                 let rows = self.query_no_cache_clean(&sql, &[&table_param]).await?;
@@ -689,7 +690,8 @@ pub trait DbQuery {
             // string for the given tables and parameters. If so, return the data from the
             // cache, otherwise execute the given SQL statement on the actualy specified
             // tables.
-            let prefix = self.kind().param_prefix().to_string();
+            let kind = self.kind().kind();
+            let prefix = kind.param_prefix().to_string();
             let cache_sql = format!(
                 r#"SELECT {prefix}1||rtrim(ltrim("value", '['), ']')||{prefix}2 AS "value"
                        FROM "{QUERY_CACHE_TABLE}"
@@ -740,6 +742,7 @@ pub trait DbQuery {
                     Ok(DbRows { content: db_rows })
                 }
                 None => {
+                    let kind = self.kind().kind();
                     let db_rows = self.query_no_cache_clean(sql, params).await?;
                     let rows_as_string = {
                         let mut rows_as_string = vec![];
@@ -755,7 +758,7 @@ pub trait DbQuery {
                         r#"INSERT INTO "{QUERY_CACHE_TABLE}"
                            ("tables", "statement", "parameters", "value")
                            VALUES ({prefix}1, {prefix}2, {prefix}3, {prefix}4)"#,
-                        prefix = self.kind().param_prefix(),
+                        prefix = kind.param_prefix(),
                     );
                     let insert_params = [&tables_param, sql, &params_param, &rows_as_string];
                     self.execute_no_cache_clean(&insert_sql, &insert_params)
@@ -871,7 +874,8 @@ pub trait DbQuery {
     /// Given a table, return a [ColumnMap] from column names to column SQL types.
     async fn columns(&self, table: &str) -> Result<ColumnMap, DbError> {
         let mut columns = ColumnMap::new();
-        let (sql, params) = self.kind().columns_sql(table);
+        let kind = self.kind().kind();
+        let (sql, params) = kind.columns_sql(table);
         let rows = self.query_no_cache_clean(&sql, params).await?;
         for row in rows.iter() {
             match (
@@ -901,7 +905,8 @@ pub trait DbQuery {
 
     /// Retrieve the primary key column names for a given table.
     async fn primary_keys(&self, table: &str) -> Result<Vec<String>, DbError> {
-        let (sql, params) = self.kind().primary_keys_sql(table);
+        let kind = self.kind().kind();
+        let (sql, params) = kind.primary_keys_sql(table);
         let rows = self.query_no_cache_clean(&sql, params).await?;
         rows.iter()
             .map(|row| {
@@ -1051,9 +1056,9 @@ pub trait DbQuery {
 
         // Query the database for the status of any unknowns:
         if !unknowns.is_empty() {
-            let (sql, params) = self
-                .kind()
-                .which_are_tables_sql(&unknowns.iter().map(|s| s.as_str()).collect::<Vec<_>>());
+            let kind = self.kind().kind();
+            let (sql, params) =
+                kind.which_are_tables_sql(&unknowns.iter().map(|s| s.as_str()).collect::<Vec<_>>());
             let rows = self.query_no_cache_clean(&sql, params).await?;
             for row in rows.iter() {
                 let table = row
@@ -1065,9 +1070,8 @@ pub trait DbQuery {
                 tables.push(table);
             }
 
-            let (sql, params) = self
-                .kind()
-                .which_are_views_sql(&unknowns.iter().map(|s| s.as_str()).collect::<Vec<_>>());
+            let (sql, params) =
+                kind.which_are_views_sql(&unknowns.iter().map(|s| s.as_str()).collect::<Vec<_>>());
             let rows = self.query_no_cache_clean(&sql, params).await?;
             for row in rows.iter() {
                 let view = row
@@ -1096,9 +1100,9 @@ pub trait DbQuery {
 
         // Query the database for the status of any unknowns:
         if !unknowns.is_empty() {
-            let (sql, params) = self
-                .kind()
-                .which_are_views_sql(&unknowns.iter().map(|s| s.as_str()).collect::<Vec<_>>());
+            let kind = self.kind().kind();
+            let (sql, params) =
+                kind.which_are_views_sql(&unknowns.iter().map(|s| s.as_str()).collect::<Vec<_>>());
             let rows = self.query_no_cache_clean(&sql, params).await?;
             for row in rows.iter() {
                 let view = row
@@ -1110,9 +1114,8 @@ pub trait DbQuery {
                 views.push(view);
             }
 
-            let (sql, params) = self
-                .kind()
-                .which_are_tables_sql(&unknowns.iter().map(|s| s.as_str()).collect::<Vec<_>>());
+            let (sql, params) =
+                kind.which_are_tables_sql(&unknowns.iter().map(|s| s.as_str()).collect::<Vec<_>>());
             let rows = self.query_no_cache_clean(&sql, params).await?;
             for row in rows.iter() {
                 let table = row
@@ -1132,8 +1135,10 @@ pub trait DbQuery {
     /// table2's foreign constraint will be removed, but table2 will not be dropped.
     async fn drop_table(&self, table: &str) -> Result<(), DbError> {
         let table = validate_table_name(table)?;
+
         // Drop the table:
-        match self.kind() {
+        let kind = self.kind().kind();
+        match kind {
             DbKind::PostgreSQL => {
                 self.execute_no_cache_clean(
                     &format!(r#"DROP TABLE IF EXISTS "{table}" CASCADE"#),
@@ -1156,7 +1161,8 @@ pub trait DbQuery {
     async fn drop_view(&self, view: &str) -> Result<(), DbError> {
         let view = validate_table_name(view)?;
         // Drop the view:
-        match self.kind() {
+        let kind = self.kind().kind();
+        match kind {
             DbKind::PostgreSQL => {
                 self.execute_no_cache_clean(&format!(r#"DROP VIEW IF EXISTS "{view}" CASCADE"#), ())
                     .await?

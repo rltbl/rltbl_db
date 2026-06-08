@@ -143,6 +143,8 @@ pub(crate) async fn edit(
     // removing any enclosing double-quotes:
     let table = validate_table_name(table)?;
 
+    let kind = pool.kind().kind();
+
     // This is very unlikely but we check anyway to be sure:
     if columns.len() > *max_params {
         return Err(DbError::InputError(format!(
@@ -152,7 +154,7 @@ pub(crate) async fn edit(
             table,
             columns.len(),
             max_params,
-            pool.kind()
+            kind
         )));
     }
 
@@ -198,7 +200,7 @@ pub(crate) async fn edit(
 
     // We use the column_map to determine the SQL type of each parameter.
     let column_map = pool.columns(&table).await?;
-    let param_prefix = pool.kind().param_prefix().to_string();
+    let param_prefix = kind.param_prefix().to_string();
     let mut rows_to_return = vec![];
     let mut lines_to_bind = Vec::new();
     let mut params_to_be_bound = Vec::new();
@@ -289,7 +291,7 @@ pub(crate) async fn edit(
             // In the CTE we generate for UPDATE statements, tokio-postgres can't infer the types
             // of the VALUES, so we explicitly cast them.
             if *edit_type == EditType::Update
-                && pool.kind() == DbKind::PostgreSQL
+                && kind == DbKind::PostgreSQL
                 // We only need to cast the first value row. The rest are inferred by Postgres:
                 && lines_to_bind.len() == 0
             {

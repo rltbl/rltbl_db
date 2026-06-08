@@ -19,7 +19,8 @@ async fn get_root(State(pool): State<Arc<impl DbQuery + Sync>>) -> impl IntoResp
 
 async fn run_axum(url: &str) {
     let pool = AnyPool::connect(url).await.unwrap();
-    let cascade = match pool.kind() {
+    let kind = pool.kind().kind();
+    let cascade = match kind {
         DbKind::SQLite => "",
         DbKind::PostgreSQL => " CASCADE",
     };

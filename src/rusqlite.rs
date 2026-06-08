@@ -2,7 +2,7 @@
 
 use crate::{
     core::{CachingStrategy, DbError, DbQuery},
-    db_kind::{DbKind, MAX_PARAMS_SQLITE},
+    db_kind::{DbKindTrait, MAX_PARAMS_SQLITE, SQLiteKind},
     db_value::{DbParams, DbRow, DbRows, DbValue, IntoDbParams, IntoDbRows, JsonValue},
     shared::{EditType, edit},
 };
@@ -214,8 +214,8 @@ impl RusqlitePool {
 
 impl DbQuery for RusqlitePool {
     /// Implements [DbQuery::kind()] for SQLite.
-    fn kind(&self) -> DbKind {
-        DbKind::SQLite
+    fn kind(&self) -> Box<dyn DbKindTrait> {
+        Box::new(SQLiteKind)
     }
 
     /// Implements [DbQuery::set_caching_strategy()] for SQLite.
