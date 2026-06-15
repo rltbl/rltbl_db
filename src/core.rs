@@ -1,9 +1,9 @@
 //! # rltbl/rltbl_db
 
 use crate::{
+    cache::{exists_in_meta_cache, get_meta_cache},
     db_kind::DbKind,
     db_value::{ColumnMap, DbParams, DbRows, IntoDbParams, IntoDbRows},
-    memory::{exists_in_meta_cache, get_meta_cache},
 };
 
 use async_trait::async_trait;
@@ -151,7 +151,7 @@ pub trait DbQuery {
 
     /// Execute the given SQL command with the given parameters, returning nothing, and without
     /// updating the cache, regardless of whether the cache-aware-query option
-    /// (see [DbQuery::set_cache_aware_query()]) has been set.
+    /// (see [crate::cache::DbCache::set_cache_aware_query()]) has been set.
     async fn execute_no_cache_clean(
         &self,
         sql: &str,
@@ -177,7 +177,7 @@ pub trait DbQuery {
 
     /// Execute the given SQL command using the given parameters, returning a vector of rows,
     /// without updating the cache, regardless of whether the cache-aware-query option
-    /// (see [DbQuery::set_cache_aware_query()]) has been set.
+    /// (see [crate::cache::DbCache::set_cache_aware_query()]) has been set.
     fn query_no_cache_clean(
         &self,
         sql: &str,
