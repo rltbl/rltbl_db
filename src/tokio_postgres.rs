@@ -1,9 +1,11 @@
 //! [tokio-postgres](<https://crates.io/crates/deadpool-postgres>) implementation for rltbl_db.
 
 use crate::{
-    core::{CachingStrategy, DbError, DbQuery},
+    cache::{CachingStrategy, DbCache},
+    core::{DbError, DbQuery},
     db_kind::{DbKind, MAX_PARAMS_POSTGRES},
     db_value::{DbParams, DbRow, DbRows, DbValue, IntoDbParams, IntoDbRows, JsonValue},
+    parse::validate_table_name,
     shared::{EditType, edit},
 };
 use bytes::{BufMut, BytesMut};
@@ -217,26 +219,6 @@ impl DbQuery for TokioPostgresPool {
         DbKind::PostgreSQL
     }
 
-    /// Implements [DbQuery::set_caching_strategy()] for PostgreSQL.
-    fn set_caching_strategy(&mut self, strategy: &CachingStrategy) {
-        self.caching_strategy = *strategy;
-    }
-
-    /// Implements [DbQuery::get_caching_strategy()] for PostgreSQL.
-    fn get_caching_strategy(&self) -> CachingStrategy {
-        self.caching_strategy
-    }
-
-    /// Implements [DbQuery::set_cache_aware_query()] for PostgreSQL.
-    fn set_cache_aware_query(&mut self, flag: bool) {
-        self.cache_aware_query = flag;
-    }
-
-    /// Implements [DbQuery::get_cache_aware_query()] for PostgreSQL.
-    fn get_cache_aware_query(&self) -> bool {
-        self.cache_aware_query
-    }
-
     /// Implements [DbQuery::execute_batch()] for PostgreSQL
     async fn execute_batch(&self, sql: &str) -> Result<(), DbError> {
         let client =
@@ -250,6 +232,15 @@ impl DbQuery for TokioPostgresPool {
 
         self.clear_cache_for_affected_tables(sql).await?;
         Ok(())
+    }
+
+    /// Implements [DbQuery::query()] for PostgreSQL.
+    async fn query(&self, sql: &str, params: impl IntoDbParams + Send) -> Result<DbRows, DbError> {
+        let rows = self.query_no_cache_clean(sql, params).await?;
+        if self.get_cache_aware_query() {
+            self.clear_cache_for_affected_tables(sql).await?;
+        }
+        Ok(rows)
     }
 
     /// Implements [DbQuery::query_no_cache_clean()] for PostgreSQL.
@@ -526,6 +517,51 @@ impl DbQuery for TokioPostgresPool {
             returning,
         )
         .await
+    }
+
+    /// Implements [DbQuery::drop_table()] for PostgreSQL.
+    async fn drop_table(&self, table: &str) -> Result<(), DbError> {
+        let table = validate_table_name(table)?;
+        self.execute_no_cache_clean(&format!(r#"DROP TABLE IF EXISTS "{table}" CASCADE"#), ())
+            .await?;
+
+        // Delete dirty entries from the cache in accordance with our caching strategy:
+        self.clear_cache_for_dropped_tables(&[&table]).await?;
+        Ok(())
+    }
+
+    /// Implements [DbQuery::drop_view()] for PostgreSQL.
+    async fn drop_view(&self, view: &str) -> Result<(), DbError> {
+        let view = validate_table_name(view)?;
+        // Drop the view:
+        self.execute_no_cache_clean(&format!(r#"DROP VIEW IF EXISTS "{view}" CASCADE"#), ())
+            .await?;
+
+        // Delete dirty entries from the cache in accordance with our caching strategy:
+        self.clear_cache_for_dropped_tables(&[&view]).await?;
+        Ok(())
+    }
+}
+
+impl DbCache for TokioPostgresPool {
+    /// Implements [DbCache::set_caching_strategy()] for PostgreSQL.
+    fn set_caching_strategy(&mut self, strategy: &CachingStrategy) {
+        self.caching_strategy = *strategy;
+    }
+
+    /// Implements [DbCache::get_caching_strategy()] for PostgreSQL.
+    fn get_caching_strategy(&self) -> CachingStrategy {
+        self.caching_strategy
+    }
+
+    /// Implements [DbCache::set_cache_aware_query()] for PostgreSQL.
+    fn set_cache_aware_query(&mut self, flag: bool) {
+        self.cache_aware_query = flag;
+    }
+
+    /// Implements [DbCache::get_cache_aware_query()] for PostgreSQL.
+    fn get_cache_aware_query(&self) -> bool {
+        self.cache_aware_query
     }
 }
 

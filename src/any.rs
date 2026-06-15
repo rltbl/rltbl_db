@@ -20,7 +20,8 @@
 /// }
 /// ```
 use crate::{
-    core::{CachingStrategy, DbError, DbQuery},
+    cache::{CachingStrategy, DbCache},
+    core::{DbError, DbQuery},
     db_kind::DbKind,
     db_value::{DbRows, IntoDbParams, IntoDbRows},
 };
@@ -121,51 +122,15 @@ impl DbQuery for AnyPool {
         }
     }
 
-    /// Implements [DbQuery::set_caching_strategy()]
-    fn set_caching_strategy(&mut self, strategy: &CachingStrategy) {
+    /// Implements [DbQuery::query()]
+    async fn query(&self, sql: &str, params: impl IntoDbParams + Send) -> Result<DbRows, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
-            AnyPool::Rusqlite(pool) => pool.set_caching_strategy(strategy),
+            AnyPool::Rusqlite(pool) => pool.query(sql, params).await,
             #[cfg(feature = "tokio-postgres")]
-            AnyPool::TokioPostgres(pool) => pool.set_caching_strategy(strategy),
+            AnyPool::TokioPostgres(pool) => pool.query(sql, params).await,
             #[cfg(feature = "libsql")]
-            AnyPool::LibSQL(pool) => pool.set_caching_strategy(strategy),
-        }
-    }
-
-    /// Implements [DbQuery::get_caching_strategy()]
-    fn get_caching_strategy(&self) -> CachingStrategy {
-        match self {
-            #[cfg(feature = "rusqlite")]
-            AnyPool::Rusqlite(pool) => pool.get_caching_strategy(),
-            #[cfg(feature = "tokio-postgres")]
-            AnyPool::TokioPostgres(pool) => pool.get_caching_strategy(),
-            #[cfg(feature = "libsql")]
-            AnyPool::LibSQL(pool) => pool.get_caching_strategy(),
-        }
-    }
-
-    /// Implements [DbQuery::set_cache_aware_query()]
-    fn set_cache_aware_query(&mut self, value: bool) {
-        match self {
-            #[cfg(feature = "rusqlite")]
-            AnyPool::Rusqlite(pool) => pool.set_cache_aware_query(value),
-            #[cfg(feature = "tokio-postgres")]
-            AnyPool::TokioPostgres(pool) => pool.set_cache_aware_query(value),
-            #[cfg(feature = "libsql")]
-            AnyPool::LibSQL(pool) => pool.set_cache_aware_query(value),
-        }
-    }
-
-    /// Implements [DbQuery::get_cache_aware_query()]
-    fn get_cache_aware_query(&self) -> bool {
-        match self {
-            #[cfg(feature = "rusqlite")]
-            AnyPool::Rusqlite(pool) => pool.get_cache_aware_query(),
-            #[cfg(feature = "tokio-postgres")]
-            AnyPool::TokioPostgres(pool) => pool.get_cache_aware_query(),
-            #[cfg(feature = "libsql")]
-            AnyPool::LibSQL(pool) => pool.get_cache_aware_query(),
+            AnyPool::LibSQL(pool) => pool.query(sql, params).await,
         }
     }
 
@@ -307,13 +272,87 @@ impl DbQuery for AnyPool {
             AnyPool::LibSQL(pool) => pool.upsert_returning(table, columns, rows, returning).await,
         }
     }
+
+    /// Implements [DbQuery::drop_table()]
+    async fn drop_table(&self, table: &str) -> Result<(), DbError> {
+        match self {
+            #[cfg(feature = "rusqlite")]
+            AnyPool::Rusqlite(pool) => pool.drop_table(table).await,
+            #[cfg(feature = "tokio-postgres")]
+            AnyPool::TokioPostgres(pool) => pool.drop_table(table).await,
+            #[cfg(feature = "libsql")]
+            AnyPool::LibSQL(pool) => pool.drop_table(table).await,
+        }
+    }
+
+    /// Implements [DbQuery::drop_view()]
+    async fn drop_view(&self, view: &str) -> Result<(), DbError> {
+        match self {
+            #[cfg(feature = "rusqlite")]
+            AnyPool::Rusqlite(pool) => pool.drop_view(view).await,
+            #[cfg(feature = "tokio-postgres")]
+            AnyPool::TokioPostgres(pool) => pool.drop_view(view).await,
+            #[cfg(feature = "libsql")]
+            AnyPool::LibSQL(pool) => pool.drop_view(view).await,
+        }
+    }
+}
+
+impl DbCache for AnyPool {
+    /// Implements [DbCache::set_caching_strategy()]
+    fn set_caching_strategy(&mut self, strategy: &CachingStrategy) {
+        match self {
+            #[cfg(feature = "rusqlite")]
+            AnyPool::Rusqlite(pool) => pool.set_caching_strategy(strategy),
+            #[cfg(feature = "tokio-postgres")]
+            AnyPool::TokioPostgres(pool) => pool.set_caching_strategy(strategy),
+            #[cfg(feature = "libsql")]
+            AnyPool::LibSQL(pool) => pool.set_caching_strategy(strategy),
+        }
+    }
+
+    /// Implements [DbCache::get_caching_strategy()]
+    fn get_caching_strategy(&self) -> CachingStrategy {
+        match self {
+            #[cfg(feature = "rusqlite")]
+            AnyPool::Rusqlite(pool) => pool.get_caching_strategy(),
+            #[cfg(feature = "tokio-postgres")]
+            AnyPool::TokioPostgres(pool) => pool.get_caching_strategy(),
+            #[cfg(feature = "libsql")]
+            AnyPool::LibSQL(pool) => pool.get_caching_strategy(),
+        }
+    }
+
+    /// Implements [DbCache::set_cache_aware_query()]
+    fn set_cache_aware_query(&mut self, value: bool) {
+        match self {
+            #[cfg(feature = "rusqlite")]
+            AnyPool::Rusqlite(pool) => pool.set_cache_aware_query(value),
+            #[cfg(feature = "tokio-postgres")]
+            AnyPool::TokioPostgres(pool) => pool.set_cache_aware_query(value),
+            #[cfg(feature = "libsql")]
+            AnyPool::LibSQL(pool) => pool.set_cache_aware_query(value),
+        }
+    }
+
+    /// Implements [DbCache::get_cache_aware_query()]
+    fn get_cache_aware_query(&self) -> bool {
+        match self {
+            #[cfg(feature = "rusqlite")]
+            AnyPool::Rusqlite(pool) => pool.get_cache_aware_query(),
+            #[cfg(feature = "tokio-postgres")]
+            AnyPool::TokioPostgres(pool) => pool.get_cache_aware_query(),
+            #[cfg(feature = "libsql")]
+            AnyPool::LibSQL(pool) => pool.get_cache_aware_query(),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{
-        core::{CachingStrategy, QUERY_CACHE_TABLE, TABLE_CACHE_TABLE},
+        cache::{CachingStrategy, QUERY_CACHE_TABLE, TABLE_CACHE_TABLE},
         db_kind::DbType,
         db_row,
         db_value::{ColumnMap, DbRow, DbValue, JsonValue, StringRow},

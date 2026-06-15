@@ -1,6 +1,7 @@
 //! Module declarations and macro definitions for rltbl_db.
 
 pub mod any;
+pub mod cache;
 pub mod core;
 pub mod db_kind;
 pub mod db_value;

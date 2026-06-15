@@ -1,7 +1,8 @@
 //! Code specific to supported database kinds.
 
 use crate::{
-    core::{DbError, QUERY_CACHE_TABLE, TABLE_CACHE_TABLE},
+    cache::{QUERY_CACHE_TABLE, TABLE_CACHE_TABLE},
+    core::DbError,
     db_value::{DbValue, IntoDbValue, JsonValue},
     params,
     parse::validate_table_name,

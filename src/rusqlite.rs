@@ -1,9 +1,11 @@
 //! [rusqlite](<https://crates.io/crates/deadpool-sqlite>) implementation for rltbl_db.
 
 use crate::{
-    core::{CachingStrategy, DbError, DbQuery},
+    cache::{CachingStrategy, DbCache},
+    core::{DbError, DbQuery},
     db_kind::{DbKind, MAX_PARAMS_SQLITE},
     db_value::{DbParams, DbRow, DbRows, DbValue, IntoDbParams, IntoDbRows, JsonValue},
+    parse::validate_table_name,
     shared::{EditType, edit},
 };
 use deadpool_sqlite::{
@@ -218,26 +220,6 @@ impl DbQuery for RusqlitePool {
         DbKind::SQLite
     }
 
-    /// Implements [DbQuery::set_caching_strategy()] for SQLite.
-    fn set_caching_strategy(&mut self, strategy: &CachingStrategy) {
-        self.caching_strategy = *strategy;
-    }
-
-    /// Implements [DbQuery::get_caching_strategy()] for SQLite.
-    fn get_caching_strategy(&self) -> CachingStrategy {
-        self.caching_strategy
-    }
-
-    /// Implements [DbQuery::set_cache_aware_query()] for SQLite.
-    fn set_cache_aware_query(&mut self, flag: bool) {
-        self.cache_aware_query = flag;
-    }
-
-    /// Implements [DbQuery::get_cache_aware_query()] for SQLite.
-    fn get_cache_aware_query(&self) -> bool {
-        self.cache_aware_query
-    }
-
     /// Implements [DbQuery::execute_batch()] for SQLite.
     async fn execute_batch(&self, sql: &str) -> Result<(), DbError> {
         let conn = self
@@ -263,6 +245,15 @@ impl DbQuery for RusqlitePool {
                 Ok(())
             }
         }
+    }
+
+    /// Implements [DbQuery::query()] for SQLite.
+    async fn query(&self, sql: &str, params: impl IntoDbParams + Send) -> Result<DbRows, DbError> {
+        let rows = self.query_no_cache_clean(sql, params).await?;
+        if self.get_cache_aware_query() {
+            self.clear_cache_for_affected_tables(sql).await?;
+        }
+        Ok(rows)
     }
 
     /// Implements [DbQuery::query_no_cache_clean()] for SQLite.
@@ -425,6 +416,52 @@ impl DbQuery for RusqlitePool {
             returning,
         )
         .await
+    }
+
+    /// Implements [DbQuery::drop_table()] for SQLite.
+    async fn drop_table(&self, table: &str) -> Result<(), DbError> {
+        let table = validate_table_name(table)?;
+        // Drop the table:
+        self.execute_no_cache_clean(&format!(r#"DROP TABLE IF EXISTS "{table}""#), ())
+            .await?;
+
+        // Delete dirty entries from the cache in accordance with our caching strategy:
+        self.clear_cache_for_dropped_tables(&[&table]).await?;
+        Ok(())
+    }
+
+    /// Implements [DbQuery::drop_table()] for SQLite.
+    async fn drop_view(&self, view: &str) -> Result<(), DbError> {
+        let view = validate_table_name(view)?;
+        // Drop the view:
+        self.execute_no_cache_clean(&format!(r#"DROP VIEW IF EXISTS "{view}""#), ())
+            .await?;
+
+        // Delete dirty entries from the cache in accordance with our caching strategy:
+        self.clear_cache_for_dropped_tables(&[&view]).await?;
+        Ok(())
+    }
+}
+
+impl DbCache for RusqlitePool {
+    /// Implements [DbCache::set_caching_strategy()] for SQLite.
+    fn set_caching_strategy(&mut self, strategy: &CachingStrategy) {
+        self.caching_strategy = *strategy;
+    }
+
+    /// Implements [DbCache::get_caching_strategy()] for SQLite.
+    fn get_caching_strategy(&self) -> CachingStrategy {
+        self.caching_strategy
+    }
+
+    /// Implements [DbCache::set_cache_aware_query()] for SQLite.
+    fn set_cache_aware_query(&mut self, flag: bool) {
+        self.cache_aware_query = flag;
+    }
+
+    /// Implements [DbCache::get_cache_aware_query()] for SQLite.
+    fn get_cache_aware_query(&self) -> bool {
+        self.cache_aware_query
     }
 }
 
