@@ -23,7 +23,7 @@ use crate::rusqlite::RusqlitePool;
 #[cfg(feature = "tokio-postgres")]
 use crate::tokio_postgres::TokioPostgresPool;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum AnyPool {
     #[cfg(feature = "rusqlite")]
     Rusqlite(RusqlitePool),
