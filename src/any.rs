@@ -21,7 +21,7 @@
 /// ```
 use crate::{
     core::{CachingStrategy, DbError, DbQuery},
-    db_kind::DbKindTrait,
+    db_kind::{DbKind, DbKindTrait},
     db_value::{DbRows, IntoDbParams, IntoDbRows},
 };
 
@@ -55,7 +55,9 @@ impl AnyPool {
         if url.starts_with("postgresql://") {
             #[cfg(feature = "tokio-postgres")]
             {
-                Ok(Box::new(PostgreSQLKind))
+                Ok(Box::new(PostgreSQLKind {
+                    kind: DbKind::PostgreSQL,
+                }))
             }
             #[cfg(not(feature = "tokio-postgres"))]
             {
@@ -64,13 +66,17 @@ impl AnyPool {
         } else {
             #[cfg(feature = "rusqlite")]
             {
-                Ok(Box::new(SQLiteKind))
+                Ok(Box::new(SQLiteKind {
+                    kind: DbKind::SQLite,
+                }))
             }
             #[cfg(not(feature = "rusqlite"))]
             {
                 #[cfg(feature = "libsql")]
                 {
-                    Ok(Box::new(SQLiteKind))
+                    Ok(Box::new(SQLiteKind {
+                        kind: DbKind::SQLite,
+                    }))
                 }
                 #[cfg(not(feature = "libsql"))]
                 {

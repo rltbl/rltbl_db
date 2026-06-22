@@ -2,7 +2,7 @@
 
 use crate::{
     core::{CachingStrategy, DbError, DbQuery},
-    db_kind::{DbKindTrait, MAX_PARAMS_POSTGRES, PostgreSQLKind},
+    db_kind::{DbKind, DbKindTrait, MAX_PARAMS_POSTGRES, PostgreSQLKind},
     db_value::{DbParams, DbRow, DbRows, DbValue, IntoDbParams, IntoDbRows, JsonValue},
     shared::{EditType, edit},
 };
@@ -214,7 +214,9 @@ impl TokioPostgresPool {
 impl DbQuery for TokioPostgresPool {
     /// Implements [DbQuery::kind()] for PostgreSQL.
     fn kind(&self) -> Box<dyn DbKindTrait> {
-        Box::new(PostgreSQLKind)
+        Box::new(PostgreSQLKind {
+            kind: DbKind::PostgreSQL,
+        })
     }
 
     /// Implements [DbQuery::set_caching_strategy()] for PostgreSQL.
