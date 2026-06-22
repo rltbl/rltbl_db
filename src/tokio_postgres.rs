@@ -1,7 +1,7 @@
 //! [tokio-postgres](<https://crates.io/crates/deadpool-postgres>) implementation for rltbl_db.
 
 use crate::{
-    cache::{CachingStrategy, DbCache},
+    cache::CachingStrategy,
     core::{DbError, DbQuery},
     db_kind::{DbKind, MAX_PARAMS_POSTGRES},
     db_value::{DbParams, DbRow, DbRows, DbValue, IntoDbParams, IntoDbRows, JsonValue},
@@ -522,6 +522,7 @@ impl DbQuery for TokioPostgresPool {
     /// Implements [DbQuery::drop_table()] for PostgreSQL.
     async fn drop_table(&self, table: &str) -> Result<(), DbError> {
         let table = validate_table_name(table)?;
+        // TODO: Get the SQL from a new function to be added to DbKind. Same for rusqlite and libsql
         self.execute_no_cache_clean(&format!(r#"DROP TABLE IF EXISTS "{table}" CASCADE"#), ())
             .await?;
 
@@ -534,6 +535,7 @@ impl DbQuery for TokioPostgresPool {
     async fn drop_view(&self, view: &str) -> Result<(), DbError> {
         let view = validate_table_name(view)?;
         // Drop the view:
+        // TODO: Get the SQL from a new function to be added to DbKind. Same for rusqlite and libsql
         self.execute_no_cache_clean(&format!(r#"DROP VIEW IF EXISTS "{view}" CASCADE"#), ())
             .await?;
 
@@ -541,25 +543,23 @@ impl DbQuery for TokioPostgresPool {
         self.clear_cache_for_dropped_tables(&[&view]).await?;
         Ok(())
     }
-}
 
-impl DbCache for TokioPostgresPool {
-    /// Implements [DbCache::set_caching_strategy()] for PostgreSQL.
+    /// Implements [DbQuery::set_caching_strategy()] for PostgreSQL.
     fn set_caching_strategy(&mut self, strategy: &CachingStrategy) {
         self.caching_strategy = *strategy;
     }
 
-    /// Implements [DbCache::get_caching_strategy()] for PostgreSQL.
+    /// Implements [DbQuery::get_caching_strategy()] for PostgreSQL.
     fn get_caching_strategy(&self) -> CachingStrategy {
         self.caching_strategy
     }
 
-    /// Implements [DbCache::set_cache_aware_query()] for PostgreSQL.
+    /// Implements [DbQuery::set_cache_aware_query()] for PostgreSQL.
     fn set_cache_aware_query(&mut self, flag: bool) {
         self.cache_aware_query = flag;
     }
 
-    /// Implements [DbCache::get_cache_aware_query()] for PostgreSQL.
+    /// Implements [DbQuery::get_cache_aware_query()] for PostgreSQL.
     fn get_cache_aware_query(&self) -> bool {
         self.cache_aware_query
     }

@@ -1,6 +1,5 @@
 use crate::{
-    cache::DbCache,
-    core::DbError,
+    core::{DbError, DbQuery},
     db_kind::DbKind,
     db_value::{DbRows, DbValue, IntoDbRows},
     parse::validate_table_name,
@@ -131,7 +130,7 @@ ON CONFLICT ({constraint_clause}) DO UPDATE SET {set_clause}{returning_clause}"#
 /// used to edit the table, do not use more than max_params bound parameters at a time. If more
 /// than max_params are required, multiple SQL statements will be generated.
 pub(crate) async fn edit(
-    pool: &(impl DbCache + Sync),
+    pool: &(impl DbQuery + Sync),
     edit_type: &EditType,
     max_params: &usize,
     table: &str,

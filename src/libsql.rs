@@ -1,7 +1,7 @@
 //! [libsql](<https://crates.io/crates/deadpool-libsql>) implementation for rltbl_db.
 
 use crate::{
-    cache::{CachingStrategy, DbCache},
+    cache::CachingStrategy,
     core::{DbError, DbQuery},
     db_kind::{DbKind, MAX_PARAMS_SQLITE},
     db_value::{DbParams, DbRow, DbRows, DbValue, IntoDbParams, IntoDbRows, JsonValue},
@@ -330,25 +330,23 @@ impl DbQuery for LibSQLPool {
         self.clear_cache_for_dropped_tables(&[&view]).await?;
         Ok(())
     }
-}
 
-impl DbCache for LibSQLPool {
-    /// Implements [DbCache::set_caching_strategy()] for SQLite.
+    /// Implements [DbQuery::set_caching_strategy()] for SQLite.
     fn set_caching_strategy(&mut self, strategy: &CachingStrategy) {
         self.caching_strategy = *strategy;
     }
 
-    /// Implements [DbCache::get_caching_strategy()] for SQLite.
+    /// Implements [DbQuery::get_caching_strategy()] for SQLite.
     fn get_caching_strategy(&self) -> CachingStrategy {
         self.caching_strategy
     }
 
-    /// Implements [DbCache::set_cache_aware_query()] for SQLite.
+    /// Implements [DbQuery::set_cache_aware_query()] for SQLite.
     fn set_cache_aware_query(&mut self, flag: bool) {
         self.cache_aware_query = flag;
     }
 
-    /// Implements [DbCache::get_cache_aware_query()] for SQLite.
+    /// Implements [DbQuery::get_cache_aware_query()] for SQLite.
     fn get_cache_aware_query(&self) -> bool {
         self.cache_aware_query
     }

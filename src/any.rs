@@ -20,7 +20,7 @@
 /// }
 /// ```
 use crate::{
-    cache::{CachingStrategy, DbCache},
+    cache::CachingStrategy,
     core::{DbError, DbQuery},
     db_kind::DbKind,
     db_value::{DbRows, IntoDbParams, IntoDbRows},
@@ -296,10 +296,8 @@ impl DbQuery for AnyPool {
             AnyPool::LibSQL(pool) => pool.drop_view(view).await,
         }
     }
-}
 
-impl DbCache for AnyPool {
-    /// Implements [DbCache::set_caching_strategy()]
+    /// Implements [DbQuery::set_caching_strategy()]
     fn set_caching_strategy(&mut self, strategy: &CachingStrategy) {
         match self {
             #[cfg(feature = "rusqlite")]
@@ -311,7 +309,7 @@ impl DbCache for AnyPool {
         }
     }
 
-    /// Implements [DbCache::get_caching_strategy()]
+    /// Implements [DbQuery::get_caching_strategy()]
     fn get_caching_strategy(&self) -> CachingStrategy {
         match self {
             #[cfg(feature = "rusqlite")]
@@ -323,7 +321,7 @@ impl DbCache for AnyPool {
         }
     }
 
-    /// Implements [DbCache::set_cache_aware_query()]
+    /// Implements [DbQuery::set_cache_aware_query()]
     fn set_cache_aware_query(&mut self, value: bool) {
         match self {
             #[cfg(feature = "rusqlite")]
@@ -335,7 +333,7 @@ impl DbCache for AnyPool {
         }
     }
 
-    /// Implements [DbCache::get_cache_aware_query()]
+    /// Implements [DbQuery::get_cache_aware_query()]
     fn get_cache_aware_query(&self) -> bool {
         match self {
             #[cfg(feature = "rusqlite")]
