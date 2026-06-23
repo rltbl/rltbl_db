@@ -1652,17 +1652,17 @@ mod tests {
             "bigint_opt_none" => DbValue::Null,
             "bigint_opt_some" => 1_i64,
 
-            "tiny_unsigned" => 1_i16,
+            "tiny_unsigned" => 1_u16,
             "tiny_unsigned_opt_none" => DbValue::Null,
-            "tiny_unsigned_opt_some" => 1_i16,
+            "tiny_unsigned_opt_some" => 1_u16,
 
-            "small_unsigned" => 1_i32,
+            "small_unsigned" => 1_u16,
             "small_unsigned_opt_none" => DbValue::Null,
-            "small_unsigned_opt_some" => 1_i32,
+            "small_unsigned_opt_some" => 1_u16,
 
-            "medium_unsigned" => 1_u64,
+            "medium_unsigned" => 1_u32,
             "medium_unsigned_opt_none" => DbValue::Null,
-            "medium_unsigned_opt_some" => 1_u64,
+            "medium_unsigned_opt_some" => 1_u32,
 
             "big_unsigned" => 1_u64,
             "big_unsigned_opt_none" => DbValue::Null,

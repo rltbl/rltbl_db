@@ -2,7 +2,7 @@
 
 use crate::{
     core::{DbError, QUERY_CACHE_TABLE, TABLE_CACHE_TABLE},
-    db_value::DbValue,
+    db_value::{DbValue, IntoDbValue, JsonValue},
     params,
     parse::validate_table_name,
 };
@@ -20,11 +20,27 @@ pub static MAX_PARAMS_SQLITE: usize = 32766;
 /// parameters to just under half that number.
 pub static MAX_PARAMS_POSTGRES: usize = 32765;
 
+//////////////////////////////////////////////////////////////////////
+// Database kinds
+//////////////////////////////////////////////////////////////////////
+
 /// Defines the supported database kinds.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DbKind {
     SQLite,
     PostgreSQL,
+}
+
+impl FromStr for DbKind {
+    type Err = DbError;
+
+    fn from_str(kind_name: &str) -> Result<Self, Self::Err> {
+        match kind_name.trim().to_lowercase().as_str() {
+            "sqlite" => Ok(DbKind::SQLite),
+            "postgresql" | "postgres" => Ok(DbKind::PostgreSQL),
+            invalid => Err(DbError::InputError(format!("Invalid kind name: {invalid}"))),
+        }
+    }
 }
 
 impl Display for DbKind {
@@ -37,6 +53,57 @@ impl Display for DbKind {
 }
 
 impl DbKind {
+    /// Constructs a [DbType] instance using the name of the given sql_type.
+    pub fn db_type(&self, sql_type: &str) -> Result<DbType, DbError> {
+        match self {
+            DbKind::SQLite => match sql_type.to_lowercase().as_str() {
+                "integer" | "int" | "tinyint" | "smallint" | "mediumint" | "bigint" | "int2"
+                | "int4" | "int8" | "boolean" | "bool" => {
+                    Ok(DbType::BigInteger(sql_type.to_string()))
+                }
+                "real" | "double precision" | "double" | "float" => {
+                    Ok(DbType::BigReal(sql_type.to_string()))
+                }
+                "numeric" => Ok(DbType::Numeric(sql_type.to_string())),
+                "text" | "clob" => Ok(DbType::Text(sql_type.to_string())),
+                other if other.starts_with("decimal") => Ok(DbType::Numeric(sql_type.to_string())),
+                other
+                    if ["character", "varchar", "nchar", "nvarchar"]
+                        .iter()
+                        .any(|other_type| other.starts_with(other_type)) =>
+                {
+                    Ok(DbType::Text(sql_type.to_string()))
+                }
+                other => Err(DbError::InputError(format!(
+                    "Invalid or unsupported SQLite type: {other}"
+                ))),
+            },
+            DbKind::PostgreSQL => match sql_type.to_lowercase().as_str() {
+                "bool" | "boolean" => Ok(DbType::Boolean(sql_type.to_string())),
+                "smallint" | "int2" | "smallserial" => {
+                    Ok(DbType::SmallInteger(sql_type.to_string()))
+                }
+                "integer" | "int4" | "serial" => Ok(DbType::Integer(sql_type.to_string())),
+                "bigint" | "int8" | "bigserial" => Ok(DbType::BigInteger(sql_type.to_string())),
+                "decimal" | "numeric" => Ok(DbType::Numeric(sql_type.to_string())),
+                "real" | "float" | "float4" => Ok(DbType::Real(sql_type.to_string())),
+                "double precision" | "float8" => Ok(DbType::BigReal(sql_type.to_string())),
+                "text" | "bpchar" => Ok(DbType::Text(sql_type.to_string())),
+                other if other.starts_with("decimal") => Ok(DbType::Numeric(sql_type.to_string())),
+                other
+                    if ["character", "varchar", "char", "bpchar"]
+                        .iter()
+                        .any(|other_type| other.starts_with(other_type)) =>
+                {
+                    Ok(DbType::Text(sql_type.to_string()))
+                }
+                other => Err(DbError::InputError(format!(
+                    "Invalid or unsupported PostgreSQL type: {other}"
+                ))),
+            },
+        }
+    }
+
     /// Get the prefix to use for parameters to queries that need to be bound.
     pub fn param_prefix(&self) -> &str {
         // Although SQLite allows '$' as a prefix, it is required to use '?' to represent integer
@@ -52,104 +119,6 @@ impl DbKind {
         match self {
             DbKind::SQLite => "strftime('%s', 'now')",
             DbKind::PostgreSQL => "extract(epoch from now())",
-        }
-    }
-
-    /// Given a SQL type for this database and a string, convert the string into the right
-    /// DbValue.
-    pub fn to_db_value(&self, sql_type: &str, value: &str) -> Result<DbValue, DbError> {
-        fn to_db_value_sqlite(sql_type: &str, value: &str) -> Result<DbValue, DbError> {
-            let err = || {
-                Err(DbError::InputError(format!(
-                    "Error converting '{value}' to a '{sql_type}'"
-                )))
-            };
-            match sql_type.to_lowercase().as_str() {
-                "text" => Ok(DbValue::Text(value.to_string())),
-                "bool" => match value.to_lowercase().as_str() {
-                    "true" | "1" => Ok(DbValue::Boolean(true)),
-                    "false" | "0" => Ok(DbValue::Boolean(false)),
-                    _ => err(),
-                },
-                "int" | "integer" | "int8" | "bigint" => match value.parse::<i64>() {
-                    Ok(int) => Ok(DbValue::BigInteger(int)),
-                    Err(_) => err(),
-                },
-                // NOTE: We are treating NUMERIC as an f64 here and for tokio-postgres.
-                "real" | "numeric" => match value.parse::<f64>() {
-                    Ok(float) => Ok(DbValue::BigReal(float)),
-                    Err(_) => err(),
-                },
-                "json" => {
-                    let json_value = serde_json::from_str(value)
-                        .map_err(|err| DbError::SerdeError(err.to_string()))?;
-                    Ok(DbValue::Json(json_value))
-                }
-                _ => Err(DbError::DatatypeError(format!(
-                    "Unhandled SQL type: {sql_type}"
-                ))),
-            }
-        }
-
-        fn to_db_value_postgresql(sql_type: &str, value: &str) -> Result<DbValue, DbError> {
-            let err = || {
-                Err(DbError::InputError(format!(
-                    "Error converting '{value}' to a '{sql_type}'"
-                )))
-            };
-            match sql_type.to_lowercase().as_str() {
-                "text" => Ok(DbValue::Text(value.to_string())),
-                "bool" | "boolean" => match bool::from_str(&value.to_lowercase()) {
-                    Ok(flag) => Ok(DbValue::Boolean(flag)),
-                    Err(_) => match value.parse::<u64>() {
-                        Ok(num) if num == 0 => Ok(DbValue::Boolean(false)),
-                        Ok(num) if num == 1 => Ok(DbValue::Boolean(true)),
-                        _ => Err(DbError::InputError(format!(
-                            "Can't parse as boolean: {value}"
-                        ))),
-                    },
-                },
-                "smallint" | "smallinteger" => match value.parse::<i16>() {
-                    Ok(int) => Ok(DbValue::SmallInteger(int)),
-                    Err(_) => err(),
-                },
-                "int" | "integer" => match value.parse::<i32>() {
-                    Ok(int) => Ok(DbValue::Integer(int)),
-                    Err(_) => err(),
-                },
-                "bigint" | "biginteger" => match value.parse::<i64>() {
-                    Ok(int) => Ok(DbValue::BigInteger(int)),
-                    Err(_) => err(),
-                },
-                "real" => match value.parse::<f32>() {
-                    Ok(float) => Ok(DbValue::Real(float)),
-                    Err(_) => err(),
-                },
-                "bigreal" => match value.parse::<f64>() {
-                    Ok(float) => Ok(DbValue::BigReal(float)),
-                    Err(_) => err(),
-                },
-                // WARN: Treat NUMERIC as an f64.
-                "numeric" => match value.parse::<f64>() {
-                    Ok(float) => Ok(DbValue::Numeric(
-                        Decimal::from_f64_retain(float).unwrap_or_default(),
-                    )),
-                    Err(_) => err(),
-                },
-                "json" | "jsonb" => {
-                    let json_value = serde_json::from_str(value)
-                        .map_err(|err| DbError::SerdeError(err.to_string()))?;
-                    Ok(DbValue::Json(json_value))
-                }
-                _ => Err(DbError::DatatypeError(format!(
-                    "Unhandled SQL type: {sql_type}"
-                ))),
-            }
-        }
-
-        match self {
-            DbKind::SQLite => to_db_value_sqlite(sql_type, value),
-            DbKind::PostgreSQL => to_db_value_postgresql(sql_type, value),
         }
     }
 
@@ -467,6 +436,154 @@ impl DbKind {
                 ];
                 Ok(ddl)
             }
+        }
+    }
+}
+
+//////////////////////////////////////////////////////////////////////
+// Database types
+//////////////////////////////////////////////////////////////////////
+
+/// The supported database types, including information about the name
+/// used to refer to the type in the underlying database.
+#[derive(Clone, Debug, PartialEq)]
+pub enum DbType {
+    Null(String),
+    Boolean(String),
+    I16(String),
+    SmallInteger(String),
+    Integer(String),
+    BigInteger(String),
+    Real(String),
+    BigReal(String),
+    Numeric(String),
+    Text(String),
+}
+
+impl DbType {
+    /// Parses a given string representing the value of a database field into a [DbValue] of this
+    /// type.
+    pub fn parse_str(&self, value: &str) -> Result<DbValue, DbError> {
+        match self {
+            DbType::Null(_) => Ok(DbValue::Null),
+            DbType::Boolean(_) => {
+                let value = value
+                    .parse::<bool>()
+                    .map_err(|_| DbError::InputError(format!("Not a boolean: {value}")))?;
+                Ok(DbValue::Boolean(value))
+            }
+            DbType::I16(_) | DbType::SmallInteger(_) => {
+                let value = value
+                    .parse::<i16>()
+                    .map_err(|_| DbError::InputError(format!("Not an i16: {value}")))?;
+                Ok(DbValue::SmallInteger(value))
+            }
+            DbType::Integer(_) => {
+                let value = value
+                    .parse::<i32>()
+                    .map_err(|_| DbError::InputError(format!("Not an i32: {value}")))?;
+                Ok(DbValue::Integer(value))
+            }
+            DbType::BigInteger(_) => {
+                let value = value
+                    .parse::<i64>()
+                    .map_err(|_| DbError::InputError(format!("Not an i64: {value}")))?;
+                Ok(DbValue::BigInteger(value))
+            }
+            DbType::Real(_) => {
+                let value = value
+                    .parse::<f32>()
+                    .map_err(|_| DbError::InputError(format!("Not an f32: {value}")))?;
+                Ok(DbValue::Real(value))
+            }
+            DbType::BigReal(_) => {
+                let value = value
+                    .parse::<f64>()
+                    .map_err(|_| DbError::InputError(format!("Not an f64: {value}")))?;
+                Ok(DbValue::BigReal(value))
+            }
+            DbType::Numeric(_) => {
+                let value = value
+                    .parse::<Decimal>()
+                    .map_err(|_| DbError::InputError(format!("Not a Decimal: {value}")))?;
+                Ok(DbValue::Numeric(value))
+            }
+            DbType::Text(_) => Ok(DbValue::Text(value.to_string())),
+        }
+    }
+
+    /// Parses a given [JsonValue] representing the value of a database field into a [DbValue] of
+    /// this type.
+    pub fn parse_json(&self, value: &JsonValue) -> Result<DbValue, DbError> {
+        Ok(DbValue::from(value))
+    }
+
+    /// Parses the given value into a [DbValue] of this type.
+    pub fn parse(&self, value: impl IntoDbValue) -> Result<DbValue, DbError> {
+        let value = value.into_db_value();
+        self.convert(&value)
+    }
+
+    /// Converts the given [DbValue] into a [DbValue] of this type.
+    pub fn convert(&self, value: &DbValue) -> Result<DbValue, DbError> {
+        // First handle NULLs and Text types:
+        match self {
+            DbType::Null(_) => match value {
+                DbValue::Null => return Ok(DbValue::Null),
+                value => {
+                    return Err(DbError::InputError(format!(
+                        "Can't convert to {self:?} from {value:?}"
+                    )));
+                }
+            },
+            _ => {
+                if let DbValue::Text(value) = value {
+                    return Ok(self.parse_str(value)?);
+                }
+            }
+        };
+
+        // Then handle everything else:
+
+        let err_template = |db_value: &DbValue| {
+            DbError::InputError(format!("Can't convert to {self:?} from {db_value:?}"))
+        };
+
+        match self {
+            DbType::Null(_) => unreachable!(), // Handled above.
+            DbType::Boolean(_) => {
+                let value = value.as_bool().ok_or(err_template(value))?;
+                Ok(DbValue::Boolean(value))
+            }
+            DbType::I16(_) => {
+                let value = value.as_i16().ok_or(err_template(value))?;
+                Ok(DbValue::SmallInteger(value))
+            }
+            DbType::SmallInteger(_) => {
+                let value = value.as_i16().ok_or(err_template(value))?;
+                Ok(DbValue::SmallInteger(value))
+            }
+            DbType::Integer(_) => {
+                let value = value.as_i32().ok_or(err_template(value))?;
+                Ok(DbValue::Integer(value))
+            }
+            DbType::BigInteger(_) => {
+                let value = value.as_i64().ok_or(err_template(value))?;
+                Ok(DbValue::BigInteger(value))
+            }
+            DbType::Real(_) => {
+                let value = value.as_f32().ok_or(err_template(value))?;
+                Ok(DbValue::Real(value))
+            }
+            DbType::BigReal(_) => {
+                let value = value.as_f64().ok_or(err_template(value))?;
+                Ok(DbValue::BigReal(value))
+            }
+            DbType::Numeric(_) => {
+                let value = value.as_decimal().ok_or(err_template(value))?;
+                Ok(DbValue::Numeric(value))
+            }
+            DbType::Text(_) => Ok(DbValue::Text(value.to_string())),
         }
     }
 }

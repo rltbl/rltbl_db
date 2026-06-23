@@ -171,7 +171,7 @@ fn extract_value(row: &Row, idx: usize) -> Result<DbValue, DbError> {
 }
 
 /// Represents a PostgreSQL database connection pool
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct TokioPostgresPool {
     pool: Pool,
     caching_strategy: CachingStrategy,
@@ -1387,7 +1387,6 @@ mod tests {
         );
 
         let db_value = db_row.get("bar").unwrap();
-        println!("DB VALUE: {db_value:?}");
 
         pool.execute(
             r#"UPDATE test_jsonb SET foo = TRUE WHERE bar = $1"#,
