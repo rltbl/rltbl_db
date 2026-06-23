@@ -7,8 +7,7 @@ use crate::{
     parse::validate_table_name,
 };
 use rust_decimal::Decimal;
-use serde::{Deserialize, Serialize};
-use std::{fmt::Display, str::FromStr};
+use std::fmt::Display;
 
 /// The [maximum number of parameters](https://www.sqlite.org/limits.html#max_variable_number)
 /// that can be bound to a SQLite query
@@ -26,25 +25,43 @@ pub static MAX_PARAMS_POSTGRES: usize = 32765;
 
 //////////////////////
 
-pub trait DbKindTrait {
-    fn kind(&self) -> DbKind;
-
+pub trait DbKind: Display {
+    /// Constructs a [DbType] instance using the name of the given sql_type.
     fn db_type(&self, sql_type: &str) -> Result<DbType, DbError>;
 
+    /// Get the prefix to use for parameters to queries that need to be bound.
     fn param_prefix(&self) -> &str;
 
+    /// Get the code needed to retrieve the current epoch time from the database.
     fn get_epoch_time_sql(&self) -> &str;
 
+    /// Generate the SQL and parameters needed to query the database's metadata for the names and
+    /// types of the columns of the given table.
     fn columns_sql(&self, table: &str) -> (String, [DbValue; 1]);
 
+    /// Generate the SQL and parameters needed to query the database's metadata for the primary
+    /// key columns of the given table.
     fn primary_keys_sql(&self, table: &str) -> (String, [DbValue; 1]);
 
-    fn which_are_views_sql(self, objects: &[&str]) -> (String, Vec<DbValue>);
+    /// Generate the SQL and parameters needed to drop the given table.
+    fn drop_table_sql(&self, table: &str) -> String;
 
-    fn which_are_tables_sql(self, objects: &[&str]) -> (String, Vec<DbValue>);
+    /// Generate the SQL and parameters needed to drop the given view.
+    fn drop_view_sql(&self, table: &str) -> String;
 
-    fn view_sql_sql(self, view: &str) -> (String, [DbValue; 1]);
+    /// Generate the SQL and parameters needed to determine which of the given list of
+    /// database names correspond to views in the database.
+    fn which_are_views_sql(&self, objects: &[&str]) -> (String, Vec<DbValue>);
 
+    /// Generate the SQL and parameters needed to determine which of the given list of
+    /// database names correspond to tables in the database.
+    fn which_are_tables_sql(&self, objects: &[&str]) -> (String, Vec<DbValue>);
+
+    /// Generate the SQL and parameters needed to retrieve the underlying SQL code for the
+    /// given view.
+    fn view_sql_sql(&self, view: &str) -> (String, [DbValue; 1]);
+
+    /// Generate the SQL needed to create the query cache.
     fn create_query_cache_table_sql(&self) -> String {
         let get_epoch_now = self.get_epoch_time_sql();
         format!(
@@ -59,6 +76,7 @@ pub trait DbKindTrait {
         )
     }
 
+    /// Generate the SQL needed to create the table cache.
     fn create_table_cache_table_sql(&self) -> String {
         let get_epoch_now = self.get_epoch_time_sql();
         format!(
@@ -69,6 +87,7 @@ pub trait DbKindTrait {
         )
     }
 
+    /// Generate the SQL statements needed to create caching triggers for the given table.
     fn create_table_caching_triggers_for_table_sql(
         &self,
         table: &str,
@@ -82,6 +101,8 @@ pub trait DbKindTrait {
         self.wrap_trigger_content(&table, &trigger_basename, &trigger_content)
     }
 
+    /// Generate the SQL statements needed to create caching triggers for the given table, which
+    /// is assumed to be a source table for the given view.
     fn create_table_caching_triggers_for_view_sql(
         &self,
         table: &str,
@@ -109,6 +130,8 @@ pub trait DbKindTrait {
         self.wrap_trigger_content(&table, &trigger_basename, &trigger_content)
     }
 
+    /// Generate the SQL statements to create a caching function and triggers with the given
+    /// trigger content for the given table using the given trigger basename.
     fn wrap_trigger_content(
         &self,
         table: &str,
@@ -120,12 +143,21 @@ pub trait DbKindTrait {
 ////////////////////////
 
 pub struct SQLiteKind;
+pub struct PostgreSQLKind;
 
-impl DbKindTrait for SQLiteKind {
-    fn kind(&self) -> DbKind {
-        DbKind::SQLite
+impl Display for SQLiteKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "sqlite")
     }
+}
 
+impl Display for PostgreSQLKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "postgresql")
+    }
+}
+
+impl DbKind for SQLiteKind {
     fn db_type(&self, sql_type: &str) -> Result<DbType, DbError> {
         match sql_type.to_lowercase().as_str() {
             "integer" | "int" | "tinyint" | "smallint" | "mediumint" | "bigint" | "int2"
@@ -160,8 +192,8 @@ impl DbKindTrait for SQLiteKind {
     fn columns_sql(&self, table: &str) -> (String, [DbValue; 1]) {
         (
             r#"SELECT "name" AS "column_name", "type" AS "data_type"
-                   FROM pragma_table_info(?1)
-                   ORDER BY "column_name""#
+               FROM pragma_table_info(?1)
+               ORDER BY "column_name""#
                 .to_string(),
             params![table],
         )
@@ -178,7 +210,15 @@ impl DbKindTrait for SQLiteKind {
         )
     }
 
-    fn which_are_views_sql(self, objects: &[&str]) -> (String, Vec<DbValue>) {
+    fn drop_table_sql(&self, table: &str) -> String {
+        format!(r#"DROP TABLE IF EXISTS "{table}""#)
+    }
+
+    fn drop_view_sql(&self, view: &str) -> String {
+        format!(r#"DROP VIEW IF EXISTS "{view}""#)
+    }
+
+    fn which_are_views_sql(&self, objects: &[&str]) -> (String, Vec<DbValue>) {
         let prefix = self.param_prefix().to_string();
         let mut placeholders = vec![];
         let mut parameters = vec![];
@@ -191,13 +231,13 @@ impl DbKindTrait for SQLiteKind {
         (
             format!(
                 r#"SELECT "name" AS "view_name" FROM "sqlite_master"
-                       WHERE "type" = 'view' AND "name" IN ({placeholders})"#,
+                   WHERE "type" = 'view' AND "name" IN ({placeholders})"#,
             ),
             parameters.clone(),
         )
     }
 
-    fn which_are_tables_sql(self, objects: &[&str]) -> (String, Vec<DbValue>) {
+    fn which_are_tables_sql(&self, objects: &[&str]) -> (String, Vec<DbValue>) {
         let prefix = self.param_prefix().to_string();
         let mut placeholders = vec![];
         let mut parameters = vec![];
@@ -210,13 +250,13 @@ impl DbKindTrait for SQLiteKind {
         (
             format!(
                 r#"SELECT "name" AS "table_name" FROM "sqlite_master"
-                       WHERE "type" = 'table' AND "name" IN ({placeholders})"#,
+                   WHERE "type" = 'table' AND "name" IN ({placeholders})"#,
             ),
             parameters.clone(),
         )
     }
 
-    fn view_sql_sql(self, view: &str) -> (String, [DbValue; 1]) {
+    fn view_sql_sql(&self, view: &str) -> (String, [DbValue; 1]) {
         (
             r#"SELECT "sql" FROM "sqlite_master"
                WHERE "type" = 'view' AND "name" = ?1"#
@@ -261,15 +301,7 @@ impl DbKindTrait for SQLiteKind {
     }
 }
 
-//////////////////////
-
-pub struct PostgreSQLKind;
-
-impl DbKindTrait for PostgreSQLKind {
-    fn kind(&self) -> DbKind {
-        DbKind::PostgreSQL
-    }
-
+impl DbKind for PostgreSQLKind {
     fn db_type(&self, sql_type: &str) -> Result<DbType, DbError> {
         match sql_type.to_lowercase().as_str() {
             "bool" | "boolean" => Ok(DbType::Boolean(sql_type.to_string())),
@@ -342,7 +374,15 @@ impl DbKindTrait for PostgreSQLKind {
         )
     }
 
-    fn which_are_views_sql(self, objects: &[&str]) -> (String, Vec<DbValue>) {
+    fn drop_table_sql(&self, table: &str) -> String {
+        format!(r#"DROP TABLE IF EXISTS "{table}" CASCADE"#)
+    }
+
+    fn drop_view_sql(&self, view: &str) -> String {
+        format!(r#"DROP VIEW IF EXISTS "{view}" CASCADE"#)
+    }
+
+    fn which_are_views_sql(&self, objects: &[&str]) -> (String, Vec<DbValue>) {
         let prefix = self.param_prefix().to_string();
         let mut placeholders = vec![];
         let mut parameters = vec![];
@@ -368,7 +408,7 @@ impl DbKindTrait for PostgreSQLKind {
         )
     }
 
-    fn which_are_tables_sql(self, objects: &[&str]) -> (String, Vec<DbValue>) {
+    fn which_are_tables_sql(&self, objects: &[&str]) -> (String, Vec<DbValue>) {
         let prefix = self.param_prefix().to_string();
         let mut placeholders = vec![];
         let mut parameters = vec![];
@@ -394,7 +434,7 @@ impl DbKindTrait for PostgreSQLKind {
         )
     }
 
-    fn view_sql_sql(self, view: &str) -> (String, [DbValue; 1]) {
+    fn view_sql_sql(&self, view: &str) -> (String, [DbValue; 1]) {
         (
             format!(
                 r#"SELECT 'CREATE VIEW "{view}" AS '||"definition" AS "sql"
@@ -450,122 +490,6 @@ impl DbKindTrait for PostgreSQLKind {
             ),
         ];
         Ok(ddl)
-    }
-}
-
-//////////////////////
-
-/// Defines the supported database kinds.
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
-pub enum DbKind {
-    SQLite,
-    PostgreSQL,
-}
-
-impl FromStr for DbKind {
-    type Err = DbError;
-
-    fn from_str(kind_name: &str) -> Result<Self, Self::Err> {
-        match kind_name.trim().to_lowercase().as_str() {
-            "sqlite" => Ok(DbKind::SQLite),
-            "postgresql" | "postgres" => Ok(DbKind::PostgreSQL),
-            invalid => Err(DbError::InputError(format!("Invalid kind name: {invalid}"))),
-        }
-    }
-}
-
-impl Display for DbKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            DbKind::SQLite => write!(f, "SQLite"),
-            DbKind::PostgreSQL => write!(f, "PostgreSQL"),
-        }
-    }
-}
-
-impl DbKind {
-    /// Constructs a [DbType] instance using the name of the given sql_type.
-    pub fn db_type(&self, _sql_type: &str) -> Result<DbType, DbError> {
-        unimplemented!()
-    }
-
-    /// Get the prefix to use for parameters to queries that need to be bound.
-    pub fn param_prefix(&self) -> &str {
-        unimplemented!()
-    }
-
-    /// Get the code needed to retrieve the current epoch time from the database.
-    pub fn get_epoch_time_sql(&self) -> &str {
-        unimplemented!()
-    }
-
-    /// Generate the SQL and parameters needed to query the database's metadata for the names and
-    /// types of the columns of the given table.
-    pub fn columns_sql(&self, _table: &str) -> (String, [DbValue; 1]) {
-        unimplemented!()
-    }
-
-    /// Generate the SQL and parameters needed to query the database's metadata for the primary
-    /// key columns of the given table.
-    pub fn primary_keys_sql(&self, _table: &str) -> (String, [DbValue; 1]) {
-        unimplemented!()
-    }
-
-    /// Generate the SQL and parameters needed to determine which of the given list of
-    /// database names correspond to views in the database.
-    pub fn which_are_views_sql(self, _objects: &[&str]) -> (String, Vec<DbValue>) {
-        unimplemented!()
-    }
-
-    /// Generate the SQL and parameters needed to determine which of the given list of
-    /// database names correspond to tables in the database.
-    pub fn which_are_tables_sql(self, _objects: &[&str]) -> (String, Vec<DbValue>) {
-        unimplemented!()
-    }
-
-    /// Generate the SQL and parameters needed to retrieve the underlying SQL code for the
-    /// given view.
-    pub fn view_sql_sql(self, _view: &str) -> (String, [DbValue; 1]) {
-        unimplemented!()
-    }
-
-    /// Generate the SQL needed to create the query cache.
-    pub fn create_query_cache_table_sql(&self) -> String {
-        unimplemented!()
-    }
-
-    /// Generate the SQL needed to create the table cache.
-    pub fn create_table_cache_table_sql(&self) -> String {
-        unimplemented!()
-    }
-
-    /// Generate the SQL statements needed to create caching triggers for the given table.
-    pub fn create_table_caching_triggers_for_table_sql(
-        &self,
-        _table: &str,
-    ) -> Result<Vec<String>, DbError> {
-        unimplemented!()
-    }
-
-    /// Generate the SQL statements needed to create caching triggers for the given table, which
-    /// is assumed to be a source table for the given view.
-    pub fn create_table_caching_triggers_for_view_sql(
-        &self,
-        _table: &str,
-        _view: &str,
-    ) -> Result<Vec<String>, DbError> {
-        unimplemented!()
-    }
-
-    /// Generate the SQL statements to create a caching function and triggers with the given
-    /// trigger content for the given table using the given trigger basename.
-    fn wrap_trigger_content(
-        &self,
-        _table: &str,
-        _trigger_basename: &str,
-        _trigger_content: &str,
-    ) -> Result<Vec<String>, DbError> {
-        unimplemented!()
     }
 }
 
