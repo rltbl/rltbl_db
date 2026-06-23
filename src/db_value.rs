@@ -16,6 +16,10 @@ pub type JsonRow = JsonMap<String, JsonValue>;
 pub type StringRow = IndexMap<String, String>;
 pub type ColumnMap = IndexMap<String, String>;
 
+//////////////////////////////////////////////////////////////////////
+// Database values
+//////////////////////////////////////////////////////////////////////
+
 /// Value types for [query parameters](DbParams) and [rows](DbRow)
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub enum DbValue {
@@ -43,6 +47,18 @@ pub enum DbValue {
     /// Other types that are not explicitly supported, represented by the triple
     /// (other type, raw representation, optional string representation)
     Other(String, Vec<u8>, Option<String>),
+}
+
+/// Types that implement this trait can be converted into a [DbValue].
+pub trait IntoDbValue {
+    fn into_db_value(self) -> DbValue;
+}
+
+/// Implements [IntoDbValue] for types that implement [TryFrom] for [DbValue].
+impl<T: Into<DbValue>> IntoDbValue for T {
+    fn into_db_value(self) -> DbValue {
+        self.into()
+    }
 }
 
 impl DbValue {
@@ -822,19 +838,11 @@ impl PartialEq for DbValue {
 
 impl Eq for DbValue {}
 
-/// Types that implement this trait can be converted into a [DbValue].
-pub trait IntoDbValue {
-    fn into_db_value(self) -> DbValue;
-}
+//////////////////////////////////////////////////////////////////////
+// Database query parameters
+//////////////////////////////////////////////////////////////////////
 
-/// Implements [IntoDbValue] for types that implement [TryFrom] for [DbValue].
-impl<T: Into<DbValue>> IntoDbValue for T {
-    fn into_db_value(self) -> DbValue {
-        self.into()
-    }
-}
-
-/// Query parameters
+/// Database query parameters
 #[derive(Debug, Clone)]
 pub enum DbParams {
     None,
@@ -893,13 +901,25 @@ impl<T: IntoDbValue> IntoDbParams for Vec<T> {
     }
 }
 
+//////////////////////////////////////////////////////////////////////
 // Database rows
+//////////////////////////////////////////////////////////////////////
 
 /// A row of database values indexed by column name.
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(transparent)] // See https://serde.rs/container-attrs.html#transparent
 pub struct DbRow {
     pub map: IndexMap<String, DbValue>,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct DbRows {
+    pub content: Vec<DbRow>,
+}
+
+/// Enables conversion from something into a vector of [DbRow]s
+pub trait IntoDbRows {
+    fn into_db_rows(self) -> DbRows;
 }
 
 impl Deref for DbRow {
@@ -916,6 +936,20 @@ impl DerefMut for DbRow {
     }
 }
 
+impl Deref for DbRows {
+    type Target = Vec<DbRow>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.content
+    }
+}
+
+impl DerefMut for DbRows {
+    fn deref_mut(&mut self) -> &mut Vec<DbRow> {
+        &mut self.content
+    }
+}
+
 impl DbRow {
     pub fn new() -> Self {
         DbRow {
@@ -929,6 +963,215 @@ impl DbRow {
 
     pub fn get(&self, key: &str) -> Option<DbValue> {
         self.map.get(key).cloned()
+    }
+
+    pub fn remove_nulls(mut self) -> Self {
+        self.map = self
+            .map
+            .into_iter()
+            .filter(|(_key, value)| !value.is_null())
+            .collect();
+        self
+    }
+
+    pub fn try_into<T>(&self) -> Result<T, DbError>
+    where
+        T: for<'de> Deserialize<'de>,
+    {
+        let mut deserializer = crate::serde::DbRowDeserializer::from_db_row(self);
+        let t = T::deserialize(&mut deserializer)
+            .map_err(|err| DbError::SerdeError(format!("{err} while deserializing {self:?}")));
+        t
+    }
+}
+
+impl DbRows {
+    pub fn row(&self) -> Result<&DbRow, DbError> {
+        if self.len() != 1 {
+            return Err(DbError::DataError(format!(
+                "Wrong number of rows: {}",
+                self.len()
+            )));
+        }
+        Ok(self.first().unwrap())
+    }
+
+    pub fn value(&self) -> Result<&DbValue, DbError> {
+        if self.len() != 1 {
+            return Err(DbError::DataError(format!(
+                "Wrong number of rows: {}",
+                self.len()
+            )));
+        }
+        let row = self.row()?;
+        if row.len() != 1 {
+            return Err(DbError::DataError(format!(
+                "Wrong number of values: {}",
+                row.len()
+            )));
+        }
+        let (_key, value) = row.first().unwrap();
+        Ok(value)
+    }
+
+    pub fn remove_nulls(mut self) -> Self {
+        self.content = self
+            .content
+            .into_iter()
+            .map(|row| row.remove_nulls())
+            .collect();
+        self
+    }
+
+    pub fn to_strings(&self) -> Result<Vec<String>, DbError> {
+        self.content
+            .iter()
+            .map(|row| match row.first() {
+                Some((_key, value)) => Ok(value.to_string()),
+                None => Err(DbError::DataError(format!("Missing value"))),
+            })
+            .collect()
+    }
+
+    pub fn try_into_value<T>(&self) -> Result<T, DbError>
+    where
+        T: TryFrom<DbValue, Error = DbError>,
+    {
+        self.value()?.clone().try_into()
+    }
+
+    pub fn try_into_vec<T>(&self) -> Result<Vec<T>, DbError>
+    where
+        T: for<'de> Deserialize<'de>,
+    {
+        self.content.iter().map(|row| row.try_into()).collect()
+    }
+}
+
+impl Into<StringRow> for DbRow {
+    fn into(self) -> StringRow {
+        self.iter()
+            .map(|(key, value)| (key.clone(), value.into()))
+            .collect()
+    }
+}
+
+impl Into<StringRow> for &DbRow {
+    fn into(self) -> StringRow {
+        self.clone().into()
+    }
+}
+
+impl Into<Vec<StringRow>> for DbRows {
+    fn into(self) -> Vec<StringRow> {
+        self.content.iter().map(|row| row.into()).collect()
+    }
+}
+
+impl Into<Vec<StringRow>> for &DbRows {
+    fn into(self) -> Vec<StringRow> {
+        self.clone().into()
+    }
+}
+
+impl Into<JsonRow> for DbRow {
+    fn into(self) -> JsonRow {
+        self.map
+            .into_iter()
+            .map(|(key, value)| (key, value.into()))
+            .collect()
+    }
+}
+
+impl TryInto<JsonValue> for DbRows {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<JsonValue, Self::Error> {
+        let value = self.value()?;
+        match value.as_json() {
+            Some(json_value) => Ok(json_value),
+            None => Err(DbError::InputError(format!("Not a JSON value: {value}"))),
+        }
+    }
+}
+
+impl TryInto<JsonValue> for &DbRows {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<JsonValue, Self::Error> {
+        Ok(self.clone().value()?.into())
+    }
+}
+
+impl TryInto<String> for DbRows {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<String, Self::Error> {
+        Ok(self.value()?.to_string())
+    }
+}
+
+impl TryInto<String> for &DbRows {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<String, Self::Error> {
+        Ok(self.clone().value()?.into())
+    }
+}
+
+impl TryInto<u64> for DbRows {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<u64, Self::Error> {
+        Ok(self.value()?.try_into()?)
+    }
+}
+
+impl TryInto<u64> for &DbRows {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<u64, Self::Error> {
+        Ok(self.value()?.try_into()?)
+    }
+}
+
+impl TryInto<i64> for DbRows {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<i64, Self::Error> {
+        Ok(self.value()?.try_into()?)
+    }
+}
+
+impl TryInto<i64> for &DbRows {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<i64, Self::Error> {
+        Ok(self.value()?.try_into()?)
+    }
+}
+
+impl TryInto<i32> for DbRows {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<i32, Self::Error> {
+        Ok(self.value()?.try_into()?)
+    }
+}
+
+impl TryInto<f64> for DbRows {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<f64, Self::Error> {
+        Ok(self.value()?.try_into()?)
+    }
+}
+
+impl TryInto<f64> for &DbRows {
+    type Error = DbError;
+
+    fn try_into(self) -> Result<f64, Self::Error> {
+        Ok(self.value()?.try_into()?)
     }
 }
 
@@ -949,137 +1192,84 @@ impl FromIterator<(String, DbValue)> for DbRow {
     }
 }
 
-// Traits for converting to and from vectors of DbRows:
-
-/// Enables conversion from something into a vector of [DbRow]s
-pub trait IntoDbRows {
-    fn into_db_rows(self) -> Vec<DbRow>;
-}
-
-impl IntoDbRows for Vec<DbRow> {
-    fn into_db_rows(self) -> Vec<DbRow> {
+impl IntoDbRows for DbRows {
+    fn into_db_rows(self) -> DbRows {
         self
     }
 }
 
-impl IntoDbRows for &Vec<DbRow> {
-    fn into_db_rows(self) -> Vec<DbRow> {
+impl IntoDbRows for &DbRows {
+    fn into_db_rows(self) -> DbRows {
         self.clone()
     }
 }
 
+impl IntoDbRows for Vec<DbRow> {
+    fn into_db_rows(self) -> DbRows {
+        DbRows { content: self }
+    }
+}
+
+impl IntoDbRows for &Vec<DbRow> {
+    fn into_db_rows(self) -> DbRows {
+        DbRows {
+            content: self.clone(),
+        }
+    }
+}
+
 impl IntoDbRows for &[DbRow] {
-    fn into_db_rows(self) -> Vec<DbRow> {
-        self.to_vec()
+    fn into_db_rows(self) -> DbRows {
+        DbRows {
+            content: self.to_vec(),
+        }
     }
 }
 
 impl IntoDbRows for &[&DbRow] {
-    fn into_db_rows(self) -> Vec<DbRow> {
-        self.into_iter()
-            .cloned()
-            .map(|row| row.clone())
-            .collect::<Vec<_>>()
+    fn into_db_rows(self) -> DbRows {
+        DbRows {
+            content: self
+                .into_iter()
+                .cloned()
+                .map(|row| row.clone())
+                .collect::<Vec<_>>(),
+        }
     }
 }
 
 impl<const N: usize> IntoDbRows for &[&DbRow; N] {
-    fn into_db_rows(self) -> Vec<DbRow> {
-        self.into_iter()
-            .cloned()
-            .map(|row| row.clone())
-            .collect::<Vec<_>>()
+    fn into_db_rows(self) -> DbRows {
+        DbRows {
+            content: self
+                .into_iter()
+                .cloned()
+                .map(|row| row.clone())
+                .collect::<Vec<_>>(),
+        }
     }
 }
 
 impl IntoDbRows for Vec<JsonRow> {
-    fn into_db_rows(self) -> Vec<DbRow> {
-        self.into_iter()
-            .map(|row| {
-                row.into_iter()
-                    .map(|(key, val)| (key, DbValue::from(val)))
-                    .collect()
-            })
-            .collect::<Vec<_>>()
+    fn into_db_rows(self) -> DbRows {
+        DbRows {
+            content: self
+                .into_iter()
+                .map(|row| {
+                    row.into_iter()
+                        .map(|(key, val)| (key, DbValue::from(val)))
+                        .collect()
+                })
+                .collect::<Vec<_>>(),
+        }
     }
 }
 
 impl IntoDbRows for &Vec<JsonRow> {
-    fn into_db_rows(self) -> Vec<DbRow> {
-        self.clone().into_db_rows()
-    }
-}
-
-/// Enables conversion from a vector of [DbRow]s into something.
-pub trait FromDbRows {
-    fn from(rows: Vec<DbRow>) -> Self;
-}
-
-impl FromDbRows for Vec<StringRow> {
-    fn from(rows: Vec<DbRow>) -> Self {
-        rows.iter()
-            .map(|row| {
-                row.iter()
-                    .map(|(key, value)| (key.clone(), value.into()))
-                    .collect()
-            })
-            .collect()
-    }
-}
-
-impl FromDbRows for Vec<JsonRow> {
-    fn from(rows: Vec<DbRow>) -> Self {
-        rows.into_iter()
-            .map(|row| {
-                row.into_iter()
-                    .map(|(key, val)| (key, val.into()))
-                    .collect()
-            })
-            .collect::<Vec<_>>()
-    }
-}
-
-impl FromDbRows for Vec<DbRow> {
-    fn from(rows: Vec<DbRow>) -> Self {
-        rows
-    }
-}
-
-/// Enables conversion from something into a [DbRow]
-pub trait IntoDbRow {
-    fn into_db_row(self) -> DbRow;
-}
-
-impl IntoDbRow for DbRow {
-    fn into_db_row(self) -> DbRow {
-        self
-    }
-}
-
-impl IntoDbRow for JsonRow {
-    fn into_db_row(self) -> DbRow {
-        self.into_iter()
-            .map(|(key, val)| (key, val.into()))
-            .collect()
-    }
-}
-
-/// Enables conversion from a [DbRow] into something.
-pub trait FromDbRow {
-    fn from(row: DbRow) -> Self;
-}
-
-impl FromDbRow for DbRow {
-    fn from(row: DbRow) -> Self {
-        row
-    }
-}
-
-impl FromDbRow for JsonRow {
-    fn from(row: DbRow) -> Self {
-        row.into_iter()
-            .map(|(key, val)| (key, val.into()))
-            .collect()
+    fn into_db_rows(self) -> DbRows {
+        DbRows {
+            content: self.clone().into_db_rows().content,
+        }
     }
 }
 

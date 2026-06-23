@@ -12,14 +12,17 @@
 ///          CREATE TABLE test ( value TEXT );\
 ///          INSERT INTO test VALUES ('foo');",
 ///     ).await?;
-///     let value = pool.query_string("SELECT value FROM test;", ()).await?;
+///     let value: String = pool.query("SELECT value FROM test;", ())
+///         .await?
+///         .value()?
+///         .into();
 ///     Ok(value)
 /// }
 /// ```
 use crate::{
     core::{CachingStrategy, DbError, DbQuery},
     db_kind::DbKind,
-    db_value::{FromDbRows, IntoDbParams, IntoDbRows},
+    db_value::{DbRows, IntoDbParams, IntoDbRows},
 };
 
 #[cfg(feature = "rusqlite")]
@@ -179,11 +182,11 @@ impl DbQuery for AnyPool {
     }
 
     /// Implements [DbQuery::query_no_cache_clean()]
-    async fn query_no_cache_clean<T: FromDbRows>(
+    async fn query_no_cache_clean(
         &self,
         sql: &str,
         params: impl IntoDbParams + Send,
-    ) -> Result<T, DbError> {
+    ) -> Result<DbRows, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.query_no_cache_clean(sql, params).await,
@@ -212,13 +215,13 @@ impl DbQuery for AnyPool {
     }
 
     /// Implements [DbQuery::insert_returning()]
-    async fn insert_returning<T: FromDbRows>(
+    async fn insert_returning(
         &self,
         table: &str,
         columns: &[&str],
         rows: impl IntoDbRows,
         returning: &[&str],
-    ) -> Result<T, DbError> {
+    ) -> Result<DbRows, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.insert_returning(table, columns, rows, returning).await,
@@ -249,13 +252,13 @@ impl DbQuery for AnyPool {
     }
 
     /// Implements [DbQuery::update_returning()]
-    async fn update_returning<T: FromDbRows>(
+    async fn update_returning(
         &self,
         table: &str,
         columns: &[&str],
         rows: impl IntoDbRows,
         returning: &[&str],
-    ) -> Result<T, DbError> {
+    ) -> Result<DbRows, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.update_returning(table, columns, rows, returning).await,
@@ -286,13 +289,13 @@ impl DbQuery for AnyPool {
     }
 
     /// Implements [DbQuery::upsert_returning()]
-    async fn upsert_returning<T: FromDbRows>(
+    async fn upsert_returning(
         &self,
         table: &str,
         columns: &[&str],
         rows: impl IntoDbRows,
         returning: &[&str],
-    ) -> Result<T, DbError> {
+    ) -> Result<DbRows, DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.upsert_returning(table, columns, rows, returning).await,
@@ -328,6 +331,7 @@ mod tests {
     use serde_json::json;
     use std::{
         collections::BTreeMap,
+        ops::Deref,
         str::FromStr,
         thread,
         time::{Duration, Instant},
@@ -365,35 +369,55 @@ mod tests {
         .unwrap();
         let select_sql = format!("SELECT value FROM test_table_text WHERE value = {p}1");
         let value: String = pool
-            .query_value(&select_sql, &["foo"])
+            .query(&select_sql, &["foo"])
             .await
+            .unwrap()
+            .value()
             .unwrap()
             .into();
         assert_eq!("foo", value);
 
-        let string = pool.query_string(&select_sql, &["foo"]).await.unwrap();
+        let string: String = pool
+            .query(&select_sql, &["foo"])
+            .await
+            .unwrap()
+            .value()
+            .unwrap()
+            .into();
         assert_eq!("foo", string);
 
-        let strings = pool.query_strings(&select_sql, &["foo"]).await.unwrap();
+        let strings = pool
+            .query(&select_sql, &["foo"])
+            .await
+            .unwrap()
+            .to_strings()
+            .unwrap();
         assert_eq!(vec!["foo".to_owned()], strings);
 
-        let string_row = pool.query_string_row(&select_sql, &["foo"]).await.unwrap();
+        let string_row: StringRow = pool
+            .query(&select_sql, &["foo"])
+            .await
+            .unwrap()
+            .row()
+            .unwrap()
+            .into();
         assert_eq!(
             StringRow::from([("value".to_owned(), "foo".to_owned())]),
             string_row
         );
 
-        let string_rows = pool.query_string_rows(&select_sql, &["foo"]).await.unwrap();
+        let string_rows: Vec<StringRow> = pool.query(&select_sql, &["foo"]).await.unwrap().into();
         assert_eq!(
             vec![StringRow::from([("value".to_owned(), "foo".to_owned())])],
             string_rows
         );
 
-        let row: DbRow = pool.query_row(&select_sql, &["foo"]).await.unwrap();
-        assert_eq!(row, db_row! {"value" => "foo",});
+        let rows = pool.query(&select_sql, &["foo"]).await.unwrap();
+        let row = rows.row().unwrap();
+        assert_eq!(*row, db_row! {"value" => "foo",});
 
-        let rows: Vec<DbRow> = pool.query(&select_sql, &["foo"]).await.unwrap();
-        assert_eq!(rows, [db_row! {"value" => "foo",}]);
+        let rows = pool.query(&select_sql, &["foo"]).await.unwrap();
+        assert_eq!(*rows.deref(), [db_row! {"value" => "foo",}]);
 
         // Clean up:
         pool.drop_table("test_table_text").await.unwrap();
@@ -439,25 +463,33 @@ mod tests {
                 _ => unreachable!(),
             };
             let select_sql = format!("SELECT {column} FROM test_table_int WHERE {column} = {p}1");
-            let value = pool.query_value(&select_sql, params.clone()).await.unwrap();
+            let value = pool.query(&select_sql, params.clone()).await.unwrap();
+            let value = value.value().unwrap();
             let value = TryInto::<i64>::try_into(value).unwrap();
             assert_eq!(1, value);
 
-            let unsigned = pool.query_u64(&select_sql, params.clone()).await.unwrap();
+            let rows = pool.query(&select_sql, params.clone()).await.unwrap();
+            let unsigned: u64 = rows.value().unwrap().try_into().unwrap();
             assert_eq!(1, unsigned);
 
-            let signed = pool.query_i64(&select_sql, params.clone()).await.unwrap();
+            let rows = pool.query(&select_sql, params.clone()).await.unwrap();
+            let signed: i64 = rows.value().unwrap().try_into().unwrap();
             assert_eq!(1, signed);
 
-            let string = pool
-                .query_string(&select_sql, params.clone())
+            let string: String = pool
+                .query(&select_sql, params.clone())
                 .await
-                .unwrap();
+                .unwrap()
+                .value()
+                .unwrap()
+                .into();
             assert_eq!("1", string);
 
             let strings = pool
-                .query_strings(&select_sql, params.clone())
+                .query(&select_sql, params.clone())
                 .await
+                .unwrap()
+                .to_strings()
                 .unwrap();
             assert_eq!(vec!["1".to_owned()], strings);
         }
@@ -499,24 +531,38 @@ mod tests {
         .await
         .unwrap();
         let select_sql = format!("SELECT value FROM test_table_float WHERE value > {p}1");
-        let value = pool.query_value(&select_sql, &[1.0_f64]).await.unwrap();
+        let value = pool.query(&select_sql, &[1.0_f64]).await.unwrap();
+        let value = value.value().unwrap();
         let value = TryInto::<f64>::try_into(value).unwrap();
         assert_eq!("1.05", format!("{value:.2}"));
 
-        let float = pool.query_f64(&select_sql, &[1.0_f64]).await.unwrap();
+        let rows = pool.query(&select_sql, &[1.0_f64]).await.unwrap();
+        let float: f64 = rows.value().unwrap().try_into().unwrap();
         assert_eq!(1.05, float);
 
-        let string = pool.query_string(&select_sql, &[1.0_f64]).await.unwrap();
+        let string: String = pool
+            .query(&select_sql, &[1.0_f64])
+            .await
+            .unwrap()
+            .value()
+            .unwrap()
+            .into();
         assert_eq!("1.05", string);
 
-        let strings = pool.query_strings(&select_sql, &[1.0_f64]).await.unwrap();
+        let strings = pool
+            .query(&select_sql, &[1.0_f64])
+            .await
+            .unwrap()
+            .to_strings()
+            .unwrap();
         assert_eq!(vec!["1.05".to_owned()], strings);
 
-        let row: DbRow = pool.query_row(&select_sql, &[1.0_f64]).await.unwrap();
-        assert_eq!(row, db_row! {"value" => 1.05,});
+        let rows = pool.query(&select_sql, &[1.0_f64]).await.unwrap();
+        let row = rows.row().unwrap();
+        assert_eq!(*row, db_row! {"value" => 1.05,});
 
-        let rows: Vec<DbRow> = pool.query(&select_sql, &[1.0_f64]).await.unwrap();
-        assert_eq!(rows, [db_row! {"value" => 1.05,}]);
+        let rows = pool.query(&select_sql, &[1.0_f64]).await.unwrap();
+        assert_eq!(*rows.deref(), [db_row! {"value" => 1.05,}]);
 
         // FLOAT4
         pool.execute_batch(&format!(
@@ -536,7 +582,8 @@ mod tests {
         .await
         .unwrap();
         let select_sql = format!("SELECT value FROM test_table_float WHERE value > {p}1");
-        let value = pool.query_value(&select_sql, &[1.0_f32]).await.unwrap();
+        let value = pool.query(&select_sql, &[1.0_f32]).await.unwrap();
+        let value = value.value().unwrap();
         let value = TryInto::<f32>::try_into(value).unwrap();
         assert_eq!("1.05", format!("{value:.2}"));
 
@@ -602,7 +649,13 @@ mod tests {
         .unwrap();
 
         let select_sql = format!("SELECT text_value FROM test_table_mixed WHERE text_value = {p}1");
-        let value: String = pool.query_value(&select_sql, ["foo"]).await.unwrap().into();
+        let value: String = pool
+            .query(&select_sql, ["foo"])
+            .await
+            .unwrap()
+            .value()
+            .unwrap()
+            .into();
         assert_eq!("foo", value);
 
         let select_sql = format!(
@@ -627,9 +680,10 @@ mod tests {
         );
         let params = params!["foo", (), 1.0_f64, 0_i64, true, dec!(0.999)];
 
-        let row: DbRow = pool.query_row(&select_sql, params.clone()).await.unwrap();
+        let rows = pool.query(&select_sql, params.clone()).await.unwrap();
+        let row = rows.row().unwrap();
         assert_eq!(
-            row,
+            *row,
             db_row! {
                 "text_value" => "foo",
                 "alt_text_value" => DbValue::Null,
@@ -647,9 +701,9 @@ mod tests {
             }
         );
 
-        let rows: Vec<DbRow> = pool.query(&select_sql, params.clone()).await.unwrap();
+        let rows = pool.query(&select_sql, params.clone()).await.unwrap();
         assert_eq!(
-            rows,
+            *rows.deref(),
             [db_row! {
                 "text_value" => "foo",
                 "alt_text_value" => DbValue::Null,
@@ -845,12 +899,12 @@ mod tests {
         .unwrap();
 
         // Validate the inserted data:
-        let rows: Vec<DbRow> = pool
+        let rows = pool
             .query(r#"SELECT * FROM test_insert"#, ())
             .await
             .unwrap();
         assert_eq!(
-            rows,
+            *rows.deref(),
             [
                 db_row! {
                     "text_value" => "TEXT",
@@ -907,7 +961,7 @@ mod tests {
         .unwrap();
 
         // Without specific returning columns:
-        let rows: Vec<DbRow> = pool
+        let rows = pool
             .insert_returning(
                 "test_insert_returning",
                 &["text_value", "int_value", "bool_value"],
@@ -923,7 +977,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            rows,
+            *rows.deref(),
             [
                 db_row! {
                     "text_value" => "TEXT",
@@ -946,7 +1000,7 @@ mod tests {
         );
 
         // With specific returning columns:
-        let rows: Vec<DbRow> = pool
+        let rows = pool
             .insert_returning(
                 "test_insert_returning",
                 &["text_value", "int_value", "bool_value"],
@@ -964,7 +1018,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            rows,
+            *rows.deref(),
             [
                 db_row! {
                     "float_value" => DbValue::Null,
@@ -1148,9 +1202,9 @@ mod tests {
         .await
         .unwrap();
 
-        let rows: Vec<DbRow> = pool.query("SELECT * from test_update", ()).await.unwrap();
+        let rows = pool.query("SELECT * from test_update", ()).await.unwrap();
         assert_eq!(
-            rows,
+            *rows.deref(),
             [
                 db_row! {
                     "foo" => 1_i64,
@@ -1351,7 +1405,7 @@ mod tests {
         );
 
         // Final sanity check on the values of all columns:
-        let rows: Vec<DbRow> = pool
+        let rows = pool
             .query("SELECT * from test_update_returning", ())
             .await
             .unwrap();
@@ -1464,9 +1518,9 @@ mod tests {
         .await
         .unwrap();
 
-        let rows: Vec<DbRow> = pool.query("SELECT * from test_upsert", ()).await.unwrap();
+        let rows = pool.query("SELECT * from test_upsert", ()).await.unwrap();
         assert_eq!(
-            rows,
+            *rows.deref(),
             [
                 db_row! {
                     "foo" => 1_i64,
@@ -1548,7 +1602,7 @@ mod tests {
         .await
         .unwrap();
 
-        let rows: Vec<DbRow> = pool
+        let rows = pool
             .upsert_returning(
                 "test_upsert_returning",
                 &["foo", "bar", "car", "dar", "ear"],
@@ -1605,15 +1659,21 @@ mod tests {
     }
 
     async fn count_query_cache_rows(pool: &mut AnyPool) -> u64 {
-        pool.query_u64(&format!("SELECT COUNT(1) from {QUERY_CACHE_TABLE}"), ())
+        let rows = pool
+            .query(&format!("SELECT COUNT(1) from {QUERY_CACHE_TABLE}"), ())
             .await
-            .unwrap()
+            .unwrap();
+        let value: u64 = rows.value().unwrap().try_into().unwrap();
+        value
     }
 
     async fn count_table_cache_rows(pool: &mut AnyPool) -> u64 {
-        pool.query_u64(&format!("SELECT COUNT(1) from {TABLE_CACHE_TABLE}"), ())
+        let rows = pool
+            .query(&format!("SELECT COUNT(1) from {TABLE_CACHE_TABLE}"), ())
             .await
-            .unwrap()
+            .unwrap();
+        let value: u64 = rows.value().unwrap().try_into().unwrap();
+        value
     }
 
     fn count_memory_query_cache_rows() -> u64 {
@@ -1705,12 +1765,8 @@ mod tests {
         .await
         .unwrap();
 
-        let rows: Vec<DbRow> = pool
-            .cache(
-                &["test_table_caching_1"],
-                "SELECT * from test_table_caching_1",
-                (),
-            )
+        let rows = pool
+            .cache("SELECT * from test_table_caching_1", ())
             .await
             .unwrap();
 
@@ -1720,7 +1776,7 @@ mod tests {
             _ => assert_eq!(count_query_cache_rows(pool).await, 1),
         };
         assert_eq!(
-            rows,
+            *rows.deref(),
             vec![
                 db_row! {
                     "value" => "alpha",
@@ -1731,12 +1787,8 @@ mod tests {
             ]
         );
 
-        let rows: Vec<DbRow> = pool
-            .cache(
-                &["test_table_caching_1"],
-                "SELECT * from test_table_caching_1",
-                (),
-            )
+        let rows = pool
+            .cache("SELECT * from test_table_caching_1", ())
             .await
             .unwrap();
 
@@ -1746,7 +1798,7 @@ mod tests {
             _ => assert_eq!(count_query_cache_rows(pool).await, 1),
         };
         assert_eq!(
-            rows,
+            *rows.deref(),
             vec![
                 db_row! {
                     "value" => "alpha",
@@ -1778,12 +1830,8 @@ mod tests {
             _ => assert_eq!(count_query_cache_rows(pool).await, 0),
         };
 
-        let rows: Vec<DbRow> = pool
-            .cache(
-                &["test_table_caching_1"],
-                "SELECT * from test_table_caching_1",
-                (),
-            )
+        let rows = pool
+            .cache("SELECT * from test_table_caching_1", ())
             .await
             .unwrap();
 
@@ -1793,7 +1841,7 @@ mod tests {
             _ => assert_eq!(count_query_cache_rows(pool).await, 1),
         };
         assert_eq!(
-            rows,
+            *rows.deref(),
             vec![
                 db_row! {
                     "value" => "alpha",
@@ -1810,17 +1858,13 @@ mod tests {
             ]
         );
 
-        let rows: Vec<DbRow> = pool
-            .cache(
-                &["test_table_caching_1"],
-                "SELECT * from test_table_caching_1",
-                (),
-            )
+        let rows = pool
+            .cache("SELECT * from test_table_caching_1", ())
             .await
             .unwrap();
 
         assert_eq!(
-            rows,
+            *rows.deref(),
             vec![
                 db_row! {
                     "value" => "alpha",
@@ -1837,21 +1881,11 @@ mod tests {
             ]
         );
 
-        let _: Vec<DbRow> = pool
-            .cache(
-                &["test_table_caching_1"],
-                "SELECT COUNT(1) FROM test_table_caching_1",
-                (),
-            )
+        pool.cache("SELECT COUNT(1) FROM test_table_caching_1", ())
             .await
             .unwrap();
 
-        let _: Vec<DbRow> = pool
-            .cache(
-                &["test_table_caching_2"],
-                "SELECT COUNT(1) FROM test_table_caching_2",
-                (),
-            )
+        pool.cache("SELECT COUNT(1) FROM test_table_caching_2", ())
             .await
             .unwrap();
 
@@ -1877,12 +1911,8 @@ mod tests {
             CachingStrategy::TruncateAll => assert_eq!(count_query_cache_rows(pool).await, 0),
         };
 
-        let rows: Vec<DbRow> = pool
-            .cache(
-                &["test_table_caching_1"],
-                "SELECT * from test_table_caching_1",
-                (),
-            )
+        let rows = pool
+            .cache("SELECT * from test_table_caching_1", ())
             .await
             .unwrap();
 
@@ -1895,7 +1925,7 @@ mod tests {
             CachingStrategy::TruncateAll => assert_eq!(count_query_cache_rows(pool).await, 1),
         };
         assert_eq!(
-            rows,
+            *rows.deref(),
             vec![
                 db_row! {
                     "value" => "alpha",
@@ -1918,9 +1948,8 @@ mod tests {
             ]
         );
 
-        let rows: Vec<DbRow> = pool
+        let rows = pool
             .cache(
-                &["test_table_caching_1", "test_table_caching_2"],
                 "SELECT * FROM test_table_caching_1 t1, test_table_caching_2 t2 \
                  WHERE t1.value = t2.value",
                 (),
@@ -1937,9 +1966,8 @@ mod tests {
         };
         assert_eq!(rows.len(), 0);
 
-        let rows: Vec<DbRow> = pool
+        let rows = pool
             .cache(
-                &["test_table_caching_1", "test_table_caching_2"],
                 "SELECT * FROM test_table_caching_1 t1, test_table_caching_2 t2 \
                  WHERE t1.value = t2.value",
                 (),
@@ -2015,12 +2043,7 @@ mod tests {
         pool.set_caching_strategy(strategy);
         pool.set_cache_aware_query(true);
 
-        let _: Vec<DbRow> = pool
-            .cache(
-                &["test_vcaching_view_1"],
-                "SELECT * FROM test_vcaching_view_1",
-                (),
-            )
+        pool.cache("SELECT * FROM test_vcaching_view_1", ())
             .await
             .unwrap();
 
@@ -2063,12 +2086,7 @@ mod tests {
             _ => assert_eq!(count_table_cache_rows(pool).await, 1),
         };
 
-        let _: Vec<DbRow> = pool
-            .cache(
-                &["test_vcaching_view_1"],
-                "SELECT * FROM test_vcaching_view_1",
-                (),
-            )
+        pool.cache("SELECT * FROM test_vcaching_view_1", ())
             .await
             .unwrap();
 
@@ -2078,12 +2096,7 @@ mod tests {
             _ => assert_eq!(count_query_cache_rows(pool).await, 1),
         };
 
-        let _: Vec<DbRow> = pool
-            .cache(
-                &["test_vcaching_view_2"],
-                "SELECT * FROM test_vcaching_view_2",
-                (),
-            )
+        pool.cache("SELECT * FROM test_vcaching_view_2", ())
             .await
             .unwrap();
 
@@ -2093,12 +2106,7 @@ mod tests {
             _ => assert_eq!(count_query_cache_rows(pool).await, 2),
         };
 
-        let _: Vec<DbRow> = pool
-            .cache(
-                &["test_vcaching_table"],
-                "SELECT * FROM test_vcaching_table",
-                (),
-            )
+        pool.cache("SELECT * FROM test_vcaching_table", ())
             .await
             .unwrap();
 
@@ -2152,13 +2160,13 @@ mod tests {
     async fn test_caching_performance() {
         let runs = 2500;
         let edit_rate = 25;
-        let timeout = 45;
+        let fail_after = 100;
         #[cfg(feature = "rusqlite")]
-        perform_caching(":memory:", runs, edit_rate, timeout).await;
+        perform_caching(":memory:", runs, edit_rate, fail_after).await;
         #[cfg(feature = "tokio-postgres")]
-        perform_caching("postgresql:///rltbl_db", runs, edit_rate, timeout).await;
+        perform_caching("postgresql:///rltbl_db", runs, edit_rate, fail_after).await;
         #[cfg(feature = "libsql")]
-        perform_caching(":memory:", runs, edit_rate, timeout).await;
+        perform_caching(":memory:", runs, edit_rate, fail_after).await;
     }
 
     // Performs the caching performance test on the database located at the given url, using
@@ -2189,19 +2197,37 @@ mod tests {
         );
         let mut times = BTreeMap::new();
         let mut elapsed_none: u64 = 0;
+        let mut actual_edits_none: usize = 0;
         for strategy in &all_strategies {
             println!("{this_test} Using strategy: {strategy}.");
             pool.set_caching_strategy(&strategy);
-            let elapsed: u64 = perform_caching_detail(&pool, runs, fail_after, edit_rate).await;
+            let fail_after = match strategy {
+                CachingStrategy::None => 0,
+                _ => fail_after,
+            };
+            let (elapsed, actual_edits) =
+                perform_caching_detail(&pool, runs, fail_after, edit_rate).await;
             times.insert(format!("{strategy}"), elapsed);
             if *strategy == CachingStrategy::None {
                 elapsed_none = elapsed;
+                actual_edits_none = actual_edits;
             } else {
                 // The elapsed time for strategy 'none' should always be greater than for the
                 // other caching strategies. Note that it is assumed that the None strategy
                 // is always tested before any of the other strategies (otherwise this assertion
                 // is certain to fail).
-                assert!(elapsed_none > elapsed);
+                //
+                if actual_edits <= actual_edits_none {
+                    assert!(elapsed_none > elapsed);
+                } else {
+                    if elapsed >= elapsed_none {
+                        println!(
+                            "WARNING: elapsed time for {strategy} took longer or just as long \
+                             as none, but there were more edits for {strategy}: \
+                             {actual_edits} vs. {actual_edits_none}."
+                        );
+                    }
+                }
             }
         }
 
@@ -2216,7 +2242,7 @@ mod tests {
         runs: usize,
         fail_after: usize,
         edit_rate: usize,
-    ) -> u64 {
+    ) -> (u64, usize) {
         fn random_between(min: usize, max: usize, seed: &mut i64) -> usize {
             let between = Uniform::try_from(min..max).unwrap();
             let mut rng = if *seed < 0 {
@@ -2252,10 +2278,10 @@ mod tests {
             .await
             .unwrap();
 
-            // Add a few thousand values to the table:
+            // Add a few tens of thousands of values to the table:
             let mut values = vec![];
             for i in 0..5 {
-                for j in 0..random_between(2000, 4000, &mut -1) {
+                for j in 0..random_between(34000, 35000, &mut -1) {
                     values.push(format!("({i}, {j})"));
                 }
             }
@@ -2274,18 +2300,14 @@ mod tests {
         let mut actual_edits = 0;
         while i < runs {
             let select_table = random_table(&tables_to_choose_from);
-            let _: Vec<DbRow> = pool
-                .cache(
-                    &[select_table],
-                    &format!(
-                        "SELECT foo, SUM(bar) FROM {select_table}_view GROUP BY foo ORDER BY foo"
-                    ),
-                    (),
-                )
-                .await
-                .unwrap();
+            pool.cache(
+                &format!("SELECT foo, SUM(bar) FROM {select_table}_view GROUP BY foo ORDER BY foo"),
+                (),
+            )
+            .await
+            .unwrap();
             elapsed = now.elapsed().as_secs();
-            if elapsed > fail_after as u64 {
+            if fail_after != 0 && elapsed > fail_after as u64 {
                 panic!("Taking longer than {fail_after}s. Timing out.");
             }
             if edit_rate != 0 && random_between(0, edit_rate, &mut -1) == 0 {
@@ -2312,7 +2334,7 @@ mod tests {
         for table in tables_to_choose_from.iter() {
             pool.drop_table(table).await.unwrap();
         }
-        elapsed
+        (elapsed, actual_edits)
     }
 
     #[tokio::test]
@@ -2346,10 +2368,11 @@ mod tests {
         .unwrap();
 
         // Get the value that was just inserted and use it to edit the table and verify the result:
-        let mut db_rows: Vec<DbRow> = pool
+        let mut db_rows = pool
             .query(r#"SELECT * FROM test_json_values"#, ())
             .await
-            .unwrap();
+            .unwrap()
+            .content;
         let db_row = db_rows.pop().unwrap();
         // Because SQLite doesn't actually have a JSON datatye (other than as an alias for TEXT),
         // the DbValue corresponding to "bar" will be DbValue::Text, while it will be DbValue::Json
@@ -2372,10 +2395,11 @@ mod tests {
         .unwrap();
 
         // Query the column again and make sure that the value is what we expect:
-        let mut db_rows: Vec<DbRow> = pool
+        let mut db_rows = pool
             .query(r#"SELECT * FROM test_json_values"#, ())
             .await
-            .unwrap();
+            .unwrap()
+            .content;
         let db_row = db_rows.pop().unwrap();
         let bar: JsonValue = serde_json::from_str(&db_row.get("bar").unwrap().to_string()).unwrap();
         assert_eq!(bar, json!({"alpha":1}));

@@ -3,8 +3,8 @@
 use crate::core::{DbError, QUERY_CACHE_TABLE, TABLE_CACHE_TABLE};
 use lazy_static::lazy_static;
 use regex::Regex;
-use std::collections::HashSet;
-use tree_sitter::{Node, Parser};
+use std::collections::BTreeSet;
+use tree_sitter::{Node, Parser, Tree};
 use tree_sitter_sequel::LANGUAGE as SQL_LANGUAGE;
 
 /// Validates that a given [Node] is not an error node:
@@ -93,7 +93,6 @@ pub fn get_view_tables(view_sql: &str) -> Result<Vec<String>, DbError> {
             .collect::<Vec<_>>()
     };
 
-    let mut view_tables = vec![];
     for statement in &statements {
         validate_node(&statement, &view_sql)?;
         for instruction in statement.children(&mut tree.walk()) {
@@ -106,56 +105,289 @@ pub fn get_view_tables(view_sql: &str) -> Result<Vec<String>, DbError> {
                         .collect::<Vec<_>>();
                     validate_list_len(&create_query, 1)?;
                     let create_query = create_query[0];
-                    validate_node(&create_query, &view_sql)?;
-
-                    let from = create_query
-                        .children(&mut create_query.walk())
-                        .filter(|child| child.kind().to_lowercase() == "from")
+                    let create_sql = view_sql.to_string()
+                        [create_query.start_byte()..create_query.end_byte()]
+                        .to_string();
+                    let view_tables = get_accessed_tables(&create_sql)?
+                        .into_iter()
                         .collect::<Vec<_>>();
-                    validate_list_len(&from, 1)?;
-                    let from = from[0];
-                    validate_node(&from, &view_sql)?;
-
-                    let relations = from
-                        .children(&mut from.walk())
-                        .filter(|child| child.kind().to_lowercase() == "relation")
-                        .collect::<Vec<_>>();
-                    for relation in relations {
-                        validate_node(&relation, &view_sql)?;
-                        let object_ref = relation
-                            .children(&mut relation.walk())
-                            .filter(|child| child.kind().to_lowercase() == "object_reference")
-                            .collect::<Vec<_>>();
-                        validate_list_len(&object_ref, 1)?;
-                        let object_ref = object_ref[0];
-                        validate_node(&object_ref, &view_sql)?;
-
-                        let source_table = view_sql.to_string()
-                            [object_ref.start_byte()..object_ref.end_byte()]
-                            .to_string();
-                        view_tables.push(source_table);
-                    }
-                    break;
+                    return Ok(view_tables);
                 }
                 _ => (),
             }
         }
     }
-    Ok(view_tables)
+    Err(DbError::InputError(format!(
+        "Not a valid CREATE VIEW statement: {view_sql}"
+    )))
+}
+
+/// Parse the given string, representing a series of (semi-colon-separated) SQL commands,
+/// into their constituents and determine the tables and views that will be read from when
+/// the commands are executed, if any.
+pub fn get_accessed_tables(sql: &str) -> Result<BTreeSet<String>, DbError> {
+    fn process_select_clause(
+        sql: &str,
+        select_clause: Node<'_>,
+        tables_read: &mut BTreeSet<String>,
+    ) -> Result<(), DbError> {
+        let from = select_clause
+            .next_sibling()
+            .ok_or(DbError::InputError(format!("Invalid SQL: {sql}")))?;
+
+        let relations = from
+            .children(&mut from.walk())
+            .filter(|child| child.kind().to_lowercase() == "relation")
+            .collect::<Vec<_>>();
+
+        for relation in relations {
+            validate_node(&relation, &sql)?;
+            let object_ref = relation
+                .children(&mut relation.walk())
+                .filter(|child| child.kind().to_lowercase() == "object_reference")
+                .collect::<Vec<_>>();
+            validate_list_len(&object_ref, 1)?;
+            let object_ref = object_ref[0];
+            validate_node(&object_ref, &sql)?;
+
+            let table = validate_table_name(
+                &sql.to_string()[object_ref.start_byte()..object_ref.end_byte()],
+            )?;
+            tables_read.insert(table.to_string());
+        }
+
+        let join_clause = from
+            .children(&mut from.walk())
+            .filter(|child| child.kind().to_lowercase() == "join")
+            .collect::<Vec<_>>();
+        if join_clause.len() > 0 {
+            validate_list_len(&join_clause, 1)?;
+            let join_clause = join_clause[0];
+            process_join_clause(sql, join_clause, tables_read)?;
+        }
+
+        let where_clause = from
+            .children(&mut from.walk())
+            .filter(|child| child.kind().to_lowercase() == "where")
+            .collect::<Vec<_>>();
+        if where_clause.len() > 0 {
+            validate_list_len(&where_clause, 1)?;
+            let where_clause = where_clause[0];
+            process_where_clause(sql, where_clause, tables_read)?;
+        }
+        Ok(())
+    }
+
+    fn process_where_clause(
+        sql: &str,
+        where_clause: Node<'_>,
+        tables_read: &mut BTreeSet<String>,
+    ) -> Result<(), DbError> {
+        let expressions = where_clause
+            .children(&mut where_clause.walk())
+            .filter(|child| {
+                [
+                    "unary_expression",
+                    "binary_expression",
+                    "parenthesized_expression",
+                ]
+                .contains(&child.kind().to_lowercase().as_str())
+            })
+            .collect::<Vec<_>>();
+
+        for expression in expressions {
+            process_expression(sql, expression, tables_read)?;
+        }
+        Ok(())
+    }
+
+    fn process_join_clause(
+        sql: &str,
+        join_clause: Node<'_>,
+        tables_read: &mut BTreeSet<String>,
+    ) -> Result<(), DbError> {
+        let table = {
+            let relation = join_clause
+                .children(&mut join_clause.walk())
+                .filter(|child| child.kind().to_lowercase() == "relation")
+                .collect::<Vec<_>>();
+            validate_list_len(&relation, 1)?;
+            let relation = relation[0];
+
+            let object_ref = relation
+                .children(&mut relation.walk())
+                .filter(|child| child.kind().to_lowercase() == "object_reference")
+                .collect::<Vec<_>>();
+            validate_list_len(&object_ref, 1)?;
+            let object_ref = object_ref[0];
+
+            let identifier = object_ref
+                .children(&mut object_ref.walk())
+                .filter(|child| child.kind().to_lowercase() == "identifier")
+                .collect::<Vec<_>>();
+            validate_list_len(&identifier, 1)?;
+            let identifier = identifier[0];
+
+            validate_table_name(&sql.to_string()[identifier.start_byte()..identifier.end_byte()])?
+        };
+        tables_read.insert(table);
+
+        let expressions = join_clause
+            .children(&mut join_clause.walk())
+            .filter(|child| {
+                [
+                    "unary_expression",
+                    "binary_expression",
+                    "parenthesized_expression",
+                ]
+                .contains(&child.kind().to_lowercase().as_str())
+            })
+            .collect::<Vec<_>>();
+
+        for expression in expressions {
+            process_expression(sql, expression, tables_read)?;
+        }
+        Ok(())
+    }
+
+    fn process_expression(
+        sql: &str,
+        expression: Node<'_>,
+        tables_read: &mut BTreeSet<String>,
+    ) -> Result<(), DbError> {
+        let children = expression
+            .children(&mut expression.walk())
+            .collect::<Vec<_>>();
+        for child in children {
+            if [
+                "unary_expression",
+                "binary_expression",
+                "parenthesized_expression",
+                "subquery",
+            ]
+            .contains(&child.kind().to_lowercase().as_str())
+            {
+                process_expression(sql, child, tables_read)?;
+            } else if child.kind().to_lowercase() == "select" {
+                process_select_clause(sql, child, tables_read)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn process_statements(
+        sql: &str,
+        tree: &Tree,
+        statements: &Vec<Node<'_>>,
+        tables_read: &mut BTreeSet<String>,
+    ) -> Result<(), DbError> {
+        let mut cte_names = BTreeSet::new();
+
+        // Determine the tables that will be modified:
+        for statement in statements {
+            validate_node(&statement, sql)?;
+            for instruction in statement.children(&mut tree.walk()) {
+                validate_node(&instruction, sql)?;
+                match instruction.kind().to_lowercase().as_str() {
+                    "set_operation" => {
+                        let children = instruction
+                            .children(&mut instruction.walk())
+                            .collect::<Vec<_>>();
+                        for child in children {
+                            if child.kind().to_lowercase() == "select" {
+                                process_select_clause(sql, child, tables_read)?;
+                            }
+                        }
+                    }
+                    "select" => process_select_clause(sql, instruction, tables_read)?,
+                    "cte" => {
+                        // Keep track of the names of any CTEs encountered, since we do not
+                        // want to include these in the list of accessed tables (they are
+                        // essentially temporary tables).
+                        let cte_name = instruction
+                            .children(&mut instruction.walk())
+                            .filter(|child| child.kind().to_lowercase() == "identifier")
+                            .collect::<Vec<_>>();
+                        validate_list_len(&cte_name, 1)?;
+                        let cte_name =
+                            &sql.to_string()[cte_name[0].start_byte()..cte_name[0].end_byte()];
+                        cte_names.insert(cte_name.to_string());
+
+                        let cte_stmt = instruction
+                            .children(&mut instruction.walk())
+                            .filter(|child| child.kind().to_lowercase() == "statement")
+                            .collect::<Vec<_>>();
+                        validate_list_len(&cte_stmt, 1)?;
+                        let cte_stmt = cte_stmt[0];
+                        process_statements(sql, tree, &vec![cte_stmt], tables_read)?;
+                    }
+                    _ => (),
+                }
+            }
+        }
+
+        // Prune the CTE names from the list of tables read:
+        for entry in cte_names {
+            tables_read.remove(&entry);
+        }
+        Ok(())
+    }
+
+    // Instantiate the parser and read in the given sql string to generate a parsing tree:
+    let mut parser = Parser::new();
+    parser
+        .set_language(&SQL_LANGUAGE.into())
+        .map_err(|err| DbError::ParseError(format!("Error setting language: {err}")))?;
+    let tree = match parser.parse(sql, None) {
+        Some(tree) => tree,
+        None => return Err(DbError::ParseError(format!("Could not parse '{sql}'"))),
+    };
+
+    // Collect the top-level statements:
+    let statements = {
+        let root_node = tree.root_node();
+        validate_node(&root_node, sql)?;
+        if root_node.kind().to_lowercase() != "program" {
+            return Err(DbError::ParseError(format!(
+                "Unexpected root node kind: {}",
+                root_node.kind()
+            )));
+        }
+        let children = root_node
+            .children(&mut root_node.walk())
+            .collect::<Vec<_>>();
+        if children.len() > 0 && children.first().unwrap().kind().to_lowercase() == "transaction" {
+            children
+                .first()
+                .unwrap()
+                .children(&mut root_node.walk())
+                .filter(|child| child.kind().to_lowercase() == "statement")
+                .collect::<Vec<_>>()
+        } else {
+            root_node
+                .children(&mut root_node.walk())
+                .filter(|child| child.kind().to_lowercase() == "statement")
+                .collect::<Vec<_>>()
+        }
+    };
+
+    let mut tables_read = BTreeSet::new();
+    process_statements(sql, &tree, &statements, &mut tables_read)?;
+    Ok(tables_read)
 }
 
 /// Parse the given string, representing a series of (semi-colon-separated) SQL commands,
 /// into their constituents and determine the tables and views that will be affected when
-/// the commands are executed, if any. Two sets are returned. The first contains tables
+/// the commands are executed, if any. Three sets are returned. The first contains tables
 /// and views that are going to be edited (targets of commands like INSERT, UPDATE, DELETE,
 /// ALTER, and TRUNCATE), the second contains tables and views that are going to be dropped
-/// (targets of a DROP TABLE command). All other kinds of statements are silently ignored.
-/// In particular, table modifications that occur _within_ a common table expression (CTE) are
-/// not recognized by this function. Such table-modifying CTEs are supported in principle by
-/// PostgreSQL (see
+/// (targets of a DROP TABLE or DROP VIEW command). The third contains tables and views that
+/// are only going to be read (targets of most other commands). Note table modifications that
+/// occur _within_ a common table expression (CTE) are not recognized by this function. Such
+/// table-modifying CTEs are supported in principle by PostgreSQL (see
 /// <https://www.postgresql.org/docs/current/queries-with.html#QUERIES-WITH-MODIFYING>) but
 /// seemingly not by SQLite (see <https://sqlite.org/lang_with.html>).
-pub fn get_affected_tables(sql: &str) -> Result<(HashSet<String>, HashSet<String>), DbError> {
+pub fn get_affected_tables(sql: &str) -> Result<(BTreeSet<String>, BTreeSet<String>), DbError> {
     // Instantiate the parser and read in the given sql string:
     let mut parser = Parser::new();
     parser
@@ -195,8 +427,8 @@ pub fn get_affected_tables(sql: &str) -> Result<(HashSet<String>, HashSet<String
     };
 
     // Determine the tables that will be modified:
-    let mut edited_tables = HashSet::new();
-    let mut dropped_tables = HashSet::new();
+    let mut edited_tables = BTreeSet::new();
+    let mut dropped_tables = BTreeSet::new();
     for statement in &statements {
         validate_node(&statement, sql)?;
         for instruction in statement.children(&mut tree.walk()) {
@@ -378,7 +610,7 @@ pub fn get_affected_tables(sql: &str) -> Result<(HashSet<String>, HashSet<String
     let edited_tables = edited_tables
         .into_iter()
         .filter(|table| ![QUERY_CACHE_TABLE, TABLE_CACHE_TABLE].contains(&table.as_str()))
-        .collect::<HashSet<_>>();
+        .collect::<BTreeSet<_>>();
 
     Ok((edited_tables.clone(), dropped_tables.clone()))
 }
@@ -445,7 +677,104 @@ mod tests {
 
     #[tokio::test]
     async fn test_sql_parsing() {
-        // Single statements, possibly with parameters:
+        let tables_read = get_accessed_tables(&format!(
+            r#"SELECT t1.foo
+               FROM alpha t1, beta t2
+               WHERE t1.foo = t2.foo"#
+        ))
+        .unwrap();
+        let tables_read: Vec<_> = tables_read.into_iter().collect();
+        assert_eq!(tables_read, ["alpha", "beta"]);
+
+        let tables_read = get_accessed_tables(&format!(
+            r#"SELECT t1.foo
+               FROM alpha t1
+               INNER JOIN beta t2 ON (t1.foo = t2.foo)"#
+        ))
+        .unwrap();
+        let tables_read: Vec<_> = tables_read.into_iter().collect();
+        assert_eq!(tables_read, ["alpha", "beta"]);
+
+        let tables_read = get_accessed_tables(&format!(
+            r#"SELECT t1.foo
+               FROM alpha t1
+               INNER JOIN beta t2 ON t1.foo = t2.foo
+               WHERE t2.foo in (
+                 SELECT t3.foo
+                 FROM gamma t3
+               )
+               AND NOT t1.foo"#
+        ))
+        .unwrap();
+        let tables_read: Vec<_> = tables_read.into_iter().collect();
+        assert_eq!(tables_read, ["alpha", "beta", "gamma"]);
+
+        let tables_read = get_accessed_tables(&format!(
+            r#"SELECT t1.foo
+               FROM alpha t1
+               INNER JOIN beta t2 ON (
+                 t1.foo = t2.foo AND
+                 t2.foo in (
+                   SELECT t3.foo
+                   FROM gamma t3
+                 )
+               )
+               WHERE NOT t1.foo"#
+        ))
+        .unwrap();
+        let tables_read: Vec<_> = tables_read.into_iter().collect();
+        assert_eq!(tables_read, ["alpha", "beta", "gamma"]);
+
+        let view_sql = r#"CREATE VIEW greek_letter_foo AS
+                          SELECT alpha.foo
+                          FROM alpha, beta"#;
+        let view_tables = get_view_tables(&view_sql).unwrap();
+        assert_eq!(view_tables, ["alpha", "beta"]);
+
+        let tables_read = get_accessed_tables(&format!(
+            r#"SELECT t1.foo
+                 FROM alpha t1, beta t2
+                 WHERE t1.foo = t2.foo
+               UNION ALL
+               SELECT t3.foo
+                 FROM gamma t3"#
+        ))
+        .unwrap();
+        let tables_read: Vec<_> = tables_read.into_iter().collect();
+        assert_eq!(tables_read, ["alpha", "beta", "gamma"]);
+
+        let tables_read = get_accessed_tables(&format!(
+            r#"WITH goo as (
+                 SELECT alpha.foo FROM alpha
+                 LEFT JOIN gamma ON gamma.foo = alpha.foo
+               ), hoo as (
+                 SELECT foo FROM beta
+               ), ioo as (
+                 SELECT foo FROM gamma
+               )
+               SELECT t1.foo
+               FROM goo t1, hoo t2
+               WHERE t1.foo = t2.foo
+                 AND t2.foo in (
+                   SELECT t3.foo
+                     FROM delta t3
+                 )
+               UNION ALL
+               SELECT * from ioo"#
+        ))
+        .unwrap();
+        let tables_read: Vec<_> = tables_read.into_iter().collect();
+        assert_eq!(tables_read, ["alpha", "beta", "delta", "gamma"]);
+
+        let view_sql = r#"CREATE VIEW greek_letter_foo AS
+                          SELECT alpha.foo
+                          FROM alpha, beta
+                          WHERE alpha.foo = beta.foo
+                          UNION ALL
+                          SELECT gamma.foo
+                          FROM gamma"#;
+        let view_tables = get_view_tables(&view_sql).unwrap();
+        assert_eq!(view_tables, ["alpha", "beta", "gamma"]);
 
         let (edited_tables, dropped_tables) =
             get_affected_tables(&format!(r#"INSERT INTO "alpha" VALUES ($1, $2, $3)"#)).unwrap();
@@ -455,11 +784,11 @@ mod tests {
 
         let (edited_tables, dropped_tables) = get_affected_tables(
             r#"WITH bar AS (SELECT * FROM alpha),
-                        mar AS (SELECT * FROM beta)
-                   INSERT INTO gamma
-                   SELECT alpha.*
-                   FROM alpha, beta
-                   WHERE alpha.value = beta.value"#,
+                    mar AS (SELECT * FROM beta)
+                 INSERT INTO gamma
+                 SELECT alpha.*
+                 FROM alpha, beta
+                 WHERE alpha.value = beta.value"#,
         )
         .unwrap();
         let edited_tables: Vec<_> = edited_tables.into_iter().collect();
@@ -474,11 +803,11 @@ mod tests {
 
         let (edited_tables, dropped_tables) = get_affected_tables(&format!(
             r#"WITH bar AS (SELECT * FROM test),
-                        mar AS (SELECT * FROM test)
-                   UPDATE delta
-                   SET value = bar.value
-                   FROM bar, mar
-                   WHERE bar.value = $1 AND bar.value = mar.value"#,
+                    mar AS (SELECT * FROM test)
+                 UPDATE delta
+                 SET value = bar.value
+                 FROM bar, mar
+                 WHERE bar.value = $1 AND bar.value = mar.value"#,
         ))
         .unwrap();
         let edited_tables: Vec<_> = edited_tables.into_iter().collect();
@@ -493,8 +822,8 @@ mod tests {
 
         let (edited_tables, dropped_tables) = get_affected_tables(
             r#"WITH bar AS (SELECT * FROM test),
-                        mar AS (SELECT * FROM test)
-                   DELETE FROM lambda WHERE value IN (SELECT value FROM bar)"#,
+                    mar AS (SELECT * FROM test)
+                 DELETE FROM lambda WHERE value IN (SELECT value FROM bar)"#,
         )
         .unwrap();
         let edited_tables: Vec<_> = edited_tables.into_iter().collect();
@@ -514,33 +843,30 @@ mod tests {
 
         let (edited_tables, dropped_tables) =
             get_affected_tables("TRUNCATE TABLE mu, nu CASCADE").unwrap();
-        let mut edited_tables: Vec<_> = edited_tables.into_iter().collect();
-        edited_tables.sort();
+        let edited_tables: Vec<_> = edited_tables.into_iter().collect();
         assert_eq!(edited_tables, ["mu", "nu"]);
         assert_eq!(dropped_tables, [].into());
 
         let (edited_tables, dropped_tables) =
             get_affected_tables("ALTER TABLE phi ADD COLUMN varphi INT").unwrap();
-        let mut edited_tables: Vec<_> = edited_tables.into_iter().collect();
-        edited_tables.sort();
+        let edited_tables: Vec<_> = edited_tables.into_iter().collect();
         assert_eq!(edited_tables, ["phi"]);
         assert_eq!(dropped_tables, [].into());
 
         let (edited_tables, dropped_tables) = get_affected_tables("DROP VIEW theta").unwrap();
-        let mut dropped_tables: Vec<_> = dropped_tables.into_iter().collect();
-        dropped_tables.sort();
+        let dropped_tables: Vec<_> = dropped_tables.into_iter().collect();
         assert_eq!(edited_tables, [].into());
         assert_eq!(dropped_tables, ["theta"]);
 
         let (edited_tables, dropped_tables) = get_affected_tables(
             r#"UPDATE epsilon
-               SET alpha = new_beta
-               FROM (
-                 SELECT 9 AS new_alpha, 3 AS new_beta, 2 AS new_gamma, 1 AS new_delta
-                 UNION ALL
-                 SELECT 4 AS new_alpha, 3 as new_beta, 2 AS new_gamma, 1 AS new_delta
-               ) foo_alias
-               WHERE alpha = new_alpha"#,
+                 SET alpha = new_beta
+                 FROM (
+                   SELECT 9 AS new_alpha, 3 AS new_beta, 2 AS new_gamma, 1 AS new_delta
+                   UNION ALL
+                   SELECT 4 AS new_alpha, 3 as new_beta, 2 AS new_gamma, 1 AS new_delta
+                 ) foo_alias
+                 WHERE alpha = new_alpha"#,
         )
         .unwrap();
         let edited_tables: Vec<_> = edited_tables.into_iter().collect();
@@ -549,53 +875,50 @@ mod tests {
 
         // Multiple statements, no parameters:
 
-        let sql = r#"
-            BEGIN TRANSACTION;
+        let sql = r#"BEGIN TRANSACTION;
 
-            INSERT INTO "alpha" VALUES (1, 2, 3), (4, 5, 6);
+                     INSERT INTO "alpha" VALUES (1, 2, 3), (4, 5, 6);
 
-            INSERT INTO gamma
-            SELECT alpha.*
-            FROM alpha, beta
-            WHERE alpha.value = beta.value;
+                     INSERT INTO gamma
+                     SELECT alpha.*
+                     FROM alpha, beta
+                     WHERE alpha.value = beta.value;
 
-            WITH t AS (
-              SELECT * from delta_base ORDER BY quality LIMIT 1
-            )
-            UPDATE delta SET price = t.price * 1.05;
+                     WITH t AS (
+                       SELECT * from delta_base ORDER BY quality LIMIT 1
+                     )
+                     UPDATE delta SET price = t.price * 1.05;
 
-            WITH t AS (
-              SELECT * FROM phi_base
-              WHERE
-                "date" >= '2010-10-01' AND
-                "date" < '2010-11-01'
-            )
-            INSERT INTO phi
-            SELECT * FROM t;
+                     WITH t AS (
+                       SELECT * FROM phi_base
+                       WHERE
+                         "date" >= '2010-10-01' AND
+                         "date" < '2010-11-01'
+                     )
+                     INSERT INTO phi
+                     SELECT * FROM t;
 
-            DELETE FROM "psi" WHERE bar >= 10;
+                     DELETE FROM "psi" WHERE bar >= 10;
 
-            WITH RECURSIVE included_lambda(sub_lambda, lambda) AS (
-                SELECT sub_lambda, lambda FROM lambda WHERE lambda = 'our_product'
-              UNION ALL
-                SELECT p.sub_lambda, p.lambda
-                FROM included_lambda pr, lambda p
-                WHERE p.lambda = pr.sub_lambda
-            )
-            DELETE FROM lambda
-              WHERE lambda IN (SELECT lambda FROM included_lambda);
+                     WITH RECURSIVE included_lambda(sub_lambda, lambda) AS (
+                         SELECT sub_lambda, lambda FROM lambda WHERE lambda = 'our_product'
+                       UNION ALL
+                         SELECT p.sub_lambda, p.lambda
+                         FROM included_lambda pr, lambda p
+                         WHERE p.lambda = pr.sub_lambda
+                     )
+                     DELETE FROM lambda
+                       WHERE lambda IN (SELECT lambda FROM included_lambda);
 
-            DROP TABLE "rho";
+                     DROP TABLE "rho";
 
-            DROP TABLE "sigma" CASCADE;
+                     DROP TABLE "sigma" CASCADE;
 
-            COMMIT"#;
+                     COMMIT"#;
 
         let (edited_tables, dropped_tables) = get_affected_tables(&sql).unwrap();
-        let mut edited_tables: Vec<_> = edited_tables.into_iter().collect();
-        let mut dropped_tables: Vec<_> = dropped_tables.into_iter().collect();
-        edited_tables.sort();
-        dropped_tables.sort();
+        let edited_tables: Vec<_> = edited_tables.into_iter().collect();
+        let dropped_tables: Vec<_> = dropped_tables.into_iter().collect();
         assert_eq!(
             edited_tables,
             ["alpha", "delta", "gamma", "lambda", "phi", "psi",]

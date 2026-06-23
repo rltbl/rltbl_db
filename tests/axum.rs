@@ -9,11 +9,11 @@ use std::{marker::Sync, sync::Arc};
 use tower_service::Service;
 
 async fn get_root(State(pool): State<Arc<impl DbQuery + Sync>>) -> impl IntoResponse {
-    let value: String = pool
-        .query_value("SELECT value FROM test LIMIT 1", ())
+    let value = pool
+        .query("SELECT value FROM test LIMIT 1", ())
         .await
-        .unwrap()
-        .into();
+        .unwrap();
+    let value: String = value.value().unwrap().into();
     Html(value)
 }
 
@@ -40,14 +40,8 @@ async fn run_axum(url: &str) {
     .await
     .unwrap();
 
-    let _: Vec<DbRow> = pool
-        .cache(&["test"], "SELECT 1 FROM test", ())
-        .await
-        .unwrap();
-    let _: Vec<DbRow> = pool
-        .cache(&["test"], "SELECT 1 FROM test", ())
-        .await
-        .unwrap();
+    pool.cache("SELECT 1 FROM test", ()).await.unwrap();
+    pool.cache("SELECT 1 FROM test", ()).await.unwrap();
 
     let state = Arc::new(pool);
     let mut router: Router = Router::new().route("/", get(get_root)).with_state(state);
