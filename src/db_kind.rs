@@ -119,9 +119,7 @@ pub trait DbKindTrait {
 
 ////////////////////////
 
-pub struct SQLiteKind {
-    pub kind: DbKind,
-}
+pub struct SQLiteKind;
 
 impl DbKindTrait for SQLiteKind {
     fn kind(&self) -> DbKind {
@@ -265,9 +263,7 @@ impl DbKindTrait for SQLiteKind {
 
 //////////////////////
 
-pub struct PostgreSQLKind {
-    pub kind: DbKind,
-}
+pub struct PostgreSQLKind;
 
 impl DbKindTrait for PostgreSQLKind {
     fn kind(&self) -> DbKind {
