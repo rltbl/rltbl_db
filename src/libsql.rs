@@ -1,7 +1,8 @@
 //! [libsql](<https://crates.io/crates/deadpool-libsql>) implementation for rltbl_db.
 
 use crate::{
-    cache::CachingStrategy,
+    any::AnyPool,
+    cache::{CachingStrategy, clear_cache_for_affected_tables, clear_cache_for_dropped_tables},
     core::{DbError, DbQuery},
     db_kind::{DbKind, MAX_PARAMS_SQLITE},
     db_value::{DbParams, DbRow, DbRows, DbValue, IntoDbParams, IntoDbRows, JsonValue},
@@ -117,6 +118,15 @@ impl DbQuery for LibSQLPool {
         DbKind::SQLite
     }
 
+    /// TODO: Add docstring.
+    fn pool(&self) -> AnyPool {
+        AnyPool::LibSQL(LibSQLPool {
+            pool: self.pool.clone(),
+            caching_strategy: self.caching_strategy,
+            cache_aware_query: self.cache_aware_query,
+        })
+    }
+
     /// Implements [DbQuery::execute_batch()] for SQLite
     async fn execute_batch(&self, sql: &str) -> Result<(), DbError> {
         let conn = self
@@ -136,7 +146,7 @@ impl DbQuery for LibSQLPool {
     async fn query(&self, sql: &str, params: impl IntoDbParams + Send) -> Result<DbRows, DbError> {
         let rows = self.query_no_cache_clean(sql, params).await?;
         if self.get_cache_aware_query() {
-            self.clear_cache_for_affected_tables(sql).await?;
+            clear_cache_for_affected_tables(&self.pool(), sql).await?;
         }
         Ok(rows)
     }
@@ -315,7 +325,7 @@ impl DbQuery for LibSQLPool {
             .await?;
 
         // Delete dirty entries from the cache in accordance with our caching strategy:
-        self.clear_cache_for_dropped_tables(&[&table]).await?;
+        clear_cache_for_dropped_tables(&self.pool(), &[&table]).await?;
         Ok(())
     }
 
@@ -327,7 +337,7 @@ impl DbQuery for LibSQLPool {
             .await?;
 
         // Delete dirty entries from the cache in accordance with our caching strategy:
-        self.clear_cache_for_dropped_tables(&[&view]).await?;
+        clear_cache_for_dropped_tables(&self.pool(), &[&view]).await?;
         Ok(())
     }
 
