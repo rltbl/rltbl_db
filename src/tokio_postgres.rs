@@ -229,6 +229,26 @@ impl DbQuery for TokioPostgresPool {
         })
     }
 
+    /// Implements [DbQuery::set_caching_strategy()] for PostgreSQL.
+    fn set_caching_strategy(&mut self, strategy: &CachingStrategy) {
+        self.caching_strategy = *strategy;
+    }
+
+    /// Implements [DbQuery::get_caching_strategy()] for PostgreSQL.
+    fn get_caching_strategy(&self) -> CachingStrategy {
+        self.caching_strategy
+    }
+
+    /// Implements [DbQuery::set_cache_aware_query()] for PostgreSQL.
+    fn set_cache_aware_query(&mut self, flag: bool) {
+        self.cache_aware_query = flag;
+    }
+
+    /// Implements [DbQuery::get_cache_aware_query()] for PostgreSQL.
+    fn get_cache_aware_query(&self) -> bool {
+        self.cache_aware_query
+    }
+
     /// Implements [DbQuery::execute_batch()] for PostgreSQL
     async fn execute_batch(&self, sql: &str) -> Result<(), DbError> {
         let client =
@@ -242,15 +262,6 @@ impl DbQuery for TokioPostgresPool {
 
         clear_cache_for_affected_tables(&self.pool(), sql).await?;
         Ok(())
-    }
-
-    /// Implements [DbQuery::query()] for PostgreSQL.
-    async fn query(&self, sql: &str, params: impl IntoDbParams + Send) -> Result<DbRows, DbError> {
-        let rows = self.query_no_cache_clean(sql, params).await?;
-        if self.get_cache_aware_query() {
-            clear_cache_for_affected_tables(&self.pool(), sql).await?;
-        }
-        Ok(rows)
     }
 
     /// Implements [DbQuery::query_no_cache_clean()] for PostgreSQL.
@@ -550,26 +561,6 @@ impl DbQuery for TokioPostgresPool {
         // Delete dirty entries from the cache in accordance with our caching strategy:
         clear_cache_for_dropped_tables(&self.pool(), &[&view]).await?;
         Ok(())
-    }
-
-    /// Implements [DbQuery::set_caching_strategy()] for PostgreSQL.
-    fn set_caching_strategy(&mut self, strategy: &CachingStrategy) {
-        self.caching_strategy = *strategy;
-    }
-
-    /// Implements [DbQuery::get_caching_strategy()] for PostgreSQL.
-    fn get_caching_strategy(&self) -> CachingStrategy {
-        self.caching_strategy
-    }
-
-    /// Implements [DbQuery::set_cache_aware_query()] for PostgreSQL.
-    fn set_cache_aware_query(&mut self, flag: bool) {
-        self.cache_aware_query = flag;
-    }
-
-    /// Implements [DbQuery::get_cache_aware_query()] for PostgreSQL.
-    fn get_cache_aware_query(&self) -> bool {
-        self.cache_aware_query
     }
 }
 

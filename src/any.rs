@@ -134,18 +134,6 @@ impl DbQuery for AnyPool {
         }
     }
 
-    /// Implements [DbQuery::query()]
-    async fn query(&self, sql: &str, params: impl IntoDbParams + Send) -> Result<DbRows, DbError> {
-        match self {
-            #[cfg(feature = "rusqlite")]
-            AnyPool::Rusqlite(pool) => pool.query(sql, params).await,
-            #[cfg(feature = "tokio-postgres")]
-            AnyPool::TokioPostgres(pool) => pool.query(sql, params).await,
-            #[cfg(feature = "libsql")]
-            AnyPool::LibSQL(pool) => pool.query(sql, params).await,
-        }
-    }
-
     /// Implements [DbQuery::execute_batch()]
     async fn execute_batch(&self, sql: &str) -> Result<(), DbError> {
         match self {

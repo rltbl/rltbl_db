@@ -4,9 +4,10 @@ use crate::{
     any::AnyPool,
     cache::{
         CachingStrategy, MemoryQueryCacheKey, MemoryQueryCacheValue, QUERY_CACHE_TABLE,
-        ensure_cache_tables_exist, ensure_caching_triggers_exist_for_table,
-        ensure_caching_triggers_exist_for_view, exists_in_meta_cache, get_memory_query_cache,
-        get_meta_cache, update_cached_views, update_last_verified,
+        clear_cache_for_affected_tables, ensure_cache_tables_exist,
+        ensure_caching_triggers_exist_for_table, ensure_caching_triggers_exist_for_view,
+        exists_in_meta_cache, get_memory_query_cache, get_meta_cache, update_cached_views,
+        update_last_verified,
     },
     db_kind::DbKind,
     db_value::{ColumnMap, DbParams, DbRow, DbRows, IntoDbParams, IntoDbRows},
@@ -79,6 +80,12 @@ impl std::fmt::Display for DbError {
 
 #[async_trait]
 pub trait DbQuery: Sync {
+    /// Get the kind of SQL database. See [DbKind] for the supported database kinds.
+    fn kind(&self) -> DbKind;
+
+    /// Get the underlying database pool
+    fn pool(&self) -> AnyPool;
+
     /// Set the caching strategy.
     fn set_caching_strategy(&mut self, strategy: &CachingStrategy);
 
@@ -320,12 +327,6 @@ pub trait DbQuery: Sync {
         }
     }
 
-    /// Get the kind of SQL database. See [DbKind] for the supported database kinds.
-    fn kind(&self) -> DbKind;
-
-    /// Get the underlying database pool
-    fn pool(&self) -> AnyPool;
-
     /// Given a table, return a [ColumnMap] from column names to column SQL types.
     async fn columns(&self, table: &str) -> Result<ColumnMap, DbError> {
         let mut columns = ColumnMap::new();
@@ -404,11 +405,14 @@ pub trait DbQuery: Sync {
     fn execute_batch(&self, sql: &str) -> impl Future<Output = Result<(), DbError>> + Send;
 
     /// Execute the given SQL command, with the given parameters, returning a vector of rows.
-    fn query(
-        &self,
-        sql: &str,
-        params: impl IntoDbParams + Send,
-    ) -> impl Future<Output = Result<DbRows, DbError>> + Send;
+    /// Implements [DbQuery::query()] for SQLite.
+    async fn query(&self, sql: &str, params: impl IntoDbParams + Send) -> Result<DbRows, DbError> {
+        let rows = self.query_no_cache_clean(sql, params).await?;
+        if self.get_cache_aware_query() {
+            clear_cache_for_affected_tables(&self.pool(), sql).await?;
+        }
+        Ok(rows)
+    }
 
     /// Execute the given SQL command using the given parameters, returning a vector of rows,
     /// without updating the cache, regardless of whether the cache-aware-query option

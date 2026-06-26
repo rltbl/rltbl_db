@@ -2,7 +2,7 @@
 
 use crate::{
     any::AnyPool,
-    cache::{CachingStrategy, clear_cache_for_affected_tables, clear_cache_for_dropped_tables},
+    cache::{CachingStrategy, clear_cache_for_dropped_tables},
     core::{DbError, DbQuery},
     db_kind::{DbKind, MAX_PARAMS_SQLITE},
     db_value::{DbParams, DbRow, DbRows, DbValue, IntoDbParams, IntoDbRows, JsonValue},
@@ -127,6 +127,26 @@ impl DbQuery for LibSQLPool {
         })
     }
 
+    /// Implements [DbQuery::set_caching_strategy()] for SQLite.
+    fn set_caching_strategy(&mut self, strategy: &CachingStrategy) {
+        self.caching_strategy = *strategy;
+    }
+
+    /// Implements [DbQuery::get_caching_strategy()] for SQLite.
+    fn get_caching_strategy(&self) -> CachingStrategy {
+        self.caching_strategy
+    }
+
+    /// Implements [DbQuery::set_cache_aware_query()] for SQLite.
+    fn set_cache_aware_query(&mut self, flag: bool) {
+        self.cache_aware_query = flag;
+    }
+
+    /// Implements [DbQuery::get_cache_aware_query()] for SQLite.
+    fn get_cache_aware_query(&self) -> bool {
+        self.cache_aware_query
+    }
+
     /// Implements [DbQuery::execute_batch()] for SQLite
     async fn execute_batch(&self, sql: &str) -> Result<(), DbError> {
         let conn = self
@@ -140,15 +160,6 @@ impl DbQuery for LibSQLPool {
             }
             Ok(_) => Ok(()),
         }
-    }
-
-    /// Implements [DbQuery::query()] for SQLite.
-    async fn query(&self, sql: &str, params: impl IntoDbParams + Send) -> Result<DbRows, DbError> {
-        let rows = self.query_no_cache_clean(sql, params).await?;
-        if self.get_cache_aware_query() {
-            clear_cache_for_affected_tables(&self.pool(), sql).await?;
-        }
-        Ok(rows)
     }
 
     /// Implements [DbQuery::query_no_cache_clean()] for SQLite.
@@ -339,26 +350,6 @@ impl DbQuery for LibSQLPool {
         // Delete dirty entries from the cache in accordance with our caching strategy:
         clear_cache_for_dropped_tables(&self.pool(), &[&view]).await?;
         Ok(())
-    }
-
-    /// Implements [DbQuery::set_caching_strategy()] for SQLite.
-    fn set_caching_strategy(&mut self, strategy: &CachingStrategy) {
-        self.caching_strategy = *strategy;
-    }
-
-    /// Implements [DbQuery::get_caching_strategy()] for SQLite.
-    fn get_caching_strategy(&self) -> CachingStrategy {
-        self.caching_strategy
-    }
-
-    /// Implements [DbQuery::set_cache_aware_query()] for SQLite.
-    fn set_cache_aware_query(&mut self, flag: bool) {
-        self.cache_aware_query = flag;
-    }
-
-    /// Implements [DbQuery::get_cache_aware_query()] for SQLite.
-    fn get_cache_aware_query(&self) -> bool {
-        self.cache_aware_query
     }
 }
 
