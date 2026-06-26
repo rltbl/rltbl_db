@@ -118,7 +118,7 @@ impl DbQuery for LibSQLPool {
         DbKind::SQLite
     }
 
-    /// TODO: Add docstring.
+    /// Implements [DbQuery::pool()] for SQLite.
     fn pool(&self) -> AnyPool {
         AnyPool::LibSQL(LibSQLPool {
             pool: self.pool.clone(),

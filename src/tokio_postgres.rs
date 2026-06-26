@@ -220,7 +220,7 @@ impl DbQuery for TokioPostgresPool {
         DbKind::PostgreSQL
     }
 
-    /// TODO: Add docstring.
+    /// Implements [DbQuery::pool()] for PostgreSQL
     fn pool(&self) -> AnyPool {
         AnyPool::TokioPostgres(TokioPostgresPool {
             pool: self.pool.clone(),
@@ -532,7 +532,6 @@ impl DbQuery for TokioPostgresPool {
     /// Implements [DbQuery::drop_table()] for PostgreSQL.
     async fn drop_table(&self, table: &str) -> Result<(), DbError> {
         let table = validate_table_name(table)?;
-        // TODO: Get the SQL from a new function to be added to DbKind. Same for rusqlite and libsql
         self.execute_no_cache_clean(&format!(r#"DROP TABLE IF EXISTS "{table}" CASCADE"#), ())
             .await?;
 
@@ -545,7 +544,6 @@ impl DbQuery for TokioPostgresPool {
     async fn drop_view(&self, view: &str) -> Result<(), DbError> {
         let view = validate_table_name(view)?;
         // Drop the view:
-        // TODO: Get the SQL from a new function to be added to DbKind. Same for rusqlite and libsql
         self.execute_no_cache_clean(&format!(r#"DROP VIEW IF EXISTS "{view}" CASCADE"#), ())
             .await?;
 

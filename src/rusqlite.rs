@@ -221,7 +221,7 @@ impl DbQuery for RusqlitePool {
         DbKind::SQLite
     }
 
-    /// TODO: Add docstring.
+    /// Implements [DbQuery::pool()] for SQLite.
     fn pool(&self) -> AnyPool {
         AnyPool::Rusqlite(RusqlitePool {
             pool: self.pool.clone(),
