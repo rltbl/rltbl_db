@@ -126,54 +126,6 @@ impl DbQuery for AnyPool {
         }
     }
 
-    /// Implements [DbQuery::set_caching_strategy()]
-    fn set_caching_strategy(&mut self, strategy: &CachingStrategy) {
-        match self {
-            #[cfg(feature = "rusqlite")]
-            AnyPool::Rusqlite(pool) => pool.set_caching_strategy(strategy),
-            #[cfg(feature = "tokio-postgres")]
-            AnyPool::TokioPostgres(pool) => pool.set_caching_strategy(strategy),
-            #[cfg(feature = "libsql")]
-            AnyPool::LibSQL(pool) => pool.set_caching_strategy(strategy),
-        }
-    }
-
-    /// Implements [DbQuery::get_caching_strategy()]
-    fn get_caching_strategy(&self) -> CachingStrategy {
-        match self {
-            #[cfg(feature = "rusqlite")]
-            AnyPool::Rusqlite(pool) => pool.get_caching_strategy(),
-            #[cfg(feature = "tokio-postgres")]
-            AnyPool::TokioPostgres(pool) => pool.get_caching_strategy(),
-            #[cfg(feature = "libsql")]
-            AnyPool::LibSQL(pool) => pool.get_caching_strategy(),
-        }
-    }
-
-    /// Implements [DbQuery::set_cache_aware_query()]
-    fn set_cache_aware_query(&mut self, value: bool) {
-        match self {
-            #[cfg(feature = "rusqlite")]
-            AnyPool::Rusqlite(pool) => pool.set_cache_aware_query(value),
-            #[cfg(feature = "tokio-postgres")]
-            AnyPool::TokioPostgres(pool) => pool.set_cache_aware_query(value),
-            #[cfg(feature = "libsql")]
-            AnyPool::LibSQL(pool) => pool.set_cache_aware_query(value),
-        }
-    }
-
-    /// Implements [DbQuery::get_cache_aware_query()]
-    fn get_cache_aware_query(&self) -> bool {
-        match self {
-            #[cfg(feature = "rusqlite")]
-            AnyPool::Rusqlite(pool) => pool.get_cache_aware_query(),
-            #[cfg(feature = "tokio-postgres")]
-            AnyPool::TokioPostgres(pool) => pool.get_cache_aware_query(),
-            #[cfg(feature = "libsql")]
-            AnyPool::LibSQL(pool) => pool.get_cache_aware_query(),
-        }
-    }
-
     /// Implements [DbQuery::execute_batch()]
     async fn execute_batch(&self, sql: &str) -> Result<(), DbError> {
         match self {
@@ -310,6 +262,54 @@ impl DbQuery for AnyPool {
             }
             #[cfg(feature = "libsql")]
             AnyPool::LibSQL(pool) => pool.upsert_returning(table, columns, rows, returning).await,
+        }
+    }
+
+    /// Implements [DbQuery::set_caching_strategy()]
+    fn set_caching_strategy(&mut self, strategy: &CachingStrategy) {
+        match self {
+            #[cfg(feature = "rusqlite")]
+            AnyPool::Rusqlite(pool) => pool.set_caching_strategy(strategy),
+            #[cfg(feature = "tokio-postgres")]
+            AnyPool::TokioPostgres(pool) => pool.set_caching_strategy(strategy),
+            #[cfg(feature = "libsql")]
+            AnyPool::LibSQL(pool) => pool.set_caching_strategy(strategy),
+        }
+    }
+
+    /// Implements [DbQuery::get_caching_strategy()]
+    fn get_caching_strategy(&self) -> CachingStrategy {
+        match self {
+            #[cfg(feature = "rusqlite")]
+            AnyPool::Rusqlite(pool) => pool.get_caching_strategy(),
+            #[cfg(feature = "tokio-postgres")]
+            AnyPool::TokioPostgres(pool) => pool.get_caching_strategy(),
+            #[cfg(feature = "libsql")]
+            AnyPool::LibSQL(pool) => pool.get_caching_strategy(),
+        }
+    }
+
+    /// Implements [DbQuery::set_cache_aware_query()]
+    fn set_cache_aware_query(&mut self, value: bool) {
+        match self {
+            #[cfg(feature = "rusqlite")]
+            AnyPool::Rusqlite(pool) => pool.set_cache_aware_query(value),
+            #[cfg(feature = "tokio-postgres")]
+            AnyPool::TokioPostgres(pool) => pool.set_cache_aware_query(value),
+            #[cfg(feature = "libsql")]
+            AnyPool::LibSQL(pool) => pool.set_cache_aware_query(value),
+        }
+    }
+
+    /// Implements [DbQuery::get_cache_aware_query()]
+    fn get_cache_aware_query(&self) -> bool {
+        match self {
+            #[cfg(feature = "rusqlite")]
+            AnyPool::Rusqlite(pool) => pool.get_cache_aware_query(),
+            #[cfg(feature = "tokio-postgres")]
+            AnyPool::TokioPostgres(pool) => pool.get_cache_aware_query(),
+            #[cfg(feature = "libsql")]
+            AnyPool::LibSQL(pool) => pool.get_cache_aware_query(),
         }
     }
 }
