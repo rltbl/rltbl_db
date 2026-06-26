@@ -81,7 +81,7 @@ impl std::fmt::Display for DbError {
 #[async_trait]
 pub trait DbQuery: Sync {
     /// Get the kind of SQL database. See [DbKind] for the supported database kinds.
-    fn kind(&self) -> DbKind;
+    fn kind(&self) -> Box<dyn DbKind>;
 
     /// Get the underlying database pool
     fn pool(&self) -> AnyPool;

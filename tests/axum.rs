@@ -4,7 +4,7 @@ use axum::{
     response::{Html, IntoResponse},
     routing::get,
 };
-use rltbl_db::{any::AnyPool, core::DbQuery, db_kind::DbKind, db_row, db_value::DbRow};
+use rltbl_db::{any::AnyPool, core::DbQuery, db_row, db_value::DbRow};
 use std::{marker::Sync, sync::Arc};
 use tower_service::Service;
 
@@ -19,9 +19,11 @@ async fn get_root(State(pool): State<Arc<impl DbQuery + Sync>>) -> impl IntoResp
 
 async fn run_axum(url: &str) {
     let pool = AnyPool::connect(url).await.unwrap();
-    let cascade = match pool.kind() {
-        DbKind::SQLite => "",
-        DbKind::PostgreSQL => " CASCADE",
+    let kind = pool.kind();
+    let cascade = match kind.to_string().as_str() {
+        "sqlite" => "",
+        "postgresql" => " CASCADE",
+        _ => panic!("Invalid kind: '{kind}'"),
     };
     pool.execute_batch(&format!(
         "DROP TABLE IF EXISTS test{cascade};\

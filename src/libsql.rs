@@ -4,7 +4,7 @@ use crate::{
     any::AnyPool,
     cache::{CachingStrategy, clear_cache_for_dropped_tables},
     core::{DbError, DbQuery},
-    db_kind::{DbKind, MAX_PARAMS_SQLITE},
+    db_kind::{DbKind, MAX_PARAMS_SQLITE, SQLiteKind},
     db_value::{DbParams, DbRow, DbRows, DbValue, IntoDbParams, IntoDbRows, JsonValue},
     parse::validate_table_name,
     shared::{EditType, edit},
@@ -114,8 +114,8 @@ impl LibSQLPool {
 
 impl DbQuery for LibSQLPool {
     /// Implements [DbQuery::kind()] for SQLite.
-    fn kind(&self) -> DbKind {
-        DbKind::SQLite
+    fn kind(&self) -> Box<dyn DbKind> {
+        Box::new(SQLiteKind)
     }
 
     /// Implements [DbQuery::pool()] for SQLite.

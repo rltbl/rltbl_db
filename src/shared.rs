@@ -1,7 +1,6 @@
 use crate::{
     cache::clear_cache_for_edited_tables,
     core::{DbError, DbQuery},
-    db_kind::DbKind,
     db_value::{DbRows, DbValue, IntoDbRows},
     parse::validate_table_name,
 };
@@ -153,7 +152,7 @@ pub(crate) async fn edit(
             table,
             columns.len(),
             max_params,
-            pool.kind()
+            pool.kind(),
         )));
     }
 
@@ -290,7 +289,7 @@ pub(crate) async fn edit(
             // In the CTE we generate for UPDATE statements, tokio-postgres can't infer the types
             // of the VALUES, so we explicitly cast them.
             if *edit_type == EditType::Update
-                && pool.kind() == DbKind::PostgreSQL
+                && pool.kind().to_string() == "postgresql"
                 // We only need to cast the first value row. The rest are inferred by Postgres:
                 && lines_to_bind.len() == 0
             {

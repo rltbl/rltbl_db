@@ -35,6 +35,12 @@ use crate::tokio_postgres::TokioPostgresPool;
 #[cfg(feature = "libsql")]
 use crate::libsql::LibSQLPool;
 
+#[cfg(feature = "tokio-postgres")]
+use crate::db_kind::PostgreSQLKind;
+
+#[cfg(any(feature = "rusqlite", feature = "libsql"))]
+use crate::db_kind::SQLiteKind;
+
 #[derive(Clone, Debug)]
 pub enum AnyPool {
     #[cfg(feature = "rusqlite")]
@@ -46,12 +52,11 @@ pub enum AnyPool {
 }
 
 impl AnyPool {
-    /// Get the DbKind for this connection URL.
-    pub fn connection_kind(url: &str) -> Result<DbKind, DbError> {
+    pub fn connection_kind(url: &str) -> Result<Box<dyn DbKind>, DbError> {
         if url.starts_with("postgresql://") {
             #[cfg(feature = "tokio-postgres")]
             {
-                Ok(DbKind::PostgreSQL)
+                Ok(Box::new(PostgreSQLKind))
             }
             #[cfg(not(feature = "tokio-postgres"))]
             {
@@ -60,13 +65,13 @@ impl AnyPool {
         } else {
             #[cfg(feature = "rusqlite")]
             {
-                Ok(DbKind::SQLite)
+                Ok(Box::new(SQLiteKind))
             }
             #[cfg(not(feature = "rusqlite"))]
             {
                 #[cfg(feature = "libsql")]
                 {
-                    Ok(DbKind::SQLite)
+                    Ok(Box::new(SQLiteKind))
                 }
                 #[cfg(not(feature = "libsql"))]
                 {
@@ -111,7 +116,7 @@ impl AnyPool {
 
 impl DbQuery for AnyPool {
     /// Implements [DbQuery::kind()]
-    fn kind(&self) -> DbKind {
+    fn kind(&self) -> Box<dyn DbKind> {
         match self {
             #[cfg(feature = "rusqlite")]
             AnyPool::Rusqlite(pool) => pool.kind(),
@@ -388,13 +393,16 @@ mod tests {
     async fn text_column_query(url: &str) {
         clear_meta_cache().unwrap();
         let pool = AnyPool::connect(url).await.unwrap();
-        let p = pool.kind().param_prefix().to_string();
+        let kind = pool.kind();
+
+        let p = kind.param_prefix().to_string();
         pool.execute_batch(&format!(
             "DROP TABLE IF EXISTS test_table_text{cascade};\
              CREATE TABLE test_table_text ( value TEXT )",
-            cascade = match pool.kind() {
-                DbKind::PostgreSQL => " CASCADE",
-                DbKind::SQLite => "",
+            cascade = match kind.to_string().as_str() {
+                "postgresql" => " CASCADE",
+                "sqlite" => "",
+                _ => panic!("Invalid kind '{kind}'"),
             }
         ))
         .await
@@ -474,13 +482,15 @@ mod tests {
     async fn integer_column_query(url: &str) {
         clear_meta_cache().unwrap();
         let pool = AnyPool::connect(url).await.unwrap();
-        let p = pool.kind().param_prefix().to_string();
+        let kind = pool.kind();
+        let p = kind.param_prefix().to_string();
         pool.execute_batch(&format!(
             "DROP TABLE IF EXISTS test_table_int{cascade};\
              CREATE TABLE test_table_int ( value_2 INT2, value_4 INT4, value_8 INT8 )",
-            cascade = match pool.kind() {
-                DbKind::PostgreSQL => " CASCADE",
-                DbKind::SQLite => "",
+            cascade = match kind.to_string().as_str() {
+                "postgresql" => " CASCADE",
+                "sqlite" => "",
+                _ => panic!("Invalid kind '{kind}'"),
             }
         ))
         .await
@@ -549,15 +559,17 @@ mod tests {
     async fn float_column_query(url: &str) {
         clear_meta_cache().unwrap();
         let pool = AnyPool::connect(url).await.unwrap();
-        let p = pool.kind().param_prefix().to_string();
+        let kind = pool.kind();
+        let p = kind.param_prefix().to_string();
 
         // FLOAT8
         pool.execute_batch(&format!(
             "DROP TABLE IF EXISTS test_table_float{cascade};\
              CREATE TABLE test_table_float ( value FLOAT8 )",
-            cascade = match pool.kind() {
-                DbKind::PostgreSQL => " CASCADE",
-                DbKind::SQLite => "",
+            cascade = match kind.to_string().as_str() {
+                "postgresql" => " CASCADE",
+                "sqlite" => "",
+                _ => panic!("Invalid kind '{kind}'"),
             }
         ))
         .await
@@ -606,9 +618,10 @@ mod tests {
         pool.execute_batch(&format!(
             "DROP TABLE IF EXISTS test_table_float{cascade};\
              CREATE TABLE test_table_float ( value FLOAT4 )",
-            cascade = match pool.kind() {
-                DbKind::PostgreSQL => " CASCADE",
-                DbKind::SQLite => "",
+            cascade = match kind.to_string().as_str() {
+                "postgresql" => " CASCADE",
+                "sqlite" => "",
+                _ => panic!("Invalid kind '{kind}'"),
             }
         ))
         .await
@@ -642,7 +655,8 @@ mod tests {
     async fn mixed_column_query(url: &str) {
         clear_meta_cache().unwrap();
         let pool = AnyPool::connect(url).await.unwrap();
-        let p = pool.kind().param_prefix().to_string();
+        let kind = pool.kind();
+        let p = kind.param_prefix().to_string();
         pool.execute_batch(&format!(
             "DROP TABLE IF EXISTS test_table_mixed{cascade};\
              CREATE TABLE test_table_mixed (\
@@ -657,9 +671,10 @@ mod tests {
                numeric_value NUMERIC,\
                alt_numeric_value NUMERIC\
              )",
-            cascade = match pool.kind() {
-                DbKind::PostgreSQL => " CASCADE",
-                DbKind::SQLite => "",
+            cascade = match kind.to_string().as_str() {
+                "postgresql" => " CASCADE",
+                "sqlite" => "",
+                _ => panic!("Invalid kind '{kind}'"),
             }
         ))
         .await
@@ -729,9 +744,10 @@ mod tests {
                 "alt_float_value" => DbValue::Null,
                 "int_value" => 1_i64,
                 "alt_int_value" => DbValue::Null,
-                "bool_value" => match pool.kind() {
-                    DbKind::SQLite => DbValue::from(1_i64),
-                    DbKind::PostgreSQL => DbValue::from(true),
+                "bool_value" => match kind.to_string().as_str() {
+                    "sqlite" => DbValue::from(1_i64),
+                    "postgresql" => DbValue::from(true),
+                    _ => panic!("Invalid kind '{kind}'"),
                 },
                 "alt_bool_value" => DbValue::Null,
                 "numeric_value" => 1_i64,
@@ -749,9 +765,10 @@ mod tests {
                 "alt_float_value" => DbValue::Null,
                 "int_value" => 1_i64,
                 "alt_int_value" => DbValue::Null,
-                "bool_value" => match pool.kind() {
-                    DbKind::SQLite => DbValue::from(1_i64),
-                    DbKind::PostgreSQL => DbValue::from(true),
+                "bool_value" => match kind.to_string().as_str() {
+                    "sqlite" => DbValue::from(1_i64),
+                    "postgresql" => DbValue::from(true),
+                    _ => panic!("Invalid kind '{kind}'"),
                 },
                 "alt_bool_value" => DbValue::Null,
                 "numeric_value" => 1_i64,
@@ -776,10 +793,12 @@ mod tests {
     async fn input_params(url: &str) {
         clear_meta_cache().unwrap();
         let pool = AnyPool::connect(url).await.unwrap();
-        let p = pool.kind().param_prefix().to_string();
-        let cascade = match pool.kind() {
-            DbKind::PostgreSQL => " CASCADE",
-            DbKind::SQLite => "",
+        let kind = pool.kind();
+        let p = kind.param_prefix().to_string();
+        let cascade = match kind.to_string().as_str() {
+            "postgresql" => " CASCADE",
+            "sqlite" => "",
+            _ => panic!("Invalid kind '{kind}'"),
         };
         pool.execute(
             &format!("DROP TABLE IF EXISTS test_any_table_input_params{cascade}"),
@@ -901,9 +920,11 @@ mod tests {
     async fn insert(url: &str) {
         clear_meta_cache().unwrap();
         let pool = AnyPool::connect(url).await.unwrap();
-        let cascade = match pool.kind() {
-            DbKind::PostgreSQL => " CASCADE",
-            DbKind::SQLite => "",
+        let kind = pool.kind();
+        let cascade = match kind.to_string().as_str() {
+            "postgresql" => " CASCADE",
+            "sqlite" => "",
+            _ => panic!("Invalid kind '{kind}'"),
         };
         pool.execute_batch(&format!(
             "DROP TABLE IF EXISTS test_insert{cascade};\
@@ -926,9 +947,10 @@ mod tests {
                 &db_row! {"text_value" => "TEXT",},
                 &db_row! {
                     "int_value" => 1_i64,
-                    "bool_value" => match pool.kind() {
-                        DbKind::SQLite => DbValue::from(1_i64),
-                        DbKind::PostgreSQL => DbValue::from(true),
+                    "bool_value" => match kind.to_string().as_str() {
+                        "sqlite" => DbValue::from(1_i64),
+                        "postgresql" => DbValue::from(true),
+                        _ => panic!("Invalid kind '{kind}'"),
                     },
                 },
             ],
@@ -956,9 +978,10 @@ mod tests {
                     "alt_text_value" => DbValue::Null,
                     "float_value" => DbValue::Null,
                     "int_value" => 1_i64,
-                    "bool_value" => match pool.kind() {
-                        DbKind::SQLite => DbValue::from(1_i64),
-                        DbKind::PostgreSQL => DbValue::from(true),
+                    "bool_value" => match kind.to_string().as_str() {
+                        "sqlite" => DbValue::from(1_i64),
+                        "postgresql" => DbValue::from(true),
+                        _ => panic!("Invalid kind '{kind}'"),
                     },
                 }
             ]
@@ -981,9 +1004,11 @@ mod tests {
     async fn insert_returning(url: &str) {
         clear_meta_cache().unwrap();
         let pool = AnyPool::connect(url).await.unwrap();
-        let cascade = match pool.kind() {
-            DbKind::PostgreSQL => " CASCADE",
-            DbKind::SQLite => "",
+        let kind = pool.kind();
+        let cascade = match kind.to_string().as_str() {
+            "postgresql" => " CASCADE",
+            "sqlite" => "",
+            _ => panic!("Invalid kind '{kind}'"),
         };
         pool.execute_batch(&format!(
             "DROP TABLE IF EXISTS test_insert_returning{cascade};\
@@ -1029,9 +1054,10 @@ mod tests {
                     "alt_text_value" => DbValue::Null,
                     "float_value" => DbValue::Null,
                     "int_value" => 1_i64,
-                    "bool_value" => match pool.kind() {
-                        DbKind::SQLite => DbValue::from(1_i64),
-                        DbKind::PostgreSQL => DbValue::from(true),
+                    "bool_value" => match kind.to_string().as_str() {
+                        "sqlite" => DbValue::from(1_i64),
+                        "postgresql" => DbValue::from(true),
+                        _ => panic!("Invalid kind '{kind}'"),
                     },
                 }
             ]
@@ -1086,9 +1112,11 @@ mod tests {
     async fn drop_table(url: &str) {
         clear_meta_cache().unwrap();
         let pool = AnyPool::connect(url).await.unwrap();
-        let cascade = match pool.kind() {
-            DbKind::PostgreSQL => " CASCADE",
-            DbKind::SQLite => "",
+        let kind = pool.kind();
+        let cascade = match kind.to_string().as_str() {
+            "postgresql" => " CASCADE",
+            "sqlite" => "",
+            _ => panic!("Invalid kind '{kind}'"),
         };
         let table1 = "test_drop1";
         let table2 = "test_drop2";
@@ -1134,9 +1162,11 @@ mod tests {
     async fn primary_keys(url: &str) {
         clear_meta_cache().unwrap();
         let pool = AnyPool::connect(url).await.unwrap();
-        let cascade = match pool.kind() {
-            DbKind::PostgreSQL => " CASCADE",
-            DbKind::SQLite => "",
+        let kind = pool.kind();
+        let cascade = match kind.to_string().as_str() {
+            "postgresql" => " CASCADE",
+            "sqlite" => "",
+            _ => panic!("Invalid kind '{kind}'"),
         };
         pool.execute_batch(&format!(
             "DROP TABLE IF EXISTS test_primary_keys1{cascade};\
@@ -1181,9 +1211,11 @@ mod tests {
     async fn update(url: &str) {
         clear_meta_cache().unwrap();
         let pool = AnyPool::connect(url).await.unwrap();
-        let cascade = match pool.kind() {
-            DbKind::PostgreSQL => " CASCADE",
-            DbKind::SQLite => "",
+        let kind = pool.kind();
+        let cascade = match kind.to_string().as_str() {
+            "postgresql" => " CASCADE",
+            "sqlite" => "",
+            _ => panic!("Invalid kind '{kind}'"),
         };
         pool.execute_batch(&format!(
             "DROP TABLE IF EXISTS test_update{cascade};\
@@ -1285,9 +1317,11 @@ mod tests {
     async fn update_returning(url: &str) {
         clear_meta_cache().unwrap();
         let pool = AnyPool::connect(url).await.unwrap();
-        let cascade = match pool.kind() {
-            DbKind::PostgreSQL => " CASCADE",
-            DbKind::SQLite => "",
+        let kind = pool.kind();
+        let cascade = match kind.to_string().as_str() {
+            "postgresql" => " CASCADE",
+            "sqlite" => "",
+            _ => panic!("Invalid kind '{kind}'"),
         };
         pool.execute_batch(&format!(
             "DROP TABLE IF EXISTS test_update_returning{cascade};\
@@ -1491,9 +1525,11 @@ mod tests {
     async fn upsert(url: &str) {
         clear_meta_cache().unwrap();
         let pool = AnyPool::connect(url).await.unwrap();
-        let cascade = match pool.kind() {
-            DbKind::PostgreSQL => " CASCADE",
-            DbKind::SQLite => "",
+        let kind = pool.kind();
+        let cascade = match kind.to_string().as_str() {
+            "postgresql" => " CASCADE",
+            "sqlite" => "",
+            _ => panic!("Invalid kind '{kind}'"),
         };
         pool.execute_batch(&format!(
             "DROP TABLE IF EXISTS test_upsert{cascade};\
@@ -1601,9 +1637,11 @@ mod tests {
     async fn upsert_returning(url: &str) {
         clear_meta_cache().unwrap();
         let pool = AnyPool::connect(url).await.unwrap();
-        let cascade = match pool.kind() {
-            DbKind::PostgreSQL => " CASCADE",
-            DbKind::SQLite => "",
+        let kind = pool.kind();
+        let cascade = match kind.to_string().as_str() {
+            "postgresql" => " CASCADE",
+            "sqlite" => "",
+            _ => panic!("Invalid kind '{kind}'"),
         };
         pool.execute_batch(&format!(
             "DROP TABLE IF EXISTS test_upsert_returning{cascade};\
@@ -2224,9 +2262,10 @@ mod tests {
 
         pool.set_cache_aware_query(true);
         let this_test = "Caching Performance Test -";
+        let kind = pool.kind();
         println!(
             "{this_test} Starting test for {} connection '{}' with cache_aware_query {}.",
-            pool.kind(),
+            kind,
             url,
             match pool.get_cache_aware_query() {
                 true => "on",
@@ -2269,7 +2308,7 @@ mod tests {
             }
         }
 
-        println!("{this_test} Elapsed times for {} (summary):", pool.kind());
+        println!("{this_test} Elapsed times for {} (summary):", kind);
         for (strategy, elapsed) in times.iter() {
             println!("  Strategy: {strategy}, elapsed time: {elapsed}s");
         }
@@ -2459,6 +2498,7 @@ mod tests {
         clear_meta_cache().unwrap();
 
         let pool = AnyPool::connect(url).await.unwrap();
+        let kind = pool.kind();
         pool.drop_table("test_db_type").await.unwrap();
         pool.execute(
             r#"CREATE TABLE test_db_type (
@@ -2476,30 +2516,32 @@ mod tests {
 
         let alpha_type = {
             let alpha_type = columns.get("alpha").unwrap();
-            pool.kind().db_type(alpha_type).unwrap()
+            kind.db_type(alpha_type).unwrap()
         };
         assert_eq!(alpha_type, DbType::Text("text".to_string()));
 
         let beta_type = {
             let beta_type = columns.get("beta").unwrap();
-            pool.kind().db_type(beta_type).unwrap()
+            kind.db_type(beta_type).unwrap()
         };
         assert_eq!(beta_type, DbType::BigInteger("bigint".to_string()));
 
         let gamma_type = {
             let gamma_type = columns.get("gamma").unwrap();
-            pool.kind().db_type(gamma_type).unwrap()
+            kind.db_type(gamma_type).unwrap()
         };
-        match pool.kind() {
-            DbKind::PostgreSQL => {
+
+        match kind.to_string().as_str() {
+            "postgresql" => {
                 assert_eq!(gamma_type, DbType::SmallInteger("smallint".to_string()))
             }
-            DbKind::SQLite => assert_eq!(gamma_type, DbType::BigInteger("smallint".to_string())),
+            "sqlite" => assert_eq!(gamma_type, DbType::BigInteger("smallint".to_string())),
+            _ => panic!("Invalid kind: '{kind}'"),
         };
 
         let delta_type = {
             let delta_type = columns.get("delta").unwrap();
-            pool.kind().db_type(delta_type).unwrap()
+            kind.db_type(delta_type).unwrap()
         };
         assert_eq!(delta_type, DbType::BigReal("double precision".to_string()));
 
