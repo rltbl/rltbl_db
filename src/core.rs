@@ -187,7 +187,7 @@ pub trait DbQuery: Sync {
                     })?;
                     // Only views need to be verified every time they are accessed. Tables
                     // do not because they do not have any dependencies.
-                    if self.which_are_views(tables).await?.len() > 0 {
+                    if which_are_views(&self.pool(), tables).await?.len() > 0 {
                         update_last_verified(&self.pool(), tables, sql, &params).await?;
                     }
                     Ok(DbRows { content: db_rows })
@@ -247,7 +247,7 @@ pub trait DbQuery: Sync {
                 Some(db_rows) => {
                     // Only views need to be verified every time they are accessed. Tables
                     // do not because they do not have any dependencies.
-                    if self.which_are_views(tables).await?.len() > 0 {
+                    if which_are_views(&self.pool(), tables).await?.len() > 0 {
                         update_last_verified(&self.pool(), tables, sql, &params).await?;
                     }
                     Ok(DbRows { content: db_rows })
@@ -293,8 +293,7 @@ pub trait DbQuery: Sync {
                 Ok(rows)
             }
             CachingStrategy::Trigger => {
-                let views = self
-                    .which_are_views(tables)
+                let views = which_are_views(&self.pool(), tables)
                     .await?
                     .into_iter()
                     .collect::<HashSet<_>>();
@@ -326,28 +325,6 @@ pub trait DbQuery: Sync {
 
     /// Get the underlying database pool
     fn pool(&self) -> AnyPool;
-
-    /// Get the SQL code that is used to define the given view.
-    async fn get_view_sql(&self, view: &str) -> Result<String, DbError> {
-        let view_sql = {
-            let rows = {
-                let (sql, params) = self.kind().view_sql_sql(view);
-                self.query_no_cache_clean(&sql, &params).await?
-            };
-            match rows.first() {
-                Some(row) => row
-                    .get("sql")
-                    .ok_or(DbError::DataError("No column 'sql' in row".to_string()))?
-                    .to_string(),
-                None => {
-                    return Err(DbError::DataError(format!(
-                        "No view definition found for '{view}'"
-                    )));
-                }
-            }
-        };
-        Ok(view_sql)
-    }
 
     /// Given a table, return a [ColumnMap] from column names to column SQL types.
     async fn columns(&self, table: &str) -> Result<ColumnMap, DbError> {
@@ -507,102 +484,12 @@ pub trait DbQuery: Sync {
 
     /// Check whether the given table exists in the database.
     async fn table_exists(&self, table: &str) -> Result<bool, DbError> {
-        Ok(self.which_are_tables(&[table]).await?.len() == 1)
+        Ok(which_are_tables(&self.pool(), &[table]).await?.len() == 1)
     }
 
     /// Check whether the given view exists in the database.
     async fn view_exists(&self, view: &str) -> Result<bool, DbError> {
-        Ok(self.which_are_views(&[view]).await?.len() == 1)
-    }
-
-    /// Return a list of the objects from the given list that are tables.
-    async fn which_are_tables(&self, objects: &[&str]) -> Result<Vec<String>, DbError> {
-        let mut tables = vec![];
-        let mut unknowns = vec![];
-        // Start by looking for the given objects in the meta cache:
-        for object in objects {
-            if exists_in_meta_cache(&format!("{object}_TABLE"))? {
-                tables.push(object.to_string());
-            } else if !exists_in_meta_cache(&format!("{object}_VIEW"))? {
-                unknowns.push(object.to_string());
-            }
-        }
-
-        // Query the database for the status of any unknowns:
-        if !unknowns.is_empty() {
-            let (sql, params) = self
-                .kind()
-                .which_are_tables_sql(&unknowns.iter().map(|s| s.as_str()).collect::<Vec<_>>());
-            let rows = self.query_no_cache_clean(&sql, params).await?;
-            for row in rows.iter() {
-                let table = row
-                    .get("table_name")
-                    .ok_or(DbError::DataError("No table_name found in row".to_string()))?
-                    .to_string();
-                let mut cache = get_meta_cache()?;
-                cache.insert(format!("{table}_TABLE"));
-                tables.push(table);
-            }
-
-            let (sql, params) = self
-                .kind()
-                .which_are_views_sql(&unknowns.iter().map(|s| s.as_str()).collect::<Vec<_>>());
-            let rows = self.query_no_cache_clean(&sql, params).await?;
-            for row in rows.iter() {
-                let view = row
-                    .get("view_name")
-                    .ok_or(DbError::DataError("No view_name found in row".to_string()))?
-                    .to_string();
-                let mut cache = get_meta_cache()?;
-                cache.insert(format!("{view}_VIEW"));
-            }
-        }
-        Ok(tables)
-    }
-
-    /// Return a list of the objects from the given list that are views.
-    async fn which_are_views(&self, objects: &[&str]) -> Result<Vec<String>, DbError> {
-        let mut views = vec![];
-        let mut unknowns = vec![];
-        // Start by looking for the given objects in the meta cache:
-        for object in objects {
-            if exists_in_meta_cache(&format!("{object}_VIEW"))? {
-                views.push(object.to_string());
-            } else if !exists_in_meta_cache(&format!("{object}_TABLE"))? {
-                unknowns.push(object.to_string());
-            }
-        }
-
-        // Query the database for the status of any unknowns:
-        if !unknowns.is_empty() {
-            let (sql, params) = self
-                .kind()
-                .which_are_views_sql(&unknowns.iter().map(|s| s.as_str()).collect::<Vec<_>>());
-            let rows = self.query_no_cache_clean(&sql, params).await?;
-            for row in rows.iter() {
-                let view = row
-                    .get("view_name")
-                    .ok_or(DbError::DataError("No view_name found in row".to_string()))?
-                    .to_string();
-                let mut cache = get_meta_cache()?;
-                cache.insert(format!("{view}_VIEW"));
-                views.push(view);
-            }
-
-            let (sql, params) = self
-                .kind()
-                .which_are_tables_sql(&unknowns.iter().map(|s| s.as_str()).collect::<Vec<_>>());
-            let rows = self.query_no_cache_clean(&sql, params).await?;
-            for row in rows.iter() {
-                let table = row
-                    .get("table_name")
-                    .ok_or(DbError::DataError("No table_name found in row".to_string()))?
-                    .to_string();
-                let mut cache = get_meta_cache()?;
-                cache.insert(format!("{table}_TABLE"));
-            }
-        }
-        Ok(views)
+        Ok(which_are_views(&self.pool(), &[view]).await?.len() == 1)
     }
 
     /// Drop the given table from the database. Note that for PostgreSQL (see
@@ -613,4 +500,122 @@ pub trait DbQuery: Sync {
 
     /// Drop the given view from the database.
     fn drop_view(&self, view: &str) -> impl Future<Output = Result<(), DbError>> + Send;
+}
+
+/// Get the SQL code that is used to define the given view.
+pub async fn get_view_sql(pool: &impl DbQuery, view: &str) -> Result<String, DbError> {
+    let view_sql = {
+        let rows = {
+            let (sql, params) = pool.kind().view_sql_sql(view);
+            pool.query_no_cache_clean(&sql, &params).await?
+        };
+        match rows.first() {
+            Some(row) => row
+                .get("sql")
+                .ok_or(DbError::DataError("No column 'sql' in row".to_string()))?
+                .to_string(),
+            None => {
+                return Err(DbError::DataError(format!(
+                    "No view definition found for '{view}'"
+                )));
+            }
+        }
+    };
+    Ok(view_sql)
+}
+
+/// Return a list of the objects from the given list that are tables.
+pub async fn which_are_tables(
+    pool: &impl DbQuery,
+    objects: &[&str],
+) -> Result<Vec<String>, DbError> {
+    let mut tables = vec![];
+    let mut unknowns = vec![];
+    // Start by looking for the given objects in the meta cache:
+    for object in objects {
+        if exists_in_meta_cache(&format!("{object}_TABLE"))? {
+            tables.push(object.to_string());
+        } else if !exists_in_meta_cache(&format!("{object}_VIEW"))? {
+            unknowns.push(object.to_string());
+        }
+    }
+
+    // Query the database for the status of any unknowns:
+    if !unknowns.is_empty() {
+        let (sql, params) = pool
+            .kind()
+            .which_are_tables_sql(&unknowns.iter().map(|s| s.as_str()).collect::<Vec<_>>());
+        let rows = pool.query_no_cache_clean(&sql, params).await?;
+        for row in rows.iter() {
+            let table = row
+                .get("table_name")
+                .ok_or(DbError::DataError("No table_name found in row".to_string()))?
+                .to_string();
+            let mut cache = get_meta_cache()?;
+            cache.insert(format!("{table}_TABLE"));
+            tables.push(table);
+        }
+
+        let (sql, params) = pool
+            .kind()
+            .which_are_views_sql(&unknowns.iter().map(|s| s.as_str()).collect::<Vec<_>>());
+        let rows = pool.query_no_cache_clean(&sql, params).await?;
+        for row in rows.iter() {
+            let view = row
+                .get("view_name")
+                .ok_or(DbError::DataError("No view_name found in row".to_string()))?
+                .to_string();
+            let mut cache = get_meta_cache()?;
+            cache.insert(format!("{view}_VIEW"));
+        }
+    }
+    Ok(tables)
+}
+
+/// Return a list of the objects from the given list that are views.
+pub async fn which_are_views(
+    pool: &impl DbQuery,
+    objects: &[&str],
+) -> Result<Vec<String>, DbError> {
+    let mut views = vec![];
+    let mut unknowns = vec![];
+    // Start by looking for the given objects in the meta cache:
+    for object in objects {
+        if exists_in_meta_cache(&format!("{object}_VIEW"))? {
+            views.push(object.to_string());
+        } else if !exists_in_meta_cache(&format!("{object}_TABLE"))? {
+            unknowns.push(object.to_string());
+        }
+    }
+
+    // Query the database for the status of any unknowns:
+    if !unknowns.is_empty() {
+        let (sql, params) = pool
+            .kind()
+            .which_are_views_sql(&unknowns.iter().map(|s| s.as_str()).collect::<Vec<_>>());
+        let rows = pool.query_no_cache_clean(&sql, params).await?;
+        for row in rows.iter() {
+            let view = row
+                .get("view_name")
+                .ok_or(DbError::DataError("No view_name found in row".to_string()))?
+                .to_string();
+            let mut cache = get_meta_cache()?;
+            cache.insert(format!("{view}_VIEW"));
+            views.push(view);
+        }
+
+        let (sql, params) = pool
+            .kind()
+            .which_are_tables_sql(&unknowns.iter().map(|s| s.as_str()).collect::<Vec<_>>());
+        let rows = pool.query_no_cache_clean(&sql, params).await?;
+        for row in rows.iter() {
+            let table = row
+                .get("table_name")
+                .ok_or(DbError::DataError("No table_name found in row".to_string()))?
+                .to_string();
+            let mut cache = get_meta_cache()?;
+            cache.insert(format!("{table}_TABLE"));
+        }
+    }
+    Ok(views)
 }

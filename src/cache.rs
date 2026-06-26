@@ -1,7 +1,7 @@
 //! Code for query caching.
 
 use crate::{
-    core::{DbError, DbQuery},
+    core::{DbError, DbQuery, get_view_sql, which_are_views},
     db_value::{DbParams, DbRow, DbValue},
     params,
     parse::{get_affected_tables, get_view_tables},
@@ -334,7 +334,7 @@ pub async fn ensure_caching_triggers_exist_for_view(
     let view_triggers_name = format!("{view}_triggers");
     if !exists_in_meta_cache(&view_triggers_name)? {
         ensure_cache_tables_exist(pool).await?;
-        let view_sql = pool.get_view_sql(&view).await?;
+        let view_sql = get_view_sql(pool, &view).await?;
         let source_tables = get_view_tables(&view_sql)?;
         for source_table in source_tables.iter() {
             // Add a trigger to clean entries from the cache for the source table itself:
@@ -604,7 +604,7 @@ pub async fn delete_query_cache_entries(
 /// that (a) are views and (b) have source tables that have been modified more recently than
 /// the view. This function works both with database and memory cache strategies.
 pub async fn update_cached_views(pool: &impl DbQuery, tables: &[&str]) -> Result<(), DbError> {
-    let views = pool.which_are_views(tables).await?;
+    let views = which_are_views(pool, tables).await?;
     match pool.get_caching_strategy() {
         CachingStrategy::Memory(_) => {
             for view in &views {
@@ -617,7 +617,7 @@ pub async fn update_cached_views(pool: &impl DbQuery, tables: &[&str]) -> Result
                     }
                     last_verified
                 };
-                let view_sql = pool.get_view_sql(&view).await?;
+                let view_sql = get_view_sql(pool, &view).await?;
                 let view_tables = get_view_tables(&view_sql)?;
                 let last_modified = {
                     let mut latest_last_modified = 0;
@@ -639,7 +639,7 @@ pub async fn update_cached_views(pool: &impl DbQuery, tables: &[&str]) -> Result
         _ => {
             for view in &views {
                 let last_verified = last_verified(pool, &view).await?;
-                let view_sql = pool.get_view_sql(&view).await?;
+                let view_sql = get_view_sql(pool, &view).await?;
                 let view_tables = get_view_tables(&view_sql)?;
                 let last_modified = get_latest_last_modified(
                     pool,
