@@ -1,9 +1,12 @@
 //! [libsql](<https://crates.io/crates/deadpool-libsql>) implementation for rltbl_db.
 
 use crate::{
-    core::{CachingStrategy, DbError, DbQuery},
+    any::AnyPool,
+    cache::{CachingStrategy, clear_cache_for_dropped_tables},
+    core::{DbError, DbQuery},
     db_kind::{DbKind, MAX_PARAMS_SQLITE},
     db_value::{DbParams, DbRow, DbRows, DbValue, IntoDbParams, IntoDbRows, JsonValue},
+    parse::validate_table_name,
     shared::{EditType, edit},
 };
 use deadpool_libsql::{
@@ -113,6 +116,15 @@ impl DbQuery for LibSQLPool {
     /// Implements [DbQuery::kind()] for SQLite.
     fn kind(&self) -> DbKind {
         DbKind::SQLite
+    }
+
+    /// Implements [DbQuery::pool()] for SQLite.
+    fn pool(&self) -> AnyPool {
+        AnyPool::LibSQL(LibSQLPool {
+            pool: self.pool.clone(),
+            caching_strategy: self.caching_strategy,
+            cache_aware_query: self.cache_aware_query,
+        })
     }
 
     /// Implements [DbQuery::set_caching_strategy()] for SQLite.
@@ -314,6 +326,30 @@ impl DbQuery for LibSQLPool {
             returning,
         )
         .await
+    }
+
+    /// Implements [DbQuery::drop_table()] for SQLite.
+    async fn drop_table(&self, table: &str) -> Result<(), DbError> {
+        let table = validate_table_name(table)?;
+        // Drop the table:
+        self.execute_no_cache_clean(&format!(r#"DROP TABLE IF EXISTS "{table}""#), ())
+            .await?;
+
+        // Delete dirty entries from the cache in accordance with our caching strategy:
+        clear_cache_for_dropped_tables(&self.pool(), &[&table]).await?;
+        Ok(())
+    }
+
+    /// Implements [DbQuery::drop_table()] for SQLite.
+    async fn drop_view(&self, view: &str) -> Result<(), DbError> {
+        let view = validate_table_name(view)?;
+        // Drop the view:
+        self.execute_no_cache_clean(&format!(r#"DROP VIEW IF EXISTS "{view}""#), ())
+            .await?;
+
+        // Delete dirty entries from the cache in accordance with our caching strategy:
+        clear_cache_for_dropped_tables(&self.pool(), &[&view]).await?;
+        Ok(())
     }
 }
 

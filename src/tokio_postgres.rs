@@ -1,9 +1,12 @@
 //! [tokio-postgres](<https://crates.io/crates/deadpool-postgres>) implementation for rltbl_db.
 
 use crate::{
-    core::{CachingStrategy, DbError, DbQuery},
+    any::AnyPool,
+    cache::{CachingStrategy, clear_cache_for_affected_tables, clear_cache_for_dropped_tables},
+    core::{DbError, DbQuery},
     db_kind::{DbKind, MAX_PARAMS_POSTGRES},
     db_value::{DbParams, DbRow, DbRows, DbValue, IntoDbParams, IntoDbRows, JsonValue},
+    parse::validate_table_name,
     shared::{EditType, edit},
 };
 use bytes::{BufMut, BytesMut};
@@ -217,6 +220,15 @@ impl DbQuery for TokioPostgresPool {
         DbKind::PostgreSQL
     }
 
+    /// Implements [DbQuery::pool()] for PostgreSQL
+    fn pool(&self) -> AnyPool {
+        AnyPool::TokioPostgres(TokioPostgresPool {
+            pool: self.pool.clone(),
+            caching_strategy: self.caching_strategy,
+            cache_aware_query: self.cache_aware_query,
+        })
+    }
+
     /// Implements [DbQuery::set_caching_strategy()] for PostgreSQL.
     fn set_caching_strategy(&mut self, strategy: &CachingStrategy) {
         self.caching_strategy = *strategy;
@@ -248,7 +260,7 @@ impl DbQuery for TokioPostgresPool {
             .await
             .map_err(|err| DbError::DatabaseError(format!("Error in query(): {err:?}")))?;
 
-        self.clear_cache_for_affected_tables(sql).await?;
+        clear_cache_for_affected_tables(&self.pool(), sql).await?;
         Ok(())
     }
 
@@ -526,6 +538,29 @@ impl DbQuery for TokioPostgresPool {
             returning,
         )
         .await
+    }
+
+    /// Implements [DbQuery::drop_table()] for PostgreSQL.
+    async fn drop_table(&self, table: &str) -> Result<(), DbError> {
+        let table = validate_table_name(table)?;
+        self.execute_no_cache_clean(&format!(r#"DROP TABLE IF EXISTS "{table}" CASCADE"#), ())
+            .await?;
+
+        // Delete dirty entries from the cache in accordance with our caching strategy:
+        clear_cache_for_dropped_tables(&self.pool(), &[&table]).await?;
+        Ok(())
+    }
+
+    /// Implements [DbQuery::drop_view()] for PostgreSQL.
+    async fn drop_view(&self, view: &str) -> Result<(), DbError> {
+        let view = validate_table_name(view)?;
+        // Drop the view:
+        self.execute_no_cache_clean(&format!(r#"DROP VIEW IF EXISTS "{view}" CASCADE"#), ())
+            .await?;
+
+        // Delete dirty entries from the cache in accordance with our caching strategy:
+        clear_cache_for_dropped_tables(&self.pool(), &[&view]).await?;
+        Ok(())
     }
 }
 

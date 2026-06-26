@@ -1,4 +1,5 @@
 use crate::{
+    cache::clear_cache_for_edited_tables,
     core::{DbError, DbQuery},
     db_kind::DbKind,
     db_value::{DbRows, DbValue, IntoDbRows},
@@ -324,7 +325,7 @@ pub(crate) async fn edit(
     }
 
     // Delete dirty entries from the cache in accordance with our caching strategy:
-    pool.clear_cache_for_edited_tables(&[&table]).await?;
+    clear_cache_for_edited_tables(pool, &[&table]).await?;
 
     Ok(rows_to_return.into_db_rows())
 }

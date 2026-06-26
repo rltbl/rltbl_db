@@ -1,6 +1,9 @@
 //! Code for parsing SQL expressions.
 
-use crate::core::{DbError, QUERY_CACHE_TABLE, TABLE_CACHE_TABLE};
+use crate::{
+    cache::{QUERY_CACHE_TABLE, TABLE_CACHE_TABLE},
+    core::DbError,
+};
 use lazy_static::lazy_static;
 use regex::Regex;
 use std::collections::BTreeSet;
