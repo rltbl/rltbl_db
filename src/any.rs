@@ -23,8 +23,7 @@ use crate::{
     cache::CachingStrategy,
     core::{DbError, DbQuery},
     db_kind::DbKind,
-    db_row::{DbRows, IntoDbRows},
-    db_value::IntoDbParams,
+    db_value::{DbRows, IntoDbParams, IntoDbRows},
 };
 
 #[cfg(feature = "rusqlite")]
@@ -361,10 +360,9 @@ mod tests {
             clear_memory_query_cache, clear_memory_table_cache, clear_meta_cache,
             get_memory_query_cache_contents, get_memory_table_cache_contents,
         },
+        db_kind::DbType,
         db_row,
-        db_row::{ColumnMap, DbRow, StringRow},
-        db_type::DbType,
-        db_value::{DbValue, JsonValue},
+        db_value::{ColumnMap, DbRow, DbValue, JsonValue, StringRow},
         params,
     };
     use rand::{

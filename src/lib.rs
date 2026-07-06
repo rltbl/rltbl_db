@@ -4,8 +4,6 @@ pub mod any;
 pub mod cache;
 pub mod core;
 pub mod db_kind;
-pub mod db_row;
-pub mod db_type;
 pub mod db_value;
 pub mod parse;
 pub mod serde;
@@ -55,8 +53,7 @@ macro_rules! db_row {
 
 #[cfg(test)]
 mod tests {
-    use crate::db_value::{DbValue};
-    use crate::db_row::DbRow;
+    use crate::db_value::{DbRow, DbValue};
 
     #[test]
     fn test_macros() {

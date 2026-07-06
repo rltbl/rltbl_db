@@ -1,8 +1,7 @@
 use crate::{
     cache::clear_cache_for_edited_tables,
     core::{DbError, DbQuery},
-    db_row::{DbRows, IntoDbRows},
-    db_value::DbValue,
+    db_value::{DbRows, DbValue, IntoDbRows},
     parse::validate_table_name,
 };
 use std::fmt::Display;

@@ -10,8 +10,7 @@ use crate::{
         update_last_verified,
     },
     db_kind::DbKind,
-    db_row::{ColumnMap, DbRow, DbRows, IntoDbRows},
-    db_value::{DbParams, IntoDbParams},
+    db_value::{ColumnMap, DbParams, DbRow, DbRows, IntoDbParams, IntoDbRows},
     parse::get_accessed_tables,
 };
 
