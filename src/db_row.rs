@@ -33,7 +33,7 @@ pub struct DbRows {
 
 /// TODO: Add docstring.
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct DbColumn {
+pub struct DbColumn {
     name: String,
     db_type: DbType,
     not_null: bool,
@@ -428,12 +428,58 @@ impl IntoDbRows for &Vec<JsonRow> {
 }
 
 impl DbColumn {
-    fn guess<'a, I>(values: I) -> Self
+    pub fn guess_value<'a, I>(values: I) -> Result<Self, DbError>
     where
         I: Iterator<Item = &'a DbValue>,
     {
-        for value in values {}
-        todo!()
+        // TODO: We can probably do this more efficiently ...
+        let values = values.map(|value| value.to_string()).collect::<Vec<_>>();
+        let values = values
+            .iter()
+            .map(|value| value.as_str())
+            .collect::<Vec<_>>()
+            .into_iter();
+        DbColumn::guess_str(values)
+    }
+
+    pub fn guess_str<'a, I>(values: I) -> Result<Self, DbError>
+    where
+        I: Iterator<Item = &'a str>,
+    {
+        // TODO: Implement DbColumn::default() instead?
+        let mut column = DbColumn {
+            name: "unknown".to_string(),
+            db_type: DbType::Boolean("unknown".to_string()),
+            not_null: true,
+            unique: true,
+        };
+
+        let mut values_seen = vec![];
+
+        for value in values {
+            if value == "" {
+                column.not_null = false;
+                continue;
+            } else if values_seen.contains(&value) {
+                column.unique = false;
+                continue;
+            } else {
+                values_seen.push(value)
+            }
+
+            let (db_type, _) = DbType::guess(value).unwrap();
+            if db_type >= column.db_type {
+                column.db_type = db_type;
+            }
+        }
+
+        // Verify that all of the values are really parseable into the least specific type
+        // that was found:
+        for value in &values_seen {
+            column.db_type.parse_str(value)?;
+        }
+
+        Ok(column)
     }
 }
 
@@ -447,8 +493,16 @@ mod tests {
     #[test]
     fn test_guessing() {
         let db_values = vec![DbValue::SmallInteger(1), DbValue::Real(1.23)];
-        let column = DbColumn::guess(db_values.iter());
-        println!("COLUMN: {column:?}");
+        let column = DbColumn::guess_value(db_values.iter()).unwrap();
+        assert_eq!(
+            column,
+            DbColumn {
+                name: "unknown".to_string(),
+                db_type: DbType::Real("".to_string()),
+                not_null: true,
+                unique: true,
+            }
+        );
     }
 
     #[test]
