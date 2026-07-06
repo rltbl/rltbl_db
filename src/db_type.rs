@@ -6,7 +6,7 @@ use crate::{
 };
 
 use rust_decimal::Decimal;
-use std::{cmp::Ordering, str::FromStr};
+use std::cmp::Ordering;
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 
@@ -96,33 +96,48 @@ impl PartialOrd for DbType {
     }
 }
 
-impl FromStr for DbType {
-    type Err = DbError;
+impl DbType {
+    /// TODO: Add docstring.
+    pub fn guess(value: &str) -> Result<DbValue, DbError> {
+        match value {
+            "" => Ok(DbValue::Null),
+            _ => {
+                let mut db_types = DbType::iter()
+                    .filter(|db_type| match db_type {
+                        DbType::Null(_) => false,
+                        _ => true,
+                    })
+                    .collect::<Vec<_>>();
 
-    fn from_str(value: &str) -> Result<Self, DbError> {
-        if 1 == 1 {
-            let mut db_types = DbType::iter().collect::<Vec<_>>();
-            db_types.sort();
-            for db_type in db_types {
-                println!("DB TYPE: {db_type:?}");
+                db_types.sort();
+                for db_type in db_types {
+                    match db_type.parse_str(value) {
+                        Ok(db_value) => return Ok(db_value),
+                        _ => (),
+                    }
+                }
+                Err(DbError::InputError(format!(
+                    "Could not guess value type: '{value}'"
+                )))
             }
         }
-        todo!()
     }
-}
 
-impl DbType {
     /// Parses a given string representing the value of a database field into a [DbValue] of this
     /// type.
     pub fn parse_str(&self, value: &str) -> Result<DbValue, DbError> {
         match self {
             DbType::Null(_) => Ok(DbValue::Null),
-            DbType::Boolean(_) => {
-                let value = value
-                    .parse::<bool>()
-                    .map_err(|_| DbError::InputError(format!("Not a boolean: {value}")))?;
-                Ok(DbValue::Boolean(value))
-            }
+            DbType::Boolean(_) => match value.to_lowercase().as_str() {
+                "0" | "false" | "f" => Ok(DbValue::Boolean(false)),
+                "1" | "true" | "t" => Ok(DbValue::Boolean(true)),
+                _ => {
+                    let value = value
+                        .parse::<bool>()
+                        .map_err(|_| DbError::InputError(format!("Not a boolean: {value}")))?;
+                    Ok(DbValue::Boolean(value))
+                }
+            },
             DbType::I16(_) | DbType::SmallInteger(_) => {
                 let value = value
                     .parse::<i16>()
@@ -245,6 +260,13 @@ mod tests {
 
     #[test]
     fn test_from_str() {
-        let foo = DbType::from_str("0").unwrap();
+        let foo = DbType::guess("True").unwrap();
+        assert_eq!(foo, DbValue::Boolean(true));
+
+        let foo = DbType::guess("2").unwrap();
+        assert_eq!(foo, DbValue::SmallInteger(2));
+
+        let foo = DbType::guess("2.0").unwrap();
+        assert_eq!(foo, DbValue::Real(2.0));
     }
 }
