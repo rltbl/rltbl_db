@@ -23,7 +23,8 @@ use crate::{
     cache::CachingStrategy,
     core::{DbError, DbQuery},
     db_kind::DbKind,
-    db_value::{DbRows, IntoDbParams, IntoDbRows},
+    db_row::{DbRows, IntoDbRows},
+    db_value::IntoDbParams,
 };
 
 #[cfg(feature = "rusqlite")]

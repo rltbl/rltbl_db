@@ -2,7 +2,8 @@
 
 use crate::{
     core::{DbError, DbQuery, get_view_sql, which_are_views},
-    db_value::{DbParams, DbRow, DbValue},
+    db_row::DbRow,
+    db_value::{DbParams, DbValue},
     params,
     parse::{get_affected_tables, get_view_tables},
 };
