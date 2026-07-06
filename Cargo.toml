@@ -21,6 +21,8 @@ regex = "1.12.2"
 rust_decimal = { version = "1.39.0", features = ["db-tokio-postgres", "macros"], optional = true }
 serde = { version = "1.0.226", features = ["derive"] }
 serde_json = { version = "1.0.145", features = ["preserve_order"] }
+strum = "0.28"
+strum_macros = "0.28"
 tokio-postgres = { version = "0.7", features = ["with-serde_json-1"], optional = true }
 tree-sitter = "0.26.3"
 tree-sitter-sequel = "0.3.11"

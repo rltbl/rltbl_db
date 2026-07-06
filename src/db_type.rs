@@ -4,12 +4,15 @@ use crate::{
     core::DbError,
     db_value::{DbValue, IntoDbValue, JsonValue},
 };
+
 use rust_decimal::Decimal;
-use std::cmp::Ordering;
+use std::{cmp::Ordering, str::FromStr};
+use strum::IntoEnumIterator;
+use strum_macros::EnumIter;
 
 /// The supported database types, including information about the name
 /// used to refer to the type in the underlying database.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, EnumIter)]
 pub enum DbType {
     Null(String),
     Boolean(String),
@@ -43,77 +46,68 @@ impl PartialEq for DbType {
 
 impl Eq for DbType {}
 
+impl Ord for DbType {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match (self, other) {
+            (DbType::Null(_), DbType::Null(_)) => Ordering::Equal,
+            (DbType::Null(_), _) => Ordering::Less,
+            (_, DbType::Null(_)) => Ordering::Greater,
+
+            (DbType::Boolean(_), DbType::Boolean(_)) => Ordering::Equal,
+            (DbType::Boolean(_), _) => Ordering::Less,
+            (_, DbType::Boolean(_)) => Ordering::Greater,
+
+            (DbType::I16(_), DbType::I16(_)) => Ordering::Equal,
+            (DbType::I16(_), _) => Ordering::Less,
+            (_, DbType::I16(_)) => Ordering::Greater,
+
+            (DbType::SmallInteger(_), DbType::SmallInteger(_)) => Ordering::Equal,
+            (DbType::SmallInteger(_), _) => Ordering::Less,
+            (_, DbType::SmallInteger(_)) => Ordering::Greater,
+
+            (DbType::Integer(_), DbType::Integer(_)) => Ordering::Equal,
+            (DbType::Integer(_), _) => Ordering::Less,
+            (_, DbType::Integer(_)) => Ordering::Greater,
+
+            (DbType::BigInteger(_), DbType::BigInteger(_)) => Ordering::Equal,
+            (DbType::BigInteger(_), _) => Ordering::Less,
+            (_, DbType::BigInteger(_)) => Ordering::Greater,
+
+            (DbType::Real(_), DbType::Real(_)) => Ordering::Equal,
+            (DbType::Real(_), _) => Ordering::Less,
+            (_, DbType::Real(_)) => Ordering::Greater,
+
+            (DbType::BigReal(_), DbType::BigReal(_)) => Ordering::Equal,
+            (DbType::BigReal(_), _) => Ordering::Less,
+            (_, DbType::BigReal(_)) => Ordering::Greater,
+
+            (DbType::Numeric(_), DbType::Numeric(_)) => Ordering::Equal,
+            (DbType::Numeric(_), _) => Ordering::Less,
+            (_, DbType::Numeric(_)) => Ordering::Greater,
+
+            (DbType::Text(_), DbType::Text(_)) => Ordering::Equal,
+        }
+    }
+}
+
 impl PartialOrd for DbType {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        match (self, other) {
-            (DbType::Null(_), DbType::Null(_)) => Some(Ordering::Equal),
-            (DbType::Null(_), _) => None,
-            (_, DbType::Null(_)) => None,
+        Some(self.cmp(other))
+    }
+}
 
-            (DbType::Boolean(_), DbType::Boolean(_)) => Some(Ordering::Equal),
-            (DbType::Boolean(_), _) => Some(Ordering::Less),
-            (_, DbType::Boolean(_)) => Some(Ordering::Greater),
+impl FromStr for DbType {
+    type Err = DbError;
 
-            (DbType::Text(_), DbType::Text(_)) => Some(Ordering::Equal),
-            (DbType::Text(_), _) => Some(Ordering::Greater),
-            (_, DbType::Text(_)) => Some(Ordering::Less),
-
-            (DbType::I16(_), DbType::I16(_)) => Some(Ordering::Equal),
-            (DbType::I16(_), DbType::SmallInteger(_)) => Some(Ordering::Less),
-            (DbType::I16(_), DbType::Integer(_)) => Some(Ordering::Less),
-            (DbType::I16(_), DbType::BigInteger(_)) => Some(Ordering::Less),
-            (DbType::I16(_), DbType::Real(_)) => Some(Ordering::Less),
-            (DbType::I16(_), DbType::BigReal(_)) => Some(Ordering::Less),
-            (DbType::I16(_), DbType::Numeric(_)) => Some(Ordering::Less),
-
-            (DbType::SmallInteger(_), DbType::I16(_)) => Some(Ordering::Greater),
-            (DbType::SmallInteger(_), DbType::SmallInteger(_)) => Some(Ordering::Equal),
-            (DbType::SmallInteger(_), DbType::Integer(_)) => Some(Ordering::Less),
-            (DbType::SmallInteger(_), DbType::BigInteger(_)) => Some(Ordering::Less),
-            (DbType::SmallInteger(_), DbType::Real(_)) => Some(Ordering::Less),
-            (DbType::SmallInteger(_), DbType::BigReal(_)) => Some(Ordering::Less),
-            (DbType::SmallInteger(_), DbType::Numeric(_)) => Some(Ordering::Less),
-
-            (DbType::Integer(_), DbType::I16(_)) => Some(Ordering::Greater),
-            (DbType::Integer(_), DbType::SmallInteger(_)) => Some(Ordering::Greater),
-            (DbType::Integer(_), DbType::Integer(_)) => Some(Ordering::Equal),
-            (DbType::Integer(_), DbType::BigInteger(_)) => Some(Ordering::Less),
-            (DbType::Integer(_), DbType::Real(_)) => Some(Ordering::Less),
-            (DbType::Integer(_), DbType::BigReal(_)) => Some(Ordering::Less),
-            (DbType::Integer(_), DbType::Numeric(_)) => Some(Ordering::Less),
-
-            (DbType::BigInteger(_), DbType::I16(_)) => Some(Ordering::Greater),
-            (DbType::BigInteger(_), DbType::SmallInteger(_)) => Some(Ordering::Greater),
-            (DbType::BigInteger(_), DbType::Integer(_)) => Some(Ordering::Greater),
-            (DbType::BigInteger(_), DbType::BigInteger(_)) => Some(Ordering::Equal),
-            (DbType::BigInteger(_), DbType::Real(_)) => Some(Ordering::Less),
-            (DbType::BigInteger(_), DbType::BigReal(_)) => Some(Ordering::Less),
-            (DbType::BigInteger(_), DbType::Numeric(_)) => Some(Ordering::Less),
-
-            (DbType::Real(_), DbType::I16(_)) => Some(Ordering::Greater),
-            (DbType::Real(_), DbType::SmallInteger(_)) => Some(Ordering::Greater),
-            (DbType::Real(_), DbType::Integer(_)) => Some(Ordering::Greater),
-            (DbType::Real(_), DbType::BigInteger(_)) => Some(Ordering::Greater),
-            (DbType::Real(_), DbType::Real(_)) => Some(Ordering::Equal),
-            (DbType::Real(_), DbType::BigReal(_)) => Some(Ordering::Less),
-            (DbType::Real(_), DbType::Numeric(_)) => Some(Ordering::Less),
-
-            (DbType::BigReal(_), DbType::I16(_)) => Some(Ordering::Greater),
-            (DbType::BigReal(_), DbType::SmallInteger(_)) => Some(Ordering::Greater),
-            (DbType::BigReal(_), DbType::Integer(_)) => Some(Ordering::Greater),
-            (DbType::BigReal(_), DbType::BigInteger(_)) => Some(Ordering::Greater),
-            (DbType::BigReal(_), DbType::Real(_)) => Some(Ordering::Greater),
-            (DbType::BigReal(_), DbType::BigReal(_)) => Some(Ordering::Equal),
-            (DbType::BigReal(_), DbType::Numeric(_)) => Some(Ordering::Less),
-
-            (DbType::Numeric(_), DbType::I16(_)) => Some(Ordering::Greater),
-            (DbType::Numeric(_), DbType::SmallInteger(_)) => Some(Ordering::Greater),
-            (DbType::Numeric(_), DbType::Integer(_)) => Some(Ordering::Greater),
-            (DbType::Numeric(_), DbType::BigInteger(_)) => Some(Ordering::Greater),
-            (DbType::Numeric(_), DbType::Real(_)) => Some(Ordering::Greater),
-            (DbType::Numeric(_), DbType::BigReal(_)) => Some(Ordering::Greater),
-            (DbType::Numeric(_), DbType::Numeric(_)) => Some(Ordering::Equal),
+    fn from_str(value: &str) -> Result<Self, DbError> {
+        if 1 == 1 {
+            let mut db_types = DbType::iter().collect::<Vec<_>>();
+            db_types.sort();
+            for db_type in db_types {
+                println!("DB TYPE: {db_type:?}");
+            }
         }
+        todo!()
     }
 }
 
@@ -242,5 +236,15 @@ impl DbType {
             }
             DbType::Text(_) => Ok(DbValue::Text(value.to_string())),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_from_str() {
+        let foo = DbType::from_str("0").unwrap();
     }
 }

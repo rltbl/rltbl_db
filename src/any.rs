@@ -360,8 +360,8 @@ mod tests {
             clear_memory_query_cache, clear_memory_table_cache, clear_meta_cache,
             get_memory_query_cache_contents, get_memory_table_cache_contents,
         },
-        db_kind::DbType,
         db_row,
+        db_type::DbType,
         db_value::{ColumnMap, DbRow, DbValue, JsonValue, StringRow},
         params,
     };
