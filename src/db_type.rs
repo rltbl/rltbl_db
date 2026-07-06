@@ -98,10 +98,12 @@ impl PartialOrd for DbType {
 
 impl DbType {
     /// TODO: Add docstring.
+    // TODO: Change name from guess to something else.
     pub fn guess(value: &str) -> Result<(DbType, DbValue), DbError> {
         match value {
             "" => Ok((DbType::Null("unknown".to_string()), DbValue::Null)),
             _ => {
+                // TODO: Optimize. Don't always need to do this.
                 let mut db_types = DbType::iter()
                     .filter(|db_type| match db_type {
                         DbType::Null(_) => false,
