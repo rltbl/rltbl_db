@@ -362,8 +362,9 @@ mod tests {
             get_memory_query_cache_contents, get_memory_table_cache_contents,
         },
         db_row,
+        db_row::{ColumnMap, DbRow, StringRow},
         db_type::DbType,
-        db_value::{ColumnMap, DbRow, DbValue, JsonValue, StringRow},
+        db_value::{DbValue, JsonValue},
         params,
     };
     use rand::{

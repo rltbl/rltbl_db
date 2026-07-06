@@ -98,9 +98,9 @@ impl PartialOrd for DbType {
 
 impl DbType {
     /// TODO: Add docstring.
-    pub fn guess(value: &str) -> Result<DbValue, DbError> {
+    pub fn guess(value: &str) -> Result<(DbType, DbValue), DbError> {
         match value {
-            "" => Ok(DbValue::Null),
+            "" => Ok((DbType::Null("unknown".to_string()), DbValue::Null)),
             _ => {
                 let mut db_types = DbType::iter()
                     .filter(|db_type| match db_type {
@@ -112,7 +112,7 @@ impl DbType {
                 db_types.sort();
                 for db_type in db_types {
                     match db_type.parse_str(value) {
-                        Ok(db_value) => return Ok(db_value),
+                        Ok(db_value) => return Ok((db_type, db_value)),
                         _ => (),
                     }
                 }
@@ -260,13 +260,13 @@ mod tests {
 
     #[test]
     fn test_from_str() {
-        let foo = DbType::guess("True").unwrap();
+        let (_, foo) = DbType::guess("True").unwrap();
         assert_eq!(foo, DbValue::Boolean(true));
 
-        let foo = DbType::guess("2").unwrap();
+        let (_, foo) = DbType::guess("2").unwrap();
         assert_eq!(foo, DbValue::SmallInteger(2));
 
-        let foo = DbType::guess("2.0").unwrap();
+        let (_, foo) = DbType::guess("2.0").unwrap();
         assert_eq!(foo, DbValue::Real(2.0));
     }
 }

@@ -55,7 +55,8 @@ macro_rules! db_row {
 
 #[cfg(test)]
 mod tests {
-    use crate::db_value::{DbRow, DbValue};
+    use crate::db_value::{DbValue};
+    use crate::db_row::DbRow;
 
     #[test]
     fn test_macros() {

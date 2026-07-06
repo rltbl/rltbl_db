@@ -2,17 +2,21 @@
 
 use crate::{
     core::DbError,
+    db_type::DbType,
     db_value::{DbValue, JsonValue},
 };
 use indexmap::{self, IndexMap};
 use serde::{Deserialize, Serialize};
 use serde_json::Map as JsonMap;
-use std::ops::{Deref, DerefMut};
+use std::{
+    cmp::Ordering,
+    ops::{Deref, DerefMut},
+};
 
 pub type JsonRow = JsonMap<String, JsonValue>;
 pub type StringRow = IndexMap<String, String>;
 
-// TODO: Maybe replace this with Column:
+// TODO: Maybe replace this with DbColumn:
 pub type ColumnMap = IndexMap<String, String>;
 
 /// A row of database values indexed by column name.
@@ -25,6 +29,15 @@ pub struct DbRow {
 #[derive(Debug, Default, Clone)]
 pub struct DbRows {
     pub content: Vec<DbRow>,
+}
+
+/// TODO: Add docstring.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct DbColumn {
+    name: String,
+    db_type: DbType,
+    not_null: bool,
+    unique: bool,
 }
 
 /// Enables conversion from something into a vector of [DbRow]s
@@ -57,6 +70,37 @@ impl Deref for DbRows {
 impl DerefMut for DbRows {
     fn deref_mut(&mut self) -> &mut Vec<DbRow> {
         &mut self.content
+    }
+}
+
+impl Ord for DbColumn {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match self.db_type.cmp(&other.db_type) {
+            Ordering::Equal => {
+                if self.not_null != other.not_null {
+                    if self.not_null {
+                        Ordering::Less
+                    } else {
+                        Ordering::Greater
+                    }
+                } else if self.unique != other.unique {
+                    if self.unique {
+                        Ordering::Less
+                    } else {
+                        Ordering::Greater
+                    }
+                } else {
+                    Ordering::Equal
+                }
+            }
+            ordering => ordering,
+        }
+    }
+}
+
+impl PartialOrd for DbColumn {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 
@@ -383,11 +427,29 @@ impl IntoDbRows for &Vec<JsonRow> {
     }
 }
 
+impl DbColumn {
+    fn guess<'a, I>(values: I) -> Self
+    where
+        I: Iterator<Item = &'a DbValue>,
+    {
+        for value in values {}
+        todo!()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use rust_decimal::dec;
+    use serde_json::json;
     use std::collections::HashMap;
+
+    #[test]
+    fn test_guessing() {
+        let db_values = vec![DbValue::SmallInteger(1), DbValue::Real(1.23)];
+        let column = DbColumn::guess(db_values.iter());
+        println!("COLUMN: {column:?}");
+    }
 
     #[test]
     fn test_json() {
