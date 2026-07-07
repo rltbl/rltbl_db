@@ -993,9 +993,24 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
                     JsonValue::Object(_) => value.deserialize_map(visitor).map_err(|err| {
                         DbError::SerdeError(format!("Error deserializing object: '{err}'."))
                     }),
+                    JsonValue::Number(num) => {
+                        if num.is_i64() {
+                            value.deserialize_i64(visitor).map_err(|err| {
+                                DbError::SerdeError(format!("Error deserializing i64: '{err}'."))
+                            })
+                        } else if num.is_u64() {
+                            value.deserialize_u64(visitor).map_err(|err| {
+                                DbError::SerdeError(format!("Error deserializing u64: '{err}'."))
+                            })
+                        } else {
+                            value.deserialize_f64(visitor).map_err(|err| {
+                                DbError::SerdeError(format!("Error deserializing f64: '{err}'."))
+                            })
+                        }
+                    }
                     _ => {
                         return Err(DbError::SerdeError(format!(
-                            "Invalid JSON value: {value:?}"
+                            "In deserialize_any(): Invalid JSON value: {value:?}"
                         )));
                     }
                 },
@@ -1062,7 +1077,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
                     }),
                     _ => {
                         return Err(DbError::SerdeError(format!(
-                            "Invalid JSON value: {value:?}"
+                            "In deserialize_struct(): Invalid JSON value: {value:?}"
                         )));
                     }
                 },
@@ -1156,7 +1171,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
                         }),
                     _ => {
                         return Err(DbError::SerdeError(format!(
-                            "Invalid JSON value: {value:?}"
+                            "In deserialize_enum: Invalid JSON value: {value:?}"
                         )));
                     }
                 }
@@ -1185,7 +1200,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
                 }),
                 _ => {
                     return Err(DbError::SerdeError(format!(
-                        "Invalid JSON value: {value:?}"
+                        "In deserialize_seq(): Invalid JSON value: {value:?}"
                     )));
                 }
             },
@@ -1213,7 +1228,7 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
                 }),
                 _ => {
                     return Err(DbError::SerdeError(format!(
-                        "Invalid JSON value: {value:?}"
+                        "In deserialize_tuple(): Invalid JSON value: {value:?}"
                     )));
                 }
             },
