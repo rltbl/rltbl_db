@@ -499,7 +499,7 @@ impl DbKind for PostgreSQLKind {
 
 /// The supported database types, including information about the name
 /// used to refer to the type in the underlying database.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Hash)]
 pub enum DbType {
     Null(String),
     Boolean(String),
@@ -594,16 +594,16 @@ impl DbType {
     }
 
     /// TODO: Add docstring.
-    pub fn min_type(value: &str) -> Result<(DbType, DbValue), DbError> {
+    pub fn min_type(value: &str) -> Result<DbType, DbError> {
         // If the value is an empty string, return a Null type and value.
         if value == "" {
-            return Ok((DbType::Null("".to_string()), DbValue::Null));
+            return Ok(DbType::Null("".to_string()));
         }
 
         // Otherwise, try to parse it using the available types in order from most to least specific.
         for db_type in DbType::sorted() {
             match db_type.parse_str(value) {
-                Ok(db_value) => return Ok((db_type, db_value)),
+                Ok(_) => return Ok(db_type),
                 _ => (),
             }
         }

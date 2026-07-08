@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, json};
 use std::{
     cmp::Ordering,
+    collections::HashSet,
     fmt::Display,
     hash::{Hash, Hasher},
     ops::{Deref, DerefMut},
@@ -1319,84 +1320,68 @@ impl PartialOrd for DbColumn {
 }
 
 impl DbColumn {
-    // TODO: Change "guess" to something else.
-    pub fn guess_from_value<I>(values: I) -> Result<Self, DbError>
+    /// TODO: Add docstring.
+    pub fn min_column<I>(values: I) -> Result<Self, DbError>
     where
         I: Iterator<Item = DbValue>,
     {
-        // TODO: Implement DbColumn::default() instead?
-        let mut column = DbColumn {
-            name: "".to_string(),
-            db_type: DbType::Boolean("".to_string()),
-            not_null: true,
-            unique: true,
-        };
-
-        // TODO: This should be a set not a vector.
-        let mut values_seen = vec![];
-
-        for value in values {
-            if value == DbValue::Null {
-                column.not_null = false;
-                continue;
-            } else if values_seen.contains(&value) {
-                column.unique = false;
-                continue;
-            } else {
-                values_seen.push(value.clone())
-            }
-
-            let (db_type, _) = DbType::min_type(&value.to_string()).unwrap();
-            if db_type >= column.db_type {
-                column.db_type = db_type;
-            }
-        }
-
-        // TODO: Verify that this is necessary.
-        // Verify that all of the values are really parseable into the least specific type
-        // that was found:
-        for value in values_seen {
-            column.db_type.parse(value)?;
-        }
-
-        Ok(column)
+        Self::min_column_strings(values.map(|value| value.to_string()))
     }
 
-    pub fn guess_from_str<'a, I>(values: I) -> Result<Self, DbError>
+    /// TODO: Add docstring.
+    pub fn min_column_strings<I>(values: I) -> Result<Self, DbError>
     where
-        I: Iterator<Item = &'a str>,
+        I: Iterator<Item = String>,
     {
-        // TODO: Implement DbColumn::default() instead?
+        // Begin with a column of the most specific type:
         let mut column = DbColumn {
-            name: "unknown".to_string(),
-            db_type: DbType::Boolean("unknown".to_string()),
+            name: "".to_string(),
+            // This should never fail unless there are actually no DbType variants defined:
+            db_type: DbType::sorted().next().expect("No types defined"),
             not_null: true,
             unique: true,
         };
 
-        let mut values_seen = vec![];
-
+        // Iterate over the given values and determine the most specific type that is compatible
+        // with them all:
+        let mut values_seen = HashSet::new();
+        let mut types_seen = HashSet::new();
         for value in values {
+            // First check whether this is a null value or a duplicate:
             if value == "" {
-                column.not_null = false;
+                if column.not_null {
+                    column.not_null = false;
+                }
                 continue;
             } else if values_seen.contains(&value) {
-                column.unique = false;
+                if column.unique {
+                    column.unique = false;
+                }
                 continue;
-            } else {
-                values_seen.push(value)
             }
 
-            let (db_type, _) = DbType::min_type(value).unwrap();
-            if db_type >= column.db_type {
-                column.db_type = db_type;
+            // Get the most specific type for this value and adjust the overall column type
+            // accordingly.
+            let db_type = DbType::min_type(&value)?;
+            if column.db_type < db_type {
+                match db_type {
+                    // Real types are non-trivially related to integer types.
+                    DbType::Real(_) | DbType::BigReal(_) => {
+                        if types_seen.contains(&DbType::BigInteger("".to_string())) {
+                            column.db_type = DbType::Numeric("".to_string());
+                        } else if types_seen.contains(&DbType::Integer("".to_string())) {
+                            column.db_type = DbType::BigReal("".to_string());
+                        } else {
+                            column.db_type = db_type.clone();
+                        }
+                    }
+                    _ => column.db_type = db_type.clone(),
+                };
             }
-        }
 
-        // Verify that all of the values are really parseable into the least specific type
-        // that was found:
-        for value in &values_seen {
-            column.db_type.parse(*value)?;
+            // Add to the sets of values and types seen:
+            values_seen.insert(value);
+            types_seen.insert(db_type);
         }
 
         Ok(column)
@@ -1411,25 +1396,25 @@ mod tests {
 
     #[test]
     fn test_from_str() {
-        let (_, foo) = DbType::guess("True").unwrap();
-        assert_eq!(foo, DbValue::Boolean(true));
+        let foo = DbType::min_type("True").unwrap();
+        assert_eq!(foo, DbType::Boolean("".to_string()));
 
-        let (_, foo) = DbType::guess("2").unwrap();
-        assert_eq!(foo, DbValue::SmallInteger(2));
+        let foo = DbType::min_type("2").unwrap();
+        assert_eq!(foo, DbType::I16("".to_string()));
 
-        let (_, foo) = DbType::guess("2.0").unwrap();
-        assert_eq!(foo, DbValue::Real(2.0));
+        let foo = DbType::min_type("2.0").unwrap();
+        assert_eq!(foo, DbType::Real("".to_string()));
     }
 
     #[test]
-    fn test_guessing() {
-        let db_values = vec![DbValue::SmallInteger(1), DbValue::Real(1.23)];
-        let column = DbColumn::guess_from_value(db_values.into_iter()).unwrap();
+    fn test_min_typing() {
+        let db_values = vec![DbValue::Integer(i32::MAX), DbValue::Real(1.23)];
+        let column = DbColumn::min_column(db_values.into_iter()).unwrap();
         assert_eq!(
             column,
             DbColumn {
                 name: "".to_string(),
-                db_type: DbType::Real("".to_string()),
+                db_type: DbType::BigReal("".to_string()),
                 not_null: true,
                 unique: true,
             }
