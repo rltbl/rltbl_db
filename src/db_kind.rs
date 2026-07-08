@@ -9,8 +9,6 @@ use crate::{
 };
 use rust_decimal::Decimal;
 use std::{cmp::Ordering, fmt::Display};
-use strum::IntoEnumIterator;
-use strum_macros::EnumIter;
 
 /// The [maximum number of parameters](https://www.sqlite.org/limits.html#max_variable_number)
 /// that can be bound to a SQLite query
@@ -501,7 +499,7 @@ impl DbKind for PostgreSQLKind {
 
 /// The supported database types, including information about the name
 /// used to refer to the type in the underlying database.
-#[derive(Clone, Debug, EnumIter)]
+#[derive(Clone, Debug)]
 pub enum DbType {
     Null(String),
     Boolean(String),
@@ -580,32 +578,40 @@ impl PartialOrd for DbType {
 
 impl DbType {
     /// TODO: Add docstring.
-    // TODO: Change name from guess to something else.
-    pub fn guess(value: &str) -> Result<(DbType, DbValue), DbError> {
-        match value {
-            "" => Ok((DbType::Null("unknown".to_string()), DbValue::Null)),
-            _ => {
-                // TODO: Optimize. Don't always need to do this.
-                let mut db_types = DbType::iter()
-                    .filter(|db_type| match db_type {
-                        DbType::Null(_) => false,
-                        _ => true,
-                    })
-                    .collect::<Vec<_>>();
+    pub fn sorted() -> impl Iterator<Item = DbType> {
+        [
+            DbType::Boolean("".to_string()),
+            DbType::I16("".to_string()),
+            DbType::SmallInteger("".to_string()),
+            DbType::Integer("".to_string()),
+            DbType::BigInteger("".to_string()),
+            DbType::Real("".to_string()),
+            DbType::BigReal("".to_string()),
+            DbType::Numeric("".to_string()),
+            DbType::Text("".to_string()),
+        ]
+        .into_iter()
+    }
 
-                // TODO: Sort some other way (maybe add a custom method?)
-                //db_types.sort();
-                for db_type in db_types {
-                    match db_type.parse_str(value) {
-                        Ok(db_value) => return Ok((db_type, db_value)),
-                        _ => (),
-                    }
-                }
-                Err(DbError::InputError(format!(
-                    "Could not guess value type: '{value}'"
-                )))
+    /// TODO: Add docstring.
+    pub fn min_type(value: &str) -> Result<(DbType, DbValue), DbError> {
+        // If the value is an empty string, return a Null type and value.
+        if value == "" {
+            return Ok((DbType::Null("".to_string()), DbValue::Null));
+        }
+
+        // Otherwise, try to parse it using the available types in order from most to least specific.
+        for db_type in DbType::sorted() {
+            match db_type.parse_str(value) {
+                Ok(db_value) => return Ok((db_type, db_value)),
+                _ => (),
             }
         }
+
+        // If we haven't returned from this function by now, then it was unsuccessful.
+        Err(DbError::InputError(format!(
+            "Could not determine most specific type for value: '{value}'"
+        )))
     }
 
     /// Parses a given string representing the value of a database field into a [DbValue] of this

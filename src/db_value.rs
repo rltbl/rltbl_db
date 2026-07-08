@@ -1346,7 +1346,7 @@ impl DbColumn {
                 values_seen.push(value.clone())
             }
 
-            let (db_type, _) = DbType::guess(&value.to_string()).unwrap();
+            let (db_type, _) = DbType::min_type(&value.to_string()).unwrap();
             if db_type >= column.db_type {
                 column.db_type = db_type;
             }
@@ -1387,7 +1387,7 @@ impl DbColumn {
                 values_seen.push(value)
             }
 
-            let (db_type, _) = DbType::guess(value).unwrap();
+            let (db_type, _) = DbType::min_type(value).unwrap();
             if db_type >= column.db_type {
                 column.db_type = db_type;
             }
