@@ -1386,6 +1386,16 @@ impl DbColumn {
 
         Ok(column)
     }
+
+    /// TODO: Add docstring.
+    pub fn min_column_value_rows<I>(value_rows: I) -> Result<Vec<Self>, DbError>
+    where
+        I: Iterator<Item = Vec<DbValue>>,
+    {
+        value_rows
+            .map(|row| DbColumn::min_column(row.into_iter()))
+            .collect::<Result<Vec<DbColumn>, _>>()
+    }
 }
 
 #[cfg(test)]
@@ -1418,6 +1428,29 @@ mod tests {
                 not_null: true,
                 unique: true,
             }
+        );
+
+        let value_rows = vec![
+            vec![DbValue::Integer(i32::MAX), DbValue::Real(1.23)],
+            vec![DbValue::BigInteger(i64::MAX), DbValue::Boolean(true)],
+        ];
+        let columns = DbColumn::min_column_value_rows(value_rows.into_iter()).unwrap();
+        assert_eq!(
+            columns,
+            [
+                DbColumn {
+                    name: "".to_string(),
+                    db_type: DbType::BigReal("".to_string()),
+                    not_null: true,
+                    unique: true,
+                },
+                DbColumn {
+                    name: "".to_string(),
+                    db_type: DbType::BigInteger("".to_string()),
+                    not_null: true,
+                    unique: true,
+                }
+            ]
         );
     }
 
