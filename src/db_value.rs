@@ -1292,34 +1292,29 @@ pub struct DbColumn {
     unique: bool,
 }
 
-impl Ord for DbColumn {
-    fn cmp(&self, other: &Self) -> Ordering {
-        match self.db_type.cmp(&other.db_type) {
-            Ordering::Equal => {
+impl PartialOrd for DbColumn {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.db_type.partial_cmp(&other.db_type) {
+            None => None,
+            Some(Ordering::Equal) => {
                 if self.not_null != other.not_null {
                     if self.not_null {
-                        Ordering::Less
+                        Some(Ordering::Less)
                     } else {
-                        Ordering::Greater
+                        Some(Ordering::Greater)
                     }
                 } else if self.unique != other.unique {
                     if self.unique {
-                        Ordering::Less
+                        Some(Ordering::Less)
                     } else {
-                        Ordering::Greater
+                        Some(Ordering::Greater)
                     }
                 } else {
-                    Ordering::Equal
+                    Some(Ordering::Equal)
                 }
             }
-            ordering => ordering,
+            Some(ordering) => Some(ordering),
         }
-    }
-}
-
-impl PartialOrd for DbColumn {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
     }
 }
 

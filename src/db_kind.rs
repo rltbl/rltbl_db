@@ -518,6 +518,7 @@ pub enum DbType {
 impl PartialEq for DbType {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
+            // TODO: Is this the right equality relation for NULLs?
             (DbType::Null(_), DbType::Null(_)) => true,
             (DbType::Boolean(_), DbType::Boolean(_)) => true,
             (DbType::I16(_), DbType::I16(_)) => true,
@@ -535,53 +536,45 @@ impl PartialEq for DbType {
 
 impl Eq for DbType {}
 
-impl Ord for DbType {
-    fn cmp(&self, other: &Self) -> Ordering {
-        match (self, other) {
-            (DbType::Null(_), DbType::Null(_)) => Ordering::Equal,
-            (DbType::Null(_), _) => Ordering::Less,
-            (_, DbType::Null(_)) => Ordering::Greater,
-
-            (DbType::Boolean(_), DbType::Boolean(_)) => Ordering::Equal,
-            (DbType::Boolean(_), _) => Ordering::Less,
-            (_, DbType::Boolean(_)) => Ordering::Greater,
-
-            (DbType::I16(_), DbType::I16(_)) => Ordering::Equal,
-            (DbType::I16(_), _) => Ordering::Less,
-            (_, DbType::I16(_)) => Ordering::Greater,
-
-            (DbType::SmallInteger(_), DbType::SmallInteger(_)) => Ordering::Equal,
-            (DbType::SmallInteger(_), _) => Ordering::Less,
-            (_, DbType::SmallInteger(_)) => Ordering::Greater,
-
-            (DbType::Integer(_), DbType::Integer(_)) => Ordering::Equal,
-            (DbType::Integer(_), _) => Ordering::Less,
-            (_, DbType::Integer(_)) => Ordering::Greater,
-
-            (DbType::BigInteger(_), DbType::BigInteger(_)) => Ordering::Equal,
-            (DbType::BigInteger(_), _) => Ordering::Less,
-            (_, DbType::BigInteger(_)) => Ordering::Greater,
-
-            (DbType::Real(_), DbType::Real(_)) => Ordering::Equal,
-            (DbType::Real(_), _) => Ordering::Less,
-            (_, DbType::Real(_)) => Ordering::Greater,
-
-            (DbType::BigReal(_), DbType::BigReal(_)) => Ordering::Equal,
-            (DbType::BigReal(_), _) => Ordering::Less,
-            (_, DbType::BigReal(_)) => Ordering::Greater,
-
-            (DbType::Numeric(_), DbType::Numeric(_)) => Ordering::Equal,
-            (DbType::Numeric(_), _) => Ordering::Less,
-            (_, DbType::Numeric(_)) => Ordering::Greater,
-
-            (DbType::Text(_), DbType::Text(_)) => Ordering::Equal,
-        }
-    }
-}
-
 impl PartialOrd for DbType {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
+        match (self, other) {
+            (DbType::Null(_), _) | (_, DbType::Null(_)) => None,
+
+            (DbType::Boolean(_), DbType::Boolean(_)) => Some(Ordering::Equal),
+            (DbType::Boolean(_), _) => Some(Ordering::Less),
+            (_, DbType::Boolean(_)) => Some(Ordering::Greater),
+
+            (DbType::I16(_), DbType::I16(_)) => Some(Ordering::Equal),
+            (DbType::I16(_), _) => Some(Ordering::Less),
+            (_, DbType::I16(_)) => Some(Ordering::Greater),
+
+            (DbType::SmallInteger(_), DbType::SmallInteger(_)) => Some(Ordering::Equal),
+            (DbType::SmallInteger(_), _) => Some(Ordering::Less),
+            (_, DbType::SmallInteger(_)) => Some(Ordering::Greater),
+
+            (DbType::Integer(_), DbType::Integer(_)) => Some(Ordering::Equal),
+            (DbType::Integer(_), _) => Some(Ordering::Less),
+            (_, DbType::Integer(_)) => Some(Ordering::Greater),
+
+            (DbType::BigInteger(_), DbType::BigInteger(_)) => Some(Ordering::Equal),
+            (DbType::BigInteger(_), _) => Some(Ordering::Less),
+            (_, DbType::BigInteger(_)) => Some(Ordering::Greater),
+
+            (DbType::Real(_), DbType::Real(_)) => Some(Ordering::Equal),
+            (DbType::Real(_), _) => Some(Ordering::Less),
+            (_, DbType::Real(_)) => Some(Ordering::Greater),
+
+            (DbType::BigReal(_), DbType::BigReal(_)) => Some(Ordering::Equal),
+            (DbType::BigReal(_), _) => Some(Ordering::Less),
+            (_, DbType::BigReal(_)) => Some(Ordering::Greater),
+
+            (DbType::Numeric(_), DbType::Numeric(_)) => Some(Ordering::Equal),
+            (DbType::Numeric(_), _) => Some(Ordering::Less),
+            (_, DbType::Numeric(_)) => Some(Ordering::Greater),
+
+            (DbType::Text(_), DbType::Text(_)) => Some(Ordering::Equal),
+        }
     }
 }
 
@@ -600,7 +593,8 @@ impl DbType {
                     })
                     .collect::<Vec<_>>();
 
-                db_types.sort();
+                // TODO: Sort some other way (maybe add a custom method?)
+                //db_types.sort();
                 for db_type in db_types {
                     match db_type.parse_str(value) {
                         Ok(db_value) => return Ok((db_type, db_value)),
