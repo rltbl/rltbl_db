@@ -744,20 +744,3 @@ impl DbType {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_from_str() {
-        let (_, foo) = DbType::guess("True").unwrap();
-        assert_eq!(foo, DbValue::Boolean(true));
-
-        let (_, foo) = DbType::guess("2").unwrap();
-        assert_eq!(foo, DbValue::SmallInteger(2));
-
-        let (_, foo) = DbType::guess("2.0").unwrap();
-        assert_eq!(foo, DbValue::Real(2.0));
-    }
-}

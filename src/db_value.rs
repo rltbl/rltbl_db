@@ -1415,6 +1415,18 @@ mod tests {
     use std::collections::HashMap;
 
     #[test]
+    fn test_from_str() {
+        let (_, foo) = DbType::guess("True").unwrap();
+        assert_eq!(foo, DbValue::Boolean(true));
+
+        let (_, foo) = DbType::guess("2").unwrap();
+        assert_eq!(foo, DbValue::SmallInteger(2));
+
+        let (_, foo) = DbType::guess("2.0").unwrap();
+        assert_eq!(foo, DbValue::Real(2.0));
+    }
+
+    #[test]
     fn test_guessing() {
         let db_values = vec![DbValue::SmallInteger(1), DbValue::Real(1.23)];
         let column = DbColumn::guess_from_value(db_values.into_iter()).unwrap();
