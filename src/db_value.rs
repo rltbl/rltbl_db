@@ -1418,8 +1418,10 @@ impl DbColumn {
         }
 
         let mut column_map = DbColumnMap::new();
-        for (column, data) in column_data.into_iter() {
-            column_map.insert(column, DbColumn::min_column(data.into_iter())?);
+        for (column_name, data) in column_data.into_iter() {
+            let mut column = DbColumn::min_column(data.into_iter())?;
+            column.name = column_name.to_string();
+            column_map.insert(column_name, column);
         }
 
         Ok(column_map)
@@ -1487,34 +1489,34 @@ mod tests {
             db_row! { "foo" => 1, "bar" => 2.0, "jar" => "alphanum", "har" => true },
             db_row! { "foo" => 2, "bar" => 2, "jar" => "alphanum", "har" => true },
             db_row! { "foo" => 3, "bar" => 2.0, "jar" => "alphanum", "har" => false },
-            db_row! { "foo" => i64::MAX, "bar" => 2.0, "jar" => "alphanum", "har" => false },
+            db_row! { "foo" => i64::MAX, "bar" => 2.0, "jar" => "alphanum", "har" => DbValue::Null },
         ];
         let column_map = DbColumn::min_column_db_rows(db_rows.into_iter()).unwrap();
         assert_eq!(
             column_map,
             indexmap! {
                 "foo".to_string() => DbColumn {
-                    name: "".to_string(),
+                    name: "foo".to_string(),
                     db_type: DbType::BigInteger("".to_string()),
                     not_null: true,
                     unique: true,
                 },
                 "bar".to_string() => DbColumn {
-                    name: "".to_string(),
+                    name: "bar".to_string(),
                     db_type: DbType::I16("".to_string()),
                     not_null: true,
                     unique: false,
                 },
                 "jar".to_string() => DbColumn {
-                    name: "".to_string(),
+                    name: "jar".to_string(),
                     db_type: DbType::Text("".to_string()),
                     not_null: true,
                     unique: true,
                 },
                 "har".to_string() => DbColumn {
-                    name: "".to_string(),
+                    name: "har".to_string(),
                     db_type: DbType::Boolean("".to_string()),
-                    not_null: true,
+                    not_null: false,
                     unique: true,
                 }
             }
