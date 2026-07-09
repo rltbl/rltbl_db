@@ -10,11 +10,12 @@ use crate::{
         update_last_verified,
     },
     db_kind::DbKind,
-    db_value::{ColumnMap, DbParams, DbRow, DbRows, IntoDbParams, IntoDbRows},
+    db_value::{DbParams, DbRow, DbRows, IntoDbParams, IntoDbRows},
     parse::get_accessed_tables,
 };
 
 use async_trait::async_trait;
+use indexmap::IndexMap;
 use serde::{de, ser};
 use std::{
     collections::HashSet,
@@ -327,9 +328,9 @@ pub trait DbQuery: Sync {
         }
     }
 
-    /// Given a table, return a [ColumnMap] from column names to column SQL types.
-    async fn columns(&self, table: &str) -> Result<ColumnMap, DbError> {
-        let mut columns = ColumnMap::new();
+    /// Given a table, return an [IndexMap] from column names to column SQL types.
+    async fn columns(&self, table: &str) -> Result<IndexMap<String, String>, DbError> {
+        let mut columns = IndexMap::new();
         let (sql, params) = self.kind().columns_sql(table);
         let rows = self.query_no_cache_clean(&sql, params).await?;
         for row in rows.iter() {

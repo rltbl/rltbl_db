@@ -16,8 +16,7 @@ use std::{
 pub type JsonValue = serde_json::Value;
 pub type JsonRow = JsonMap<String, JsonValue>;
 pub type StringRow = IndexMap<String, String>;
-// TODO: Maybe replace this with DbColumn:
-pub type ColumnMap = IndexMap<String, String>;
+pub type DbColumnMap = IndexMap<String, DbColumn>;
 
 //////////////////////////////////////////////////////////////////////
 // Database values
@@ -1395,6 +1394,14 @@ impl DbColumn {
         value_rows
             .map(|row| DbColumn::min_column(row.into_iter()))
             .collect::<Result<Vec<DbColumn>, _>>()
+    }
+
+    /// TODO: Add docstring
+    pub fn min_column_db_rows<I>(db_rows: I) -> Result<DbColumnMap, DbError>
+    where
+        I: Iterator<Item = DbRows>,
+    {
+        todo!()
     }
 }
 

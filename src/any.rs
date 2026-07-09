@@ -362,9 +362,10 @@ mod tests {
         },
         db_kind::DbType,
         db_row,
-        db_value::{ColumnMap, DbRow, DbValue, JsonValue, StringRow},
+        db_value::{DbRow, DbValue, JsonValue, StringRow},
         params,
     };
+    use indexmap::IndexMap;
     use rand::{
         SeedableRng as _,
         distr::{Distribution as _, Uniform},
@@ -1136,7 +1137,7 @@ mod tests {
         let columns = pool.columns(table1).await.unwrap();
         assert_eq!(
             columns,
-            ColumnMap::from([("foo".to_owned(), "text".to_owned())])
+            IndexMap::from([("foo".to_owned(), "text".to_owned())])
         );
         pool.drop_table(table1).await.unwrap();
 
