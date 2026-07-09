@@ -1399,15 +1399,38 @@ impl DbColumn {
     /// TODO: Add docstring
     pub fn min_column_db_rows<I>(db_rows: I) -> Result<DbColumnMap, DbError>
     where
-        I: Iterator<Item = DbRows>,
+        I: Iterator<Item = DbRow>,
     {
-        todo!()
+        let mut column_data = IndexMap::new();
+        for db_row in db_rows {
+            for (column, db_value) in db_row.deref().iter() {
+                match column_data.get_mut(column) {
+                    None => {
+                        let mut data = HashSet::new();
+                        data.insert(db_value.clone());
+                        column_data.insert(column.to_string(), data);
+                    }
+                    Some(data) => {
+                        data.insert(db_value.clone());
+                    }
+                };
+            }
+        }
+
+        let mut column_map = DbColumnMap::new();
+        for (column, data) in column_data.into_iter() {
+            column_map.insert(column, DbColumn::min_column(data.into_iter())?);
+        }
+
+        Ok(column_map)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db_row;
+    use indexmap::indexmap;
     use rust_decimal::dec;
     use std::collections::HashMap;
 
@@ -1458,6 +1481,43 @@ mod tests {
                     unique: true,
                 }
             ]
+        );
+
+        let db_rows = vec![
+            db_row! { "foo" => 1, "bar" => 2.0, "jar" => "alphanum", "har" => true },
+            db_row! { "foo" => 2, "bar" => 2, "jar" => "alphanum", "har" => true },
+            db_row! { "foo" => 3, "bar" => 2.0, "jar" => "alphanum", "har" => false },
+            db_row! { "foo" => i64::MAX, "bar" => 2.0, "jar" => "alphanum", "har" => false },
+        ];
+        let column_map = DbColumn::min_column_db_rows(db_rows.into_iter()).unwrap();
+        assert_eq!(
+            column_map,
+            indexmap! {
+                "foo".to_string() => DbColumn {
+                    name: "".to_string(),
+                    db_type: DbType::BigInteger("".to_string()),
+                    not_null: true,
+                    unique: true,
+                },
+                "bar".to_string() => DbColumn {
+                    name: "".to_string(),
+                    db_type: DbType::I16("".to_string()),
+                    not_null: true,
+                    unique: false,
+                },
+                "jar".to_string() => DbColumn {
+                    name: "".to_string(),
+                    db_type: DbType::Text("".to_string()),
+                    not_null: true,
+                    unique: true,
+                },
+                "har".to_string() => DbColumn {
+                    name: "".to_string(),
+                    db_type: DbType::Boolean("".to_string()),
+                    not_null: true,
+                    unique: true,
+                }
+            }
         );
     }
 
