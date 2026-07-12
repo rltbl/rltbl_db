@@ -16,7 +16,6 @@ use std::{
 pub type JsonValue = serde_json::Value;
 pub type JsonRow = JsonMap<String, JsonValue>;
 pub type StringRow = IndexMap<String, String>;
-pub type DbColumnMap = IndexMap<String, DbColumn>;
 
 //////////////////////////////////////////////////////////////////////
 // Database values
@@ -963,6 +962,31 @@ impl DbRow {
         }
     }
 
+    /// TODO: Add docstring.
+    pub fn coerce(&self, column_map: &IndexMap<String, DbColumn>) -> Result<DbRow, DbError> {
+        // For each DbValue in db_row, get the corresponding DbColumn from the column_map.
+        // Then use the db_type to convert() the value into the correct type and place the
+        // converted DbValue into a new row that will be returned.
+        let mut coerced = DbRow::new();
+        for (column_name, db_value) in self.iter() {
+            let column_type = &column_map.get(column_name).unwrap().db_type;
+            let converted = column_type.convert(db_value).unwrap();
+            coerced.insert(column_name.to_string(), converted);
+        }
+        Ok(coerced)
+    }
+
+    /// TODO: Add docstring.
+    pub fn coerce_rows<I>(
+        db_rows: I,
+        column_map: &IndexMap<String, DbColumn>,
+    ) -> impl Iterator<Item = Result<DbRow, DbError>>
+    where
+        I: Iterator<Item = DbRow>,
+    {
+        db_rows.map(|row| row.coerce(column_map))
+    }
+
     pub fn insert(&mut self, key: String, value: DbValue) {
         self.map.insert(key, value);
     }
@@ -1320,15 +1344,15 @@ impl PartialOrd for DbColumn {
 
 impl DbColumn {
     /// TODO: Add docstring.
-    pub fn min_column<I>(values: I) -> Result<Self, DbError>
+    pub fn min_column<I>(values: I) -> Result<DbColumn, DbError>
     where
         I: Iterator<Item = DbValue>,
     {
-        Self::min_column_strings(values.map(|value| value.to_string()))
+        DbColumn::min_column_strings(values.map(|value| value.to_string()))
     }
 
     /// TODO: Add docstring.
-    pub fn min_column_strings<I>(values: I) -> Result<Self, DbError>
+    pub fn min_column_strings<I>(values: I) -> Result<DbColumn, DbError>
     where
         I: Iterator<Item = String>,
     {
@@ -1387,7 +1411,7 @@ impl DbColumn {
     }
 
     /// TODO: Add docstring.
-    pub fn min_column_value_rows<I>(value_rows: I) -> Result<Vec<Self>, DbError>
+    pub fn min_column_value_rows<I>(value_rows: I) -> Result<Vec<DbColumn>, DbError>
     where
         I: Iterator<Item = Vec<DbValue>>,
     {
@@ -1397,7 +1421,7 @@ impl DbColumn {
     }
 
     /// TODO: Add docstring
-    pub fn min_column_db_rows<I>(db_rows: I) -> Result<DbColumnMap, DbError>
+    pub fn min_column_map_db_rows<I>(db_rows: I) -> Result<IndexMap<String, DbColumn>, DbError>
     where
         I: Iterator<Item = DbRow>,
     {
@@ -1417,7 +1441,7 @@ impl DbColumn {
             }
         }
 
-        let mut column_map = DbColumnMap::new();
+        let mut column_map = IndexMap::new();
         for (column_name, data) in column_data.into_iter() {
             let mut column = DbColumn::min_column(data.into_iter())?;
             column.name = column_name.to_string();
@@ -1435,6 +1459,68 @@ mod tests {
     use indexmap::indexmap;
     use rust_decimal::dec;
     use std::collections::HashMap;
+
+    #[test]
+    fn test_coerce() {
+        let input_row_1 = db_row! {
+            "foo" => DbValue::SmallInteger(1),
+            "bar" => DbValue::SmallInteger(2),
+            "jar" => DbValue::Text("3".to_string()),
+            "har" => DbValue::Text("1".to_string())
+        };
+        let input_row_2 = db_row! {
+            "foo" => DbValue::Integer(7),
+            "bar" => DbValue::Text("2".to_string()),
+            "jar" => DbValue::SmallInteger(9),
+            "har" => DbValue::Text("0".to_string())
+        };
+        let column_map = indexmap! {
+            "foo".to_string() => DbColumn {
+                name: "foo".to_string(),
+                db_type: DbType::BigReal("".to_string()),
+                not_null: true,
+                unique: true,
+            },
+            "bar".to_string() => DbColumn {
+                name: "bar".to_string(),
+                db_type: DbType::I16("".to_string()),
+                not_null: true,
+                unique: true,
+            },
+            "jar".to_string() => DbColumn {
+                name: "jar".to_string(),
+                db_type: DbType::BigInteger("".to_string()),
+                not_null: true,
+                unique: true,
+            },
+            "har".to_string() => DbColumn {
+                name: "har".to_string(),
+                db_type: DbType::Boolean("".to_string()),
+                not_null: true,
+                unique: true,
+            }
+        };
+        let expected_row_1 = db_row! {
+            "foo" => DbValue::BigReal(1.0),
+            "bar" => DbValue::SmallInteger(2),
+            "jar" => DbValue::BigInteger(3),
+            "har" => DbValue::Boolean(true),
+        };
+        let expected_row_2 = db_row! {
+            "foo" => DbValue::BigReal(7.0),
+            "bar" => DbValue::SmallInteger(2),
+            "jar" => DbValue::BigInteger(9),
+            "har" => DbValue::Boolean(false),
+        };
+
+        let coerced_row = input_row_1.coerce(&column_map).unwrap();
+        assert_eq!(coerced_row, expected_row_1);
+
+        let mut coerced_rows =
+            DbRow::coerce_rows([input_row_1, input_row_2].into_iter(), &column_map);
+        assert_eq!(coerced_rows.next().unwrap().unwrap(), expected_row_1);
+        assert_eq!(coerced_rows.next().unwrap().unwrap(), expected_row_2);
+    }
 
     #[test]
     fn test_from_str() {
@@ -1491,7 +1577,7 @@ mod tests {
             db_row! { "foo" => 3, "bar" => 2.0, "jar" => "alphanum", "har" => false },
             db_row! { "foo" => i64::MAX, "bar" => 2.0, "jar" => "alphanum", "har" => DbValue::Null },
         ];
-        let column_map = DbColumn::min_column_db_rows(db_rows.into_iter()).unwrap();
+        let column_map = DbColumn::min_column_map_db_rows(db_rows.into_iter()).unwrap();
         assert_eq!(
             column_map,
             indexmap! {

@@ -516,7 +516,8 @@ pub enum DbType {
 impl PartialEq for DbType {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            // TODO: Is this the right equality relation for NULLs?
+            // TODO: Is this the right equality relation for NULLs, or do we care about the specific
+            // null type?
             (DbType::Null(_), DbType::Null(_)) => true,
             (DbType::Boolean(_), DbType::Boolean(_)) => true,
             (DbType::I16(_), DbType::I16(_)) => true,
@@ -537,6 +538,7 @@ impl Eq for DbType {}
 impl PartialOrd for DbType {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match (self, other) {
+            // Nulls are special and are not assigned an order in the hierarchy.
             (DbType::Null(_), _) | (_, DbType::Null(_)) => None,
 
             (DbType::Boolean(_), DbType::Boolean(_)) => Some(Ordering::Equal),
@@ -580,6 +582,7 @@ impl DbType {
     /// TODO: Add docstring.
     pub fn sorted() -> impl Iterator<Item = DbType> {
         [
+            // Note that DbType::Null is not part of this hierarchy.
             DbType::Boolean("".to_string()),
             DbType::I16("".to_string()),
             DbType::SmallInteger("".to_string()),
