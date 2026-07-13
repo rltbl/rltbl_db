@@ -497,6 +497,9 @@ pub trait DbQuery: Sync {
         Ok(which_are_views(&self.pool(), &[view]).await?.len() == 1)
     }
 
+    /// TODO: Add docstring.
+    fn import_table(&self, tsv: &str) -> impl Future<Output = Result<(), DbError>>;
+
     /// Drop the given table from the database. Note that for PostgreSQL (see
     /// <https://www.postgresql.org/docs/current/sql-droptable.html>), if the dropped table,
     /// say table1, appears in a foreign key constraint for another table, say table2, then

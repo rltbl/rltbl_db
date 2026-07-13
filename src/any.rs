@@ -278,6 +278,18 @@ impl DbQuery for AnyPool {
         }
     }
 
+    /// Implements [DbQuery::import_table()]
+    async fn import_table(&self, tsv: &str) -> Result<(), DbError> {
+        match self {
+            #[cfg(feature = "rusqlite")]
+            AnyPool::Rusqlite(pool) => pool.import_table(tsv).await,
+            #[cfg(feature = "tokio-postgres")]
+            AnyPool::TokioPostgres(pool) => pool.import_table(tsv).await,
+            #[cfg(feature = "libsql")]
+            AnyPool::LibSQL(pool) => pool.import_table(tsv).await,
+        }
+    }
+
     /// Implements [DbQuery::drop_table()]
     async fn drop_table(&self, table: &str) -> Result<(), DbError> {
         match self {
@@ -380,6 +392,22 @@ mod tests {
         thread,
         time::{Duration, Instant},
     };
+
+    #[tokio::test]
+    async fn test_import_table() {
+        #[cfg(feature = "rusqlite")]
+        import_table(":memory:").await;
+        #[cfg(feature = "tokio-postgres")]
+        import_table("postgresql:///rltbl_db").await;
+        #[cfg(feature = "libsql")]
+        import_table(":memory:").await;
+    }
+
+    async fn import_table(url: &str) {
+        clear_meta_cache().unwrap();
+        let pool = AnyPool::connect(url).await.unwrap();
+        pool.import_table("tests/input/table1.tsv").await.unwrap();
+    }
 
     #[tokio::test]
     async fn test_text_column_query() {

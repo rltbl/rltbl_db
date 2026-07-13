@@ -976,6 +976,7 @@ impl DbRow {
         Ok(coerced)
     }
 
+    // TODO: Move to DbRows.
     /// TODO: Add docstring.
     pub fn coerce_rows<I>(
         db_rows: I,
@@ -1410,14 +1411,13 @@ impl DbColumn {
         Ok(column)
     }
 
-    // TODO: I think this is wrong. It should extract all of the value for each column
-    // into a separate list of value rows (for each column) that should be sent to
-    // min_column.
     /// TODO: Add docstring.
     pub fn min_column_value_rows<I>(value_rows: I) -> Result<Vec<DbColumn>, DbError>
     where
         I: Iterator<Item = Vec<DbValue>>,
     {
+        // TODO: Could we use reduce() and zip() here?, i.e., reduce(|acc, e| acc.zip(e)).
+
         let mut column_data = IndexMap::new();
         let mut row_length = 0;
         for value_row in value_rows {
@@ -1453,6 +1453,8 @@ impl DbColumn {
     where
         I: Iterator<Item = DbRow>,
     {
+        // TODO: Could we use reduce() and zip() here?, i.e., reduce(|acc, e| acc.zip(e)).
+
         let mut column_data = IndexMap::new();
         for db_row in db_rows {
             for (column, db_value) in db_row.deref().iter() {

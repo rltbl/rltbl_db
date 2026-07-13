@@ -7,7 +7,7 @@ use crate::{
     db_kind::{DbKind, MAX_PARAMS_SQLITE, SQLiteKind},
     db_value::{DbParams, DbRow, DbRows, DbValue, IntoDbParams, IntoDbRows, JsonValue},
     parse::validate_table_name,
-    shared::{EditType, edit},
+    shared::{self, EditType, edit},
 };
 use deadpool_libsql::{
     Manager, Pool,
@@ -326,6 +326,11 @@ impl DbQuery for LibSQLPool {
             returning,
         )
         .await
+    }
+
+    /// Implements [DbQuery::import_table()] for SQLite.
+    async fn import_table(&self, tsv: &str) -> Result<(), DbError> {
+        shared::import_table(self, tsv).await
     }
 
     /// Implements [DbQuery::drop_table()] for SQLite.
