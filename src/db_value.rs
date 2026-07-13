@@ -1410,14 +1410,42 @@ impl DbColumn {
         Ok(column)
     }
 
+    // TODO: I think this is wrong. It should extract all of the value for each column
+    // into a separate list of value rows (for each column) that should be sent to
+    // min_column.
     /// TODO: Add docstring.
     pub fn min_column_value_rows<I>(value_rows: I) -> Result<Vec<DbColumn>, DbError>
     where
         I: Iterator<Item = Vec<DbValue>>,
     {
-        value_rows
-            .map(|row| DbColumn::min_column(row.into_iter()))
-            .collect::<Result<Vec<DbColumn>, _>>()
+        let mut column_data = IndexMap::new();
+        let mut row_length = 0;
+        for value_row in value_rows {
+            if row_length == 0 {
+                row_length = value_row.len();
+            } else if value_row.len() != row_length {
+                panic!("All row lengths must be the same.");
+            }
+            for i in 0..row_length {
+                match column_data.get_mut(&i) {
+                    None => {
+                        let mut data = HashSet::new();
+                        data.insert(value_row[i].to_string());
+                        column_data.insert(i, data);
+                    }
+                    Some(data) => {
+                        data.insert(value_row[i].to_string());
+                    }
+                };
+            }
+        }
+
+        let db_columns = column_data
+            .into_iter()
+            .map(|(_index, data)| DbColumn::min_column_strings(data.into_iter()).unwrap())
+            .collect::<Vec<_>>();
+
+        Ok(db_columns)
     }
 
     /// TODO: Add docstring
@@ -1558,13 +1586,13 @@ mod tests {
             [
                 DbColumn {
                     name: "".to_string(),
-                    db_type: DbType::BigReal("".to_string()),
+                    db_type: DbType::BigInteger("".to_string()),
                     not_null: true,
                     unique: true,
                 },
                 DbColumn {
                     name: "".to_string(),
-                    db_type: DbType::BigInteger("".to_string()),
+                    db_type: DbType::Real("".to_string()),
                     not_null: true,
                     unique: true,
                 }
