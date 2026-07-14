@@ -1,6 +1,7 @@
 //! Code related to database values.
 
 use crate::{core::DbError, db_kind::DbType};
+
 use indexmap::{self, IndexMap};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
@@ -976,7 +977,7 @@ impl DbRow {
         Ok(coerced)
     }
 
-    // TODO: Move to DbRows.
+    // TODO: Move thsi function to DbRows.
     /// TODO: Add docstring.
     pub fn coerce_rows<I>(
         db_rows: I,
@@ -1349,11 +1350,11 @@ impl DbColumn {
     where
         I: Iterator<Item = DbValue>,
     {
-        DbColumn::min_column_strings(values.map(|value| value.to_string()))
+        DbColumn::min_column_from_strings(values.map(|value| value.to_string()))
     }
 
     /// TODO: Add docstring.
-    pub fn min_column_strings<I>(values: I) -> Result<DbColumn, DbError>
+    pub fn min_column_from_strings<I>(values: I) -> Result<DbColumn, DbError>
     where
         I: Iterator<Item = String>,
     {
@@ -1412,69 +1413,56 @@ impl DbColumn {
     }
 
     /// TODO: Add docstring.
-    pub fn min_column_value_rows<I>(value_rows: I) -> Result<Vec<DbColumn>, DbError>
+    pub fn min_column_from_column_values<I>(column_values: I) -> Result<Vec<DbColumn>, DbError>
     where
         I: Iterator<Item = Vec<DbValue>>,
     {
-        // TODO: Could we use reduce() and zip() here?, i.e., reduce(|acc, e| acc.zip(e)).
-
-        let mut column_data = IndexMap::new();
-        let mut row_length = 0;
-        for value_row in value_rows {
-            if row_length == 0 {
-                row_length = value_row.len();
-            } else if value_row.len() != row_length {
-                panic!("All row lengths must be the same.");
-            }
-            for i in 0..row_length {
-                match column_data.get_mut(&i) {
-                    None => {
-                        let mut data = HashSet::new();
-                        data.insert(value_row[i].to_string());
-                        column_data.insert(i, data);
-                    }
-                    Some(data) => {
-                        data.insert(value_row[i].to_string());
-                    }
-                };
-            }
-        }
-
-        let db_columns = column_data
-            .into_iter()
-            .map(|(_index, data)| DbColumn::min_column_strings(data.into_iter()).unwrap())
-            .collect::<Vec<_>>();
-
-        Ok(db_columns)
+        column_values
+            .map(|col| DbColumn::min_column(col.into_iter()))
+            .collect::<Result<Vec<DbColumn>, _>>()
     }
 
     /// TODO: Add docstring
-    pub fn min_column_map_db_rows<I>(db_rows: I) -> Result<IndexMap<String, DbColumn>, DbError>
+    pub fn min_row_from_db_rows<'a, I>(db_rows: I) -> Result<IndexMap<String, DbColumn>, DbError>
     where
-        I: Iterator<Item = DbRow>,
+        I: Iterator<Item = &'a DbRow>,
     {
-        // TODO: Could we use reduce() and zip() here?, i.e., reduce(|acc, e| acc.zip(e)).
-
         let mut column_data = IndexMap::new();
-        for db_row in db_rows {
+        let mut not_unique = vec![];
+        db_rows.for_each(|db_row| {
             for (column, db_value) in db_row.deref().iter() {
                 match column_data.get_mut(column) {
                     None => {
                         let mut data = HashSet::new();
                         data.insert(db_value.clone());
-                        column_data.insert(column.to_string(), data);
+                        column_data.insert(column.to_string(), data.into_iter());
                     }
                     Some(data) => {
-                        data.insert(db_value.clone());
+                        let mut new_data = HashSet::new();
+                        new_data.insert(db_value.clone());
+                        match data.find(|x| x == db_value) {
+                            Some(_) => {
+                                not_unique.push(column.to_string());
+                            }
+                            _ => (),
+                        }
+                        let data = data
+                            .into_iter()
+                            .chain(new_data.into_iter())
+                            .collect::<HashSet<_>>();
+                        column_data.insert(column.to_string(), data.into_iter());
                     }
                 };
             }
-        }
+        });
 
         let mut column_map = IndexMap::new();
         for (column_name, data) in column_data.into_iter() {
             let mut column = DbColumn::min_column(data.into_iter())?;
             column.name = column_name.to_string();
+            if not_unique.contains(&column_name) {
+                column.unique = false;
+            }
             column_map.insert(column_name, column);
         }
 
@@ -1578,25 +1566,73 @@ mod tests {
             }
         );
 
-        let value_rows = vec![
-            vec![DbValue::Integer(i32::MAX), DbValue::Real(1.23)],
-            vec![DbValue::BigInteger(i64::MAX), DbValue::Boolean(true)],
+        let column_values = vec![
+            // Column A:
+            vec![
+                DbValue::from(1),
+                DbValue::from(i64::MAX),
+                DbValue::from(2.1),
+                DbValue::from(true),
+            ],
+            // Column B: should give the same result as column B. TODO: fix it.
+            //vec![
+            //    DbValue::from(1),
+            //    DbValue::from(2.1),
+            //    DbValue::from(true),
+            //    DbValue::from(i64::MAX),
+            //],
+            vec![
+                DbValue::from("alphanum"),
+                DbValue::from(f64::MAX),
+                DbValue::from(true),
+                DbValue::from(25),
+            ],
+            vec![
+                DbValue::from(true),
+                DbValue::from(true),
+                DbValue::from(true),
+                DbValue::from(false),
+            ],
+            vec![
+                DbValue::from(1),
+                DbValue::from(2.1),
+                DbValue::from(2.1),
+                DbValue::Null,
+            ],
         ];
-        let columns = DbColumn::min_column_value_rows(value_rows.into_iter()).unwrap();
+        // TODO: Remove this commented-out code before the PR is merged.
+        // In case we decide to use references as function arguments:
+        //let column_values = column_values
+        //    .iter()
+        //    .map(|vrow| vrow.as_ref())
+        //    .collect::<Vec<_>>();
+        let columns = DbColumn::min_column_from_column_values(column_values.into_iter()).unwrap();
         assert_eq!(
             columns,
             [
                 DbColumn {
                     name: "".to_string(),
-                    db_type: DbType::BigInteger("".to_string()),
+                    db_type: DbType::Numeric("".to_string()),
                     not_null: true,
                     unique: true,
                 },
                 DbColumn {
                     name: "".to_string(),
-                    db_type: DbType::Real("".to_string()),
+                    db_type: DbType::Text("".to_string()),
                     not_null: true,
                     unique: true,
+                },
+                DbColumn {
+                    name: "".to_string(),
+                    db_type: DbType::Boolean("".to_string()),
+                    not_null: true,
+                    unique: false,
+                },
+                DbColumn {
+                    name: "".to_string(),
+                    db_type: DbType::Real("".to_string()),
+                    not_null: false,
+                    unique: false,
                 }
             ]
         );
@@ -1607,7 +1643,8 @@ mod tests {
             db_row! { "foo" => 3, "bar" => 2.0, "jar" => "alphanum", "har" => false },
             db_row! { "foo" => i64::MAX, "bar" => 2.0, "jar" => "alphanum", "har" => DbValue::Null },
         ];
-        let column_map = DbColumn::min_column_map_db_rows(db_rows.into_iter()).unwrap();
+        let db_rows = db_rows.iter().map(|row| row).collect::<Vec<_>>();
+        let column_map = DbColumn::min_row_from_db_rows(db_rows.into_iter()).unwrap();
         assert_eq!(
             column_map,
             indexmap! {
@@ -1627,13 +1664,13 @@ mod tests {
                     name: "jar".to_string(),
                     db_type: DbType::Text("".to_string()),
                     not_null: true,
-                    unique: true,
+                    unique: false,
                 },
                 "har".to_string() => DbColumn {
                     name: "har".to_string(),
                     db_type: DbType::Boolean("".to_string()),
                     not_null: false,
-                    unique: true,
+                    unique: false,
                 }
             }
         );
