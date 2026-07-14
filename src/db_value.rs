@@ -1413,19 +1413,62 @@ impl DbColumn {
     }
 
     /// TODO: Add docstring.
-    pub fn min_column_from_column_values<I>(column_values: I) -> Result<Vec<DbColumn>, DbError>
+    pub fn min_columns_from_column_values<I>(column_values: I) -> Result<Vec<DbColumn>, DbError>
     where
         I: Iterator<Item = Vec<DbValue>>,
     {
         column_values
-            .map(|col| DbColumn::min_column(col.into_iter()))
+            .map(|values| DbColumn::min_column(values.into_iter()))
             .collect::<Result<Vec<DbColumn>, _>>()
     }
 
-    /// TODO: Add docstring
-    pub fn min_row_from_db_rows<'a, I>(db_rows: I) -> Result<IndexMap<String, DbColumn>, DbError>
+    /// TODO: Add docstring.
+    pub fn min_columns_from_anonymous_rows<I>(columns: I) -> Result<Vec<DbColumn>, DbError>
     where
-        I: Iterator<Item = &'a DbRow>,
+        I: Iterator<Item = Vec<DbValue>>,
+    {
+        let mut column_data = IndexMap::new();
+        let mut not_unique = vec![];
+        columns.for_each(|column| {
+            for i in 0..column.len() {
+                match column_data.get_mut(&i) {
+                    None => {
+                        let mut data = HashSet::new();
+                        data.insert(column[i].to_string());
+                        column_data.insert(i, data.into_iter());
+                    }
+                    Some(data) => {
+                        let mut new_data = HashSet::new();
+                        let column_name = column[i].to_string();
+                        new_data.insert(column_name.to_string());
+                        match data.find(|x| x == &column_name) {
+                            Some(_) => {
+                                not_unique.push(column_name.to_string());
+                            }
+                            _ => (),
+                        }
+                        let data = data
+                            .into_iter()
+                            .chain(new_data.into_iter())
+                            .collect::<HashSet<_>>();
+                        column_data.insert(i, data.into_iter());
+                    }
+                };
+            }
+        });
+
+        let db_columns = column_data
+            .into_iter()
+            .map(|(_index, data)| DbColumn::min_column_from_strings(data).unwrap())
+            .collect::<Vec<_>>();
+
+        Ok(db_columns)
+    }
+
+    /// TODO: Add docstring
+    pub fn min_row_from_db_rows<I>(db_rows: I) -> Result<IndexMap<String, DbColumn>, DbError>
+    where
+        I: Iterator<Item = DbRow>,
     {
         let mut column_data = IndexMap::new();
         let mut not_unique = vec![];
@@ -1445,7 +1488,7 @@ impl DbColumn {
                                 not_unique.push(column.to_string());
                             }
                             _ => (),
-                        }
+                        };
                         let data = data
                             .into_iter()
                             .chain(new_data.into_iter())
@@ -1606,7 +1649,7 @@ mod tests {
         //    .iter()
         //    .map(|vrow| vrow.as_ref())
         //    .collect::<Vec<_>>();
-        let columns = DbColumn::min_column_from_column_values(column_values.into_iter()).unwrap();
+        let columns = DbColumn::min_columns_from_column_values(column_values.into_iter()).unwrap();
         assert_eq!(
             columns,
             [
@@ -1643,7 +1686,7 @@ mod tests {
             db_row! { "foo" => 3, "bar" => 2.0, "jar" => "alphanum", "har" => false },
             db_row! { "foo" => i64::MAX, "bar" => 2.0, "jar" => "alphanum", "har" => DbValue::Null },
         ];
-        let db_rows = db_rows.iter().map(|row| row).collect::<Vec<_>>();
+        //let db_rows = db_rows.iter().map(|row| row).collect::<Vec<_>>();
         let column_map = DbColumn::min_row_from_db_rows(db_rows.into_iter()).unwrap();
         assert_eq!(
             column_map,
