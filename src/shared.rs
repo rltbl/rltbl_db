@@ -5,8 +5,7 @@ use crate::{
     parse::validate_table_name,
 };
 
-use csv::ReaderBuilder;
-use std::{fmt::Display, fs::File, path::Path};
+use std::fmt::Display;
 
 #[derive(PartialEq, Eq)]
 pub(crate) enum EditType {
@@ -329,51 +328,4 @@ pub(crate) async fn edit(
     clear_cache_for_edited_tables(pool, &[&table]).await?;
 
     Ok(rows_to_return.into_db_rows())
-}
-
-/// TODO: Add docstring.
-pub(crate) async fn import_table(_pool: &(impl DbQuery + Sync), tsv: &str) -> Result<(), DbError> {
-    // TODO: Maybe this doesn't need to be in shared but can use the default implementation.
-
-    // Strategy:
-    // 1. Create an iterator over the rows of the TSV.
-    // 2. Use zip() and reduce() to produce an iterator over the 0th item from each row, an
-    //    iterator over the 1st items, the 2nd items, etc., and call min_column_value_rows() on
-    //    each iterator to yield a specific DbColumn for each row column.
-    // 3. Execute a CREATE TABLE statement for the table name and column types.
-    // 4. Re-read the TSV file (i.e., close it and open it again).
-    // 5. Coerce each row into a row with the right column types.
-    // 6. Once you have collected the right number of rows (determined by MAX_SQLITE_PARAMS,
-    //    MAX_POSTGRESQL_PARAMS, etc.), generate an INSERT statement and execute it.
-    // 7. Repeat 6 until there are no more rows in the TSV file.
-
-    // The table name is just the name of the TSV file:
-    let table = Path::new(tsv).file_stem().unwrap().to_str().unwrap();
-
-    // Read the records from the given TSV file:
-    let mut rdr = ReaderBuilder::new()
-        .has_headers(false)
-        .delimiter(b'\t')
-        .from_reader(File::open(tsv).expect(&format!("Unable to open '{tsv}'")));
-    let mut records = rdr.records();
-
-    // Extract the headers from the first line of the file, which we will need for the CREATE
-    // TABLE statement:
-    let headers = {
-        let headers = match records.next() {
-            None => panic!("'{tsv}' is empty"),
-            Some(record) => match record {
-                Err(err) => panic!("Error reading from '{tsv}': {err}"),
-                Ok(headers) => headers.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-            },
-        };
-        for header in &headers {
-            if header.trim().is_empty() {
-                panic!("One or more of the header fields is empty in TSV file '{tsv}'");
-            }
-        }
-        headers
-    };
-
-    Ok(())
 }

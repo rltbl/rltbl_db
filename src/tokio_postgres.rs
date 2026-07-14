@@ -7,7 +7,7 @@ use crate::{
     db_kind::{DbKind, MAX_PARAMS_POSTGRES, PostgreSQLKind},
     db_value::{DbParams, DbRow, DbRows, DbValue, IntoDbParams, IntoDbRows, JsonValue},
     parse::validate_table_name,
-    shared::{self, EditType, edit},
+    shared::{EditType, edit},
 };
 use bytes::{BufMut, BytesMut};
 use deadpool_postgres::{
@@ -538,11 +538,6 @@ impl DbQuery for TokioPostgresPool {
             returning,
         )
         .await
-    }
-
-    /// Implements [DbQuery::import_table()] for PostgreSQL.
-    async fn import_table(&self, tsv: &str) -> Result<(), DbError> {
-        shared::import_table(self, tsv).await
     }
 
     /// Implements [DbQuery::drop_table()] for PostgreSQL.
