@@ -11,6 +11,7 @@ use std::{
     collections::HashSet,
     fmt::Display,
     hash::{Hash, Hasher},
+    iter::zip,
     ops::{Deref, DerefMut},
 };
 
@@ -1423,27 +1424,27 @@ impl DbColumn {
     }
 
     /// TODO: Add docstring.
-    pub fn min_columns_from_anonymous_rows<I>(columns: I) -> Result<Vec<DbColumn>, DbError>
+    pub fn min_columns_from_anonymous_rows<I>(rows: I) -> Result<Vec<DbColumn>, DbError>
     where
         I: Iterator<Item = Vec<DbValue>>,
     {
         let mut column_data = IndexMap::new();
         let mut not_unique = vec![];
-        columns.for_each(|column| {
-            for i in 0..column.len() {
+        rows.for_each(|row| {
+            for i in 0..row.len() {
                 match column_data.get_mut(&i) {
                     None => {
                         let mut data = HashSet::new();
-                        data.insert(column[i].to_string());
+                        data.insert(row[i].to_string());
                         column_data.insert(i, data.into_iter());
                     }
                     Some(data) => {
                         let mut new_data = HashSet::new();
-                        let column_name = column[i].to_string();
-                        new_data.insert(column_name.to_string());
-                        match data.find(|x| x == &column_name) {
+                        let value = row[i].to_string();
+                        new_data.insert(value.to_string());
+                        match data.find(|x| x == &value) {
                             Some(_) => {
-                                not_unique.push(column_name.to_string());
+                                not_unique.push(i);
                             }
                             _ => (),
                         }
@@ -1459,7 +1460,13 @@ impl DbColumn {
 
         let db_columns = column_data
             .into_iter()
-            .map(|(_index, data)| DbColumn::min_column_from_strings(data).unwrap())
+            .map(|(index, data)| {
+                let mut column = DbColumn::min_column_from_strings(data).unwrap();
+                if not_unique.contains(&index) {
+                    column.unique = false;
+                }
+                column
+            })
             .collect::<Vec<_>>();
 
         Ok(db_columns)
@@ -1470,46 +1477,25 @@ impl DbColumn {
     where
         I: Iterator<Item = DbRow>,
     {
-        let mut column_data = IndexMap::new();
-        let mut not_unique = vec![];
-        db_rows.for_each(|db_row| {
-            for (column, db_value) in db_row.deref().iter() {
-                match column_data.get_mut(column) {
-                    None => {
-                        let mut data = HashSet::new();
-                        data.insert(db_value.clone());
-                        column_data.insert(column.to_string(), data.into_iter());
-                    }
-                    Some(data) => {
-                        let mut new_data = HashSet::new();
-                        new_data.insert(db_value.clone());
-                        match data.find(|x| x == db_value) {
-                            Some(_) => {
-                                not_unique.push(column.to_string());
-                            }
-                            _ => (),
-                        };
-                        let data = data
-                            .into_iter()
-                            .chain(new_data.into_iter())
-                            .collect::<HashSet<_>>();
-                        column_data.insert(column.to_string(), data.into_iter());
-                    }
-                };
-            }
-        });
+        let mut keys = vec![];
+        let columns = DbColumn::min_columns_from_anonymous_rows(db_rows.map(|row| {
+            row.into_iter()
+                .map(|(key, val)| {
+                    // Use the values, saving the keys for later:
+                    keys.push(key.to_string());
+                    val
+                })
+                .collect::<Vec<_>>()
+        }))?;
 
-        let mut column_map = IndexMap::new();
-        for (column_name, data) in column_data.into_iter() {
-            let mut column = DbColumn::min_column(data.into_iter())?;
-            column.name = column_name.to_string();
-            if not_unique.contains(&column_name) {
-                column.unique = false;
-            }
-            column_map.insert(column_name, column);
-        }
-
-        Ok(column_map)
+        // Zip everything up into an IndexMap and return it:
+        Ok(zip(keys, columns)
+            .map(|(key, mut column)| {
+                // Don't forget to copy the column name:
+                column.name = key.to_string();
+                (key, column)
+            })
+            .collect::<IndexMap<_, _>>())
     }
 }
 
@@ -1716,6 +1702,66 @@ mod tests {
                     unique: false,
                 }
             }
+        );
+
+        let anonymous_rows = vec![
+            // Row 0
+            vec![
+                DbValue::from(1),
+                DbValue::from(2.0),
+                DbValue::from("a"),
+                DbValue::from(true),
+            ],
+            // Row 1, etc.
+            vec![
+                DbValue::from(2),
+                DbValue::from(2),
+                DbValue::from("a"),
+                DbValue::from(true),
+            ],
+            vec![
+                DbValue::from(3),
+                DbValue::from(2.0),
+                DbValue::from("a"),
+                DbValue::from(false),
+            ],
+            vec![
+                DbValue::from(i64::MAX),
+                DbValue::from(2.0),
+                DbValue::from("a"),
+                DbValue::Null,
+            ],
+        ];
+        let columns =
+            DbColumn::min_columns_from_anonymous_rows(anonymous_rows.into_iter()).unwrap();
+        assert_eq!(
+            columns,
+            vec![
+                DbColumn {
+                    name: "".to_string(),
+                    db_type: DbType::BigInteger("".to_string()),
+                    not_null: true,
+                    unique: true,
+                },
+                DbColumn {
+                    name: "".to_string(),
+                    db_type: DbType::I16("".to_string()),
+                    not_null: true,
+                    unique: false,
+                },
+                DbColumn {
+                    name: "".to_string(),
+                    db_type: DbType::Text("".to_string()),
+                    not_null: true,
+                    unique: false,
+                },
+                DbColumn {
+                    name: "".to_string(),
+                    db_type: DbType::Boolean("".to_string()),
+                    not_null: false,
+                    unique: false,
+                }
+            ]
         );
     }
 
