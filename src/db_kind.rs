@@ -25,7 +25,10 @@ pub static MAX_PARAMS_POSTGRES: usize = 32765;
 //////////////////////////////////////////////////////////////////////
 
 /// Trait that must be implemented by supported database kinds.
-pub trait DbKind: Display {
+pub trait DbKind: std::fmt::Debug + Display + Send {
+    /// The name of this DbKind.
+    fn name(&self) -> String;
+
     /// Constructs a [DbType] instance using the name of the given sql_type.
     fn db_type(&self, sql_type: &str) -> Result<DbType, DbError>;
 
@@ -142,7 +145,10 @@ pub trait DbKind: Display {
 
 // Builtin database kind implementations.
 
+#[derive(Debug)]
 pub struct SQLiteKind;
+
+#[derive(Debug)]
 pub struct PostgreSQLKind;
 
 impl Display for SQLiteKind {
@@ -158,6 +164,10 @@ impl Display for PostgreSQLKind {
 }
 
 impl DbKind for SQLiteKind {
+    fn name(&self) -> String {
+        "SQLite".to_string()
+    }
+
     fn db_type(&self, sql_type: &str) -> Result<DbType, DbError> {
         match sql_type.to_lowercase().as_str() {
             "integer" | "int" | "tinyint" | "smallint" | "mediumint" | "bigint" | "int2"
@@ -302,6 +312,10 @@ impl DbKind for SQLiteKind {
 }
 
 impl DbKind for PostgreSQLKind {
+    fn name(&self) -> String {
+        "PostgreSQL".to_string()
+    }
+
     fn db_type(&self, sql_type: &str) -> Result<DbType, DbError> {
         match sql_type.to_lowercase().as_str() {
             "bool" | "boolean" => Ok(DbType::Boolean(sql_type.to_string())),
