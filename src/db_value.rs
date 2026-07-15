@@ -1435,24 +1435,13 @@ impl DbColumn {
                 match column_data.get_mut(&i) {
                     None => {
                         let mut data = HashSet::new();
-                        data.insert(row[i].to_string());
-                        column_data.insert(i, data.into_iter());
+                        data.insert(row[i].clone());
+                        column_data.insert(i, data);
                     }
                     Some(data) => {
-                        let mut new_data = HashSet::new();
-                        let value = row[i].to_string();
-                        new_data.insert(value.to_string());
-                        match data.find(|x| x == &value) {
-                            Some(_) => {
-                                not_unique.push(i);
-                            }
-                            _ => (),
+                        if !data.insert(row[i].clone()) {
+                            not_unique.push(i);
                         }
-                        let data = data
-                            .into_iter()
-                            .chain(new_data.into_iter())
-                            .collect::<HashSet<_>>();
-                        column_data.insert(i, data.into_iter());
                     }
                 };
             }
@@ -1461,7 +1450,7 @@ impl DbColumn {
         let db_columns = column_data
             .into_iter()
             .map(|(index, data)| {
-                let mut column = DbColumn::min_column_from_strings(data).unwrap();
+                let mut column = DbColumn::min_column(data.into_iter()).unwrap();
                 if not_unique.contains(&index) {
                     column.unique = false;
                 }
