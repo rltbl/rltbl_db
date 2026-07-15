@@ -199,7 +199,7 @@ impl DbQuery for LibSQLPool {
             db_rows.push(db_row);
         }
 
-        Ok(DbRows { content: db_rows })
+        Ok(DbRows { rows: db_rows })
     }
 
     /// Implements [DbQuery::insert()] for SQLite.
