@@ -798,7 +798,7 @@ impl From<JsonValue> for DbValue {
 
 impl From<&JsonValue> for DbValue {
     fn from(item: &JsonValue) -> Self {
-        item.into()
+        item.clone().into()
     }
 }
 
