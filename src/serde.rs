@@ -986,34 +986,9 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
                 DbValue::Numeric(_) => Err(DbError::SerdeError(
                     "Deserializing Decimal values is not yet supported".to_string(),
                 )),
-                DbValue::Json(value) => match value {
-                    JsonValue::Array(_) => value.deserialize_seq(visitor).map_err(|err| {
-                        DbError::SerdeError(format!("Error deserializing array: '{err}'."))
-                    }),
-                    JsonValue::Object(_) => value.deserialize_map(visitor).map_err(|err| {
-                        DbError::SerdeError(format!("Error deserializing object: '{err}'."))
-                    }),
-                    JsonValue::Number(num) => {
-                        if num.is_i64() {
-                            value.deserialize_i64(visitor).map_err(|err| {
-                                DbError::SerdeError(format!("Error deserializing i64: '{err}'."))
-                            })
-                        } else if num.is_u64() {
-                            value.deserialize_u64(visitor).map_err(|err| {
-                                DbError::SerdeError(format!("Error deserializing u64: '{err}'."))
-                            })
-                        } else {
-                            value.deserialize_f64(visitor).map_err(|err| {
-                                DbError::SerdeError(format!("Error deserializing f64: '{err}'."))
-                            })
-                        }
-                    }
-                    _ => {
-                        return Err(DbError::SerdeError(format!(
-                            "In deserialize_any(): Invalid JSON value: {value:?}"
-                        )));
-                    }
-                },
+                DbValue::Json(value) => value.deserialize_any(visitor).map_err(|err| {
+                    DbError::SerdeError(format!("Error deserializing any: '{err}'."))
+                }),
                 DbValue::Other(type_name, bytes, string_opt) => Err(DbError::SerdeError(format!(
                     "Deserialization not supported for \
                      DbValue::Other({type_name}, {bytes:?}, {string_opt:?})"
