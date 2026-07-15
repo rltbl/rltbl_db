@@ -1095,6 +1095,19 @@ impl Into<StringRow> for &DbRow {
     }
 }
 
+impl From<StringRow> for DbRow {
+    fn from(row: StringRow) -> Self {
+        row.iter()
+            .map(|(key, value)| (key.clone(), DbValue::from(value)))
+            .collect()
+    }
+}
+impl From<&StringRow> for DbRow {
+    fn from(row: &StringRow) -> Self {
+        row.clone().into()
+    }
+}
+
 impl Into<Vec<StringRow>> for DbRows {
     fn into(self) -> Vec<StringRow> {
         self.content.iter().map(|row| row.into()).collect()
@@ -1424,7 +1437,7 @@ impl DbColumn {
     }
 
     /// TODO: Add docstring.
-    pub fn min_columns_from_anonymous_rows<I>(rows: I) -> Result<Vec<DbColumn>, DbError>
+    pub fn min_columns_from_anonymous_db_rows<I>(rows: I) -> Result<Vec<DbColumn>, DbError>
     where
         I: Iterator<Item = Vec<DbValue>>,
     {
@@ -1467,7 +1480,7 @@ impl DbColumn {
         I: Iterator<Item = DbRow>,
     {
         let mut keys = vec![];
-        let columns = DbColumn::min_columns_from_anonymous_rows(db_rows.map(|row| {
+        let columns = DbColumn::min_columns_from_anonymous_db_rows(db_rows.map(|row| {
             row.into_iter()
                 .map(|(key, val)| {
                     // Use the values, saving the keys for later:
@@ -1693,7 +1706,7 @@ mod tests {
             }
         );
 
-        let anonymous_rows = vec![
+        let anonymous_db_rows = vec![
             // Row 0
             vec![
                 DbValue::from(1),
@@ -1722,7 +1735,7 @@ mod tests {
             ],
         ];
         let columns =
-            DbColumn::min_columns_from_anonymous_rows(anonymous_rows.into_iter()).unwrap();
+            DbColumn::min_columns_from_anonymous_db_rows(anonymous_db_rows.into_iter()).unwrap();
         assert_eq!(
             columns,
             vec![

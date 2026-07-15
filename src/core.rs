@@ -502,13 +502,9 @@ pub trait DbQuery: Sync {
 
     /// TODO: Add docstring.
     async fn import_table(&self, tsv: &str) -> Result<(), DbError> {
-        // TODO: Maybe this doesn't need to be in shared but can use the default implementation.
-
         // Strategy:
         // 1. Create an iterator over the rows of the TSV.
-        // 2. Use zip() and reduce() to produce an iterator over the 0th item from each row, an
-        //    iterator over the 1st items, the 2nd items, etc., and call min_column_value_rows() on
-        //    each iterator to yield a specific DbColumn for each row column.
+        // 2. Call min_row_from_string_rows() on the iterator.
         // 3. Execute a CREATE TABLE statement for the table name and column types.
         // 4. Re-read the TSV file (i.e., close it and open it again).
         // 5. Coerce each row into a row with the right column types.

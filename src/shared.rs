@@ -4,7 +4,6 @@ use crate::{
     db_value::{DbRows, DbValue, IntoDbRows},
     parse::validate_table_name,
 };
-
 use std::fmt::Display;
 
 #[derive(PartialEq, Eq)]

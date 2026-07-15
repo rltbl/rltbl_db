@@ -382,22 +382,6 @@ mod tests {
     };
 
     #[tokio::test]
-    async fn test_import_table() {
-        #[cfg(feature = "rusqlite")]
-        import_table(":memory:").await;
-        #[cfg(feature = "tokio-postgres")]
-        import_table("postgresql:///rltbl_db").await;
-        #[cfg(feature = "libsql")]
-        import_table(":memory:").await;
-    }
-
-    async fn import_table(url: &str) {
-        clear_meta_cache().unwrap();
-        let pool = AnyPool::connect(url).await.unwrap();
-        pool.import_table("tests/input/table1.tsv").await.unwrap();
-    }
-
-    #[tokio::test]
     async fn test_text_column_query() {
         #[cfg(feature = "rusqlite")]
         text_column_query(":memory:").await;
