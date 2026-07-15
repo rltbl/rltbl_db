@@ -997,6 +997,14 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
         }
     }
 
+    fn deserialize_ignored_any<V>(self, visitor: V) -> Result<V::Value, DbError>
+    where
+        V: Visitor<'de>,
+    {
+        // This *should* just pop a value then ignore it.
+        self.deserialize_any(visitor)
+    }
+
     // Options
 
     fn deserialize_option<V>(self, visitor: V) -> Result<V::Value, DbError>
@@ -1228,15 +1236,6 @@ impl<'de, 'a> de::Deserializer<'de> for &'a mut DbRowDeserializer<'de> {
     {
         return Err(DbError::SerdeError(
             "Deserializing 'byte_buf' is not supported".to_string(),
-        ));
-    }
-
-    fn deserialize_ignored_any<V>(self, _visitor: V) -> Result<V::Value, DbError>
-    where
-        V: Visitor<'de>,
-    {
-        return Err(DbError::SerdeError(
-            "Deserializing 'ignored_any' is not supported".to_string(),
         ));
     }
 }
