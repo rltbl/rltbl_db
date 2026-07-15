@@ -513,6 +513,12 @@ pub enum DbType {
     Text(String),
 }
 
+impl Default for DbType {
+    fn default() -> Self {
+        DbType::Text("TEXT".to_string())
+    }
+}
+
 impl DbType {
     /// Parses a given string representing the value of a database field into a [DbValue] of this
     /// type.
