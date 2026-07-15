@@ -411,7 +411,7 @@ impl DbQuery for TokioPostgresPool {
             db_rows.push(db_row);
         }
 
-        Ok(DbRows { content: db_rows })
+        Ok(DbRows { rows: db_rows })
     }
 
     /// Implements [DbQuery::insert()] for PostgreSQL
@@ -841,7 +841,7 @@ mod tests {
             .query(r#"SELECT * FROM test_other_types"#, ())
             .await
             .unwrap();
-        let db_row = db_rows.content.pop().unwrap();
+        let db_row = db_rows.rows.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
             "DbRow { \
@@ -861,7 +861,7 @@ mod tests {
             .query(r#"SELECT * FROM test_other_types"#, ())
             .await
             .unwrap();
-        let db_row = db_rows.content.pop().unwrap();
+        let db_row = db_rows.rows.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
             "DbRow { \
@@ -888,7 +888,7 @@ mod tests {
             .query(r#"SELECT * FROM test_other_types"#, ())
             .await
             .unwrap();
-        let db_row = db_rows.content.pop().unwrap();
+        let db_row = db_rows.rows.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
             "DbRow { \
@@ -908,7 +908,7 @@ mod tests {
             .query(r#"SELECT * FROM test_other_types"#, ())
             .await
             .unwrap();
-        let db_row = db_rows.content.pop().unwrap();
+        let db_row = db_rows.rows.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
             "DbRow { \
@@ -938,7 +938,7 @@ mod tests {
             .query(r#"SELECT * FROM test_other_types"#, ())
             .await
             .unwrap();
-        let db_row = db_rows.content.pop().unwrap();
+        let db_row = db_rows.rows.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
             "DbRow { \
@@ -957,7 +957,7 @@ mod tests {
             .query(r#"SELECT * FROM test_other_types"#, ())
             .await
             .unwrap();
-        let db_row = db_rows.content.pop().unwrap();
+        let db_row = db_rows.rows.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
             "DbRow { \
@@ -984,7 +984,7 @@ mod tests {
             .query(r#"SELECT * FROM test_other_types"#, ())
             .await
             .unwrap();
-        let db_row = db_rows.content.pop().unwrap();
+        let db_row = db_rows.rows.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
             "DbRow { \
@@ -1005,7 +1005,7 @@ mod tests {
             .query(r#"SELECT * FROM test_other_types"#, ())
             .await
             .unwrap();
-        let db_row = db_rows.content.pop().unwrap();
+        let db_row = db_rows.rows.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
             "DbRow { \
@@ -1033,7 +1033,7 @@ mod tests {
             .query(r#"SELECT * FROM test_other_types"#, ())
             .await
             .unwrap();
-        let db_row = db_rows.content.pop().unwrap();
+        let db_row = db_rows.rows.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
             "DbRow { \
@@ -1054,7 +1054,7 @@ mod tests {
             .query(r#"SELECT * FROM test_other_types"#, ())
             .await
             .unwrap();
-        let db_row = db_rows.content.pop().unwrap();
+        let db_row = db_rows.rows.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
             "DbRow { \
@@ -1085,7 +1085,7 @@ mod tests {
             .query(r#"SELECT * FROM test_other_types"#, ())
             .await
             .unwrap();
-        let db_row = db_rows.content.pop().unwrap();
+        let db_row = db_rows.rows.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
             "DbRow { \
@@ -1111,7 +1111,7 @@ mod tests {
             .query(r#"SELECT * FROM test_other_types"#, ())
             .await
             .unwrap();
-        let db_row = db_rows.content.pop().unwrap();
+        let db_row = db_rows.rows.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
             "DbRow { \
@@ -1144,7 +1144,7 @@ mod tests {
             .query(r#"SELECT * FROM test_other_types"#, ())
             .await
             .unwrap();
-        let db_row = db_rows.content.pop().unwrap();
+        let db_row = db_rows.rows.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
             "DbRow { \
@@ -1170,7 +1170,7 @@ mod tests {
             .query(r#"SELECT * FROM test_other_types"#, ())
             .await
             .unwrap();
-        let db_row = db_rows.content.pop().unwrap();
+        let db_row = db_rows.rows.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
             "DbRow { \
@@ -1203,7 +1203,7 @@ mod tests {
             .query(r#"SELECT * FROM test_other_types"#, ())
             .await
             .unwrap();
-        let db_row = db_rows.content.pop().unwrap();
+        let db_row = db_rows.rows.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
             "DbRow { \
@@ -1226,7 +1226,7 @@ mod tests {
             .query(r#"SELECT * FROM test_other_types"#, ())
             .await
             .unwrap();
-        let db_row = db_rows.content.pop().unwrap();
+        let db_row = db_rows.rows.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
             "DbRow { \
@@ -1256,7 +1256,7 @@ mod tests {
             .query(r#"SELECT * FROM test_other_types"#, ())
             .await
             .unwrap();
-        let db_row = db_rows.content.pop().unwrap();
+        let db_row = db_rows.rows.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
             "DbRow { \
@@ -1279,7 +1279,7 @@ mod tests {
             .query(r#"SELECT * FROM test_other_types"#, ())
             .await
             .unwrap();
-        let db_row = db_rows.content.pop().unwrap();
+        let db_row = db_rows.rows.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
             "DbRow { \
@@ -1309,7 +1309,7 @@ mod tests {
             .query(r#"SELECT * FROM test_other_types"#, ())
             .await
             .unwrap();
-        let db_row = db_rows.content.pop().unwrap();
+        let db_row = db_rows.rows.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
             "DbRow { \
@@ -1331,7 +1331,7 @@ mod tests {
             .query(r#"SELECT * FROM test_other_types"#, ())
             .await
             .unwrap();
-        let db_row = db_rows.content.pop().unwrap();
+        let db_row = db_rows.rows.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
             "DbRow { \
@@ -1382,7 +1382,7 @@ mod tests {
             )
             .await
             .unwrap();
-        let db_row = db_rows.content.pop().unwrap();
+        let db_row = db_rows.rows.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
             r#"DbRow { map: {"bar": Null, "foo": Boolean(false)} }"#
@@ -1411,7 +1411,7 @@ mod tests {
 
         // Get the value that was just inserted and use it to edit the table and verify the result:
         let mut db_rows = pool.query(r#"SELECT * FROM test_jsonb"#, ()).await.unwrap();
-        let db_row = db_rows.content.pop().unwrap();
+        let db_row = db_rows.rows.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
             "DbRow { \
@@ -1431,7 +1431,7 @@ mod tests {
         .unwrap();
 
         let mut db_rows = pool.query(r#"SELECT * FROM test_jsonb"#, ()).await.unwrap();
-        let db_row = db_rows.content.pop().unwrap();
+        let db_row = db_rows.rows.pop().unwrap();
         assert_eq!(
             format!("{db_row:?}"),
             "DbRow { \
