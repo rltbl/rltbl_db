@@ -916,6 +916,42 @@ pub struct DbRow {
     pub map: IndexMap<String, DbValue>,
 }
 
+/// Enables conversion from something into a [DbRow]
+pub trait IntoDbRow {
+    fn into_db_row(self) -> DbRow;
+}
+
+impl IntoDbRow for DbRow {
+    fn into_db_row(self) -> DbRow {
+        self
+    }
+}
+
+impl IntoDbRow for &DbRow {
+    fn into_db_row(self) -> DbRow {
+        self.clone()
+    }
+}
+
+impl IntoDbRow for JsonRow {
+    fn into_db_row(self) -> DbRow {
+        DbRow {
+            map: self
+                .into_iter()
+                .map(|(key, val)| (key, DbValue::from(val)))
+                .collect(),
+        }
+    }
+}
+
+impl IntoDbRow for &JsonRow {
+    fn into_db_row(self) -> DbRow {
+        DbRow {
+            map: self.clone().into_db_row().map,
+        }
+    }
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct DbRows {
     pub rows: Vec<DbRow>,
