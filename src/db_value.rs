@@ -1014,18 +1014,6 @@ impl DbRow {
         Ok(coerced)
     }
 
-    // TODO: Move thsi function to DbRows.
-    /// TODO: Add docstring.
-    pub fn coerce_rows<I>(
-        db_rows: I,
-        column_map: &IndexMap<String, DbColumn>,
-    ) -> impl Iterator<Item = Result<DbRow, DbError>>
-    where
-        I: Iterator<Item = DbRow>,
-    {
-        db_rows.map(|row| row.coerce(column_map))
-    }
-
     pub fn insert(&mut self, key: String, value: DbValue) {
         self.map.insert(key, value);
     }
@@ -1081,6 +1069,17 @@ impl DbRows {
         }
         let (_key, value) = row.first().unwrap();
         Ok(value)
+    }
+
+    /// TODO: Add docstring.
+    pub fn coerce<I>(
+        db_rows: I,
+        column_map: &IndexMap<String, DbColumn>,
+    ) -> impl Iterator<Item = Result<DbRow, DbError>>
+    where
+        I: Iterator<Item = DbRow>,
+    {
+        db_rows.map(|row| row.coerce(column_map))
     }
 
     pub fn remove_nulls(mut self) -> Self {
@@ -1599,8 +1598,7 @@ mod tests {
         let coerced_row = input_row_1.coerce(&column_map).unwrap();
         assert_eq!(coerced_row, expected_row_1);
 
-        let mut coerced_rows =
-            DbRow::coerce_rows([input_row_1, input_row_2].into_iter(), &column_map);
+        let mut coerced_rows = DbRows::coerce([input_row_1, input_row_2].into_iter(), &column_map);
         assert_eq!(coerced_rows.next().unwrap().unwrap(), expected_row_1);
         assert_eq!(coerced_rows.next().unwrap().unwrap(), expected_row_2);
     }
