@@ -12,13 +12,13 @@ use crate::{
 use deadpool_sqlite::{
     Config, Pool, Runtime,
     rusqlite::{
-        Statement,
+        self, Statement,
         fallible_iterator::FallibleIterator,
         types::{Null, ValueRef},
     },
 };
 use rust_decimal::Decimal;
-use std::str::from_utf8;
+use std::{env, str::from_utf8};
 
 /// Query a database using the given prepared statement and parameters.
 fn query_prepared(
@@ -259,11 +259,14 @@ impl DbQuery for RusqlitePool {
             .map_err(|err| DbError::ConnectError(format!("Unable to get from pool: {err}")))?;
         let sql_string = sql.to_string();
         match conn
-            .interact(move |conn| match conn.execute_batch(&sql_string) {
-                Err(err) => {
-                    return Err(DbError::DatabaseError(format!("Error during query: {err}")));
+            .interact(move |conn| {
+                rusqlite::vtab::csvtab::load_module(&conn).unwrap();
+                match conn.execute_batch(&sql_string) {
+                    Err(err) => {
+                        return Err(DbError::DatabaseError(format!("Error during query: {err}")));
+                    }
+                    Ok(_) => Ok(()),
                 }
-                Ok(_) => Ok(()),
             })
             .await
         {
@@ -291,6 +294,7 @@ impl DbQuery for RusqlitePool {
             let sql_string = sql.to_string();
             let params: DbParams = params.into_db_params();
             conn.interact(move |conn| {
+                rusqlite::vtab::csvtab::load_module(&conn).unwrap();
                 let mut stmt = conn.prepare(&sql_string).map_err(|err| {
                     DbError::DatabaseError(format!("Error preparing statement: {err}"))
                 })?;
@@ -437,6 +441,25 @@ impl DbQuery for RusqlitePool {
             returning,
         )
         .await
+    }
+
+    async fn load_table(&self, table: &str, tsv: &str) -> Result<(), DbError> {
+        let current_dir = env::current_dir().unwrap();
+        let current_dir = current_dir.display();
+        // TODO: Try to make this a TSV instead of a CSV. I've made a copy of the TSV file
+        // in tests/input/ and switched tabs with commas, but it would be ideal to make this
+        // work on the TSV file like postgres.
+        let csv = format!("{}.csv", tsv.strip_suffix(".tsv").unwrap());
+
+        let sql = format!(
+            r#"CREATE VIRTUAL TABLE temp.t1
+               USING CSV(filename='{current_dir}/{csv}', header=true)"#
+        );
+        self.execute(&sql, ()).await?;
+
+        let sql = format!("INSERT INTO {table} SELECT * FROM temp.t1");
+        self.execute(&sql, ()).await?;
+        Ok(())
     }
 
     /// Implements [DbQuery::drop_table()] for SQLite.

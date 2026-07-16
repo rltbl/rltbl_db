@@ -328,6 +328,12 @@ impl DbQuery for LibSQLPool {
         .await
     }
 
+    async fn load_table(&self, _table: &str, _tsv: &str) -> Result<(), DbError> {
+        // TODO: Load the rows to the table.
+
+        Ok(())
+    }
+
     /// Implements [DbQuery::drop_table()] for SQLite.
     async fn drop_table(&self, table: &str) -> Result<(), DbError> {
         let table = validate_table_name(table)?;

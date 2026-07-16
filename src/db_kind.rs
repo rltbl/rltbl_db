@@ -3,10 +3,11 @@
 use crate::{
     cache::{QUERY_CACHE_TABLE, TABLE_CACHE_TABLE},
     core::DbError,
-    db_value::{DbValue, IntoDbValue, JsonValue},
+    db_value::{DbColumn, DbValue, IntoDbValue, JsonValue},
     params,
     parse::validate_table_name,
 };
+use indexmap::IndexMap;
 use rust_decimal::Decimal;
 use std::{cmp::Ordering, fmt::Display};
 
@@ -45,6 +46,9 @@ pub trait DbKind: std::fmt::Debug + Display + Send {
     /// Generate the SQL and parameters needed to query the database's metadata for the primary
     /// key columns of the given table.
     fn primary_keys_sql(&self, table: &str) -> (String, [DbValue; 1]);
+
+    /// TODO: Add docstring.
+    fn create_table_sql(&self, table: &str, columns: &IndexMap<String, DbColumn>) -> String;
 
     /// Generate the SQL and parameters needed to drop the given table.
     fn drop_table_sql(&self, table: &str) -> String;
@@ -220,6 +224,35 @@ impl DbKind for SQLiteKind {
         )
     }
 
+    fn create_table_sql(&self, table: &str, columns: &IndexMap<String, DbColumn>) -> String {
+        let column_clauses = columns.iter().map(|(column_name, column)| {
+            let mut clause = format!(r#""{column_name}""#);
+            match column.db_type {
+                DbType::Null(_) => panic!("Can't use a NULL column to create a table."),
+                DbType::Boolean(_) => clause.push_str(" BOOL"),
+                DbType::I16(_)
+                | DbType::SmallInteger(_)
+                | DbType::Integer(_)
+                | DbType::BigInteger(_) => clause.push_str(" INTEGER"),
+                DbType::Real(_) | DbType::BigReal(_) => clause.push_str(" REAL"),
+                DbType::Numeric(_) => clause.push_str(" NUMERIC"),
+                DbType::Text(_) => clause.push_str(" TEXT"),
+            };
+            if column.unique {
+                clause.push_str(" UNIQUE");
+            }
+            if column.not_null {
+                clause.push_str(" NOT NULL");
+            }
+            clause
+        });
+        let sql = format!(
+            r#"CREATE TABLE "{table}" ({})"#,
+            column_clauses.collect::<Vec<_>>().join(", ")
+        );
+        sql
+    }
+
     fn drop_table_sql(&self, table: &str) -> String {
         format!(r#"DROP TABLE IF EXISTS "{table}""#)
     }
@@ -386,6 +419,34 @@ impl DbKind for PostgreSQLKind {
                 .to_string(),
             params![table],
         )
+    }
+
+    fn create_table_sql(&self, table: &str, columns: &IndexMap<String, DbColumn>) -> String {
+        let column_clauses = columns.iter().map(|(column_name, column)| {
+            let mut clause = format!(r#""{column_name}""#);
+            match column.db_type {
+                DbType::Null(_) => panic!("Can't use a NULL column to create a table."),
+                DbType::Boolean(_) => clause.push_str(" BOOLEAN"),
+                DbType::I16(_) | DbType::SmallInteger(_) => clause.push_str(" SMALLINT"),
+                DbType::Integer(_) | DbType::BigInteger(_) => clause.push_str(" INTEGER"),
+                DbType::Real(_) => clause.push_str(" REAL"),
+                DbType::BigReal(_) => clause.push_str(" DOUBLE PRECISION"),
+                DbType::Numeric(_) => clause.push_str(" NUMERIC"),
+                DbType::Text(_) => clause.push_str(" TEXT"),
+            };
+            if column.unique {
+                clause.push_str(" UNIQUE");
+            }
+            if column.not_null {
+                clause.push_str(" NOT NULL");
+            }
+            clause
+        });
+        let sql = format!(
+            r#"CREATE TABLE "{table}" ({})"#,
+            column_clauses.collect::<Vec<_>>().join(", ")
+        );
+        sql
     }
 
     fn drop_table_sql(&self, table: &str) -> String {

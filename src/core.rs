@@ -10,7 +10,7 @@ use crate::{
         update_last_verified,
     },
     db_kind::DbKind,
-    db_value::{DbParams, DbRow, DbRows, IntoDbParams, IntoDbRows},
+    db_value::{DbColumn, DbParams, DbRow, DbRows, DbValue, IntoDbParams, IntoDbRows},
     parse::get_accessed_tables,
 };
 
@@ -23,6 +23,7 @@ use std::{
     fmt::Display,
     fs::File,
     future::Future,
+    iter::zip,
     marker::Sync,
     path::Path,
     time::{SystemTime, UNIX_EPOCH},
@@ -501,44 +502,30 @@ pub trait DbQuery: Sync {
     }
 
     /// TODO: Add docstring.
+    async fn recreate_table(
+        &self,
+        table: &str,
+        columns: &IndexMap<String, DbColumn>,
+    ) -> Result<(), DbError> {
+        self.drop_table(&table).await?;
+        let sql = self.kind().create_table_sql(table, columns);
+        self.execute_no_cache_clean(&sql, ()).await
+    }
+
+    /// TODO: Add docstring.
+    fn load_table(
+        &self,
+        table: &str,
+        tsv: &str,
+    ) -> impl Future<Output = Result<(), DbError>> + Send;
+
+    /// TODO: Add docstring.
     async fn import_table(&self, tsv: &str) -> Result<(), DbError> {
-        // Strategy:
-        // 1. Create an iterator over the rows of the TSV.
-        // 2. Call min_row_from_string_rows() on the iterator.
-        // 3. Execute a CREATE TABLE statement for the table name and column types.
-        // 4. Re-read the TSV file (i.e., close it and open it again).
-        // 5. Coerce each row into a row with the right column types.
-        // 6. Once you have collected the right number of rows (determined by MAX_SQLITE_PARAMS,
-        //    MAX_POSTGRESQL_PARAMS, etc.), generate an INSERT statement and execute it.
-        // 7. Repeat 6 until there are no more rows in the TSV file.
-
         // The table name is just the name of the TSV file:
-        let _table = Path::new(tsv).file_stem().unwrap().to_str().unwrap();
-
-        // Read the records from the given TSV file:
-        let mut rdr = ReaderBuilder::new()
-            .has_headers(false)
-            .delimiter(b'\t')
-            .from_reader(File::open(tsv).expect(&format!("Unable to open '{tsv}'")));
-        let mut records = rdr.records();
-
-        // Extract the headers from the first line of the file, which we will need for the CREATE
-        // TABLE statement:
-        let _headers = {
-            let headers = match records.next() {
-                None => panic!("'{tsv}' is empty"),
-                Some(record) => match record {
-                    Err(err) => panic!("Error reading from '{tsv}': {err}"),
-                    Ok(headers) => headers.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-                },
-            };
-            for header in &headers {
-                if header.trim().is_empty() {
-                    panic!("One or more of the header fields is empty in TSV file '{tsv}'");
-                }
-            }
-            headers
-        };
+        let table = Path::new(tsv).file_stem().unwrap().to_str().unwrap();
+        let columns = read_columns_from_tsv(tsv)?;
+        self.recreate_table(&table, &columns).await?;
+        self.load_table(&table, tsv).await?;
         Ok(())
     }
 
@@ -550,6 +537,53 @@ pub trait DbQuery: Sync {
 
     /// Drop the given view from the database.
     fn drop_view(&self, view: &str) -> impl Future<Output = Result<(), DbError>> + Send;
+}
+
+/// TODO: Add docstring.
+fn read_columns_from_tsv(tsv: &str) -> Result<IndexMap<String, DbColumn>, DbError> {
+    // Read the rows from the given TSV file:
+    let mut rdr = ReaderBuilder::new()
+        .has_headers(false)
+        .delimiter(b'\t')
+        .from_reader(File::open(tsv).expect(&format!("Unable to open '{tsv}'")));
+    let mut records = rdr.records();
+
+    // Extract the headers from the first line of the file:
+    let headers = {
+        let headers = match records.next() {
+            None => panic!("'{tsv}' is empty"),
+            Some(record) => match record {
+                Err(err) => panic!("Error reading from '{tsv}': {err}"),
+                Ok(headers) => headers.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+            },
+        };
+        for header in &headers {
+            if header.trim().is_empty() {
+                // TODO: Remove panics and unwraps.
+                panic!("One or more of the header fields is empty in TSV file '{tsv}'");
+            }
+        }
+        headers
+    };
+    let rows = records.map(|record| {
+        record
+            .unwrap()
+            .into_iter()
+            .map(|value| DbValue::from(value))
+            .collect::<Vec<_>>()
+    });
+    let columns = DbColumn::min_columns_from_anonymous_db_rows(rows).unwrap();
+
+    // Zip everything up into an IndexMap and return it:
+    let columns = zip(headers.clone(), columns)
+        .map(|(key, mut column)| {
+            // Don't forget to copy the column name:
+            column.name = key.to_string();
+            (key, column)
+        })
+        .collect::<IndexMap<_, _>>();
+
+    Ok(columns)
 }
 
 /// Get the SQL code that is used to define the given view.

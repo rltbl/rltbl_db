@@ -278,6 +278,18 @@ impl DbQuery for AnyPool {
         }
     }
 
+    /// Implements [DbQuery::load_table()]
+    async fn load_table(&self, table: &str, tsv: &str) -> Result<(), DbError> {
+        match self {
+            #[cfg(feature = "rusqlite")]
+            AnyPool::Rusqlite(pool) => pool.load_table(table, tsv).await,
+            #[cfg(feature = "tokio-postgres")]
+            AnyPool::TokioPostgres(pool) => pool.load_table(table, tsv).await,
+            #[cfg(feature = "libsql")]
+            AnyPool::LibSQL(pool) => pool.load_table(table, tsv).await,
+        }
+    }
+
     /// Implements [DbQuery::drop_table()]
     async fn drop_table(&self, table: &str) -> Result<(), DbError> {
         match self {
@@ -380,6 +392,122 @@ mod tests {
         thread,
         time::{Duration, Instant},
     };
+
+    #[tokio::test]
+    async fn test_import() {
+        #[cfg(feature = "rusqlite")]
+        import(":memory:").await;
+        #[cfg(feature = "tokio-postgres")]
+        import("postgresql:///rltbl_db").await;
+        #[cfg(feature = "libsql")]
+        import(":memory:").await;
+    }
+
+    async fn import(url: &str) {
+        clear_meta_cache().unwrap();
+        let pool = AnyPool::connect(url).await.unwrap();
+        pool.import_table("tests/input/table1.tsv").await.unwrap();
+        let rows = pool.query("SELECT * FROM table1", ()).await.unwrap();
+        if pool.kind().name() == "SQLite" {
+            // TODO: Libsql is not yet supported. Remove this cfg directive once it is.
+            #[cfg(feature = "rusqlite")]
+            assert_eq!(
+                rows.rows,
+                vec![
+                    db_row! {
+                        "alpha" => DbValue::BigInteger(1),
+                        "beta" => DbValue::Text("short".to_string()),
+                        "gamma" => DbValue::BigReal(9.0),
+                        "delta" => DbValue::BigReal(4.0),
+                    },
+                    db_row! {
+                        "alpha" => DbValue::BigInteger(256),
+                        "beta" => DbValue::Text("long".to_string()),
+                        "gamma" => DbValue::BigReal(3.0),
+                        "delta" => DbValue::BigReal(4.0),
+                    },
+                    db_row! {
+                        "alpha" => DbValue::BigInteger(19),
+                        "beta" => DbValue::Text("short".to_string()),
+                        "gamma" => DbValue::BigReal(5.2),
+                        "delta" => DbValue::BigReal(4.1),
+                    },
+                    db_row! {
+                        "alpha" => DbValue::BigInteger(100),
+                        "beta" => DbValue::Text("long".to_string()),
+                        "gamma" => DbValue::BigReal(7.0),
+                        "delta" => DbValue::BigReal(19.0),
+                    },
+                    db_row! {
+                        "alpha" => DbValue::BigInteger(115),
+                        "beta" => DbValue::Text("short".to_string()),
+                        "gamma" => DbValue::BigReal(10.0),
+                        "delta" => DbValue::BigReal(12.0),
+                    },
+                    db_row! {
+                        "alpha" => DbValue::BigInteger(30),
+                        "beta" => DbValue::Text("short".to_string()),
+                        "gamma" => DbValue::BigReal(4.0),
+                        "delta" => DbValue::BigReal(19.0),
+                    },
+                    db_row! {
+                        "alpha" => DbValue::BigInteger(39),
+                        "beta" => DbValue::Text("midway".to_string()),
+                        "gamma" => DbValue::BigReal(19.99),
+                        "delta" => DbValue::BigReal(75.0),
+                    },
+                ]
+            );
+        } else if pool.kind().name() == "PostgreSQL" {
+            assert_eq!(
+                rows.rows,
+                vec![
+                    db_row! {
+                        "alpha" => DbValue::SmallInteger(1),
+                        "beta" => DbValue::Text("short".to_string()),
+                        "gamma" => DbValue::Real(9.0),
+                        "delta" => DbValue::Real(4.0),
+                    },
+                    db_row! {
+                        "alpha" => DbValue::SmallInteger(256),
+                        "beta" => DbValue::Text("long".to_string()),
+                        "gamma" => DbValue::Real(3.0),
+                        "delta" => DbValue::Real(4.0),
+                    },
+                    db_row! {
+                        "alpha" => DbValue::SmallInteger(19),
+                        "beta" => DbValue::Text("short".to_string()),
+                        "gamma" => DbValue::Real(5.2),
+                        "delta" => DbValue::Real(4.1),
+                    },
+                    db_row! {
+                        "alpha" => DbValue::SmallInteger(100),
+                        "beta" => DbValue::Text("long".to_string()),
+                        "gamma" => DbValue::Real(7.0),
+                        "delta" => DbValue::Real(19.0),
+                    },
+                    db_row! {
+                        "alpha" => DbValue::SmallInteger(115),
+                        "beta" => DbValue::Text("short".to_string()),
+                        "gamma" => DbValue::Real(10.0),
+                        "delta" => DbValue::Real(12.0),
+                    },
+                    db_row! {
+                        "alpha" => DbValue::SmallInteger(30),
+                        "beta" => DbValue::Text("short".to_string()),
+                        "gamma" => DbValue::Real(4.0),
+                        "delta" => DbValue::Real(19.0),
+                    },
+                    db_row! {
+                        "alpha" => DbValue::SmallInteger(39),
+                        "beta" => DbValue::Text("midway".to_string()),
+                        "gamma" => DbValue::Real(19.99),
+                        "delta" => DbValue::Real(75.0),
+                    },
+                ]
+            );
+        }
+    }
 
     #[tokio::test]
     async fn test_text_column_query() {

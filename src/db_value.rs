@@ -1359,10 +1359,10 @@ impl IntoDbRows for &Vec<JsonRow> {
 /// TODO: Add docstring.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DbColumn {
-    name: String,
-    db_type: DbType,
-    not_null: bool,
-    unique: bool,
+    pub name: String,
+    pub db_type: DbType,
+    pub not_null: bool,
+    pub unique: bool,
 }
 
 impl PartialOrd for DbColumn {

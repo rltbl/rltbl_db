@@ -19,6 +19,7 @@ use deadpool_postgres::{
     },
 };
 use rust_decimal::Decimal;
+use std::env;
 
 // Represents a PostgreSQL datatype that is not explicitly handled in extract_value() and query().
 #[derive(Clone, Debug)]
@@ -538,6 +539,18 @@ impl DbQuery for TokioPostgresPool {
             returning,
         )
         .await
+    }
+
+    /// TODO: Add docstring.
+    /// Note that to COPY from a file rather than STDIN, you need to grant the
+    /// pg_read_server_files role to the database user that will be performing the copy.
+    /// I.e., need to run: GRANT pg_read_server_files TO my_username;
+    async fn load_table(&self, table: &str, tsv: &str) -> Result<(), DbError> {
+        let current_dir = env::current_dir().unwrap();
+        let current_dir = current_dir.display();
+        let sql =
+            format!(r#"COPY "{table}" FROM '{current_dir}/{tsv}' WITH DELIMITER E'\t' CSV HEADER"#);
+        self.execute_no_cache_clean(&sql, ()).await
     }
 
     /// Implements [DbQuery::drop_table()] for PostgreSQL.
