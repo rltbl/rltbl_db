@@ -197,7 +197,7 @@ pub trait DbQuery: Sync {
                     if which_are_views(&self.pool(), tables).await?.len() > 0 {
                         update_last_verified(&self.pool(), tables, sql, &params).await?;
                     }
-                    Ok(DbRows { content: db_rows })
+                    Ok(DbRows { rows: db_rows })
                 }
                 None => {
                     let db_rows = self.query_no_cache_clean(sql, params).await?;
@@ -257,7 +257,7 @@ pub trait DbQuery: Sync {
                     if which_are_views(&self.pool(), tables).await?.len() > 0 {
                         update_last_verified(&self.pool(), tables, sql, &params).await?;
                     }
-                    Ok(DbRows { content: db_rows })
+                    Ok(DbRows { rows: db_rows })
                 }
                 None => {
                     let db_rows = self.query_no_cache_clean(sql, params).await?;
