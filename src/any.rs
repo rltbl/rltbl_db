@@ -2450,7 +2450,7 @@ mod tests {
             .query(r#"SELECT * FROM test_json_values"#, ())
             .await
             .unwrap()
-            .content;
+            .rows;
         let db_row = db_rows.pop().unwrap();
         // Because SQLite doesn't actually have a JSON datatye (other than as an alias for TEXT),
         // the DbValue corresponding to "bar" will be DbValue::Text, while it will be DbValue::Json
@@ -2477,7 +2477,7 @@ mod tests {
             .query(r#"SELECT * FROM test_json_values"#, ())
             .await
             .unwrap()
-            .content;
+            .rows;
         let db_row = db_rows.pop().unwrap();
         let bar: JsonValue = serde_json::from_str(&db_row.get("bar").unwrap().to_string()).unwrap();
         assert_eq!(bar, json!({"alpha":1}));

@@ -305,7 +305,7 @@ impl DbQuery for RusqlitePool {
                             .collect()
                     })
                     .collect();
-                Ok(DbRows { content: rows })
+                Ok(DbRows { rows })
             })
             .await
             .map_err(|err| DbError::DatabaseError(err.to_string()))??

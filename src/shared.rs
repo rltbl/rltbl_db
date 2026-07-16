@@ -274,7 +274,7 @@ pub(crate) async fn edit(
                     &mut params_to_be_bound,
                 )
                 .await?
-                .content,
+                .rows,
             );
         }
 
@@ -319,7 +319,7 @@ pub(crate) async fn edit(
                 &mut params_to_be_bound,
             )
             .await?
-            .content,
+            .rows,
         );
     }
 
