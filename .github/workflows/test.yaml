@@ -21,6 +21,7 @@ jobs:
         run: |
           sudo su - postgres -c "createuser runner"
           sudo su - postgres -c "createdb -O runner rltbl_db"
+          sudo su - postgres -c "psql -c 'grant pg_read_server_files to runner'"
       - name: Check out repository code
         uses: actions/checkout@v3
       - name: Run tests
