@@ -588,6 +588,12 @@ pub enum DbType {
     Text(String),
 }
 
+impl Default for DbType {
+    fn default() -> DbType {
+        DbType::sorted().next().expect("No types defined")
+    }
+}
+
 impl PartialEq for DbType {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
@@ -672,7 +678,7 @@ impl DbType {
     }
 
     /// TODO: Add docstring.
-    pub fn min_type(value: &str) -> Result<DbType, DbError> {
+    pub fn min_type(&self, value: &str) -> Result<DbType, DbError> {
         // If the value is an empty string, return a Null type and value.
         if value == "" {
             return Ok(DbType::Null("".to_string()));
@@ -680,16 +686,23 @@ impl DbType {
 
         // Otherwise, try to parse it using the available types in order from most to least specific.
         for db_type in DbType::sorted() {
-            match db_type.parse_str(value) {
-                Ok(_) => return Ok(db_type),
-                _ => (),
+            if db_type >= *self {
+                match db_type.parse_str(value) {
+                    Ok(_) => {
+                        return Ok(db_type);
+                    }
+                    Err(err) => {
+                        if let DbType::Text(_) = db_type {
+                            return Err(DbError::InputError(format!(
+                                "Could not determine most specific type for value: '{value}'. \
+                                 Got error: {err}"
+                            )));
+                        }
+                    }
+                }
             }
         }
-
-        // If we haven't returned from this function by now, then it was unsuccessful.
-        Err(DbError::InputError(format!(
-            "Could not determine most specific type for value: '{value}'"
-        )))
+        Ok(self.clone())
     }
 
     /// Parses a given string representing the value of a database field into a [DbValue] of this

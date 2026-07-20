@@ -2,7 +2,7 @@
 
 use crate::{core::DbError, db_kind::DbType};
 
-use indexmap::{self, IndexMap};
+use indexmap::{self, IndexMap, IndexSet};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as JsonMap, json};
@@ -1393,27 +1393,31 @@ impl PartialOrd for DbColumn {
 
 impl DbColumn {
     /// TODO: Add docstring.
-    pub fn min_column<I>(values: I) -> Result<DbColumn, DbError>
-    where
-        I: Iterator<Item = DbValue>,
-    {
-        DbColumn::min_column_from_strings(values.map(|value| value.to_string()))
-    }
-
-    /// TODO: Add docstring.
-    pub fn min_column_from_strings<I>(values: I) -> Result<DbColumn, DbError>
-    where
-        I: Iterator<Item = String>,
-    {
-        // Begin with a column of the most specific type:
-        let mut column = DbColumn {
+    pub fn new() -> Self {
+        DbColumn {
             name: "".to_string(),
             // This should never fail unless there are actually no DbType variants defined:
             db_type: DbType::sorted().next().expect("No types defined"),
             not_null: true,
             unique: true,
-        };
+        }
+    }
 
+    // TODO: Maybe return the object itself instead of a copy?
+    /// TODO: Add docstring.
+    pub fn min_column<I>(&mut self, values: I) -> Result<DbColumn, DbError>
+    where
+        I: Iterator<Item = DbValue>,
+    {
+        self.min_column_from_strings(values.map(|value| value.to_string()))
+    }
+
+    // TODO: Maybe return the object itself instead of a copy?
+    /// TODO: Add docstring.
+    pub fn min_column_from_strings<I>(&mut self, values: I) -> Result<DbColumn, DbError>
+    where
+        I: Iterator<Item = String>,
+    {
         // Iterate over the given values and determine the most specific type that is compatible
         // with them all:
         let mut values_seen = HashSet::new();
@@ -1421,42 +1425,40 @@ impl DbColumn {
         for value in values {
             // First check whether this is a null value or a duplicate:
             if value == "" {
-                if column.not_null {
-                    column.not_null = false;
+                if self.not_null {
+                    self.not_null = false;
                 }
                 continue;
             } else if values_seen.contains(&value) {
-                if column.unique {
-                    column.unique = false;
+                if self.unique {
+                    self.unique = false;
                 }
                 continue;
             }
 
             // Get the most specific type for this value and adjust the overall column type
             // accordingly.
-            let db_type = DbType::min_type(&value)?;
-            if column.db_type < db_type {
-                match db_type {
-                    // Real types are non-trivially related to integer types.
-                    DbType::Real(_) | DbType::BigReal(_) => {
-                        if types_seen.contains(&DbType::BigInteger("".to_string())) {
-                            column.db_type = DbType::Numeric("".to_string());
-                        } else if types_seen.contains(&DbType::Integer("".to_string())) {
-                            column.db_type = DbType::BigReal("".to_string());
-                        } else {
-                            column.db_type = db_type.clone();
-                        }
+            let db_type = self.db_type.min_type(&value)?;
+            match db_type {
+                // Real types are non-trivially related to integer types.
+                DbType::Real(_) | DbType::BigReal(_) => {
+                    if types_seen.contains(&DbType::BigInteger("".to_string())) {
+                        self.db_type = DbType::Numeric("".to_string());
+                    } else if types_seen.contains(&DbType::Integer("".to_string())) {
+                        self.db_type = DbType::BigReal("".to_string());
+                    } else {
+                        self.db_type = db_type.clone();
                     }
-                    _ => column.db_type = db_type.clone(),
-                };
-            }
+                }
+                _ => self.db_type = db_type.clone(),
+            };
 
             // Add to the sets of values and types seen:
             values_seen.insert(value);
             types_seen.insert(db_type);
         }
 
-        Ok(column)
+        Ok(self.clone())
     }
 
     /// TODO: Add docstring.
@@ -1465,7 +1467,7 @@ impl DbColumn {
         I: Iterator<Item = Vec<DbValue>>,
     {
         column_values
-            .map(|values| DbColumn::min_column(values.into_iter()))
+            .map(|values| DbColumn::new().min_column(values.into_iter()))
             .collect::<Result<Vec<DbColumn>, _>>()
     }
 
@@ -1496,7 +1498,7 @@ impl DbColumn {
         let db_columns = column_data
             .into_iter()
             .map(|(index, data)| {
-                let mut column = DbColumn::min_column(data.into_iter()).unwrap();
+                let mut column = DbColumn::new().min_column(data.into_iter()).unwrap();
                 if not_unique.contains(&index) {
                     column.unique = false;
                 }
@@ -1508,16 +1510,16 @@ impl DbColumn {
     }
 
     /// TODO: Add docstring
-    pub fn min_row_from_rows<I>(db_rows: I) -> Result<IndexMap<String, DbColumn>, DbError>
+    pub fn min_row_from_db_rows<I>(db_rows: I) -> Result<IndexMap<String, DbColumn>, DbError>
     where
         I: Iterator<Item = DbRow>,
     {
-        let mut keys = vec![];
+        let mut keys = IndexSet::new();
         let columns = DbColumn::min_columns_from_anonymous_rows(db_rows.map(|row| {
             row.into_iter()
                 .map(|(key, val)| {
                     // Use the values, saving the keys for later:
-                    keys.push(key.to_string());
+                    keys.insert(key.to_string());
                     val
                 })
                 .collect::<Vec<_>>()
@@ -1543,82 +1545,9 @@ mod tests {
     use std::collections::HashMap;
 
     #[test]
-    fn test_coerce() {
-        let input_row_1 = db_row! {
-            "foo" => DbValue::SmallInteger(1),
-            "bar" => DbValue::SmallInteger(2),
-            "jar" => DbValue::Text("3".to_string()),
-            "har" => DbValue::Text("1".to_string())
-        };
-        let input_row_2 = db_row! {
-            "foo" => DbValue::Integer(7),
-            "bar" => DbValue::Text("2".to_string()),
-            "jar" => DbValue::SmallInteger(9),
-            "har" => DbValue::Text("0".to_string())
-        };
-        let column_map = indexmap! {
-            "foo".to_string() => DbColumn {
-                name: "foo".to_string(),
-                db_type: DbType::BigReal("".to_string()),
-                not_null: true,
-                unique: true,
-            },
-            "bar".to_string() => DbColumn {
-                name: "bar".to_string(),
-                db_type: DbType::I16("".to_string()),
-                not_null: true,
-                unique: true,
-            },
-            "jar".to_string() => DbColumn {
-                name: "jar".to_string(),
-                db_type: DbType::BigInteger("".to_string()),
-                not_null: true,
-                unique: true,
-            },
-            "har".to_string() => DbColumn {
-                name: "har".to_string(),
-                db_type: DbType::Boolean("".to_string()),
-                not_null: true,
-                unique: true,
-            }
-        };
-        let expected_row_1 = db_row! {
-            "foo" => DbValue::BigReal(1.0),
-            "bar" => DbValue::SmallInteger(2),
-            "jar" => DbValue::BigInteger(3),
-            "har" => DbValue::Boolean(true),
-        };
-        let expected_row_2 = db_row! {
-            "foo" => DbValue::BigReal(7.0),
-            "bar" => DbValue::SmallInteger(2),
-            "jar" => DbValue::BigInteger(9),
-            "har" => DbValue::Boolean(false),
-        };
-
-        let coerced_row = input_row_1.coerce(&column_map).unwrap();
-        assert_eq!(coerced_row, expected_row_1);
-
-        let mut coerced_rows = DbRows::coerce([input_row_1, input_row_2].into_iter(), &column_map);
-        assert_eq!(coerced_rows.next().unwrap().unwrap(), expected_row_1);
-        assert_eq!(coerced_rows.next().unwrap().unwrap(), expected_row_2);
-    }
-
-    #[test]
-    fn test_from_str() {
-        let foo = DbType::min_type("True").unwrap();
-        assert_eq!(foo, DbType::Boolean("".to_string()));
-
-        let foo = DbType::min_type("2").unwrap();
-        assert_eq!(foo, DbType::I16("".to_string()));
-
-        let foo = DbType::min_type("2.0").unwrap();
-        assert_eq!(foo, DbType::Real("".to_string()));
-    }
-
-    #[test]
     fn test_min_typing() {
         let db_values = vec![DbValue::Integer(i32::MAX), DbValue::Real(1.23)];
-        let column = DbColumn::min_column(db_values.into_iter()).unwrap();
+        let column = DbColumn::new().min_column(db_values.into_iter()).unwrap();
         assert_eq!(
             column,
             DbColumn {
@@ -1632,30 +1561,40 @@ mod tests {
         let column_values = vec![
             // Column A:
             vec![
+                DbValue::from(true),
                 DbValue::from(1),
                 DbValue::from(i64::MAX),
                 DbValue::from(2.1),
-                DbValue::from(true),
             ],
-            // Column B: should give the same result as column B. TODO: fix it.
+            // Column B: should give the same result as column A. TODO: fix it.
+            //vec![
+            //    DbValue::from(1),
+            //    DbValue::from(i64::MAX),
+            //    DbValue::from(2.1),
+            //    DbValue::from(true),
+            //],
+            // Column C: should give the same result as column A. TODO: fix it.
             //vec![
             //    DbValue::from(1),
             //    DbValue::from(2.1),
             //    DbValue::from(true),
             //    DbValue::from(i64::MAX),
             //],
+            // Column C:
             vec![
                 DbValue::from("alphanum"),
                 DbValue::from(f64::MAX),
                 DbValue::from(true),
                 DbValue::from(25),
             ],
+            // Column D:
             vec![
                 DbValue::from(true),
                 DbValue::from(true),
                 DbValue::from(true),
                 DbValue::from(false),
             ],
+            // Column D:
             vec![
                 DbValue::from(1),
                 DbValue::from(2.1),
@@ -1707,7 +1646,7 @@ mod tests {
             db_row! { "foo" => i64::MAX, "bar" => 2.0, "jar" => "alphanum", "har" => DbValue::Null },
         ];
         //let db_rows = db_rows.iter().map(|row| row).collect::<Vec<_>>();
-        let column_map = DbColumn::min_row_from_rows(db_rows.into_iter()).unwrap();
+        let column_map = DbColumn::min_row_from_db_rows(db_rows.into_iter()).unwrap();
         assert_eq!(
             column_map,
             indexmap! {
@@ -1797,6 +1736,79 @@ mod tests {
                 }
             ]
         );
+    }
+
+    #[test]
+    fn test_coerce() {
+        let input_row_1 = db_row! {
+            "foo" => DbValue::SmallInteger(1),
+            "bar" => DbValue::SmallInteger(2),
+            "jar" => DbValue::Text("3".to_string()),
+            "har" => DbValue::Text("1".to_string())
+        };
+        let input_row_2 = db_row! {
+            "foo" => DbValue::Integer(7),
+            "bar" => DbValue::Text("2".to_string()),
+            "jar" => DbValue::SmallInteger(9),
+            "har" => DbValue::Text("0".to_string())
+        };
+        let column_map = indexmap! {
+            "foo".to_string() => DbColumn {
+                name: "foo".to_string(),
+                db_type: DbType::BigReal("".to_string()),
+                not_null: true,
+                unique: true,
+            },
+            "bar".to_string() => DbColumn {
+                name: "bar".to_string(),
+                db_type: DbType::I16("".to_string()),
+                not_null: true,
+                unique: true,
+            },
+            "jar".to_string() => DbColumn {
+                name: "jar".to_string(),
+                db_type: DbType::BigInteger("".to_string()),
+                not_null: true,
+                unique: true,
+            },
+            "har".to_string() => DbColumn {
+                name: "har".to_string(),
+                db_type: DbType::Boolean("".to_string()),
+                not_null: true,
+                unique: true,
+            }
+        };
+        let expected_row_1 = db_row! {
+            "foo" => DbValue::BigReal(1.0),
+            "bar" => DbValue::SmallInteger(2),
+            "jar" => DbValue::BigInteger(3),
+            "har" => DbValue::Boolean(true),
+        };
+        let expected_row_2 = db_row! {
+            "foo" => DbValue::BigReal(7.0),
+            "bar" => DbValue::SmallInteger(2),
+            "jar" => DbValue::BigInteger(9),
+            "har" => DbValue::Boolean(false),
+        };
+
+        let coerced_row = input_row_1.coerce(&column_map).unwrap();
+        assert_eq!(coerced_row, expected_row_1);
+
+        let mut coerced_rows = DbRows::coerce([input_row_1, input_row_2].into_iter(), &column_map);
+        assert_eq!(coerced_rows.next().unwrap().unwrap(), expected_row_1);
+        assert_eq!(coerced_rows.next().unwrap().unwrap(), expected_row_2);
+    }
+
+    #[test]
+    fn test_from_str() {
+        let foo = DbType::default().min_type("True").unwrap();
+        assert_eq!(foo, DbType::Boolean("".to_string()));
+
+        let foo = DbType::default().min_type("2").unwrap();
+        assert_eq!(foo, DbType::I16("".to_string()));
+
+        let foo = DbType::default().min_type("2.0").unwrap();
+        assert_eq!(foo, DbType::Real("".to_string()));
     }
 
     #[test]

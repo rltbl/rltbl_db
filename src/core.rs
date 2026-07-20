@@ -10,7 +10,7 @@ use crate::{
         update_last_verified,
     },
     db_kind::DbKind,
-    db_value::{DbColumn, DbParams, DbRow, DbRows, DbValue, IntoDbParams, IntoDbRows},
+    db_value::{DbColumn, DbParams, DbRow, DbRows, IntoDbParams, IntoDbRows},
     parse::get_accessed_tables,
 };
 
@@ -19,7 +19,7 @@ use csv::ReaderBuilder;
 use indexmap::IndexMap;
 use serde::{de, ser};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fmt::Display,
     fs::File,
     future::Future,
@@ -571,23 +571,56 @@ fn read_columns_from_tsv(tsv: &str) -> Result<IndexMap<String, DbColumn>, DbErro
         }
         headers
     };
-    let rows = records.map(|record| {
-        record
-            .unwrap()
-            .into_iter()
-            .map(|value| DbValue::from(value))
-            .collect::<Vec<_>>()
-    });
-    let columns = DbColumn::min_columns_from_anonymous_rows(rows).unwrap();
 
-    // Zip everything up into an IndexMap and return it:
-    let columns = zip(headers.clone(), columns)
-        .map(|(key, mut column)| {
-            // Don't forget to copy the column name:
-            column.name = key.to_string();
-            (key, column)
-        })
-        .collect::<IndexMap<_, _>>();
+    // TODO: Cleanup, remove unwraps and clones, etc.
+    let columns = {
+        let mut columns = vec![];
+        let mut values_seen = HashMap::<String, HashSet<String>>::new();
+        for row in records {
+            let row = row
+                .map_err(|err| DbError::InputError(format!("Error reading from '{tsv}': {err}")))?;
+            if columns.is_empty() {
+                columns = row
+                    .iter()
+                    .map(|value| {
+                        DbColumn::new()
+                            .min_column_from_strings(vec![value.to_string()].into_iter())
+                            .unwrap()
+                    })
+                    .collect::<Vec<_>>();
+            }
+            // TODO: Replace asserts with Err().
+            assert_eq!(row.len(), headers.len());
+            assert_eq!(row.len(), columns.len());
+            for i in 0..row.len() {
+                if &row[i] == "" {
+                    if columns[i].not_null {
+                        columns[i].not_null = false;
+                    }
+                } else {
+                    columns[i] = columns[i]
+                        .min_column_from_strings(vec![row[i].to_string()].into_iter())
+                        .unwrap();
+                    if let None = values_seen.get_mut(&headers[i]) {
+                        values_seen.insert(headers[i].to_string(), HashSet::new());
+                    }
+                    let this_column_seen = values_seen.get_mut(&headers[i]).unwrap();
+                    if !this_column_seen.insert(row[i].to_string()) && columns[i].unique {
+                        columns[i].unique = false;
+                    }
+                }
+            }
+        }
+
+        // Zip everything up into an IndexMap:
+        zip(headers, columns)
+            .map(|(key, mut column)| {
+                // Don't forget to copy the column name:
+                column.name = key.to_string();
+                (key, column)
+            })
+            .collect::<IndexMap<_, _>>()
+    };
 
     Ok(columns)
 }
