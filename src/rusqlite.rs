@@ -446,9 +446,9 @@ impl DbQuery for RusqlitePool {
     async fn load_table(&self, table: &str, tsv: &str) -> Result<(), DbError> {
         let current_dir = env::current_dir().unwrap();
         let current_dir = current_dir.display();
-        // TODO: Try to make this a TSV instead of a CSV. I've made a copy of the TSV file
-        // in tests/input/ and switched tabs with commas, but it would be ideal to make this
-        // work on the TSV file like postgres.
+        // TODO: It does not appear that there is any way to load from a TSV file using this
+        // extension. Currently in the makefile there is a call to `csvtool` to do the conversion
+        // before running a csv load test. Think about possible better solutions?
         let csv = format!("{}.csv", tsv.strip_suffix(".tsv").unwrap());
 
         let sql = format!(

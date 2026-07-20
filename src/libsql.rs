@@ -14,7 +14,7 @@ use deadpool_libsql::{
     libsql::{Builder, Value},
 };
 use rust_decimal::prelude::ToPrimitive;
-use std::str::from_utf8;
+use std::{env, str::from_utf8};
 
 impl TryFrom<Value> for DbValue {
     type Error = DbError;
@@ -174,6 +174,10 @@ impl DbQuery for LibSQLPool {
             .await
             .map_err(|err| DbError::ConnectError(format!("Error getting from pool: {err}")))?;
 
+        let _guard = deadpool_libsql::libsql::LoadExtensionGuard::new(&conn).unwrap();
+        conn.load_extension("/usr/lib/x86_64-linux-gnu/sqlite/csv.so", None)
+            .unwrap();
+
         let params: Vec<Value> = params.into_db_params().try_into()?;
         let mut rows = conn
             .query(sql, params)
@@ -328,9 +332,22 @@ impl DbQuery for LibSQLPool {
         .await
     }
 
-    async fn load_table(&self, _table: &str, _tsv: &str) -> Result<(), DbError> {
-        // TODO: Load the rows to the table.
+    async fn load_table(&self, table: &str, tsv: &str) -> Result<(), DbError> {
+        let current_dir = env::current_dir().unwrap();
+        let current_dir = current_dir.display();
+        // TODO: It does not appear that there is any way to load from a TSV file using this
+        // extension. Currently in the makefile there is a call to `csvtool` to do the conversion
+        // before running a csv load test. Think about possible better solutions?
+        let csv = format!("{}.csv", tsv.strip_suffix(".tsv").unwrap());
 
+        let sql = format!(
+            r#"CREATE VIRTUAL TABLE temp.t1
+               USING CSV(filename='{current_dir}/{csv}', header=true)"#
+        );
+        self.execute(&sql, ()).await?;
+
+        let sql = format!("INSERT INTO {table} SELECT * FROM temp.t1");
+        self.execute(&sql, ()).await?;
         Ok(())
     }
 

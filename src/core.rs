@@ -522,7 +522,12 @@ pub trait DbQuery: Sync {
     /// TODO: Add docstring.
     async fn import_table(&self, tsv: &str) -> Result<(), DbError> {
         // The table name is just the name of the TSV file:
-        let table = Path::new(tsv).file_stem().unwrap().to_str().unwrap();
+        let table = Path::new(tsv)
+            .file_stem()
+            .and_then(|fs| fs.to_str())
+            .ok_or(DbError::InputError(format!(
+                "Error getting table name from TSV path '{tsv}'"
+            )))?;
         let columns = read_columns_from_tsv(tsv)?;
         self.recreate_table(&table, &columns).await?;
         self.load_table(&table, tsv).await?;
@@ -559,8 +564,9 @@ fn read_columns_from_tsv(tsv: &str) -> Result<IndexMap<String, DbColumn>, DbErro
         };
         for header in &headers {
             if header.trim().is_empty() {
-                // TODO: Remove panics and unwraps.
-                panic!("One or more of the header fields is empty in TSV file '{tsv}'");
+                return Err(DbError::InputError(format!(
+                    "One or more of the header fields is empty in TSV file '{tsv}'"
+                )));
             }
         }
         headers
@@ -572,7 +578,7 @@ fn read_columns_from_tsv(tsv: &str) -> Result<IndexMap<String, DbColumn>, DbErro
             .map(|value| DbValue::from(value))
             .collect::<Vec<_>>()
     });
-    let columns = DbColumn::min_columns_from_anonymous_db_rows(rows).unwrap();
+    let columns = DbColumn::min_columns_from_anonymous_rows(rows).unwrap();
 
     // Zip everything up into an IndexMap and return it:
     let columns = zip(headers.clone(), columns)

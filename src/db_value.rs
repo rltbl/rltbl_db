@@ -1470,7 +1470,7 @@ impl DbColumn {
     }
 
     /// TODO: Add docstring.
-    pub fn min_columns_from_anonymous_db_rows<I>(rows: I) -> Result<Vec<DbColumn>, DbError>
+    pub fn min_columns_from_anonymous_rows<I>(rows: I) -> Result<Vec<DbColumn>, DbError>
     where
         I: Iterator<Item = Vec<DbValue>>,
     {
@@ -1508,12 +1508,12 @@ impl DbColumn {
     }
 
     /// TODO: Add docstring
-    pub fn min_row_from_db_rows<I>(db_rows: I) -> Result<IndexMap<String, DbColumn>, DbError>
+    pub fn min_row_from_rows<I>(db_rows: I) -> Result<IndexMap<String, DbColumn>, DbError>
     where
         I: Iterator<Item = DbRow>,
     {
         let mut keys = vec![];
-        let columns = DbColumn::min_columns_from_anonymous_db_rows(db_rows.map(|row| {
+        let columns = DbColumn::min_columns_from_anonymous_rows(db_rows.map(|row| {
             row.into_iter()
                 .map(|(key, val)| {
                     // Use the values, saving the keys for later:
@@ -1707,7 +1707,7 @@ mod tests {
             db_row! { "foo" => i64::MAX, "bar" => 2.0, "jar" => "alphanum", "har" => DbValue::Null },
         ];
         //let db_rows = db_rows.iter().map(|row| row).collect::<Vec<_>>();
-        let column_map = DbColumn::min_row_from_db_rows(db_rows.into_iter()).unwrap();
+        let column_map = DbColumn::min_row_from_rows(db_rows.into_iter()).unwrap();
         assert_eq!(
             column_map,
             indexmap! {
@@ -1738,7 +1738,7 @@ mod tests {
             }
         );
 
-        let anonymous_db_rows = vec![
+        let anonymous_rows = vec![
             // Row 0
             vec![
                 DbValue::from(1),
@@ -1767,7 +1767,7 @@ mod tests {
             ],
         ];
         let columns =
-            DbColumn::min_columns_from_anonymous_db_rows(anonymous_db_rows.into_iter()).unwrap();
+            DbColumn::min_columns_from_anonymous_rows(anonymous_rows.into_iter()).unwrap();
         assert_eq!(
             columns,
             vec![
