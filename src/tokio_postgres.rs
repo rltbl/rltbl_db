@@ -559,10 +559,7 @@ impl DbQuery for TokioPostgresPool {
             let row = row
                 .map_err(|err| DbError::InputError(format!("Error reading from '{tsv}': {err}")))?;
             let mut string_row = vec![];
-            row.iter().for_each(|value| match value {
-                "" => string_row.push(r"\N"),
-                _ => string_row.push(value),
-            });
+            row.iter().for_each(|value| string_row.push(value));
             let string_row = format!("{}\n", string_row.join("\t"));
             let bytes_row = Bytes::copy_from_slice(string_row.as_bytes());
             bytes_rows.push(bytes_row);
@@ -575,7 +572,7 @@ impl DbQuery for TokioPostgresPool {
             })?;
         let mut sink = pin!(
             client
-                .copy_in(&format!(r#"COPY "{table}" FROM STDIN"#))
+                .copy_in(&format!(r#"COPY "{table}" FROM STDIN WITH NULL ''"#))
                 .await
                 .unwrap()
         );
