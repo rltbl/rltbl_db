@@ -9,17 +9,19 @@ use crate::{
     parse::validate_table_name,
     shared::{EditType, edit},
 };
-use bytes::{BufMut, BytesMut};
+use bytes::{BufMut, Bytes, BytesMut};
+use csv::ReaderBuilder;
 use deadpool_postgres::{
     Config, Pool, Runtime,
     tokio_postgres::{
-        NoTls,
+        Error, NoTls,
         row::Row,
         types::{FromSql, IsNull, ToSql, Type, to_sql_checked},
     },
 };
+use futures_util::{SinkExt, stream};
 use rust_decimal::Decimal;
-use std::env;
+use std::{fs::File, pin::pin};
 
 // Represents a PostgreSQL datatype that is not explicitly handled in extract_value() and query().
 #[derive(Clone, Debug)]
@@ -546,11 +548,41 @@ impl DbQuery for TokioPostgresPool {
     /// pg_read_server_files role to the database user that will be performing the copy.
     /// I.e., need to run: GRANT pg_read_server_files TO my_username;
     async fn load_table(&self, table: &str, tsv: &str) -> Result<(), DbError> {
-        let current_dir = env::current_dir().unwrap();
-        let current_dir = current_dir.display();
-        let sql =
-            format!(r#"COPY "{table}" FROM '{current_dir}/{tsv}' WITH DELIMITER E'\t' CSV HEADER"#);
-        self.execute_no_cache_clean(&sql, ()).await
+        // Read the rows from the given TSV file:
+        let mut rdr = ReaderBuilder::new()
+            .has_headers(true)
+            .delimiter(b'\t')
+            .from_reader(File::open(tsv).expect(&format!("Unable to open '{tsv}'")));
+        let records = rdr.records();
+        let mut bytes_rows = vec![];
+        for row in records {
+            let row = row
+                .map_err(|err| DbError::InputError(format!("Error reading from '{tsv}': {err}")))?;
+            let mut string_row = vec![];
+            row.iter().for_each(|value| match value {
+                "" => string_row.push(r"\N"),
+                _ => string_row.push(value),
+            });
+            let string_row = format!("{}\n", string_row.join("\t"));
+            let bytes_row = Bytes::copy_from_slice(string_row.as_bytes());
+            bytes_rows.push(bytes_row);
+        }
+        let mut stream = stream::iter(bytes_rows.into_iter().map(Ok::<_, Error>));
+
+        let client =
+            self.pool.get().await.map_err(|err| {
+                DbError::ConnectError(format!("Unable to get from pool: {err:?}"))
+            })?;
+        let mut sink = pin!(
+            client
+                .copy_in(&format!(r#"COPY "{table}" FROM STDIN"#))
+                .await
+                .unwrap()
+        );
+        sink.send_all(&mut stream).await.unwrap();
+        let _num_written = sink.finish().await.unwrap();
+
+        Ok(())
     }
 
     /// Implements [DbQuery::drop_table()] for PostgreSQL.
