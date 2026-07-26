@@ -546,6 +546,10 @@ impl DbQuery for TokioPostgresPool {
 
     /// TODO: Add docstring.
     async fn load_table(&self, table: &str, tsv: &str) -> Result<(), DbError> {
+        // TODO: Remove panics.
+
+        // TODO: We don't need to use the csv module. Just read the bytes from the file directly.
+
         // Read the rows from the given TSV file into an asynchronous Stream
         // (see https://docs.rs/futures-util/latest/futures_util/stream/trait.Stream.html).
         let mut rdr = ReaderBuilder::new()

@@ -503,25 +503,33 @@ pub trait DbQuery: Sync {
         Ok(which_are_views(&self.pool(), &[view]).await?.len() == 1)
     }
 
-    /// TODO: Add docstring.
+    /// Create a given table with the given columns in the database. If a table with the
+    /// same name already exists, drop that first.
     async fn recreate_table(
         &self,
         table: &str,
         columns: &IndexMap<String, DbColumn>,
     ) -> Result<(), DbError> {
         self.drop_table(&table).await?;
-        let sql = self.kind().create_table_sql(table, columns);
+        let sql = self.kind().create_table_sql(table, columns)?;
         self.execute_no_cache_clean(&sql, ()).await
     }
 
-    /// TODO: Add docstring.
+    // TODO: Remove.
+    //async fn load_table(&self, table: &str, tsv: &str) -> Result<(), DbError> {
+    //    Ok(())
+    //}
+
+    /// Load the given table using the data from the given TSV file.
     fn load_table(
         &self,
         table: &str,
         tsv: &str,
     ) -> impl Future<Output = Result<(), DbError>> + Send;
 
-    /// TODO: Add docstring.
+    /// Create a table, using the stem of the given TSV file as the table name, and the headers
+    /// of each data column in the file as the names of the table's columns, and then load the
+    /// data into it.
     async fn import_table(&self, tsv: &str) -> Result<(), DbError> {
         // The table name is just the name of the TSV file:
         let table = Path::new(tsv)
@@ -546,21 +554,28 @@ pub trait DbQuery: Sync {
     fn drop_view(&self, view: &str) -> impl Future<Output = Result<(), DbError>> + Send;
 }
 
-/// TODO: Add docstring.
+/// Determine the database columns needed for each column of data in the given TSV file.
 fn read_columns_from_tsv(tsv: &str) -> Result<IndexMap<String, DbColumn>, DbError> {
     // Read the rows from the given TSV file:
     let mut rdr = ReaderBuilder::new()
         .has_headers(false)
         .delimiter(b'\t')
-        .from_reader(File::open(tsv).expect(&format!("Unable to open '{tsv}'")));
+        .from_reader(
+            File::open(tsv)
+                .map_err(|err| DbError::InputError(format!("Unable to open '{tsv}': {err}")))?,
+        );
     let mut records = rdr.records();
 
     // Extract the headers from the first line of the file:
     let headers = {
         let headers = match records.next() {
-            None => panic!("'{tsv}' is empty"),
+            None => return Err(DbError::InputError(format!("'{tsv}' is empty"))),
             Some(record) => match record {
-                Err(err) => panic!("Error reading from '{tsv}': {err}"),
+                Err(err) => {
+                    return Err(DbError::InputError(format!(
+                        "Error reading from '{tsv}': {err}"
+                    )));
+                }
                 Ok(headers) => headers.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
             },
         };
@@ -574,7 +589,6 @@ fn read_columns_from_tsv(tsv: &str) -> Result<IndexMap<String, DbColumn>, DbErro
         headers
     };
 
-    // TODO: Cleanup, remove unwraps and clones, etc.
     let columns = {
         let mut columns = vec![];
         let mut values_seen = HashMap::<String, HashSet<String>>::new();
@@ -582,27 +596,36 @@ fn read_columns_from_tsv(tsv: &str) -> Result<IndexMap<String, DbColumn>, DbErro
             let row = row
                 .map_err(|err| DbError::InputError(format!("Error reading from '{tsv}': {err}")))?;
             if columns.is_empty() {
-                columns = row
-                    .iter()
-                    .map(|value| {
+                for value in &row {
+                    columns.push(
                         DbColumn::new()
-                            .min_column_from_strings(vec![value.to_string()].into_iter())
-                            .unwrap()
-                    })
-                    .collect::<Vec<_>>();
+                            .min_column_from_strings(vec![value.to_string()].into_iter())?,
+                    );
+                }
             }
-            // TODO: Replace asserts with Err().
-            assert_eq!(row.len(), headers.len());
-            assert_eq!(row.len(), columns.len());
+            if row.len() != headers.len() {
+                return Err(DbError::InputError(format!(
+                    "Number of row values ({}) != number of headers ({})",
+                    row.len(),
+                    headers.len()
+                )));
+            }
+            if row.len() != columns.len() {
+                return Err(DbError::InputError(format!(
+                    "Number of row values ({}) != number of columns ({})",
+                    row.len(),
+                    columns.len()
+                )));
+            }
+
             for i in 0..row.len() {
                 if &row[i] == "" {
                     if columns[i].not_null {
                         columns[i].not_null = false;
                     }
                 } else {
-                    columns[i] = columns[i]
-                        .min_column_from_strings(vec![row[i].to_string()].into_iter())
-                        .unwrap();
+                    columns[i] =
+                        columns[i].min_column_from_strings(vec![row[i].to_string()].into_iter())?;
                     if let None = values_seen.get_mut(&headers[i]) {
                         values_seen.insert(headers[i].to_string(), HashSet::new());
                     }

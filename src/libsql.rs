@@ -7,17 +7,15 @@ use crate::{
     db_kind::{DbKind, MAX_PARAMS_SQLITE, SQLiteKind},
     db_value::{DbParams, DbRow, DbRows, DbValue, IntoDbParams, IntoDbRows, JsonValue},
     parse::validate_table_name,
-    shared::{EditType, edit},
+    shared::{EditType, edit, load_table_using_insert},
 };
 
-use csv::ReaderBuilder;
 use deadpool_libsql::{
     Manager, Pool,
     libsql::{Builder, Value},
 };
-use indexmap::IndexMap;
 use rust_decimal::prelude::ToPrimitive;
-use std::{fs::File, iter::zip, str::from_utf8};
+use std::str::from_utf8;
 
 impl TryFrom<Value> for DbValue {
     type Error = DbError;
@@ -332,57 +330,7 @@ impl DbQuery for LibSQLPool {
     }
 
     async fn load_table(&self, table: &str, tsv: &str) -> Result<(), DbError> {
-        // TODO: Consider moving the body of this function to shared.rs, or to the default
-        // implementation, but the latter doesn't seem to work because of async_trait.
-
-        // TODO: Change the signature of insert() and similar methods so that they take iterators
-        // as arguments instead of impl IntoDbRows. Then we will not have to collect the contents
-        // of the file into a vector but can keep it in the form of an iterator as we do in
-        // TokioPostgreSQLPool::load_table().
-
-        // Read the rows from the given TSV file into a vector.
-        let mut rdr = ReaderBuilder::new()
-            .has_headers(false)
-            .delimiter(b'\t')
-            .from_reader(File::open(tsv).expect(&format!("Unable to open '{tsv}'")));
-
-        let mut records = rdr.records();
-
-        // Extract the columns from the first line of the file:
-        let headers = {
-            let headers = match records.next() {
-                None => panic!("'{tsv}' is empty"),
-                Some(record) => match record {
-                    Err(err) => panic!("Error reading from '{tsv}': {err}"),
-                    Ok(headers) => headers.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-                },
-            };
-            for header in &headers {
-                if header.trim().is_empty() {
-                    return Err(DbError::InputError(format!(
-                        "One or more of the header fields is empty in TSV file '{tsv}'"
-                    )));
-                }
-            }
-            headers
-        };
-
-        let rows = rdr
-            .records()
-            .map(|row| {
-                let row_values = row
-                    .unwrap()
-                    .into_iter()
-                    .map(|value| DbValue::from(value))
-                    .collect::<Vec<_>>();
-                let row_content = zip(headers.clone(), row_values).collect::<IndexMap<_, _>>();
-                DbRow { map: row_content }
-            })
-            .collect::<Vec<_>>();
-
-        let columns = headers.iter().map(|s| s.as_str()).collect::<Vec<_>>();
-        self.insert(table, &columns, rows).await?;
-        Ok(())
+        load_table_using_insert(self, table, tsv).await
     }
 
     /// Implements [DbQuery::drop_table()] for SQLite.

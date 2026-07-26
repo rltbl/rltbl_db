@@ -8,7 +8,7 @@ use crate::{
     parse::validate_table_name,
 };
 use indexmap::IndexMap;
-use rust_decimal::Decimal;
+use rust_decimal::{Decimal, dec};
 use std::{cmp::Ordering, fmt::Display};
 
 /// The [maximum number of parameters](https://www.sqlite.org/limits.html#max_variable_number)
@@ -47,8 +47,12 @@ pub trait DbKind: std::fmt::Debug + Display + Send {
     /// key columns of the given table.
     fn primary_keys_sql(&self, table: &str) -> (String, [DbValue; 1]);
 
-    /// TODO: Add docstring.
-    fn create_table_sql(&self, table: &str, columns: &IndexMap<String, DbColumn>) -> String;
+    /// Generate the SQL needed to create a table with the given name and given column definitions.
+    fn create_table_sql(
+        &self,
+        table: &str,
+        columns: &IndexMap<String, DbColumn>,
+    ) -> Result<String, DbError>;
 
     /// Generate the SQL and parameters needed to drop the given table.
     fn drop_table_sql(&self, table: &str) -> String;
@@ -224,11 +228,19 @@ impl DbKind for SQLiteKind {
         )
     }
 
-    fn create_table_sql(&self, table: &str, columns: &IndexMap<String, DbColumn>) -> String {
+    fn create_table_sql(
+        &self,
+        table: &str,
+        columns: &IndexMap<String, DbColumn>,
+    ) -> Result<String, DbError> {
         let column_clauses = columns.iter().map(|(column_name, column)| {
             let mut clause = format!(r#""{column_name}""#);
             match column.db_type {
-                DbType::Null(_) => panic!("Can't use a NULL column to create a table."),
+                DbType::Null(_) => {
+                    return Err(DbError::InputError(format!(
+                        "Can't use a NULL column to create table '{table}'."
+                    )));
+                }
                 DbType::Boolean(_) => clause.push_str(" BOOL"),
                 DbType::I16(_)
                 | DbType::SmallInteger(_)
@@ -244,13 +256,16 @@ impl DbKind for SQLiteKind {
             if column.not_null {
                 clause.push_str(" NOT NULL");
             }
-            clause
+            Ok(clause)
         });
         let sql = format!(
             r#"CREATE TABLE "{table}" ({})"#,
-            column_clauses.collect::<Vec<_>>().join(", ")
+            column_clauses
+                .into_iter()
+                .collect::<Result<Vec<String>, DbError>>()?
+                .join(", ")
         );
-        sql
+        Ok(sql)
     }
 
     fn drop_table_sql(&self, table: &str) -> String {
@@ -421,11 +436,19 @@ impl DbKind for PostgreSQLKind {
         )
     }
 
-    fn create_table_sql(&self, table: &str, columns: &IndexMap<String, DbColumn>) -> String {
+    fn create_table_sql(
+        &self,
+        table: &str,
+        columns: &IndexMap<String, DbColumn>,
+    ) -> Result<String, DbError> {
         let column_clauses = columns.iter().map(|(column_name, column)| {
             let mut clause = format!(r#""{column_name}""#);
             match column.db_type {
-                DbType::Null(_) => panic!("Can't use a NULL column to create a table."),
+                DbType::Null(_) => {
+                    return Err(DbError::InputError(format!(
+                        "Can't use a NULL column to create table '{table}'."
+                    )));
+                }
                 DbType::Boolean(_) => clause.push_str(" BOOLEAN"),
                 DbType::I16(_) | DbType::SmallInteger(_) => clause.push_str(" SMALLINT"),
                 DbType::Integer(_) | DbType::BigInteger(_) => clause.push_str(" INTEGER"),
@@ -440,13 +463,16 @@ impl DbKind for PostgreSQLKind {
             if column.not_null {
                 clause.push_str(" NOT NULL");
             }
-            clause
+            Ok(clause)
         });
         let sql = format!(
             r#"CREATE TABLE "{table}" ({})"#,
-            column_clauses.collect::<Vec<_>>().join(", ")
+            column_clauses
+                .into_iter()
+                .collect::<Result<Vec<String>, DbError>>()?
+                .join(", ")
         );
-        sql
+        Ok(sql)
     }
 
     fn drop_table_sql(&self, table: &str) -> String {
@@ -597,9 +623,6 @@ impl Default for DbType {
 impl PartialEq for DbType {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            // TODO: Is this the right equality relation for NULLs, or do we care about the specific
-            // null type?
-            (DbType::Null(_), DbType::Null(_)) => true,
             (DbType::Boolean(_), DbType::Boolean(_)) => true,
             (DbType::I16(_), DbType::I16(_)) => true,
             (DbType::SmallInteger(_), DbType::SmallInteger(_)) => true,
@@ -660,7 +683,7 @@ impl PartialOrd for DbType {
 }
 
 impl DbType {
-    /// TODO: Add docstring.
+    /// Return an iterator over sortable database types.
     pub fn sorted() -> impl Iterator<Item = DbType> {
         [
             // Note that DbType::Null is not part of this hierarchy.
@@ -677,7 +700,10 @@ impl DbType {
         .into_iter()
     }
 
-    /// TODO: Add docstring.
+    /// Determine the minimum type (see [DbType::sorted()]) needed to support the given value,
+    /// where the latter is given in the form of a string. The minimum type is the first type
+    /// in the type hierarchy for which we can parse the given value string as an instance of that
+    /// type.
     pub fn min_type(&self, value: &str) -> Result<DbType, DbError> {
         // If the value is an empty string, return a Null type and value.
         if value == "" {
@@ -686,6 +712,39 @@ impl DbType {
 
         // Otherwise, try to parse it using the available types in order from most to least specific.
         for db_type in DbType::sorted() {
+            match self {
+                DbType::Real(_) | DbType::BigReal(_) => match db_type {
+                    DbType::BigInteger(_) => match db_type.parse_str(value) {
+                        Ok(_) => {
+                            return Ok(DbType::Numeric("".to_string()));
+                        }
+                        Err(err) => {
+                            if let DbType::Text(_) = db_type {
+                                return Err(DbError::InputError(format!(
+                                    "Could not determine most specific type for value: '{value}'. \
+                                     Got error: {err}"
+                                )));
+                            }
+                        }
+                    },
+                    DbType::Integer(_) => match db_type.parse_str(value) {
+                        Ok(_) => {
+                            return Ok(DbType::BigReal("".to_string()));
+                        }
+                        Err(err) => {
+                            if let DbType::Text(_) = db_type {
+                                return Err(DbError::InputError(format!(
+                                    "Could not determine most specific type for value: '{value}'. \
+                                     Got error: {err}"
+                                )));
+                            }
+                        }
+                    },
+                    _ => (),
+                },
+                _ => (),
+            };
+
             if db_type >= *self {
                 match db_type.parse_str(value) {
                     Ok(_) => {
@@ -720,42 +779,66 @@ impl DbType {
                     Ok(DbValue::Boolean(value))
                 }
             },
-            DbType::I16(_) | DbType::SmallInteger(_) => {
-                let value = value
-                    .parse::<i16>()
-                    .map_err(|_| DbError::InputError(format!("Not an i16: {value}")))?;
-                Ok(DbValue::SmallInteger(value))
-            }
-            DbType::Integer(_) => {
-                let value = value
-                    .parse::<i32>()
-                    .map_err(|_| DbError::InputError(format!("Not an i32: {value}")))?;
-                Ok(DbValue::Integer(value))
-            }
-            DbType::BigInteger(_) => {
-                let value = value
-                    .parse::<i64>()
-                    .map_err(|_| DbError::InputError(format!("Not an i64: {value}")))?;
-                Ok(DbValue::BigInteger(value))
-            }
-            DbType::Real(_) => {
-                let value = value
-                    .parse::<f32>()
-                    .map_err(|_| DbError::InputError(format!("Not an f32: {value}")))?;
-                Ok(DbValue::Real(value))
-            }
-            DbType::BigReal(_) => {
-                let value = value
-                    .parse::<f64>()
-                    .map_err(|_| DbError::InputError(format!("Not an f64: {value}")))?;
-                Ok(DbValue::BigReal(value))
-            }
-            DbType::Numeric(_) => {
-                let value = value
-                    .parse::<Decimal>()
-                    .map_err(|_| DbError::InputError(format!("Not a Decimal: {value}")))?;
-                Ok(DbValue::Numeric(value))
-            }
+            DbType::I16(_) | DbType::SmallInteger(_) => match value.to_lowercase().as_str() {
+                "0" | "false" | "f" => Ok(DbValue::SmallInteger(0)),
+                "1" | "true" | "t" => Ok(DbValue::SmallInteger(1)),
+                _ => {
+                    let value = value
+                        .parse::<i16>()
+                        .map_err(|_| DbError::InputError(format!("Not an i16: {value}")))?;
+                    Ok(DbValue::SmallInteger(value))
+                }
+            },
+            DbType::Integer(_) => match value.to_lowercase().as_str() {
+                "0" | "false" | "f" => Ok(DbValue::Integer(0)),
+                "1" | "true" | "t" => Ok(DbValue::Integer(1)),
+                _ => {
+                    let value = value
+                        .parse::<i32>()
+                        .map_err(|_| DbError::InputError(format!("Not an i32: {value}")))?;
+                    Ok(DbValue::Integer(value))
+                }
+            },
+            DbType::BigInteger(_) => match value.to_lowercase().as_str() {
+                "0" | "false" | "f" => Ok(DbValue::BigInteger(0)),
+                "1" | "true" | "t" => Ok(DbValue::BigInteger(1)),
+                _ => {
+                    let value = value
+                        .parse::<i64>()
+                        .map_err(|_| DbError::InputError(format!("Not an i64: {value}")))?;
+                    Ok(DbValue::BigInteger(value))
+                }
+            },
+            DbType::Real(_) => match value.to_lowercase().as_str() {
+                "0" | "false" | "f" => Ok(DbValue::Real(0_f32)),
+                "1" | "true" | "t" => Ok(DbValue::Real(1_f32)),
+                _ => {
+                    let value = value
+                        .parse::<f32>()
+                        .map_err(|_| DbError::InputError(format!("Not an f32: {value}")))?;
+                    Ok(DbValue::Real(value))
+                }
+            },
+            DbType::BigReal(_) => match value.to_lowercase().as_str() {
+                "0" | "false" | "f" => Ok(DbValue::BigReal(0_f64)),
+                "1" | "true" | "t" => Ok(DbValue::BigReal(1_f64)),
+                _ => {
+                    let value = value
+                        .parse::<f64>()
+                        .map_err(|_| DbError::InputError(format!("Not an f64: {value}")))?;
+                    Ok(DbValue::BigReal(value))
+                }
+            },
+            DbType::Numeric(_) => match value.to_lowercase().as_str() {
+                "0" | "false" | "f" => Ok(DbValue::Numeric(dec!(0))),
+                "1" | "true" | "t" => Ok(DbValue::Numeric(dec!(1))),
+                _ => {
+                    let value = value
+                        .parse::<Decimal>()
+                        .map_err(|_| DbError::InputError(format!("Not a Decimal: {value}")))?;
+                    Ok(DbValue::Numeric(value))
+                }
+            },
             DbType::Text(_) => Ok(DbValue::Text(value.to_string())),
         }
     }

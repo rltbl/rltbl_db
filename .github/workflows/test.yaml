@@ -13,7 +13,7 @@ jobs:
       - name: Install postgresql server and client
         run: |
           sudo apt-get update
-          sudo apt-get install postgresql postgresql-contrib postgresql-client build-essential csvtool
+          sudo apt-get install postgresql postgresql-contrib postgresql-client build-essential
       - name: Start the database server
         run: |
           sudo systemctl start postgresql.service

@@ -1007,8 +1007,13 @@ impl DbRow {
         // converted DbValue into a new row that will be returned.
         let mut coerced = DbRow::new();
         for (column_name, db_value) in self.iter() {
-            let column_type = &column_map.get(column_name).unwrap().db_type;
-            let converted = column_type.convert(db_value).unwrap();
+            let column_type = &column_map
+                .get(column_name)
+                .ok_or(DbError::InputError(format!(
+                    "Column '{column_name}' not in column map."
+                )))?
+                .db_type;
+            let converted = column_type.convert(db_value)?;
             coerced.insert(column_name.to_string(), converted);
         }
         Ok(coerced)
@@ -1420,6 +1425,10 @@ impl DbColumn {
     {
         // Iterate over the given values and determine the most specific type that is compatible
         // with them all:
+        // TODO: Add a max_value private field to DbColumn, representing the maximum numeric value
+        // that we have seen in the column so far, and use it to process types in a fine-grained
+        // way.
+
         let mut values_seen = HashSet::new();
         let mut types_seen = HashSet::new();
         for value in values {
@@ -1566,35 +1575,35 @@ mod tests {
                 DbValue::from(i64::MAX),
                 DbValue::from(2.1),
             ],
-            // Column B: should give the same result as column A. TODO: fix it.
-            //vec![
-            //    DbValue::from(1),
-            //    DbValue::from(i64::MAX),
-            //    DbValue::from(2.1),
-            //    DbValue::from(true),
-            //],
-            // Column C: should give the same result as column A. TODO: fix it.
-            //vec![
-            //    DbValue::from(1),
-            //    DbValue::from(2.1),
-            //    DbValue::from(true),
-            //    DbValue::from(i64::MAX),
-            //],
+            // Column B:
+            vec![
+                DbValue::from(1),
+                DbValue::from(i64::MAX),
+                DbValue::from(2.1),
+                DbValue::from(true),
+            ],
             // Column C:
+            vec![
+                DbValue::from(1),
+                DbValue::from(2.1),
+                DbValue::from(true),
+                DbValue::from(i64::MAX),
+            ],
+            // Column D:
             vec![
                 DbValue::from("alphanum"),
                 DbValue::from(f64::MAX),
                 DbValue::from(true),
                 DbValue::from(25),
             ],
-            // Column D:
+            // Column E:
             vec![
                 DbValue::from(true),
                 DbValue::from(true),
                 DbValue::from(true),
                 DbValue::from(false),
             ],
-            // Column D:
+            // Column F:
             vec![
                 DbValue::from(1),
                 DbValue::from(2.1),
@@ -1612,24 +1621,42 @@ mod tests {
         assert_eq!(
             columns,
             [
+                // Column A:
                 DbColumn {
                     name: "".to_string(),
                     db_type: DbType::Numeric("".to_string()),
                     not_null: true,
                     unique: true,
                 },
+                // Column B:
+                DbColumn {
+                    name: "".to_string(),
+                    db_type: DbType::Numeric("".to_string()),
+                    not_null: true,
+                    unique: true,
+                },
+                // Column C:
+                DbColumn {
+                    name: "".to_string(),
+                    db_type: DbType::Numeric("".to_string()),
+                    not_null: true,
+                    unique: true,
+                },
+                // Column D:
                 DbColumn {
                     name: "".to_string(),
                     db_type: DbType::Text("".to_string()),
                     not_null: true,
                     unique: true,
                 },
+                // Column E:
                 DbColumn {
                     name: "".to_string(),
                     db_type: DbType::Boolean("".to_string()),
                     not_null: true,
                     unique: false,
                 },
+                // Column F:
                 DbColumn {
                     name: "".to_string(),
                     db_type: DbType::Real("".to_string()),

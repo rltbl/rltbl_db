@@ -1,10 +1,12 @@
 use crate::{
     cache::clear_cache_for_edited_tables,
     core::{DbError, DbQuery},
-    db_value::{DbRows, DbValue, IntoDbRows},
+    db_value::{DbRow, DbRows, DbValue, IntoDbRows},
     parse::validate_table_name,
 };
-use std::fmt::Display;
+use csv::ReaderBuilder;
+use indexmap::IndexMap;
+use std::{fmt::Display, fs::File, iter::zip};
 
 #[derive(PartialEq, Eq)]
 pub(crate) enum EditType {
@@ -327,4 +329,62 @@ pub(crate) async fn edit(
     clear_cache_for_edited_tables(pool, &[&table]).await?;
 
     Ok(rows_to_return.into_db_rows())
+}
+
+/// TODO: Add docstring.
+pub async fn load_table_using_insert(
+    pool: &(impl DbQuery + Sync),
+    table: &str,
+    tsv: &str,
+) -> Result<(), DbError> {
+    // TODO: Remove panics.
+
+    // TODO: Change the signature of insert() and similar methods so that they take iterators
+    // as arguments instead of impl IntoDbRows. Then we will not have to collect the contents
+    // of the file into a vector but can keep it in the form of an iterator as we do in
+    // TokioPostgreSQLPool::load_table().
+
+    // Read the rows from the given TSV file into a vector.
+    let mut rdr = ReaderBuilder::new()
+        .has_headers(false)
+        .delimiter(b'\t')
+        .from_reader(File::open(tsv).expect(&format!("Unable to open '{tsv}'")));
+
+    let mut records = rdr.records();
+
+    // Extract the columns from the first line of the file:
+    let headers = {
+        let headers = match records.next() {
+            None => panic!("'{tsv}' is empty"),
+            Some(record) => match record {
+                Err(err) => panic!("Error reading from '{tsv}': {err}"),
+                Ok(headers) => headers.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+            },
+        };
+        for header in &headers {
+            if header.trim().is_empty() {
+                return Err(DbError::InputError(format!(
+                    "One or more of the header fields is empty in TSV file '{tsv}'"
+                )));
+            }
+        }
+        headers
+    };
+
+    let rows = rdr
+        .records()
+        .map(|row| {
+            let row_values = row
+                .unwrap()
+                .into_iter()
+                .map(|value| DbValue::from(value))
+                .collect::<Vec<_>>();
+            let row_content = zip(headers.clone(), row_values).collect::<IndexMap<_, _>>();
+            DbRow { map: row_content }
+        })
+        .collect::<Vec<_>>();
+
+    let columns = headers.iter().map(|s| s.as_str()).collect::<Vec<_>>();
+    pool.insert(table, &columns, rows).await?;
+    Ok(())
 }

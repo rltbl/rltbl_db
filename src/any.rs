@@ -394,6 +394,25 @@ mod tests {
     };
 
     #[tokio::test]
+    #[ignore]
+    async fn test_import_perf() {
+        #[cfg(feature = "rusqlite")]
+        import_perf(":memory:").await;
+        #[cfg(feature = "tokio-postgres")]
+        import_perf("postgresql:///rltbl_db").await;
+        #[cfg(feature = "libsql")]
+        import_perf(":memory:").await;
+    }
+
+    async fn import_perf(url: &str) {
+        clear_meta_cache().unwrap();
+        let pool = AnyPool::connect(url).await.unwrap();
+        pool.import_table("tests/penguins/src/data/penguin.tsv")
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
     async fn test_import() {
         #[cfg(feature = "rusqlite")]
         import(":memory:").await;
@@ -467,44 +486,44 @@ mod tests {
                     db_row! {
                         "alpha" => DbValue::SmallInteger(1),
                         "beta" => DbValue::Text("short".to_string()),
-                        "gamma" => DbValue::Real(9.0),
-                        "delta" => DbValue::Real(4.0),
+                        "gamma" => DbValue::BigReal(9.0),
+                        "delta" => DbValue::BigReal(4.0),
                     },
                     db_row! {
                         "alpha" => DbValue::Null,
                         "beta" => DbValue::Text("long".to_string()),
-                        "gamma" => DbValue::Real(3.0),
-                        "delta" => DbValue::Real(4.0),
+                        "gamma" => DbValue::BigReal(3.0),
+                        "delta" => DbValue::BigReal(4.0),
                     },
                     db_row! {
                         "alpha" => DbValue::SmallInteger(19),
                         "beta" => DbValue::Text("short".to_string()),
-                        "gamma" => DbValue::Real(5.2),
-                        "delta" => DbValue::Real(4.1),
+                        "gamma" => DbValue::BigReal(5.2),
+                        "delta" => DbValue::BigReal(4.1),
                     },
                     db_row! {
                         "alpha" => DbValue::SmallInteger(100),
                         "beta" => DbValue::Text("long".to_string()),
-                        "gamma" => DbValue::Real(7.0),
-                        "delta" => DbValue::Real(19.0),
+                        "gamma" => DbValue::BigReal(7.0),
+                        "delta" => DbValue::BigReal(19.0),
                     },
                     db_row! {
                         "alpha" => DbValue::SmallInteger(115),
                         "beta" => DbValue::Text("short".to_string()),
-                        "gamma" => DbValue::Real(10.0),
-                        "delta" => DbValue::Real(12.0),
+                        "gamma" => DbValue::BigReal(10.0),
+                        "delta" => DbValue::BigReal(12.0),
                     },
                     db_row! {
                         "alpha" => DbValue::SmallInteger(30),
                         "beta" => DbValue::Text("short".to_string()),
-                        "gamma" => DbValue::Real(4.0),
-                        "delta" => DbValue::Real(19.0),
+                        "gamma" => DbValue::BigReal(4.0),
+                        "delta" => DbValue::BigReal(19.0),
                     },
                     db_row! {
                         "alpha" => DbValue::SmallInteger(39),
                         "beta" => DbValue::Text("midway".to_string()),
-                        "gamma" => DbValue::Real(19.99),
-                        "delta" => DbValue::Real(75.0),
+                        "gamma" => DbValue::BigReal(19.99),
+                        "delta" => DbValue::BigReal(75.0),
                     },
                 ]
             );
