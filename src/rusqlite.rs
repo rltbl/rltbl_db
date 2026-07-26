@@ -12,9 +12,10 @@ use crate::{
 use deadpool_sqlite::{
     Config, Pool, Runtime,
     rusqlite::{
-        self, Statement,
+        Statement,
         fallible_iterator::FallibleIterator,
         types::{Null, ValueRef},
+        vtab::csvtab,
     },
 };
 use rust_decimal::Decimal;
@@ -207,6 +208,18 @@ impl RusqlitePool {
         let pool = cfg
             .create_pool(Runtime::Tokio1)
             .map_err(|err| DbError::ConnectError(format!("Error creating pool: {err}")))?;
+
+        // TODO: DOn't do this. Use the default implementation of load_table() instead.
+        let conn = pool
+            .get()
+            .await
+            .map_err(|err| DbError::ConnectError(format!("Unable to get pool: {err}")))?;
+        conn.interact(move |conn| {
+            csvtab::load_module(&conn).unwrap();
+        })
+        .await
+        .map_err(|err| DbError::DatabaseError(format!("Error adding csvtab module: {err}")))?;
+
         Ok(Self {
             pool: pool,
             caching_strategy: CachingStrategy::None,
@@ -259,14 +272,11 @@ impl DbQuery for RusqlitePool {
             .map_err(|err| DbError::ConnectError(format!("Unable to get from pool: {err}")))?;
         let sql_string = sql.to_string();
         match conn
-            .interact(move |conn| {
-                rusqlite::vtab::csvtab::load_module(&conn).unwrap();
-                match conn.execute_batch(&sql_string) {
-                    Err(err) => {
-                        return Err(DbError::DatabaseError(format!("Error during query: {err}")));
-                    }
-                    Ok(_) => Ok(()),
+            .interact(move |conn| match conn.execute_batch(&sql_string) {
+                Err(err) => {
+                    return Err(DbError::DatabaseError(format!("Error during query: {err}")));
                 }
+                Ok(_) => Ok(()),
             })
             .await
         {
@@ -294,7 +304,6 @@ impl DbQuery for RusqlitePool {
             let sql_string = sql.to_string();
             let params: DbParams = params.into_db_params();
             conn.interact(move |conn| {
-                rusqlite::vtab::csvtab::load_module(&conn).unwrap();
                 let mut stmt = conn.prepare(&sql_string).map_err(|err| {
                     DbError::DatabaseError(format!("Error preparing statement: {err}"))
                 })?;

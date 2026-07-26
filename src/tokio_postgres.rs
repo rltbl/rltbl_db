@@ -544,28 +544,29 @@ impl DbQuery for TokioPostgresPool {
     }
 
     /// TODO: Add docstring.
-    /// Note that to COPY from a file rather than STDIN, you need to grant the
-    /// pg_read_server_files role to the database user that will be performing the copy.
-    /// I.e., need to run: GRANT pg_read_server_files TO my_username;
     async fn load_table(&self, table: &str, tsv: &str) -> Result<(), DbError> {
-        // Read the rows from the given TSV file:
+        // Read the rows from the given TSV file into an asynchronous Stream
+        // (see https://docs.rs/futures-util/latest/futures_util/stream/trait.Stream.html).
         let mut rdr = ReaderBuilder::new()
             .has_headers(true)
             .delimiter(b'\t')
             .from_reader(File::open(tsv).expect(&format!("Unable to open '{tsv}'")));
-        let records = rdr.records();
-        let mut bytes_rows = vec![];
-        for row in records {
-            let row = row
-                .map_err(|err| DbError::InputError(format!("Error reading from '{tsv}': {err}")))?;
-            let mut string_row = vec![];
-            row.iter().for_each(|value| string_row.push(value));
-            let string_row = format!("{}\n", string_row.join("\t"));
-            let bytes_row = Bytes::copy_from_slice(string_row.as_bytes());
-            bytes_rows.push(bytes_row);
-        }
-        let mut stream = stream::iter(bytes_rows.into_iter().map(Ok::<_, Error>));
+        let mut stream = {
+            let stream = rdr.records().map(|row| {
+                let mut row = row
+                    //.map_err(|err| Error(format!("Error reading from '{tsv}': {err}")))?
+                    .unwrap()
+                    .into_iter()
+                    .map(|value| value)
+                    .collect::<Vec<_>>()
+                    .join("\t");
+                row.push_str("\n");
+                Bytes::copy_from_slice(row.as_bytes())
+            });
+            stream::iter(stream.map(Ok::<_, Error>))
+        };
 
+        // Send the input stream to the tokio-postgres client which is executing a copy_in():
         let client =
             self.pool.get().await.map_err(|err| {
                 DbError::ConnectError(format!("Unable to get from pool: {err:?}"))

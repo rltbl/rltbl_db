@@ -174,6 +174,7 @@ impl DbQuery for LibSQLPool {
             .await
             .map_err(|err| DbError::ConnectError(format!("Error getting from pool: {err}")))?;
 
+        // TODO: DOn't do this. Use the default implementation of load_table() instead.
         let _guard = deadpool_libsql::libsql::LoadExtensionGuard::new(&conn).unwrap();
         conn.load_extension("/usr/lib/x86_64-linux-gnu/sqlite/csv.so", None)
             .unwrap();
