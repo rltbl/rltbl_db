@@ -428,6 +428,8 @@ pub trait DbQuery: Sync {
         params: impl IntoDbParams + Send,
     ) -> impl Future<Output = Result<DbRows, DbError>> + Send;
 
+    // TODO Change the signatures of insert() and other similar functions so that they take
+    // an iterator as an argument instead of `impl IntoDbRows`.
     /// Insert rows into the given columns of the given table. If an input row does not have a
     /// key corresponding to one of the given columns, use NULL as the value of that column when
     /// inserting the row to the table.

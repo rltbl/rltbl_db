@@ -9,12 +9,15 @@ use crate::{
     parse::validate_table_name,
     shared::{EditType, edit},
 };
+
+use csv::ReaderBuilder;
 use deadpool_libsql::{
     Manager, Pool,
     libsql::{Builder, Value},
 };
+use indexmap::IndexMap;
 use rust_decimal::prelude::ToPrimitive;
-use std::{env, str::from_utf8};
+use std::{fs::File, iter::zip, str::from_utf8};
 
 impl TryFrom<Value> for DbValue {
     type Error = DbError;
@@ -174,11 +177,6 @@ impl DbQuery for LibSQLPool {
             .await
             .map_err(|err| DbError::ConnectError(format!("Error getting from pool: {err}")))?;
 
-        // TODO: DOn't do this. Use the default implementation of load_table() instead.
-        let _guard = deadpool_libsql::libsql::LoadExtensionGuard::new(&conn).unwrap();
-        conn.load_extension("/usr/lib/x86_64-linux-gnu/sqlite/csv.so", None)
-            .unwrap();
-
         let params: Vec<Value> = params.into_db_params().try_into()?;
         let mut rows = conn
             .query(sql, params)
@@ -334,21 +332,56 @@ impl DbQuery for LibSQLPool {
     }
 
     async fn load_table(&self, table: &str, tsv: &str) -> Result<(), DbError> {
-        let current_dir = env::current_dir().unwrap();
-        let current_dir = current_dir.display();
-        // TODO: It does not appear that there is any way to load from a TSV file using this
-        // extension. Currently in the makefile there is a call to `csvtool` to do the conversion
-        // before running a csv load test. Think about possible better solutions?
-        let csv = format!("{}.csv", tsv.strip_suffix(".tsv").unwrap());
+        // TODO: Consider moving the body of this function to shared.rs, or to the default
+        // implementation, but the latter doesn't seem to work because of async_trait.
 
-        let sql = format!(
-            r#"CREATE VIRTUAL TABLE temp.t1
-               USING CSV(filename='{current_dir}/{csv}', header=true)"#
-        );
-        self.execute(&sql, ()).await?;
+        // TODO: Change the signature of insert() and similar methods so that they take iterators
+        // as arguments instead of impl IntoDbRows. Then we will not have to collect the contents
+        // of the file into a vector but can keep it in the form of an iterator as we do in
+        // TokioPostgreSQLPool::load_table().
 
-        let sql = format!("INSERT INTO {table} SELECT * FROM temp.t1");
-        self.execute(&sql, ()).await?;
+        // Read the rows from the given TSV file into a vector.
+        let mut rdr = ReaderBuilder::new()
+            .has_headers(false)
+            .delimiter(b'\t')
+            .from_reader(File::open(tsv).expect(&format!("Unable to open '{tsv}'")));
+
+        let mut records = rdr.records();
+
+        // Extract the columns from the first line of the file:
+        let headers = {
+            let headers = match records.next() {
+                None => panic!("'{tsv}' is empty"),
+                Some(record) => match record {
+                    Err(err) => panic!("Error reading from '{tsv}': {err}"),
+                    Ok(headers) => headers.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+                },
+            };
+            for header in &headers {
+                if header.trim().is_empty() {
+                    return Err(DbError::InputError(format!(
+                        "One or more of the header fields is empty in TSV file '{tsv}'"
+                    )));
+                }
+            }
+            headers
+        };
+
+        let rows = rdr
+            .records()
+            .map(|row| {
+                let row_values = row
+                    .unwrap()
+                    .into_iter()
+                    .map(|value| DbValue::from(value))
+                    .collect::<Vec<_>>();
+                let row_content = zip(headers.clone(), row_values).collect::<IndexMap<_, _>>();
+                DbRow { map: row_content }
+            })
+            .collect::<Vec<_>>();
+
+        let columns = headers.iter().map(|s| s.as_str()).collect::<Vec<_>>();
+        self.insert(table, &columns, rows).await?;
         Ok(())
     }
 
