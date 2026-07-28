@@ -10,8 +10,7 @@ use crate::{
     shared::{EditType, edit},
 };
 
-use bytes::{BufMut, Bytes, BytesMut};
-use csv::ReaderBuilder;
+use bytes::{BufMut, BytesMut};
 use deadpool_postgres::{
     Config, Pool, Runtime,
     tokio_postgres::{
@@ -22,7 +21,11 @@ use deadpool_postgres::{
 };
 use futures_util::{SinkExt, stream};
 use rust_decimal::Decimal;
-use std::{fs::File, pin::pin};
+use std::{
+    fs::File,
+    io::{BufRead, BufReader},
+    pin::pin,
+};
 
 // Represents a PostgreSQL datatype that is not explicitly handled in extract_value() and query().
 #[derive(Clone, Debug)]
@@ -546,30 +549,17 @@ impl DbQuery for TokioPostgresPool {
 
     /// TODO: Add docstring.
     async fn load_table(&self, table: &str, tsv: &str) -> Result<(), DbError> {
-        // TODO: Remove panics.
+        // TODO: Remove panics and unwraps.
 
-        // TODO: We don't need to use the csv module. Just read the bytes from the file directly.
-
-        // Read the rows from the given TSV file into an asynchronous Stream
-        // (see https://docs.rs/futures-util/latest/futures_util/stream/trait.Stream.html).
-        let mut rdr = ReaderBuilder::new()
-            .has_headers(true)
-            .delimiter(b'\t')
-            .from_reader(File::open(tsv).expect(&format!("Unable to open '{tsv}'")));
-        let mut stream = {
-            let stream = rdr.records().map(|row| {
-                let mut row = row
-                    //.map_err(|err| Error(format!("Error reading from '{tsv}': {err}")))?
-                    .unwrap()
-                    .into_iter()
-                    .map(|value| value)
-                    .collect::<Vec<_>>()
-                    .join("\t");
-                row.push_str("\n");
-                Bytes::copy_from_slice(row.as_bytes())
-            });
-            stream::iter(stream.map(Ok::<_, Error>))
-        };
+        let file = File::open(tsv).unwrap();
+        let buf_reader = BufReader::new(file);
+        let mut stream = buf_reader.split(b'\n').map(|line| {
+            let line = line.unwrap();
+            let mut bytes = BytesMut::with_capacity(line.len() + 1);
+            bytes.extend_from_slice(&line);
+            bytes.put_u8(b'\n');
+            bytes
+        });
 
         // Send the input stream to the tokio-postgres client which is executing a copy_in():
         let client =
@@ -582,6 +572,11 @@ impl DbQuery for TokioPostgresPool {
                 .await
                 .unwrap()
         );
+
+        // Ignore the header line:
+        stream.next().unwrap();
+        let mut stream = stream::iter(stream.map(Ok::<_, Error>));
+
         sink.send_all(&mut stream).await.unwrap();
         let _num_written = sink.finish().await.unwrap();
 
