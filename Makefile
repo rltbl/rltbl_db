@@ -27,12 +27,12 @@ tests/input/table1.csv: tests/input/table1.tsv
 
 test: test_default test_libsql
 
-test_default:
+test_default: | tests/input/table1.csv
 	@echo "Running unit tests using default features."
 	cargo test
 	@echo "Default unit tests succeeded."
 
-test_libsql:
+test_libsql: | tests/input/table1.csv
 	@echo "Running unit tests using Libsql."
 	cargo test --no-default-features --features libsql
 	@echo "Libsql unit tests succeeded."
