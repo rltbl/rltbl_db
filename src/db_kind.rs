@@ -712,39 +712,6 @@ impl DbType {
 
         // Otherwise, try to parse it using the available types in order from most to least specific.
         for db_type in DbType::sorted() {
-            match self {
-                DbType::Real(_) | DbType::BigReal(_) => match db_type {
-                    DbType::BigInteger(_) => match db_type.parse_str(value) {
-                        Ok(_) => {
-                            return Ok(DbType::Numeric("".to_string()));
-                        }
-                        Err(err) => {
-                            if let DbType::Text(_) = db_type {
-                                return Err(DbError::InputError(format!(
-                                    "Could not determine most specific type for value: '{value}'. \
-                                     Got error: {err}"
-                                )));
-                            }
-                        }
-                    },
-                    DbType::Integer(_) => match db_type.parse_str(value) {
-                        Ok(_) => {
-                            return Ok(DbType::BigReal("".to_string()));
-                        }
-                        Err(err) => {
-                            if let DbType::Text(_) = db_type {
-                                return Err(DbError::InputError(format!(
-                                    "Could not determine most specific type for value: '{value}'. \
-                                     Got error: {err}"
-                                )));
-                            }
-                        }
-                    },
-                    _ => (),
-                },
-                _ => (),
-            };
-
             if db_type >= *self {
                 match db_type.parse_str(value) {
                     Ok(_) => {

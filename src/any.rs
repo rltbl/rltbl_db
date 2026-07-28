@@ -435,7 +435,7 @@ mod tests {
                         "alpha" => DbValue::BigInteger(1),
                         "beta" => DbValue::Text("short".to_string()),
                         "gamma" => DbValue::BigReal(9.0),
-                        "delta" => DbValue::BigReal(4.0),
+                        "delta" => DbValue::BigReal(i64::MAX as f64),
                     },
                     db_row! {
                         // TODO: This first value is wrong. It should be DbValue::Null,
@@ -444,7 +444,7 @@ mod tests {
                         // whenever we are given some special string such as '\N', 'null', etc.
                         "alpha" => DbValue::Text("".to_string()),
                         "beta" => DbValue::Text("long".to_string()),
-                        "gamma" => DbValue::BigReal(3.0),
+                        "gamma" => DbValue::BigReal(i32::MAX as f64),
                         "delta" => DbValue::BigReal(4.0),
                     },
                     db_row! {
@@ -486,44 +486,44 @@ mod tests {
                     db_row! {
                         "alpha" => DbValue::SmallInteger(1),
                         "beta" => DbValue::Text("short".to_string()),
-                        "gamma" => DbValue::BigReal(9.0),
-                        "delta" => DbValue::BigReal(4.0),
+                        "gamma" => DbValue::Real(9.0),
+                        "delta" => DbValue::Real(i64::MAX as f32),
                     },
                     db_row! {
                         "alpha" => DbValue::Null,
                         "beta" => DbValue::Text("long".to_string()),
-                        "gamma" => DbValue::BigReal(3.0),
-                        "delta" => DbValue::BigReal(4.0),
+                        "gamma" => DbValue::Real(i32::MAX as f32),
+                        "delta" => DbValue::Real(4.0),
                     },
                     db_row! {
                         "alpha" => DbValue::SmallInteger(19),
                         "beta" => DbValue::Text("short".to_string()),
-                        "gamma" => DbValue::BigReal(5.2),
-                        "delta" => DbValue::BigReal(4.1),
+                        "gamma" => DbValue::Real(5.2),
+                        "delta" => DbValue::Real(4.1),
                     },
                     db_row! {
                         "alpha" => DbValue::SmallInteger(100),
                         "beta" => DbValue::Text("long".to_string()),
-                        "gamma" => DbValue::BigReal(7.0),
-                        "delta" => DbValue::BigReal(19.0),
+                        "gamma" => DbValue::Real(7.0),
+                        "delta" => DbValue::Real(19.0),
                     },
                     db_row! {
                         "alpha" => DbValue::SmallInteger(115),
                         "beta" => DbValue::Text("short".to_string()),
-                        "gamma" => DbValue::BigReal(10.0),
-                        "delta" => DbValue::BigReal(12.0),
+                        "gamma" => DbValue::Real(10.0),
+                        "delta" => DbValue::Real(12.0),
                     },
                     db_row! {
                         "alpha" => DbValue::SmallInteger(30),
                         "beta" => DbValue::Text("short".to_string()),
-                        "gamma" => DbValue::BigReal(4.0),
-                        "delta" => DbValue::BigReal(19.0),
+                        "gamma" => DbValue::Real(4.0),
+                        "delta" => DbValue::Real(19.0),
                     },
                     db_row! {
                         "alpha" => DbValue::SmallInteger(39),
                         "beta" => DbValue::Text("midway".to_string()),
-                        "gamma" => DbValue::BigReal(19.99),
-                        "delta" => DbValue::BigReal(75.0),
+                        "gamma" => DbValue::Real(19.99),
+                        "delta" => DbValue::Real(75.0),
                     },
                 ]
             );

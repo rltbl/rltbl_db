@@ -515,11 +515,6 @@ pub trait DbQuery: Sync {
         self.execute_no_cache_clean(&sql, ()).await
     }
 
-    // TODO: Remove.
-    //async fn load_table(&self, table: &str, tsv: &str) -> Result<(), DbError> {
-    //    Ok(())
-    //}
-
     /// Load the given table using the data from the given TSV file.
     fn load_table(
         &self,

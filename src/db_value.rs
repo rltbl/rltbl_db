@@ -9,6 +9,7 @@ use serde_json::{Map as JsonMap, json};
 use std::{
     cmp::Ordering,
     collections::HashSet,
+    f32, f64,
     fmt::Display,
     hash::{Hash, Hasher},
     iter::zip,
@@ -1425,9 +1426,6 @@ impl DbColumn {
     {
         // Iterate over the given values and determine the most specific type that is compatible
         // with them all:
-        // TODO: Add a max_value private field to DbColumn, representing the maximum numeric value
-        // that we have seen in the column so far, and use it to process types in a fine-grained
-        // way.
 
         let mut values_seen = HashSet::new();
         let mut types_seen = HashSet::new();
@@ -1448,23 +1446,11 @@ impl DbColumn {
             // Get the most specific type for this value and adjust the overall column type
             // accordingly.
             let db_type = self.db_type.min_type(&value)?;
-            match db_type {
-                // Real types are non-trivially related to integer types.
-                DbType::Real(_) | DbType::BigReal(_) => {
-                    if types_seen.contains(&DbType::BigInteger("".to_string())) {
-                        self.db_type = DbType::Numeric("".to_string());
-                    } else if types_seen.contains(&DbType::Integer("".to_string())) {
-                        self.db_type = DbType::BigReal("".to_string());
-                    } else {
-                        self.db_type = db_type.clone();
-                    }
-                }
-                _ => self.db_type = db_type.clone(),
-            };
+            self.db_type = db_type.clone();
 
             // Add to the sets of values and types seen:
-            values_seen.insert(value);
             types_seen.insert(db_type);
+            values_seen.insert(value);
         }
 
         Ok(self.clone())
@@ -1561,7 +1547,7 @@ mod tests {
             column,
             DbColumn {
                 name: "".to_string(),
-                db_type: DbType::BigReal("".to_string()),
+                db_type: DbType::Real("".to_string()),
                 not_null: true,
                 unique: true,
             }
@@ -1617,6 +1603,7 @@ mod tests {
         //    .iter()
         //    .map(|vrow| vrow.as_ref())
         //    .collect::<Vec<_>>();
+        println!("BOOM!");
         let columns = DbColumn::min_columns_from_column_values(column_values.into_iter()).unwrap();
         assert_eq!(
             columns,
@@ -1624,21 +1611,21 @@ mod tests {
                 // Column A:
                 DbColumn {
                     name: "".to_string(),
-                    db_type: DbType::Numeric("".to_string()),
+                    db_type: DbType::Real("".to_string()),
                     not_null: true,
                     unique: true,
                 },
                 // Column B:
                 DbColumn {
                     name: "".to_string(),
-                    db_type: DbType::Numeric("".to_string()),
+                    db_type: DbType::Real("".to_string()),
                     not_null: true,
                     unique: true,
                 },
                 // Column C:
                 DbColumn {
                     name: "".to_string(),
-                    db_type: DbType::Numeric("".to_string()),
+                    db_type: DbType::Real("".to_string()),
                     not_null: true,
                     unique: true,
                 },
