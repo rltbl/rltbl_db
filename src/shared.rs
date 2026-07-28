@@ -344,10 +344,20 @@ pub async fn load_table_using_insert(
     // of the file into a vector but can keep it in the form of an iterator as we do in
     // TokioPostgreSQLPool::load_table().
 
+    let delimiter = {
+        if tsv.to_lowercase().ends_with("tsv") {
+            b'\t'
+        } else if tsv.to_lowercase().ends_with(".csv") {
+            b','
+        } else {
+            panic!()
+        }
+    };
+
     // Read the rows from the given TSV file into a vector.
     let mut rdr = ReaderBuilder::new()
         .has_headers(false)
-        .delimiter(b'\t')
+        .delimiter(delimiter)
         .from_reader(File::open(tsv).expect(&format!("Unable to open '{tsv}'")));
 
     let mut records = rdr.records();

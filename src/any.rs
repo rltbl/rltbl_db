@@ -425,9 +425,9 @@ mod tests {
     async fn import(url: &str) {
         clear_meta_cache().unwrap();
         let pool = AnyPool::connect(url).await.unwrap();
-        pool.import_table("tests/input/table1.tsv").await.unwrap();
-        let rows = pool.query("SELECT * FROM table1", ()).await.unwrap();
         if pool.kind().name() == "SQLite" {
+            pool.import_table("tests/input/table1.csv").await.unwrap();
+            let rows = pool.query("SELECT * FROM table1", ()).await.unwrap();
             assert_eq!(
                 rows.rows,
                 vec![
@@ -480,6 +480,8 @@ mod tests {
                 ]
             );
         } else if pool.kind().name() == "PostgreSQL" {
+            pool.import_table("tests/input/table1.tsv").await.unwrap();
+            let rows = pool.query("SELECT * FROM table1", ()).await.unwrap();
             assert_eq!(
                 rows.rows,
                 vec![

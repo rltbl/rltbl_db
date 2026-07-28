@@ -16,10 +16,11 @@ use deadpool_sqlite::{
         Statement,
         fallible_iterator::FallibleIterator,
         types::{Null, ValueRef},
+        vtab::csvtab,
     },
 };
 use rust_decimal::Decimal;
-use std::str::from_utf8;
+use std::{env, str::from_utf8};
 
 /// Query a database using the given prepared statement and parameters.
 fn query_prepared(
@@ -208,6 +209,17 @@ impl RusqlitePool {
         let pool = cfg
             .create_pool(Runtime::Tokio1)
             .map_err(|err| DbError::ConnectError(format!("Error creating pool: {err}")))?;
+
+        let conn = pool
+            .get()
+            .await
+            .map_err(|err| DbError::ConnectError(format!("Unable to get pool: {err}")))?;
+        conn.interact(move |conn| {
+            csvtab::load_module(&conn).unwrap();
+        })
+        .await
+        .map_err(|err| DbError::DatabaseError(format!("Error adding csvtab module: {err}")))?;
+
         Ok(Self {
             pool: pool,
             caching_strategy: CachingStrategy::None,
@@ -440,10 +452,24 @@ impl DbQuery for RusqlitePool {
         .await
     }
 
-    async fn load_table(&self, table: &str, tsv: &str) -> Result<(), DbError> {
-        // TODO: If the filename ends with .csv, then use the old way. Not sure if we should
-        // do the same for libsql.
-        load_table_using_insert(self, table, tsv).await
+    async fn load_table(&self, table: &str, filename: &str) -> Result<(), DbError> {
+        let current_dir = env::current_dir().unwrap();
+        let current_dir = current_dir.display();
+        if filename.to_lowercase().ends_with(".csv") {
+            let csv = format!("{}.csv", filename.strip_suffix(".csv").unwrap());
+            let sql = format!(
+                r#"CREATE VIRTUAL TABLE temp.t1
+                   USING CSV(filename='{current_dir}/{csv}', header=true)"#
+            );
+            self.execute(&sql, ()).await?;
+            let sql = format!("INSERT INTO {table} SELECT * FROM temp.t1");
+            self.execute(&sql, ()).await?;
+            Ok(())
+        } else if filename.to_lowercase().ends_with(".tsv") {
+            load_table_using_insert(self, table, filename).await
+        } else {
+            panic!()
+        }
     }
 
     /// Implements [DbQuery::drop_table()] for SQLite.

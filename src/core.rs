@@ -551,10 +551,20 @@ pub trait DbQuery: Sync {
 
 /// Determine the database columns needed for each column of data in the given TSV file.
 fn read_columns_from_tsv(tsv: &str) -> Result<IndexMap<String, DbColumn>, DbError> {
+    let delimiter = {
+        if tsv.to_lowercase().ends_with("tsv") {
+            b'\t'
+        } else if tsv.to_lowercase().ends_with(".csv") {
+            b','
+        } else {
+            panic!()
+        }
+    };
+
     // Read the rows from the given TSV file:
     let mut rdr = ReaderBuilder::new()
         .has_headers(false)
-        .delimiter(b'\t')
+        .delimiter(delimiter)
         .from_reader(
             File::open(tsv)
                 .map_err(|err| DbError::InputError(format!("Unable to open '{tsv}': {err}")))?,

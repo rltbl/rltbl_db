@@ -21,6 +21,9 @@ test_import_perf: tests/penguins/src/data/penguin.tsv
 	echo "Loading data using tokio-postgres ..."
 	time -p cargo test --no-default-features --features tokio-postgres test_import_perf
 
+tests/input/table1.csv: tests/input/table1.tsv
+	csvtool -t TAB -u COMMA cat $< > $@
+
 
 test: test_default test_libsql
 

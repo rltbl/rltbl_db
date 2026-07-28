@@ -329,8 +329,10 @@ impl DbQuery for LibSQLPool {
         .await
     }
 
-    async fn load_table(&self, table: &str, tsv: &str) -> Result<(), DbError> {
-        load_table_using_insert(self, table, tsv).await
+    async fn load_table(&self, table: &str, filename: &str) -> Result<(), DbError> {
+        // TODO: Handle the case where filename ends with .csv using the load extension
+        // if the absolute path can be avoided (this seems unlikely, though).
+        load_table_using_insert(self, table, filename).await
     }
 
     /// Implements [DbQuery::drop_table()] for SQLite.
