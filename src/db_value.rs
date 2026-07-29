@@ -1001,7 +1001,8 @@ impl DbRow {
         }
     }
 
-    /// TODO: Add docstring.
+    /// Coerce this row into a row whose columns have the types specified in the given
+    /// column_map.
     pub fn coerce(&self, column_map: &IndexMap<String, DbColumn>) -> Result<DbRow, DbError> {
         // For each DbValue in db_row, get the corresponding DbColumn from the column_map.
         // Then use the db_type to convert() the value into the correct type and place the
@@ -1077,7 +1078,8 @@ impl DbRows {
         Ok(value)
     }
 
-    /// TODO: Add docstring.
+    /// Coerce these rows into rows whose columns have the types specified in the given
+    /// column_map.
     pub fn coerce<I>(
         db_rows: I,
         column_map: &IndexMap<String, DbColumn>,
@@ -1362,7 +1364,7 @@ impl IntoDbRows for &Vec<JsonRow> {
 // Database columns
 //////////////////////////////////////////////////////////////////////
 
-/// TODO: Add docstring.
+/// A database column
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DbColumn {
     pub name: String,
@@ -1398,7 +1400,7 @@ impl PartialOrd for DbColumn {
 }
 
 impl DbColumn {
-    /// TODO: Add docstring.
+    /// Return a blank database column of the minumum type.
     pub fn new() -> Self {
         DbColumn {
             name: "".to_string(),
@@ -1409,8 +1411,7 @@ impl DbColumn {
         }
     }
 
-    // TODO: Maybe return the object itself instead of a copy?
-    /// TODO: Add docstring.
+    /// Return the minimum column required to contain the given database values.
     pub fn min_column<I>(&mut self, values: I) -> Result<DbColumn, DbError>
     where
         I: Iterator<Item = DbValue>,
@@ -1418,15 +1419,13 @@ impl DbColumn {
         self.min_column_from_strings(values.map(|value| value.to_string()))
     }
 
-    // TODO: Maybe return the object itself instead of a copy?
-    /// TODO: Add docstring.
+    /// Return the minimum column required to contain the given string values.
     pub fn min_column_from_strings<I>(&mut self, values: I) -> Result<DbColumn, DbError>
     where
         I: Iterator<Item = String>,
     {
         // Iterate over the given values and determine the most specific type that is compatible
         // with them all:
-
         let mut values_seen = HashSet::new();
         let mut types_seen = HashSet::new();
         for value in values {
@@ -1456,7 +1455,7 @@ impl DbColumn {
         Ok(self.clone())
     }
 
-    /// TODO: Add docstring.
+    /// Return the minimum column types corresponding to the given vectors of column values.
     pub fn min_columns_from_column_values<I>(column_values: I) -> Result<Vec<DbColumn>, DbError>
     where
         I: Iterator<Item = Vec<DbValue>>,
@@ -1466,7 +1465,7 @@ impl DbColumn {
             .collect::<Result<Vec<DbColumn>, _>>()
     }
 
-    /// TODO: Add docstring.
+    /// Return the minimum columns needed to contain the given vectors of database values.
     pub fn min_columns_from_anonymous_rows<I>(rows: I) -> Result<Vec<DbColumn>, DbError>
     where
         I: Iterator<Item = Vec<DbValue>>,
@@ -1490,21 +1489,19 @@ impl DbColumn {
             }
         });
 
-        let db_columns = column_data
-            .into_iter()
-            .map(|(index, data)| {
-                let mut column = DbColumn::new().min_column(data.into_iter()).unwrap();
-                if not_unique.contains(&index) {
-                    column.unique = false;
-                }
-                column
-            })
-            .collect::<Vec<_>>();
+        let mut db_columns = vec![];
+        for (index, data) in column_data.into_iter() {
+            let mut column = DbColumn::new().min_column(data.into_iter())?;
+            if not_unique.contains(&index) {
+                column.unique = false;
+            }
+            db_columns.push(column)
+        }
 
         Ok(db_columns)
     }
 
-    /// TODO: Add docstring
+    /// Return the minimum columns needed to contain the given database rows.
     pub fn min_row_from_db_rows<I>(db_rows: I) -> Result<IndexMap<String, DbColumn>, DbError>
     where
         I: Iterator<Item = DbRow>,
@@ -1546,7 +1543,7 @@ mod tests {
             vec![
                 DbValue::from(true),
                 DbValue::from(1),
-                DbValue::from(i64::MAX),
+                DbValue::from(u64::MAX),
                 DbValue::from(2.1),
                 DbValue::from(f64::MAX),
             ],
@@ -1554,7 +1551,7 @@ mod tests {
             vec![
                 DbValue::from(1),
                 DbValue::from(true),
-                DbValue::from(i64::MAX),
+                DbValue::from(u64::MAX),
                 DbValue::from(2.1),
                 DbValue::from(f64::MAX),
             ],
@@ -1563,7 +1560,7 @@ mod tests {
                 DbValue::from(f64::MAX),
                 DbValue::from(1),
                 DbValue::from(true),
-                DbValue::from(i64::MAX),
+                DbValue::from(u64::MAX),
                 DbValue::from(2.1),
             ],
             // Column D:
@@ -1610,6 +1607,14 @@ mod tests {
             vec![
                 DbValue::Null,
                 DbValue::from(i16::MAX),
+                DbValue::from(2),
+                DbValue::from(1),
+                DbValue::from(3),
+            ],
+            // Column J:
+            vec![
+                DbValue::Null,
+                DbValue::from(u64::MAX),
                 DbValue::from(2),
                 DbValue::from(1),
                 DbValue::from(3),
@@ -1683,12 +1688,19 @@ mod tests {
                     not_null: false,
                     unique: true,
                 },
+                // Column J:
+                DbColumn {
+                    name: "".to_string(),
+                    db_type: DbType::Real("".to_string()),
+                    not_null: false,
+                    unique: true,
+                },
             ]
         );
 
         let db_rows = vec![
             db_row! { "foo" => 1, "bar" => 2.0, "jar" => "alphanum", "har" => true },
-            db_row! { "foo" => 2, "bar" => 2, "jar" => "alphanum", "har" => true },
+            db_row! { "foo" => f32::MAX, "bar" => 2, "jar" => "alphanum", "har" => true },
             db_row! { "foo" => 3, "bar" => 2.0, "jar" => "alphanum", "har" => false },
             db_row! { "foo" => i64::MAX, "bar" => 2.0, "jar" => "alphanum", "har" => DbValue::Null },
         ];
@@ -1699,7 +1711,7 @@ mod tests {
             indexmap! {
                 "foo".to_string() => DbColumn {
                     name: "foo".to_string(),
-                    db_type: DbType::BigInteger("".to_string()),
+                    db_type: DbType::Real("".to_string()),
                     not_null: true,
                     unique: true,
                 },

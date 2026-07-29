@@ -547,13 +547,15 @@ impl DbQuery for TokioPostgresPool {
         .await
     }
 
-    /// TODO: Add docstring.
-    async fn load_table(&self, table: &str, tsv: &str) -> Result<(), DbError> {
-        // TODO: Remove panics and unwraps.
-        if !tsv.to_lowercase().ends_with("tsv") && !tsv.to_lowercase().ends_with(".csv") {
-            panic!()
+    /// Implements [DbQuery::load_table()] for PostgreSQL
+    async fn load_table(&self, table: &str, filename: &str) -> Result<(), DbError> {
+        if !filename.to_lowercase().ends_with("tsv") && !filename.to_lowercase().ends_with(".csv") {
+            return Err(DbError::InputError(format!(
+                "Filename: '{filename}' must end with .tsv or .csv"
+            )));
         }
-        let file = File::open(tsv).unwrap();
+        let file = File::open(filename)
+            .map_err(|err| DbError::InputError(format!("Unable to open '{filename}': {err}")))?;
         let buf_reader = BufReader::new(file);
         let mut stream = buf_reader.split(b'\n').map(|line| {
             let line = line.unwrap();
@@ -572,15 +574,24 @@ impl DbQuery for TokioPostgresPool {
             client
                 .copy_in(&format!(r#"COPY "{table}" FROM STDIN WITH NULL ''"#))
                 .await
-                .unwrap()
+                .map_err(|err| {
+                    DbError::InputError(format!("Unable to COPY IN to '{table}': {err}"))
+                })?
         );
 
         // Ignore the header line:
-        stream.next().unwrap();
+        stream
+            .next()
+            .ok_or(DbError::InputError(format!("File '{filename}' is empty")))?;
         let mut stream = stream::iter(stream.map(Ok::<_, Error>));
 
-        sink.send_all(&mut stream).await.unwrap();
-        let _num_written = sink.finish().await.unwrap();
+        sink.send_all(&mut stream)
+            .await
+            .map_err(|err| DbError::InputError(format!("Unable to COPY IN to '{table}': {err}")))?;
+        let _num_written = sink
+            .finish()
+            .await
+            .map_err(|err| DbError::InputError(format!("Unable to COPY IN to '{table}': {err}")))?;
 
         Ok(())
     }

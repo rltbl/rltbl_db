@@ -504,7 +504,7 @@ pub trait DbQuery: Sync {
     }
 
     /// Create a given table with the given columns in the database. If a table with the
-    /// same name already exists, drop that first.
+    /// same name already exists, drop that one first.
     async fn recreate_table(
         &self,
         table: &str,
@@ -515,27 +515,27 @@ pub trait DbQuery: Sync {
         self.execute_no_cache_clean(&sql, ()).await
     }
 
-    /// Load the given table using the data from the given TSV file.
+    /// Load the given table using the data from the given file.
     fn load_table(
         &self,
         table: &str,
-        tsv: &str,
+        filename: &str,
     ) -> impl Future<Output = Result<(), DbError>> + Send;
 
-    /// Create a table, using the stem of the given TSV file as the table name, and the headers
+    /// Create a table, using the stem of the given file as the table name, and the headers
     /// of each data column in the file as the names of the table's columns, and then load the
     /// data into it.
-    async fn import_table(&self, tsv: &str) -> Result<(), DbError> {
-        // The table name is just the name of the TSV file:
-        let table = Path::new(tsv)
+    async fn import_table(&self, filename: &str) -> Result<(), DbError> {
+        // The table name is just the name of the file:
+        let table = Path::new(filename)
             .file_stem()
             .and_then(|fs| fs.to_str())
             .ok_or(DbError::InputError(format!(
-                "Error getting table name from TSV path '{tsv}'"
+                "Error getting table name from path '{filename}'"
             )))?;
-        let columns = read_columns_from_tsv(tsv)?;
+        let columns = read_columns_from_file(filename)?;
         self.recreate_table(&table, &columns).await?;
-        self.load_table(&table, tsv).await?;
+        self.load_table(&table, filename).await?;
         Ok(())
     }
 
@@ -549,36 +549,38 @@ pub trait DbQuery: Sync {
     fn drop_view(&self, view: &str) -> impl Future<Output = Result<(), DbError>> + Send;
 }
 
-/// Determine the database columns needed for each column of data in the given TSV file.
-fn read_columns_from_tsv(tsv: &str) -> Result<IndexMap<String, DbColumn>, DbError> {
+/// Determine the database columns needed for each column of data in the given file.
+fn read_columns_from_file(filename: &str) -> Result<IndexMap<String, DbColumn>, DbError> {
     let delimiter = {
-        if tsv.to_lowercase().ends_with("tsv") {
+        if filename.to_lowercase().ends_with("tsv") {
             b'\t'
-        } else if tsv.to_lowercase().ends_with(".csv") {
+        } else if filename.to_lowercase().ends_with(".csv") {
             b','
         } else {
-            panic!()
+            return Err(DbError::InputError(format!(
+                "Filename: '{filename}' must end with .tsv or .csv"
+            )));
         }
     };
 
-    // Read the rows from the given TSV file:
-    let mut rdr = ReaderBuilder::new()
-        .has_headers(false)
-        .delimiter(delimiter)
-        .from_reader(
-            File::open(tsv)
-                .map_err(|err| DbError::InputError(format!("Unable to open '{tsv}': {err}")))?,
-        );
+    // Read the rows from the given file:
+    let mut rdr =
+        ReaderBuilder::new()
+            .has_headers(false)
+            .delimiter(delimiter)
+            .from_reader(File::open(filename).map_err(|err| {
+                DbError::InputError(format!("Unable to open '{filename}': {err}"))
+            })?);
     let mut records = rdr.records();
 
     // Extract the headers from the first line of the file:
     let headers = {
         let headers = match records.next() {
-            None => return Err(DbError::InputError(format!("'{tsv}' is empty"))),
+            None => return Err(DbError::InputError(format!("'{filename}' is empty"))),
             Some(record) => match record {
                 Err(err) => {
                     return Err(DbError::InputError(format!(
-                        "Error reading from '{tsv}': {err}"
+                        "Error reading from '{filename}': {err}"
                     )));
                 }
                 Ok(headers) => headers.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
@@ -587,19 +589,23 @@ fn read_columns_from_tsv(tsv: &str) -> Result<IndexMap<String, DbColumn>, DbErro
         for header in &headers {
             if header.trim().is_empty() {
                 return Err(DbError::InputError(format!(
-                    "One or more of the header fields is empty in TSV file '{tsv}'"
+                    "One or more of the header fields is empty in file '{filename}'"
                 )));
             }
         }
         headers
     };
 
+    // Determine the columns required:
     let columns = {
         let mut columns = vec![];
-        let mut values_seen = HashMap::<String, HashSet<String>>::new();
+        let mut values_seen = HashMap::new();
         for row in records {
-            let row = row
-                .map_err(|err| DbError::InputError(format!("Error reading from '{tsv}': {err}")))?;
+            let row = row.map_err(|err| {
+                DbError::InputError(format!("Error reading from '{filename}': {err}"))
+            })?;
+
+            // Determine the columns for the first row if this hasn't been done already:
             if columns.is_empty() {
                 for value in &row {
                     columns.push(
@@ -608,6 +614,8 @@ fn read_columns_from_tsv(tsv: &str) -> Result<IndexMap<String, DbColumn>, DbErro
                     );
                 }
             }
+
+            // Sanity checks:
             if row.len() != headers.len() {
                 return Err(DbError::InputError(format!(
                     "Number of row values ({}) != number of headers ({})",
@@ -623,6 +631,8 @@ fn read_columns_from_tsv(tsv: &str) -> Result<IndexMap<String, DbColumn>, DbErro
                 )));
             }
 
+            // Each new row will be used to refine the column types that were determined on the
+            // basis of the previous N rows.
             for i in 0..row.len() {
                 if &row[i] == "" {
                     if columns[i].not_null {

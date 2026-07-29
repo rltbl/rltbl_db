@@ -452,14 +452,16 @@ impl DbQuery for RusqlitePool {
         .await
     }
 
+    /// Implements [DbQuery::load_table()] for SQLite.
     async fn load_table(&self, table: &str, filename: &str) -> Result<(), DbError> {
         if filename.to_lowercase().ends_with(".csv") {
-            let current_dir = env::current_dir().unwrap();
+            let current_dir = env::current_dir().map_err(|err| {
+                DbError::ConnectError(format!("Error getting current directory: {err}"))
+            })?;
             let current_dir = current_dir.display();
-            let csv = format!("{}.csv", filename.strip_suffix(".csv").unwrap());
             let sql = format!(
                 r#"CREATE VIRTUAL TABLE temp.t1
-                   USING CSV(filename='{current_dir}/{csv}', header=true)"#
+                   USING CSV(filename='{current_dir}/{filename}', header=true)"#
             );
             self.execute(&sql, ()).await?;
             let sql = format!("INSERT INTO {table} SELECT * FROM temp.t1");
@@ -468,7 +470,9 @@ impl DbQuery for RusqlitePool {
         } else if filename.to_lowercase().ends_with(".tsv") {
             batch_insert(self, table, filename).await
         } else {
-            panic!()
+            return Err(DbError::InputError(format!(
+                "Filename: '{filename}' must end with .tsv or .csv"
+            )));
         }
     }
 

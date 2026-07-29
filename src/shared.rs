@@ -331,68 +331,75 @@ pub(crate) async fn edit(
     Ok(rows_to_return.into_db_rows())
 }
 
-/// TODO: Add docstring.
+/// Read data from the given file and insert it to the given table in the database.
 pub async fn batch_insert(
     pool: &(impl DbQuery + Sync),
     table: &str,
-    tsv: &str,
+    filename: &str,
 ) -> Result<(), DbError> {
-    // TODO: Remove panics.
-
     // TODO: Change the signature of insert() and similar methods so that they take iterators
     // as arguments instead of impl IntoDbRows. Then we will not have to collect the contents
     // of the file into a vector but can keep it in the form of an iterator as we do in
     // TokioPostgreSQLPool::load_table().
 
     let delimiter = {
-        if tsv.to_lowercase().ends_with("tsv") {
+        if filename.to_lowercase().ends_with("tsv") {
             b'\t'
-        } else if tsv.to_lowercase().ends_with(".csv") {
+        } else if filename.to_lowercase().ends_with(".csv") {
             b','
         } else {
-            panic!()
+            return Err(DbError::InputError(format!(
+                "Filename: '{filename}' must end with .tsv or .csv"
+            )));
         }
     };
 
-    // Read the rows from the given TSV file into a vector.
-    let mut rdr = ReaderBuilder::new()
-        .has_headers(false)
-        .delimiter(delimiter)
-        .from_reader(File::open(tsv).expect(&format!("Unable to open '{tsv}'")));
-
+    // Read the rows from the given file into a vector.
+    let mut rdr =
+        ReaderBuilder::new()
+            .has_headers(false)
+            .delimiter(delimiter)
+            .from_reader(File::open(filename).map_err(|err| {
+                DbError::InputError(format!("Unable to open '{filename}': {err}"))
+            })?);
     let mut records = rdr.records();
 
     // Extract the columns from the first line of the file:
     let headers = {
         let headers = match records.next() {
-            None => panic!("'{tsv}' is empty"),
+            None => return Err(DbError::InputError(format!("'{filename}' is empty"))),
             Some(record) => match record {
-                Err(err) => panic!("Error reading from '{tsv}': {err}"),
+                Err(err) => {
+                    return Err(DbError::InputError(format!(
+                        "Error reading from '{filename}': {err}"
+                    )));
+                }
                 Ok(headers) => headers.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
             },
         };
         for header in &headers {
             if header.trim().is_empty() {
                 return Err(DbError::InputError(format!(
-                    "One or more of the header fields is empty in TSV file '{tsv}'"
+                    "One or more of the header fields is empty in file '{filename}'"
                 )));
             }
         }
         headers
     };
 
-    let rows = rdr
-        .records()
-        .map(|row| {
-            let row_values = row
-                .unwrap()
-                .into_iter()
-                .map(|value| DbValue::from(value))
-                .collect::<Vec<_>>();
-            let row_content = zip(headers.clone(), row_values).collect::<IndexMap<_, _>>();
-            DbRow { map: row_content }
-        })
-        .collect::<Vec<_>>();
+    // Collect all of the rows into a vector (TODO: See comment at the beginning of this function).
+    let mut rows = vec![];
+    for row in rdr.records() {
+        let row_values = row
+            .map_err(|err| {
+                DbError::DataError(format!("Error reading from file '{filename}': {err}"))
+            })?
+            .into_iter()
+            .map(|value| DbValue::from(value))
+            .collect::<Vec<_>>();
+        let row_content = zip(headers.clone(), row_values).collect::<IndexMap<_, _>>();
+        rows.push(DbRow { map: row_content });
+    }
 
     let columns = headers.iter().map(|s| s.as_str()).collect::<Vec<_>>();
     pool.insert(table, &columns, rows).await?;

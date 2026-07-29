@@ -172,10 +172,12 @@ impl Display for PostgreSQLKind {
 }
 
 impl DbKind for SQLiteKind {
+    /// Implements [DbKind::name()] for SQLiteKind.
     fn name(&self) -> String {
         "SQLite".to_string()
     }
 
+    /// Implements [DbKind::db_type()] for SQLiteKind.
     fn db_type(&self, sql_type: &str) -> Result<DbType, DbError> {
         match sql_type.to_lowercase().as_str() {
             "integer" | "int" | "tinyint" | "smallint" | "mediumint" | "bigint" | "int2"
@@ -199,14 +201,17 @@ impl DbKind for SQLiteKind {
         }
     }
 
+    /// Implements [DbKind::param_prefix()] for SQLiteKind.
     fn param_prefix(&self) -> &str {
         "?"
     }
 
+    /// Implements [DbKind::get_epoch_time_sql()] for SQLiteKind.
     fn get_epoch_time_sql(&self) -> &str {
         "strftime('%s', 'now')"
     }
 
+    /// Implements [DbKind::columns_sql()] for SQLiteKind.
     fn columns_sql(&self, table: &str) -> (String, [DbValue; 1]) {
         (
             r#"SELECT "name" AS "column_name", "type" AS "data_type"
@@ -217,6 +222,7 @@ impl DbKind for SQLiteKind {
         )
     }
 
+    /// Implements [DbKind::primary_keys_sql()] for SQLiteKind.
     fn primary_keys_sql(&self, table: &str) -> (String, [DbValue; 1]) {
         (
             r#"SELECT "name" AS "column_name"
@@ -228,6 +234,7 @@ impl DbKind for SQLiteKind {
         )
     }
 
+    /// Implements [DbKind::create_table_sql()] for SQLiteKind.
     fn create_table_sql(
         &self,
         table: &str,
@@ -268,14 +275,17 @@ impl DbKind for SQLiteKind {
         Ok(sql)
     }
 
+    /// Implements [DbKind::drop_table_sql()] for SQLiteKind.
     fn drop_table_sql(&self, table: &str) -> String {
         format!(r#"DROP TABLE IF EXISTS "{table}""#)
     }
 
+    /// Implements [DbKind::drop_view_sql()] for SQLiteKind.
     fn drop_view_sql(&self, view: &str) -> String {
         format!(r#"DROP VIEW IF EXISTS "{view}""#)
     }
 
+    /// Implements [DbKind::which_are_views_sql()] for SQLiteKind.
     fn which_are_views_sql(&self, objects: &[&str]) -> (String, Vec<DbValue>) {
         let prefix = self.param_prefix().to_string();
         let mut placeholders = vec![];
@@ -295,6 +305,7 @@ impl DbKind for SQLiteKind {
         )
     }
 
+    /// Implements [DbKind::which_are_tables_sql()] for SQLiteKind.
     fn which_are_tables_sql(&self, objects: &[&str]) -> (String, Vec<DbValue>) {
         let prefix = self.param_prefix().to_string();
         let mut placeholders = vec![];
@@ -314,6 +325,7 @@ impl DbKind for SQLiteKind {
         )
     }
 
+    /// Implements [DbKind::view_sql_sql()] for SQLiteKind.
     fn view_sql_sql(&self, view: &str) -> (String, [DbValue; 1]) {
         (
             r#"SELECT "sql" FROM "sqlite_master"
@@ -323,6 +335,7 @@ impl DbKind for SQLiteKind {
         )
     }
 
+    /// Implements [DbKind::wrap_trigger_content()] for SQLiteKind.
     fn wrap_trigger_content(
         &self,
         table: &str,
@@ -360,10 +373,12 @@ impl DbKind for SQLiteKind {
 }
 
 impl DbKind for PostgreSQLKind {
+    /// Implements [DbKind::name()] for PostgreSQLKind.
     fn name(&self) -> String {
         "PostgreSQL".to_string()
     }
 
+    /// Implements [DbKind::db_type()] for PostgreSQLKind.
     fn db_type(&self, sql_type: &str) -> Result<DbType, DbError> {
         match sql_type.to_lowercase().as_str() {
             "bool" | "boolean" => Ok(DbType::Boolean(sql_type.to_string())),
@@ -388,14 +403,17 @@ impl DbKind for PostgreSQLKind {
         }
     }
 
+    /// Implements [DbKind::param_prefix()] for PostgreSQLKind.
     fn param_prefix(&self) -> &str {
         "$"
     }
 
+    /// Implements [DbKind::get_epoch_time_sql()] for PostgreSQLKind.
     fn get_epoch_time_sql(&self) -> &str {
         "extract(epoch from now())"
     }
 
+    /// Implements [DbKind::columns_sql()] for PostgreSQLKind.
     fn columns_sql(&self, table: &str) -> (String, [DbValue; 1]) {
         (
             r#"SELECT
@@ -416,6 +434,7 @@ impl DbKind for PostgreSQLKind {
         )
     }
 
+    /// Implements [DbKind::primary_keys_sql()] for PostgreSQLKind.
     fn primary_keys_sql(&self, table: &str) -> (String, [DbValue; 1]) {
         (
             r#"SELECT "kcu"."column_name"
@@ -436,6 +455,7 @@ impl DbKind for PostgreSQLKind {
         )
     }
 
+    /// Implements [DbKind::create_table_sql()] for PostgreSQLKind.
     fn create_table_sql(
         &self,
         table: &str,
@@ -475,14 +495,17 @@ impl DbKind for PostgreSQLKind {
         Ok(sql)
     }
 
+    /// Implements [DbKind::drop_table_sql()] for PostgreSQLKind.
     fn drop_table_sql(&self, table: &str) -> String {
         format!(r#"DROP TABLE IF EXISTS "{table}" CASCADE"#)
     }
 
+    /// Implements [DbKind::drop_view_sql()] for PostgreSQLKind.
     fn drop_view_sql(&self, view: &str) -> String {
         format!(r#"DROP VIEW IF EXISTS "{view}" CASCADE"#)
     }
 
+    /// Implements [DbKind::which_are_views_sql()] for PostgreSQLKind.
     fn which_are_views_sql(&self, objects: &[&str]) -> (String, Vec<DbValue>) {
         let prefix = self.param_prefix().to_string();
         let mut placeholders = vec![];
@@ -509,6 +532,7 @@ impl DbKind for PostgreSQLKind {
         )
     }
 
+    /// Implements [DbKind::which_are_tables_sql()] for PostgreSQLKind.
     fn which_are_tables_sql(&self, objects: &[&str]) -> (String, Vec<DbValue>) {
         let prefix = self.param_prefix().to_string();
         let mut placeholders = vec![];
@@ -535,6 +559,7 @@ impl DbKind for PostgreSQLKind {
         )
     }
 
+    /// Implements [DbKind::view_sql_sql()] for PostgreSQLKind.
     fn view_sql_sql(&self, view: &str) -> (String, [DbValue; 1]) {
         (
             format!(
@@ -551,6 +576,7 @@ impl DbKind for PostgreSQLKind {
         )
     }
 
+    /// Implements [DbKind::wrap_trigger_content()] for PostgreSQLKind.
     fn wrap_trigger_content(
         &self,
         table: &str,
