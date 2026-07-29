@@ -373,10 +373,6 @@ impl DbQuery for LibSQLPool {
         } else {
             panic!()
         }
-
-        // TODO: Handle the case where filename ends with .csv using the load extension
-        // if the absolute path can be avoided (this seems unlikely, though).
-        //batch_insert(self, table, filename).await
     }
 
     /// Implements [DbQuery::drop_table()] for SQLite.

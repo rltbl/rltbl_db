@@ -714,9 +714,7 @@ impl DbType {
         for db_type in DbType::sorted() {
             if db_type >= *self {
                 match db_type.parse_str(value) {
-                    Ok(_) => {
-                        return Ok(db_type);
-                    }
+                    Ok(_) => return Ok(db_type),
                     Err(err) => {
                         if let DbType::Text(_) = db_type {
                             return Err(DbError::InputError(format!(
@@ -779,22 +777,24 @@ impl DbType {
             DbType::Real(_) => match value.to_lowercase().as_str() {
                 "0" | "false" | "f" => Ok(DbValue::Real(0_f32)),
                 "1" | "true" | "t" => Ok(DbValue::Real(1_f32)),
-                _ => {
-                    let value = value
-                        .parse::<f32>()
-                        .map_err(|_| DbError::InputError(format!("Not an f32: {value}")))?;
-                    Ok(DbValue::Real(value))
-                }
+                _ => match value
+                    .parse::<f32>()
+                    .map_err(|_| DbError::InputError(format!("Not an f32: {value}")))?
+                {
+                    f32::INFINITY => Err(DbError::InputError(format!("Not an f32: {value}"))),
+                    value => Ok(DbValue::Real(value)),
+                },
             },
             DbType::BigReal(_) => match value.to_lowercase().as_str() {
                 "0" | "false" | "f" => Ok(DbValue::BigReal(0_f64)),
                 "1" | "true" | "t" => Ok(DbValue::BigReal(1_f64)),
-                _ => {
-                    let value = value
-                        .parse::<f64>()
-                        .map_err(|_| DbError::InputError(format!("Not an f64: {value}")))?;
-                    Ok(DbValue::BigReal(value))
-                }
+                _ => match value
+                    .parse::<f64>()
+                    .map_err(|_| DbError::InputError(format!("Not an f64: {value}")))?
+                {
+                    f64::INFINITY => Err(DbError::InputError(format!("Not an f64: {value}"))),
+                    value => Ok(DbValue::BigReal(value)),
+                },
             },
             DbType::Numeric(_) => match value.to_lowercase().as_str() {
                 "0" | "false" | "f" => Ok(DbValue::Numeric(dec!(0))),

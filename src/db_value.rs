@@ -1541,18 +1541,6 @@ mod tests {
 
     #[test]
     fn test_min_typing() {
-        let db_values = vec![DbValue::Integer(i32::MAX), DbValue::Real(1.23)];
-        let column = DbColumn::new().min_column(db_values.into_iter()).unwrap();
-        assert_eq!(
-            column,
-            DbColumn {
-                name: "".to_string(),
-                db_type: DbType::Real("".to_string()),
-                not_null: true,
-                unique: true,
-            }
-        );
-
         let column_values = vec![
             // Column A:
             vec![
@@ -1560,27 +1548,31 @@ mod tests {
                 DbValue::from(1),
                 DbValue::from(i64::MAX),
                 DbValue::from(2.1),
+                DbValue::from(f64::MAX),
             ],
             // Column B:
             vec![
                 DbValue::from(1),
+                DbValue::from(true),
                 DbValue::from(i64::MAX),
                 DbValue::from(2.1),
-                DbValue::from(true),
+                DbValue::from(f64::MAX),
             ],
             // Column C:
             vec![
+                DbValue::from(f64::MAX),
                 DbValue::from(1),
-                DbValue::from(2.1),
                 DbValue::from(true),
                 DbValue::from(i64::MAX),
+                DbValue::from(2.1),
             ],
             // Column D:
             vec![
                 DbValue::from("alphanum"),
-                DbValue::from(f64::MAX),
+                DbValue::from(f32::MAX),
                 DbValue::from(true),
                 DbValue::from(25),
+                DbValue::from(i32::MAX),
             ],
             // Column E:
             vec![
@@ -1588,21 +1580,42 @@ mod tests {
                 DbValue::from(true),
                 DbValue::from(true),
                 DbValue::from(false),
+                DbValue::from(0),
             ],
             // Column F:
             vec![
                 DbValue::from(1),
                 DbValue::from(2.1),
                 DbValue::from(2.1),
+                DbValue::from(i64::MAX),
                 DbValue::Null,
             ],
+            // Column G:
+            vec![
+                DbValue::Null,
+                DbValue::from(i64::MAX),
+                DbValue::from(2.1),
+                DbValue::from(1),
+                DbValue::from(2.1),
+            ],
+            // Column H:
+            vec![
+                DbValue::Null,
+                DbValue::from(i32::MAX),
+                DbValue::from(2),
+                DbValue::from(1),
+                DbValue::from(i32::MAX),
+            ],
+            // Column I:
+            vec![
+                DbValue::Null,
+                DbValue::from(i16::MAX),
+                DbValue::from(2),
+                DbValue::from(1),
+                DbValue::from(3),
+            ],
         ];
-        // TODO: Remove this commented-out code before the PR is merged.
-        // In case we decide to use references as function arguments:
-        //let column_values = column_values
-        //    .iter()
-        //    .map(|vrow| vrow.as_ref())
-        //    .collect::<Vec<_>>();
+
         let columns = DbColumn::min_columns_from_column_values(column_values.into_iter()).unwrap();
         assert_eq!(
             columns,
@@ -1610,21 +1623,21 @@ mod tests {
                 // Column A:
                 DbColumn {
                     name: "".to_string(),
-                    db_type: DbType::Real("".to_string()),
+                    db_type: DbType::BigReal("".to_string()),
                     not_null: true,
                     unique: true,
                 },
                 // Column B:
                 DbColumn {
                     name: "".to_string(),
-                    db_type: DbType::Real("".to_string()),
+                    db_type: DbType::BigReal("".to_string()),
                     not_null: true,
                     unique: true,
                 },
                 // Column C:
                 DbColumn {
                     name: "".to_string(),
-                    db_type: DbType::Real("".to_string()),
+                    db_type: DbType::BigReal("".to_string()),
                     not_null: true,
                     unique: true,
                 },
@@ -1648,7 +1661,28 @@ mod tests {
                     db_type: DbType::Real("".to_string()),
                     not_null: false,
                     unique: false,
-                }
+                },
+                // Column G:
+                DbColumn {
+                    name: "".to_string(),
+                    db_type: DbType::Real("".to_string()),
+                    not_null: false,
+                    unique: false,
+                },
+                // Column H:
+                DbColumn {
+                    name: "".to_string(),
+                    db_type: DbType::Integer("".to_string()),
+                    not_null: false,
+                    unique: false,
+                },
+                // Column I:
+                DbColumn {
+                    name: "".to_string(),
+                    db_type: DbType::I16("".to_string()),
+                    not_null: false,
+                    unique: true,
+                },
             ]
         );
 
@@ -1658,7 +1692,7 @@ mod tests {
             db_row! { "foo" => 3, "bar" => 2.0, "jar" => "alphanum", "har" => false },
             db_row! { "foo" => i64::MAX, "bar" => 2.0, "jar" => "alphanum", "har" => DbValue::Null },
         ];
-        //let db_rows = db_rows.iter().map(|row| row).collect::<Vec<_>>();
+
         let column_map = DbColumn::min_row_from_db_rows(db_rows.into_iter()).unwrap();
         assert_eq!(
             column_map,
@@ -1718,6 +1752,7 @@ mod tests {
                 DbValue::Null,
             ],
         ];
+
         let columns =
             DbColumn::min_columns_from_anonymous_rows(anonymous_rows.into_iter()).unwrap();
         assert_eq!(
