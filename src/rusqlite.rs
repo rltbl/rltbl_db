@@ -7,7 +7,7 @@ use crate::{
     db_kind::{DbKind, MAX_PARAMS_SQLITE, SQLiteKind},
     db_value::{DbParams, DbRow, DbRows, DbValue, IntoDbParams, IntoDbRows, JsonValue},
     parse::validate_table_name,
-    shared::{EditType, edit, load_table_using_insert},
+    shared::{EditType, batch_insert, edit},
 };
 
 use deadpool_sqlite::{
@@ -453,9 +453,9 @@ impl DbQuery for RusqlitePool {
     }
 
     async fn load_table(&self, table: &str, filename: &str) -> Result<(), DbError> {
-        let current_dir = env::current_dir().unwrap();
-        let current_dir = current_dir.display();
         if filename.to_lowercase().ends_with(".csv") {
+            let current_dir = env::current_dir().unwrap();
+            let current_dir = current_dir.display();
             let csv = format!("{}.csv", filename.strip_suffix(".csv").unwrap());
             let sql = format!(
                 r#"CREATE VIRTUAL TABLE temp.t1
@@ -466,7 +466,7 @@ impl DbQuery for RusqlitePool {
             self.execute(&sql, ()).await?;
             Ok(())
         } else if filename.to_lowercase().ends_with(".tsv") {
-            load_table_using_insert(self, table, filename).await
+            batch_insert(self, table, filename).await
         } else {
             panic!()
         }

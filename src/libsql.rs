@@ -7,7 +7,7 @@ use crate::{
     db_kind::{DbKind, MAX_PARAMS_SQLITE, SQLiteKind},
     db_value::{DbParams, DbRow, DbRows, DbValue, IntoDbParams, IntoDbRows, JsonValue},
     parse::validate_table_name,
-    shared::{EditType, edit, load_table_using_insert},
+    shared::{EditType, batch_insert, edit},
 };
 
 use deadpool_libsql::{
@@ -15,7 +15,7 @@ use deadpool_libsql::{
     libsql::{Builder, Value},
 };
 use rust_decimal::prelude::ToPrimitive;
-use std::str::from_utf8;
+use std::{env, str::from_utf8};
 
 impl TryFrom<Value> for DbValue {
     type Error = DbError;
@@ -93,6 +93,7 @@ pub struct LibSQLPool {
     /// the cache will be maintained in accordance with the given [CachingStrategy].
     /// For further information, see [DbQuery::set_cache_aware_query()].
     cache_aware_query: bool,
+    load_extensions_enabled: bool,
 }
 
 impl LibSQLPool {
@@ -105,11 +106,35 @@ impl LibSQLPool {
         let pool = Pool::builder(manager).build().map_err(|err| {
             DbError::ConnectError(format!("Error creating pool from URL: '{url}': {err}"))
         })?;
-        Ok(Self {
-            pool: pool,
-            caching_strategy: CachingStrategy::None,
-            cache_aware_query: false,
-        })
+
+        let conn = pool
+            .get()
+            .await
+            .map_err(|err| DbError::ConnectError(format!("Error getting from pool: {err}")))?;
+
+        // Enable the CSV load extension.
+        // Note that this requires that csv.so be in the current directory.
+        conn.load_extension_enable().unwrap();
+        let current_dir = env::current_dir().unwrap();
+        let current_dir = current_dir.display();
+        match conn.load_extension(&format!("{current_dir}/csv"), None) {
+            Ok(_) => Ok(Self {
+                pool: pool,
+                caching_strategy: CachingStrategy::None,
+                cache_aware_query: false,
+                load_extensions_enabled: true,
+            }),
+            Err(err) => {
+                eprintln!("WARNING Unable to load extension 'csv': {err}");
+                conn.load_extension_disable().unwrap();
+                Ok(Self {
+                    pool: pool,
+                    caching_strategy: CachingStrategy::None,
+                    cache_aware_query: false,
+                    load_extensions_enabled: false,
+                })
+            }
+        }
     }
 }
 
@@ -125,6 +150,7 @@ impl DbQuery for LibSQLPool {
             pool: self.pool.clone(),
             caching_strategy: self.caching_strategy,
             cache_aware_query: self.cache_aware_query,
+            load_extensions_enabled: self.load_extensions_enabled,
         })
     }
 
@@ -330,9 +356,27 @@ impl DbQuery for LibSQLPool {
     }
 
     async fn load_table(&self, table: &str, filename: &str) -> Result<(), DbError> {
+        if !self.load_extensions_enabled || filename.to_lowercase().ends_with(".tsv") {
+            batch_insert(self, table, filename).await
+        } else if filename.to_lowercase().ends_with(".csv") {
+            let current_dir = env::current_dir().unwrap();
+            let current_dir = current_dir.display();
+            let csv = format!("{}.csv", filename.strip_suffix(".csv").unwrap());
+            let sql = format!(
+                r#"CREATE VIRTUAL TABLE temp.t1
+                   USING CSV(filename='{current_dir}/{csv}', header=true)"#
+            );
+            self.execute(&sql, ()).await?;
+            let sql = format!("INSERT INTO {table} SELECT * FROM temp.t1");
+            self.execute(&sql, ()).await?;
+            Ok(())
+        } else {
+            panic!()
+        }
+
         // TODO: Handle the case where filename ends with .csv using the load extension
         // if the absolute path can be avoided (this seems unlikely, though).
-        load_table_using_insert(self, table, filename).await
+        //batch_insert(self, table, filename).await
     }
 
     /// Implements [DbQuery::drop_table()] for SQLite.

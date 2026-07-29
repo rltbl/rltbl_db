@@ -332,7 +332,7 @@ pub(crate) async fn edit(
 }
 
 /// TODO: Add docstring.
-pub async fn load_table_using_insert(
+pub async fn batch_insert(
     pool: &(impl DbQuery + Sync),
     table: &str,
     tsv: &str,

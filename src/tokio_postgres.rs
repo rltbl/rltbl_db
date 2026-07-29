@@ -550,7 +550,9 @@ impl DbQuery for TokioPostgresPool {
     /// TODO: Add docstring.
     async fn load_table(&self, table: &str, tsv: &str) -> Result<(), DbError> {
         // TODO: Remove panics and unwraps.
-
+        if !tsv.to_lowercase().ends_with("tsv") && !tsv.to_lowercase().ends_with(".csv") {
+            panic!()
+        }
         let file = File::open(tsv).unwrap();
         let buf_reader = BufReader::new(file);
         let mut stream = buf_reader.split(b'\n').map(|line| {

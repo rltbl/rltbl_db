@@ -1603,7 +1603,6 @@ mod tests {
         //    .iter()
         //    .map(|vrow| vrow.as_ref())
         //    .collect::<Vec<_>>();
-        println!("BOOM!");
         let columns = DbColumn::min_columns_from_column_values(column_values.into_iter()).unwrap();
         assert_eq!(
             columns,
