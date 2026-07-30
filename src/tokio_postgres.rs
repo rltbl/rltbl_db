@@ -5,7 +5,7 @@ use crate::{
     cache::{CachingStrategy, clear_cache_for_affected_tables, clear_cache_for_dropped_tables},
     core::{DbError, DbQuery},
     db_kind::{DbKind, MAX_PARAMS_POSTGRES, PostgreSQLKind},
-    db_value::{DbParams, DbRow, DbRows, DbValue, IntoDbParams, IntoDbRows, JsonValue},
+    db_value::{DbColumn, DbParams, DbRow, DbRows, DbValue, IntoDbParams, IntoDbRows, JsonValue},
     parse::validate_table_name,
     shared::{EditType, edit},
 };
@@ -20,6 +20,7 @@ use deadpool_postgres::{
     },
 };
 use futures_util::{SinkExt, stream};
+use indexmap::IndexMap;
 use rust_decimal::Decimal;
 use std::{
     fs::File,
@@ -548,7 +549,13 @@ impl DbQuery for TokioPostgresPool {
     }
 
     /// Implements [DbQuery::load_table()] for PostgreSQL
-    async fn load_table(&self, table: &str, filename: &str) -> Result<(), DbError> {
+    async fn load_table(
+        &self,
+        table: &str,
+        _: &IndexMap<String, DbColumn>,
+        filename: &str,
+    ) -> Result<(), DbError> {
+        eprintln!("Loading table '{table}' from '{filename}' using PostgreSQL's COPY IN command.");
         if !filename.to_lowercase().ends_with("tsv") && !filename.to_lowercase().ends_with(".csv") {
             return Err(DbError::InputError(format!(
                 "Filename: '{filename}' must end with .tsv or .csv"

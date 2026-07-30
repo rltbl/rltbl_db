@@ -28,4 +28,4 @@ jobs:
         uses: actions/checkout@v3
       - name: Run tests
         run: |
-          make test_ignored
+          make test_caching_perf_and_max_params

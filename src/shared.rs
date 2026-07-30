@@ -1,7 +1,7 @@
 use crate::{
     cache::clear_cache_for_edited_tables,
     core::{DbError, DbQuery},
-    db_value::{DbRow, DbRows, DbValue, IntoDbRows},
+    db_value::{DbColumn, DbRow, DbRows, DbValue, IntoDbRows},
     parse::validate_table_name,
 };
 use csv::ReaderBuilder;
@@ -335,8 +335,11 @@ pub(crate) async fn edit(
 pub async fn batch_insert(
     pool: &(impl DbQuery + Sync),
     table: &str,
+    columns: &IndexMap<String, DbColumn>,
     filename: &str,
 ) -> Result<(), DbError> {
+    eprintln!("Loading table '{table}' from '{filename}' using batch_insert()");
+
     // TODO: Change the signature of insert() and similar methods so that they take iterators
     // as arguments instead of impl IntoDbRows. Then we will not have to collect the contents
     // of the file into a vector but can keep it in the form of an iterator as we do in
@@ -388,7 +391,7 @@ pub async fn batch_insert(
     };
 
     // Collect all of the rows into a vector (TODO: See comment at the beginning of this function).
-    let mut rows = vec![];
+    let mut db_rows = vec![];
     for row in rdr.records() {
         let row_values = row
             .map_err(|err| {
@@ -397,11 +400,14 @@ pub async fn batch_insert(
             .into_iter()
             .map(|value| DbValue::from(value))
             .collect::<Vec<_>>();
-        let row_content = zip(headers.clone(), row_values).collect::<IndexMap<_, _>>();
-        rows.push(DbRow { map: row_content });
+        let db_row = DbRow {
+            map: zip(headers.clone(), row_values).collect::<IndexMap<_, _>>(),
+        };
+        let db_row = db_row.coerce(columns)?;
+        db_rows.push(db_row);
     }
 
     let columns = headers.iter().map(|s| s.as_str()).collect::<Vec<_>>();
-    pool.insert(table, &columns, rows).await?;
+    pool.insert(table, &columns, db_rows).await?;
     Ok(())
 }

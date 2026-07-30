@@ -12,6 +12,7 @@ use crate::{
     db_kind::DbKind,
     db_value::{DbColumn, DbParams, DbRow, DbRows, IntoDbParams, IntoDbRows},
     parse::get_accessed_tables,
+    shared::batch_insert,
 };
 
 use async_trait::async_trait;
@@ -519,12 +520,14 @@ pub trait DbQuery: Sync {
     fn load_table(
         &self,
         table: &str,
+        columns: &IndexMap<String, DbColumn>,
         filename: &str,
     ) -> impl Future<Output = Result<(), DbError>> + Send;
 
     /// Create a table, using the stem of the given file as the table name, and the headers
     /// of each data column in the file as the names of the table's columns, and then load the
-    /// data into it.
+    /// data into it using the bulk copy method if available for this driver, otherwise the
+    /// fallback is to [DbQuery::import_table_using_batch_insert()]
     async fn import_table(&self, filename: &str) -> Result<(), DbError> {
         // The table name is just the name of the file:
         let table = Path::new(filename)
@@ -535,8 +538,23 @@ pub trait DbQuery: Sync {
             )))?;
         let columns = read_columns_from_file(filename)?;
         self.recreate_table(&table, &columns).await?;
-        self.load_table(&table, filename).await?;
-        Ok(())
+        self.load_table(&table, &columns, filename).await
+    }
+
+    /// Create a table, using the stem of the given file as the table name, and the headers
+    /// of each data column in the file as the names of the table's columns, and then load the
+    /// data into it using the batch insert method.
+    async fn import_table_using_batch_insert(&self, filename: &str) -> Result<(), DbError> {
+        // The table name is just the name of the file:
+        let table = Path::new(filename)
+            .file_stem()
+            .and_then(|fs| fs.to_str())
+            .ok_or(DbError::InputError(format!(
+                "Error getting table name from path '{filename}'"
+            )))?;
+        let columns = read_columns_from_file(filename)?;
+        self.recreate_table(&table, &columns).await?;
+        batch_insert(&self.pool(), table, &columns, filename).await
     }
 
     /// Drop the given table from the database. Note that for PostgreSQL (see

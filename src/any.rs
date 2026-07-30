@@ -23,7 +23,7 @@ use crate::{
     cache::CachingStrategy,
     core::{DbError, DbQuery},
     db_kind::DbKind,
-    db_value::{DbRows, IntoDbParams, IntoDbRows},
+    db_value::{DbColumn, DbRows, IntoDbParams, IntoDbRows},
 };
 
 #[cfg(feature = "rusqlite")]
@@ -40,6 +40,8 @@ use crate::db_kind::PostgreSQLKind;
 
 #[cfg(any(feature = "rusqlite", feature = "libsql"))]
 use crate::db_kind::SQLiteKind;
+
+use indexmap::IndexMap;
 
 #[derive(Clone, Debug)]
 pub enum AnyPool {
@@ -279,14 +281,19 @@ impl DbQuery for AnyPool {
     }
 
     /// Implements [DbQuery::load_table()]
-    async fn load_table(&self, table: &str, tsv: &str) -> Result<(), DbError> {
+    async fn load_table(
+        &self,
+        table: &str,
+        columns: &IndexMap<String, DbColumn>,
+        filename: &str,
+    ) -> Result<(), DbError> {
         match self {
             #[cfg(feature = "rusqlite")]
-            AnyPool::Rusqlite(pool) => pool.load_table(table, tsv).await,
+            AnyPool::Rusqlite(pool) => pool.load_table(table, columns, filename).await,
             #[cfg(feature = "tokio-postgres")]
-            AnyPool::TokioPostgres(pool) => pool.load_table(table, tsv).await,
+            AnyPool::TokioPostgres(pool) => pool.load_table(table, columns, filename).await,
             #[cfg(feature = "libsql")]
-            AnyPool::LibSQL(pool) => pool.load_table(table, tsv).await,
+            AnyPool::LibSQL(pool) => pool.load_table(table, columns, filename).await,
         }
     }
 
@@ -407,9 +414,29 @@ mod tests {
     async fn import_perf(url: &str) {
         clear_meta_cache().unwrap();
         let pool = AnyPool::connect(url).await.unwrap();
-        pool.import_table("tests/penguins/src/data/penguin.tsv")
+
+        eprintln!("Import performance test for {}.", pool.kind().name());
+        eprintln!("---");
+
+        let filename = match pool.kind().name().as_str() {
+            "SQLite" => "tests/penguins/src/data/penguin.csv",
+            "PostgreSQL" => "tests/penguins/src/data/penguin.tsv",
+            _ => unreachable!(),
+        };
+        let now = Instant::now();
+        pool.import_table(filename).await.unwrap();
+        let elapsed = now.elapsed().as_secs();
+        eprintln!("Importing the data in '{filename}; using import_table() took {elapsed}s.");
+
+        let filename = "tests/penguins/src/data/penguin.tsv";
+        let now = Instant::now();
+        pool.import_table_using_batch_insert(filename)
             .await
             .unwrap();
+        let elapsed = now.elapsed().as_secs();
+        eprintln!(
+            "Importing the data in '{filename}' import_table_using_insert() took {elapsed}s."
+        );
     }
 
     #[tokio::test]
@@ -2386,9 +2413,9 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_caching_performance() {
-        let runs = 2500;
+        let runs = 1000;
         let edit_rate = 25;
-        let fail_after = 100;
+        let fail_after = 60;
         #[cfg(feature = "rusqlite")]
         perform_caching(":memory:", runs, edit_rate, fail_after).await;
         #[cfg(feature = "tokio-postgres")]

@@ -758,6 +758,17 @@ impl DbType {
     /// Parses a given string representing the value of a database field into a [DbValue] of this
     /// type.
     pub fn parse_str(&self, value: &str) -> Result<DbValue, DbError> {
+        // If the value is a NULL value, then we just return a Null:
+        if value == "" {
+            return Ok(DbValue::Null);
+        }
+
+        // When parsing from a TSV or CSV file we will often encounter strings like "true",
+        // "false", "f", "t", "0", and "1", possibly in uppercase or mixed case. When the current
+        // type is a boolean, these should be interpreted as booleans. Otherwise, if the current
+        // type is a number type, then these should be interpreted as numbers of that type (with
+        // true => 1 and false => 0), otherwise if the current type is text then *all* values
+        // should be interpreted as text.
         match self {
             DbType::Null(_) => Ok(DbValue::Null),
             DbType::Boolean(_) => match value.to_lowercase().as_str() {
@@ -766,7 +777,7 @@ impl DbType {
                 _ => {
                     let value = value
                         .parse::<bool>()
-                        .map_err(|_| DbError::InputError(format!("Not a boolean: {value}")))?;
+                        .map_err(|_| DbError::InputError(format!("Not a boolean: '{value}'")))?;
                     Ok(DbValue::Boolean(value))
                 }
             },
@@ -776,7 +787,7 @@ impl DbType {
                 _ => {
                     let value = value
                         .parse::<i16>()
-                        .map_err(|_| DbError::InputError(format!("Not an i16: {value}")))?;
+                        .map_err(|_| DbError::InputError(format!("Not an i16: '{value}'")))?;
                     Ok(DbValue::SmallInteger(value))
                 }
             },
@@ -786,7 +797,7 @@ impl DbType {
                 _ => {
                     let value = value
                         .parse::<i32>()
-                        .map_err(|_| DbError::InputError(format!("Not an i32: {value}")))?;
+                        .map_err(|_| DbError::InputError(format!("Not an i32: '{value}'")))?;
                     Ok(DbValue::Integer(value))
                 }
             },
@@ -796,7 +807,7 @@ impl DbType {
                 _ => {
                     let value = value
                         .parse::<i64>()
-                        .map_err(|_| DbError::InputError(format!("Not an i64: {value}")))?;
+                        .map_err(|_| DbError::InputError(format!("Not an i64: '{value}'")))?;
                     Ok(DbValue::BigInteger(value))
                 }
             },
@@ -805,9 +816,9 @@ impl DbType {
                 "1" | "true" | "t" => Ok(DbValue::Real(1_f32)),
                 _ => match value
                     .parse::<f32>()
-                    .map_err(|_| DbError::InputError(format!("Not an f32: {value}")))?
+                    .map_err(|_| DbError::InputError(format!("Not an f32: '{value}'")))?
                 {
-                    f32::INFINITY => Err(DbError::InputError(format!("Not an f32: {value}"))),
+                    f32::INFINITY => Err(DbError::InputError(format!("Not an f32: '{value}'"))),
                     value => Ok(DbValue::Real(value)),
                 },
             },
@@ -816,9 +827,9 @@ impl DbType {
                 "1" | "true" | "t" => Ok(DbValue::BigReal(1_f64)),
                 _ => match value
                     .parse::<f64>()
-                    .map_err(|_| DbError::InputError(format!("Not an f64: {value}")))?
+                    .map_err(|_| DbError::InputError(format!("Not an f64: '{value}'")))?
                 {
-                    f64::INFINITY => Err(DbError::InputError(format!("Not an f64: {value}"))),
+                    f64::INFINITY => Err(DbError::InputError(format!("Not an f64: '{value}'"))),
                     value => Ok(DbValue::BigReal(value)),
                 },
             },
@@ -828,7 +839,7 @@ impl DbType {
                 _ => {
                     let value = value
                         .parse::<Decimal>()
-                        .map_err(|_| DbError::InputError(format!("Not a Decimal: {value}")))?;
+                        .map_err(|_| DbError::InputError(format!("Not a Decimal: '{value}'")))?;
                     Ok(DbValue::Numeric(value))
                 }
             },

@@ -5,7 +5,7 @@ use crate::{
     cache::{CachingStrategy, clear_cache_for_dropped_tables},
     core::{DbError, DbQuery},
     db_kind::{DbKind, MAX_PARAMS_SQLITE, SQLiteKind},
-    db_value::{DbParams, DbRow, DbRows, DbValue, IntoDbParams, IntoDbRows, JsonValue},
+    db_value::{DbColumn, DbParams, DbRow, DbRows, DbValue, IntoDbParams, IntoDbRows, JsonValue},
     parse::validate_table_name,
     shared::{EditType, batch_insert, edit},
 };
@@ -14,6 +14,7 @@ use deadpool_libsql::{
     Manager, Pool,
     libsql::{Builder, Value},
 };
+use indexmap::IndexMap;
 use rust_decimal::prelude::ToPrimitive;
 use std::{env, str::from_utf8};
 
@@ -362,10 +363,19 @@ impl DbQuery for LibSQLPool {
     }
 
     /// Implements [DbQuery::load_table()] for SQLite.
-    async fn load_table(&self, table: &str, filename: &str) -> Result<(), DbError> {
+    async fn load_table(
+        &self,
+        table: &str,
+        columns: &IndexMap<String, DbColumn>,
+        filename: &str,
+    ) -> Result<(), DbError> {
         if !self.load_extensions_enabled || filename.to_lowercase().ends_with(".tsv") {
-            batch_insert(self, table, filename).await
+            eprintln!("Loading table '{table}' from '{filename}' using batch_insert().");
+            batch_insert(self, table, columns, filename).await
         } else if filename.to_lowercase().ends_with(".csv") {
+            eprintln!(
+                "Loading table '{table}' from '{filename}' using SQLite's CSV load extension."
+            );
             let current_dir = env::current_dir().map_err(|err| {
                 DbError::ConnectError(format!("Error getting current directory: {err}"))
             })?;
