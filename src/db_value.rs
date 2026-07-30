@@ -1005,8 +1005,8 @@ impl DbRow {
     /// column_map.
     pub fn coerce(&self, column_map: &IndexMap<String, DbColumn>) -> Result<DbRow, DbError> {
         // For each DbValue in db_row, get the corresponding DbColumn from the column_map.
-        // Then use the db_type to convert() the value into the correct type and place the
-        // converted DbValue into a new row that will be returned.
+        // Then use the db_type to parse the string representation of the value into the
+        // correct type and place the converted DbValue into a new row that will be returned.
         let mut coerced = DbRow::new();
         for (column_name, db_value) in self.iter() {
             let column_type = &column_map
@@ -1015,7 +1015,7 @@ impl DbRow {
                     "Column '{column_name}' not in column map."
                 )))?
                 .db_type;
-            let converted = column_type.convert(db_value)?;
+            let converted = column_type.parse_str(&db_value.to_string())?;
             coerced.insert(column_name.to_string(), converted);
         }
         Ok(coerced)
@@ -1619,6 +1619,14 @@ mod tests {
                 DbValue::from(1),
                 DbValue::from(3),
             ],
+            // Column K:
+            vec![
+                DbValue::Null,
+                DbValue::from(u32::MAX),
+                DbValue::from(2),
+                DbValue::from(1),
+                DbValue::from(3),
+            ],
         ];
 
         let columns = DbColumn::min_columns_from_column_values(column_values.into_iter()).unwrap();
@@ -1692,6 +1700,13 @@ mod tests {
                 DbColumn {
                     name: "".to_string(),
                     db_type: DbType::Real("".to_string()),
+                    not_null: false,
+                    unique: true,
+                },
+                // Column K:
+                DbColumn {
+                    name: "".to_string(),
+                    db_type: DbType::BigInteger("".to_string()),
                     not_null: false,
                     unique: true,
                 },
@@ -1804,10 +1819,10 @@ mod tests {
             "foo" => DbValue::SmallInteger(1),
             "bar" => DbValue::SmallInteger(2),
             "jar" => DbValue::Text("3".to_string()),
-            "har" => DbValue::Text("1".to_string())
+            "har" => DbValue::Text("t".to_string())
         };
         let input_row_2 = db_row! {
-            "foo" => DbValue::Integer(7),
+            "foo" => DbValue::BigInteger(i64::MAX),
             "bar" => DbValue::Text("2".to_string()),
             "jar" => DbValue::SmallInteger(9),
             "har" => DbValue::Text("0".to_string())
@@ -1815,7 +1830,7 @@ mod tests {
         let column_map = indexmap! {
             "foo".to_string() => DbColumn {
                 name: "foo".to_string(),
-                db_type: DbType::BigReal("".to_string()),
+                db_type: DbType::Real("".to_string()),
                 not_null: true,
                 unique: true,
             },
@@ -1839,13 +1854,13 @@ mod tests {
             }
         };
         let expected_row_1 = db_row! {
-            "foo" => DbValue::BigReal(1.0),
+            "foo" => DbValue::Real(1.0),
             "bar" => DbValue::SmallInteger(2),
             "jar" => DbValue::BigInteger(3),
             "har" => DbValue::Boolean(true),
         };
         let expected_row_2 = db_row! {
-            "foo" => DbValue::BigReal(7.0),
+            "foo" => DbValue::Real(9.223372e18),
             "bar" => DbValue::SmallInteger(2),
             "jar" => DbValue::BigInteger(9),
             "har" => DbValue::Boolean(false),
