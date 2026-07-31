@@ -446,9 +446,13 @@ mod tests {
         #[cfg(feature = "tokio-postgres")]
         import("postgresql:///rltbl_db").await;
         #[cfg(feature = "libsql")]
-        {
-            // import(":memory:").await;
-        }
+        import_direct(":memory:").await;
+    }
+
+    async fn import_direct(url: &str) {
+        clear_meta_cache().unwrap();
+        let pool = AnyPool::connect(url).await.unwrap();
+        pool.import_table("tests/input/table1.tsv").await.unwrap();
     }
 
     async fn import(url: &str) {
