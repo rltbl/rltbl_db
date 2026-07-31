@@ -465,20 +465,11 @@ mod tests {
                         "delta" => DbValue::BigReal(i64::MAX as f64),
                     },
                     db_row! {
-                        // TODO: Rusqlite has this first value wrong. It should be DbValue::Null,
+                        // TODO: This first value is wrong. It should be DbValue::Null,
                         // but we need a way to import NULL values from TSV. One possibility
                         // is to create a trigger on tables with nullable columns to insert NULL
                         // whenever we are given some special string such as '\N', 'null', etc.
-                        "alpha" => {
-                            #[cfg(feature = "rusqlite")]
-                            {
-                                DbValue::Text("".to_string())
-                            }
-                            #[cfg(feature = "libsql")]
-                            {
-                                DbValue::Null
-                            }
-                        },
+                        "alpha" => DbValue::Text("".to_string()),
                         "beta" => DbValue::Text("long".to_string()),
                         "gamma" => DbValue::BigReal(i32::MAX as f64),
                         "delta" => DbValue::BigReal(4.0),
