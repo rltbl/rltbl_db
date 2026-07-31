@@ -338,7 +338,12 @@ pub async fn batch_insert(
     columns: &IndexMap<String, DbColumn>,
     filename: &str,
 ) -> Result<(), DbError> {
-    eprintln!("Loading table '{table}' from '{filename}' using batch_insert()");
+    let batch_size = 100;
+
+    eprintln!(
+        "Loading table '{table}' from '{filename}' using batch_insert() \
+         with batch size {batch_size}"
+    );
 
     // TODO: Change the signature of insert() and similar methods so that they take iterators
     // as arguments instead of impl IntoDbRows. Then we will not have to collect the contents
@@ -358,14 +363,14 @@ pub async fn batch_insert(
     };
 
     // Read the rows from the given file into a vector.
-    let mut rdr =
+    let rdr =
         ReaderBuilder::new()
             .has_headers(false)
             .delimiter(delimiter)
             .from_reader(File::open(filename).map_err(|err| {
                 DbError::InputError(format!("Unable to open '{filename}': {err}"))
             })?);
-    let mut records = rdr.records();
+    let mut records = rdr.into_records();
 
     // Extract the columns from the first line of the file:
     let headers = {
@@ -390,9 +395,11 @@ pub async fn batch_insert(
         headers
     };
 
-    // Collect all of the rows into a vector (TODO: See comment at the beginning of this function).
+    // Collect all of the rows into vectors and insert them
+    // (TODO: See comment at the beginning of this function).
     let mut db_rows = vec![];
-    for row in rdr.records() {
+    let str_columns = headers.iter().map(|s| s.as_str()).collect::<Vec<_>>();
+    for row in records {
         let row_values = row
             .map_err(|err| {
                 DbError::DataError(format!("Error reading from file '{filename}': {err}"))
@@ -405,9 +412,16 @@ pub async fn batch_insert(
         };
         let db_row = db_row.coerce(columns)?;
         db_rows.push(db_row);
-    }
 
-    let columns = headers.iter().map(|s| s.as_str()).collect::<Vec<_>>();
-    pool.insert(table, &columns, db_rows).await?;
+        // We don't insert more than batch_size at a time:
+        if db_rows.len() >= batch_size {
+            pool.insert(table, &str_columns, db_rows.clone()).await?;
+            db_rows.clear();
+        }
+    }
+    // Insert anything that's left:
+    if db_rows.len() > 0 {
+        pool.insert(table, &str_columns, db_rows).await?;
+    }
     Ok(())
 }

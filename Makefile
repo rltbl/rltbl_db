@@ -30,6 +30,8 @@ test_libsql: | tests/input/table1.csv
 test_caching_perf_and_max_params:
 	@echo "Running caching_performance and max_params tests using default features."
 	cargo test -- --no-capture --ignored test_max_params test_caching_performance
+	cargo test --no-default-features --features libsql \
+		-- --no-capture --ignored test_max_params test_caching_performance
 	@echo "Tests succeeded."
 
 # Import test using penguin
@@ -41,7 +43,8 @@ tests/penguins/src/data/penguin.csv: tests/penguins/src/data/penguin.tsv
 	csvtool -t TAB -u COMMA cat $< > $@
 
 test_import_perf: tests/penguins/src/data/penguin.tsv tests/penguins/src/data/penguin.csv
-	cargo test test_import_perf -- --ignored --no-capture
+	cargo test -- --ignored --no-capture test_import_perf
+	cargo test --no-default-features --features libsql -- --ignored --no-capture test_import_perf
 
 # Documentation
 
