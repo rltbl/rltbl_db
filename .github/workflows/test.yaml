@@ -13,7 +13,7 @@ jobs:
       - name: Install postgresql server and client
         run: |
           sudo apt-get update
-          sudo apt-get install postgresql postgresql-contrib postgresql-client build-essential csvtool
+          sudo apt-get install postgresql postgresql-contrib postgresql-client build-essential csvtool libsqlite3-ext-csv
       - name: Start the database server
         run: |
           sudo systemctl start postgresql.service
@@ -21,6 +21,7 @@ jobs:
         run: |
           sudo su - postgres -c "createuser runner"
           sudo su - postgres -c "createdb -O runner rltbl_db"
+          sudo cp /usr/lib/x86_64-linux-gnu/sqlite/csv.so .
       - name: Check out repository code
         uses: actions/checkout@v3
       - name: Run tests
