@@ -446,65 +446,7 @@ mod tests {
         #[cfg(feature = "tokio-postgres")]
         import("postgresql:///rltbl_db").await;
         #[cfg(feature = "libsql")]
-        import_sqlite_batch(":memory:").await;
-    }
-
-    async fn import_sqlite_batch(url: &str) {
-        clear_meta_cache().unwrap();
-        let pool = AnyPool::connect(url).await.unwrap();
-        pool.import_table("tests/input/table1.tsv").await.unwrap();
-        let rows = pool.query("SELECT * FROM table1", ()).await.unwrap();
-        assert_eq!(
-            rows.rows,
-            vec![
-                db_row! {
-                    "alpha" => DbValue::BigInteger(1),
-                    "beta" => DbValue::Text("short".to_string()),
-                    "gamma" => DbValue::BigReal(9.0),
-                    "delta" => DbValue::BigReal(i64::MAX as f64),
-                },
-                db_row! {
-                    // TODO: This first value is wrong. It should be DbValue::Null,
-                    // but we need a way to import NULL values from TSV. One possibility
-                    // is to create a trigger on tables with nullable columns to insert NULL
-                    // whenever we are given some special string such as '\N', 'null', etc.
-                    "alpha" => DbValue::Text("".to_string()),
-                    "beta" => DbValue::Text("long".to_string()),
-                    "gamma" => DbValue::BigReal(i32::MAX as f64),
-                    "delta" => DbValue::BigReal(4.0),
-                },
-                db_row! {
-                    "alpha" => DbValue::BigInteger(19),
-                    "beta" => DbValue::Text("short".to_string()),
-                    "gamma" => DbValue::BigReal(5.2),
-                    "delta" => DbValue::BigReal(4.1),
-                },
-                db_row! {
-                    "alpha" => DbValue::BigInteger(100),
-                    "beta" => DbValue::Text("long".to_string()),
-                    "gamma" => DbValue::BigReal(7.0),
-                    "delta" => DbValue::BigReal(19.0),
-                },
-                db_row! {
-                    "alpha" => DbValue::BigInteger(115),
-                    "beta" => DbValue::Text("short".to_string()),
-                    "gamma" => DbValue::BigReal(10.0),
-                    "delta" => DbValue::BigReal(12.0),
-                },
-                db_row! {
-                    "alpha" => DbValue::BigInteger(30),
-                    "beta" => DbValue::Text("short".to_string()),
-                    "gamma" => DbValue::BigReal(4.0),
-                    "delta" => DbValue::BigReal(19.0),
-                },
-                db_row! {
-                    "alpha" => DbValue::BigInteger(39),
-                    "beta" => DbValue::Text("midway".to_string()),
-                    "gamma" => DbValue::BigReal(19.99),
-                    "delta" => DbValue::BigReal(75.0),
-                },
-            ]
-        );
+        import(":memory:").await;
     }
 
     async fn import(url: &str) {
