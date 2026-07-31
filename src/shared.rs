@@ -410,11 +410,7 @@ pub async fn batch_insert(
         let db_row = DbRow {
             map: zip(headers.clone(), row_values).collect::<IndexMap<_, _>>(),
         };
-        if pool.kind().name() != "SQLite" {
-            db_rows.push(db_row.coerce(columns)?);
-        } else {
-            db_rows.push(db_row);
-        }
+        db_rows.push(db_row.coerce(columns)?);
 
         // We don't insert more than batch_size at a time:
         if db_rows.len() >= batch_size {
