@@ -410,6 +410,11 @@ pub async fn batch_insert(
         let db_row = DbRow {
             map: zip(headers.clone(), row_values).collect::<IndexMap<_, _>>(),
         };
+
+        // Logically we should be able to call coerce for both SQLite and PostgreSQL, but in the
+        // case of SQLite, since it is so liberal about types, this doesn't actually matter, and
+        // it avoids having to worry about differences in the rounding of real numbers between
+        // libsql and rusqlite.
         if pool.kind().name() != "SQLite" {
             db_rows.push(db_row.coerce(columns)?);
         } else {
