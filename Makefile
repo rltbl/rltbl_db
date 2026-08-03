@@ -6,7 +6,7 @@ SHELL := bash
 
 .PHONY: check crate_docs build build_libsql
 .PHONY: test test_default test_libsql
-.PHONY: test_import_perf test_caching_perf_and_max_params
+.PHONY: test_caching_perf_and_max_params
 
 # Main test
 
@@ -33,18 +33,6 @@ test_caching_perf_and_max_params:
 	cargo test --no-default-features --features libsql \
 		-- --no-capture --ignored test_max_params test_caching_performance
 	@echo "Tests succeeded."
-
-# Import test using penguin
-
-tests/penguins/src/data/penguin.tsv:
-	cd tests/penguins && ./generate.py 100000
-
-tests/penguins/src/data/penguin.csv: tests/penguins/src/data/penguin.tsv
-	csvtool -t TAB -u COMMA cat $< > $@
-
-test_import_perf: tests/penguins/src/data/penguin.tsv tests/penguins/src/data/penguin.csv
-	cargo test -- --ignored --no-capture test_import_perf
-	cargo test --no-default-features --features libsql -- --ignored --no-capture test_import_perf
 
 # Documentation
 
