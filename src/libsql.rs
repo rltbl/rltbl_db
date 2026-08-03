@@ -54,15 +54,13 @@ impl TryFrom<DbParams> for Vec<Value> {
                         DbValue::SmallInteger(pvalue) => values.push(Value::Integer(pvalue.into())),
                         DbValue::Integer(pvalue) => values.push(Value::Integer(pvalue.into())),
                         DbValue::BigInteger(pvalue) => values.push(Value::Integer(pvalue.into())),
-                        // We convert real values to text since the database doesn't care and
-                        // it gives us more control over the representation.
-                        DbValue::Real(pvalue) => values.push(Value::Text(pvalue.to_string())),
-                        DbValue::BigReal(pvalue) => values.push(Value::Text(pvalue.to_string())),
+                        DbValue::Real(pvalue) => values.push(Value::Real(pvalue.into())),
+                        DbValue::BigReal(pvalue) => values.push(Value::Real(pvalue.into())),
                         DbValue::Numeric(pvalue) => {
                             let pvalue = pvalue.to_f64().ok_or(DbError::DatatypeError(format!(
                                 "Error converting value '{pvalue}' to f64"
                             )))?;
-                            values.push(Value::Text(pvalue.to_string()))
+                            values.push(Value::Real(pvalue.into()))
                         }
                         DbValue::Text(pvalue) => values.push(Value::Text(pvalue)),
                         DbValue::Json(value) => {
