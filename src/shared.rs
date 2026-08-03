@@ -1,10 +1,12 @@
 use crate::{
     cache::clear_cache_for_edited_tables,
     core::{DbError, DbQuery},
-    db_value::{DbRows, DbValue, IntoDbRows},
+    db_value::{DbColumn, DbRow, DbRows, DbValue, IntoDbRows},
     parse::validate_table_name,
 };
-use std::fmt::Display;
+use csv::ReaderBuilder;
+use indexmap::IndexMap;
+use std::{fmt::Display, fs::File, iter::zip};
 
 #[derive(PartialEq, Eq)]
 pub(crate) enum EditType {
@@ -327,4 +329,107 @@ pub(crate) async fn edit(
     clear_cache_for_edited_tables(pool, &[&table]).await?;
 
     Ok(rows_to_return.into_db_rows())
+}
+
+/// Read data from the given file and insert it to the given table in the database.
+pub async fn batch_insert(
+    pool: &(impl DbQuery + Sync),
+    table: &str,
+    columns: &IndexMap<String, DbColumn>,
+    filename: &str,
+) -> Result<(), DbError> {
+    let batch_size = 100;
+
+    eprintln!(
+        "Loading table '{table}' from '{filename}' using batch_insert() \
+         with batch size {batch_size}"
+    );
+
+    // TODO: Change the signature of insert() and similar methods so that they take iterators
+    // as arguments instead of impl IntoDbRows. Then we will not have to collect the contents
+    // of the file into a vector but can keep it in the form of an iterator as we do in
+    // TokioPostgreSQLPool::load_table().
+
+    let delimiter = {
+        if filename.to_lowercase().ends_with("tsv") {
+            b'\t'
+        } else if filename.to_lowercase().ends_with(".csv") {
+            b','
+        } else {
+            return Err(DbError::InputError(format!(
+                "Filename: '{filename}' must end with .tsv or .csv"
+            )));
+        }
+    };
+
+    // Read the rows from the given file into a vector.
+    let rdr =
+        ReaderBuilder::new()
+            .has_headers(false)
+            .delimiter(delimiter)
+            .from_reader(File::open(filename).map_err(|err| {
+                DbError::InputError(format!("Unable to open '{filename}': {err}"))
+            })?);
+    let mut records = rdr.into_records();
+
+    // Extract the columns from the first line of the file:
+    let headers = {
+        let headers = match records.next() {
+            None => return Err(DbError::InputError(format!("'{filename}' is empty"))),
+            Some(record) => match record {
+                Err(err) => {
+                    return Err(DbError::InputError(format!(
+                        "Error reading from '{filename}': {err}"
+                    )));
+                }
+                Ok(headers) => headers.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+            },
+        };
+        for header in &headers {
+            if header.trim().is_empty() {
+                return Err(DbError::InputError(format!(
+                    "One or more of the header fields is empty in file '{filename}'"
+                )));
+            }
+        }
+        headers
+    };
+
+    // Collect all of the rows into vectors and insert them
+    // (TODO: See comment at the beginning of this function).
+    let mut db_rows = vec![];
+    let str_columns = headers.iter().map(|s| s.as_str()).collect::<Vec<_>>();
+    for row in records {
+        let row_values = row
+            .map_err(|err| {
+                DbError::DataError(format!("Error reading from file '{filename}': {err}"))
+            })?
+            .into_iter()
+            .map(|value| DbValue::from(value))
+            .collect::<Vec<_>>();
+        let db_row = DbRow {
+            map: zip(headers.clone(), row_values).collect::<IndexMap<_, _>>(),
+        };
+
+        // Logically we should be able to call coerce for both SQLite and PostgreSQL, but in the
+        // case of SQLite, since it is so liberal about types, this doesn't actually matter, and
+        // it avoids having to worry about differences in the rounding of real numbers between
+        // libsql and rusqlite.
+        if pool.kind().name() != "SQLite" {
+            db_rows.push(db_row.coerce(columns)?);
+        } else {
+            db_rows.push(db_row);
+        }
+
+        // We don't insert more than batch_size at a time:
+        if db_rows.len() >= batch_size {
+            pool.insert(table, &str_columns, db_rows.clone()).await?;
+            db_rows.clear();
+        }
+    }
+    // Insert anything that's left:
+    if db_rows.len() > 0 {
+        pool.insert(table, &str_columns, db_rows).await?;
+    }
+    Ok(())
 }

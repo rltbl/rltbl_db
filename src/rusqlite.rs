@@ -5,20 +5,23 @@ use crate::{
     cache::{CachingStrategy, clear_cache_for_affected_tables, clear_cache_for_dropped_tables},
     core::{DbError, DbQuery},
     db_kind::{DbKind, MAX_PARAMS_SQLITE, SQLiteKind},
-    db_value::{DbParams, DbRow, DbRows, DbValue, IntoDbParams, IntoDbRows, JsonValue},
+    db_value::{DbColumn, DbParams, DbRow, DbRows, DbValue, IntoDbParams, IntoDbRows, JsonValue},
     parse::validate_table_name,
-    shared::{EditType, edit},
+    shared::{EditType, batch_insert, edit},
 };
+
 use deadpool_sqlite::{
     Config, Pool, Runtime,
     rusqlite::{
         Statement,
         fallible_iterator::FallibleIterator,
         types::{Null, ValueRef},
+        vtab::csvtab,
     },
 };
+use indexmap::IndexMap;
 use rust_decimal::Decimal;
-use std::str::from_utf8;
+use std::{env, str::from_utf8};
 
 /// Query a database using the given prepared statement and parameters.
 fn query_prepared(
@@ -207,6 +210,17 @@ impl RusqlitePool {
         let pool = cfg
             .create_pool(Runtime::Tokio1)
             .map_err(|err| DbError::ConnectError(format!("Error creating pool: {err}")))?;
+
+        let conn = pool
+            .get()
+            .await
+            .map_err(|err| DbError::ConnectError(format!("Unable to get pool: {err}")))?;
+        conn.interact(move |conn| {
+            csvtab::load_module(&conn).unwrap();
+        })
+        .await
+        .map_err(|err| DbError::DatabaseError(format!("Error adding csvtab module: {err}")))?;
+
         Ok(Self {
             pool: pool,
             caching_strategy: CachingStrategy::None,
@@ -437,6 +451,39 @@ impl DbQuery for RusqlitePool {
             returning,
         )
         .await
+    }
+
+    /// Implements [DbQuery::load_table()] for SQLite.
+    async fn load_table(
+        &self,
+        table: &str,
+        columns: &IndexMap<String, DbColumn>,
+        filename: &str,
+    ) -> Result<(), DbError> {
+        if filename.to_lowercase().ends_with(".csv") {
+            eprintln!(
+                "Loading table '{table}' from '{filename}' using SQLite's CSV load extension."
+            );
+            let current_dir = env::current_dir().map_err(|err| {
+                DbError::ConnectError(format!("Error getting current directory: {err}"))
+            })?;
+            let current_dir = current_dir.display();
+            let sql = format!(
+                r#"CREATE VIRTUAL TABLE temp.t1
+                   USING CSV(filename='{current_dir}/{filename}', header=true)"#
+            );
+            self.execute(&sql, ()).await?;
+            let sql = format!("INSERT INTO {table} SELECT * FROM temp.t1");
+            self.execute(&sql, ()).await?;
+            Ok(())
+        } else if filename.to_lowercase().ends_with(".tsv") {
+            eprintln!("Loading table '{table}' from '{filename}' using batch_insert().");
+            batch_insert(self, table, columns, filename).await
+        } else {
+            return Err(DbError::InputError(format!(
+                "Filename: '{filename}' must end with .tsv or .csv"
+            )));
+        }
     }
 
     /// Implements [DbQuery::drop_table()] for SQLite.

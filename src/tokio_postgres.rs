@@ -5,20 +5,28 @@ use crate::{
     cache::{CachingStrategy, clear_cache_for_affected_tables, clear_cache_for_dropped_tables},
     core::{DbError, DbQuery},
     db_kind::{DbKind, MAX_PARAMS_POSTGRES, PostgreSQLKind},
-    db_value::{DbParams, DbRow, DbRows, DbValue, IntoDbParams, IntoDbRows, JsonValue},
+    db_value::{DbColumn, DbParams, DbRow, DbRows, DbValue, IntoDbParams, IntoDbRows, JsonValue},
     parse::validate_table_name,
     shared::{EditType, edit},
 };
+
 use bytes::{BufMut, BytesMut};
 use deadpool_postgres::{
     Config, Pool, Runtime,
     tokio_postgres::{
-        NoTls,
+        Error, NoTls,
         row::Row,
         types::{FromSql, IsNull, ToSql, Type, to_sql_checked},
     },
 };
+use futures_util::{SinkExt, stream};
+use indexmap::IndexMap;
 use rust_decimal::Decimal;
+use std::{
+    fs::File,
+    io::{BufRead, BufReader},
+    pin::pin,
+};
 
 // Represents a PostgreSQL datatype that is not explicitly handled in extract_value() and query().
 #[derive(Clone, Debug)]
@@ -538,6 +546,61 @@ impl DbQuery for TokioPostgresPool {
             returning,
         )
         .await
+    }
+
+    /// Implements [DbQuery::load_table()] for PostgreSQL
+    async fn load_table(
+        &self,
+        table: &str,
+        _: &IndexMap<String, DbColumn>,
+        filename: &str,
+    ) -> Result<(), DbError> {
+        eprintln!("Loading table '{table}' from '{filename}' using PostgreSQL's COPY IN command.");
+        if !filename.to_lowercase().ends_with("tsv") && !filename.to_lowercase().ends_with(".csv") {
+            return Err(DbError::InputError(format!(
+                "Filename: '{filename}' must end with .tsv or .csv"
+            )));
+        }
+        let file = File::open(filename)
+            .map_err(|err| DbError::InputError(format!("Unable to open '{filename}': {err}")))?;
+        let buf_reader = BufReader::new(file);
+        let mut stream = buf_reader.split(b'\n').map(|line| {
+            let line = line.unwrap();
+            let mut bytes = BytesMut::with_capacity(line.len() + 1);
+            bytes.extend_from_slice(&line);
+            bytes.put_u8(b'\n');
+            bytes
+        });
+
+        // Send the input stream to the tokio-postgres client which is executing a copy_in():
+        let client =
+            self.pool.get().await.map_err(|err| {
+                DbError::ConnectError(format!("Unable to get from pool: {err:?}"))
+            })?;
+        let mut sink = pin!(
+            client
+                .copy_in(&format!(r#"COPY "{table}" FROM STDIN WITH NULL ''"#))
+                .await
+                .map_err(|err| {
+                    DbError::InputError(format!("Unable to COPY IN to '{table}': {err}"))
+                })?
+        );
+
+        // Ignore the header line:
+        stream
+            .next()
+            .ok_or(DbError::InputError(format!("File '{filename}' is empty")))?;
+        let mut stream = stream::iter(stream.map(Ok::<_, Error>));
+
+        sink.send_all(&mut stream)
+            .await
+            .map_err(|err| DbError::InputError(format!("Unable to COPY IN to '{table}': {err}")))?;
+        let _num_written = sink
+            .finish()
+            .await
+            .map_err(|err| DbError::InputError(format!("Unable to COPY IN to '{table}': {err}")))?;
+
+        Ok(())
     }
 
     /// Implements [DbQuery::drop_table()] for PostgreSQL.

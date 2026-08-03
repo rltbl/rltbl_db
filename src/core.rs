@@ -10,17 +10,23 @@ use crate::{
         update_last_verified,
     },
     db_kind::DbKind,
-    db_value::{ColumnMap, DbParams, DbRow, DbRows, IntoDbParams, IntoDbRows},
+    db_value::{DbColumn, DbParams, DbRow, DbRows, IntoDbParams, IntoDbRows},
     parse::get_accessed_tables,
+    shared::batch_insert,
 };
 
 use async_trait::async_trait;
+use csv::ReaderBuilder;
+use indexmap::IndexMap;
 use serde::{de, ser};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fmt::Display,
+    fs::File,
     future::Future,
+    iter::zip,
     marker::Sync,
+    path::Path,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -327,9 +333,9 @@ pub trait DbQuery: Sync {
         }
     }
 
-    /// Given a table, return a [ColumnMap] from column names to column SQL types.
-    async fn columns(&self, table: &str) -> Result<ColumnMap, DbError> {
-        let mut columns = ColumnMap::new();
+    /// Given a table, return an [IndexMap] from column names to column SQL types.
+    async fn columns(&self, table: &str) -> Result<IndexMap<String, String>, DbError> {
+        let mut columns = IndexMap::new();
         let (sql, params) = self.kind().columns_sql(table);
         let rows = self.query_no_cache_clean(&sql, params).await?;
         for row in rows.iter() {
@@ -423,6 +429,8 @@ pub trait DbQuery: Sync {
         params: impl IntoDbParams + Send,
     ) -> impl Future<Output = Result<DbRows, DbError>> + Send;
 
+    // TODO Change the signatures of insert() and other similar functions so that they take
+    // an iterator as an argument instead of `impl IntoDbRows`.
     /// Insert rows into the given columns of the given table. If an input row does not have a
     /// key corresponding to one of the given columns, use NULL as the value of that column when
     /// inserting the row to the table.
@@ -496,6 +504,59 @@ pub trait DbQuery: Sync {
         Ok(which_are_views(&self.pool(), &[view]).await?.len() == 1)
     }
 
+    /// Create a given table with the given columns in the database. If a table with the
+    /// same name already exists, drop that one first.
+    async fn recreate_table(
+        &self,
+        table: &str,
+        columns: &IndexMap<String, DbColumn>,
+    ) -> Result<(), DbError> {
+        self.drop_table(&table).await?;
+        let sql = self.kind().create_table_sql(table, columns)?;
+        self.execute_no_cache_clean(&sql, ()).await
+    }
+
+    /// Load the given table using the data from the given file.
+    fn load_table(
+        &self,
+        table: &str,
+        columns: &IndexMap<String, DbColumn>,
+        filename: &str,
+    ) -> impl Future<Output = Result<(), DbError>> + Send;
+
+    /// Create a table, using the stem of the given file as the table name, and the headers
+    /// of each data column in the file as the names of the table's columns, and then load the
+    /// data into it using the bulk copy method if available for this driver, otherwise the
+    /// fallback is to [DbQuery::import_table_using_batch_insert()]
+    async fn import_table(&self, filename: &str) -> Result<(), DbError> {
+        // The table name is just the name of the file:
+        let table = Path::new(filename)
+            .file_stem()
+            .and_then(|fs| fs.to_str())
+            .ok_or(DbError::InputError(format!(
+                "Error getting table name from path '{filename}'"
+            )))?;
+        let columns = read_columns_from_file(filename)?;
+        self.recreate_table(&table, &columns).await?;
+        self.load_table(&table, &columns, filename).await
+    }
+
+    /// Create a table, using the stem of the given file as the table name, and the headers
+    /// of each data column in the file as the names of the table's columns, and then load the
+    /// data into it using the batch insert method.
+    async fn import_table_using_batch_insert(&self, filename: &str) -> Result<(), DbError> {
+        // The table name is just the name of the file:
+        let table = Path::new(filename)
+            .file_stem()
+            .and_then(|fs| fs.to_str())
+            .ok_or(DbError::InputError(format!(
+                "Error getting table name from path '{filename}'"
+            )))?;
+        let columns = read_columns_from_file(filename)?;
+        self.recreate_table(&table, &columns).await?;
+        batch_insert(&self.pool(), table, &columns, filename).await
+    }
+
     /// Drop the given table from the database. Note that for PostgreSQL (see
     /// <https://www.postgresql.org/docs/current/sql-droptable.html>), if the dropped table,
     /// say table1, appears in a foreign key constraint for another table, say table2, then
@@ -504,6 +565,122 @@ pub trait DbQuery: Sync {
 
     /// Drop the given view from the database.
     fn drop_view(&self, view: &str) -> impl Future<Output = Result<(), DbError>> + Send;
+}
+
+/// Determine the database columns needed for each column of data in the given file.
+fn read_columns_from_file(filename: &str) -> Result<IndexMap<String, DbColumn>, DbError> {
+    let delimiter = {
+        if filename.to_lowercase().ends_with("tsv") {
+            b'\t'
+        } else if filename.to_lowercase().ends_with(".csv") {
+            b','
+        } else {
+            return Err(DbError::InputError(format!(
+                "Filename: '{filename}' must end with .tsv or .csv"
+            )));
+        }
+    };
+
+    // Read the rows from the given file:
+    let mut rdr =
+        ReaderBuilder::new()
+            .has_headers(false)
+            .delimiter(delimiter)
+            .from_reader(File::open(filename).map_err(|err| {
+                DbError::InputError(format!("Unable to open '{filename}': {err}"))
+            })?);
+    let mut records = rdr.records();
+
+    // Extract the headers from the first line of the file:
+    let headers = {
+        let headers = match records.next() {
+            None => return Err(DbError::InputError(format!("'{filename}' is empty"))),
+            Some(record) => match record {
+                Err(err) => {
+                    return Err(DbError::InputError(format!(
+                        "Error reading from '{filename}': {err}"
+                    )));
+                }
+                Ok(headers) => headers.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+            },
+        };
+        for header in &headers {
+            if header.trim().is_empty() {
+                return Err(DbError::InputError(format!(
+                    "One or more of the header fields is empty in file '{filename}'"
+                )));
+            }
+        }
+        headers
+    };
+
+    // Determine the columns required:
+    let columns = {
+        let mut columns = vec![];
+        let mut values_seen = HashMap::new();
+        for row in records {
+            let row = row.map_err(|err| {
+                DbError::InputError(format!("Error reading from '{filename}': {err}"))
+            })?;
+
+            // Determine the columns for the first row if this hasn't been done already:
+            if columns.is_empty() {
+                for value in &row {
+                    columns.push(
+                        DbColumn::new()
+                            .min_column_from_strings(vec![value.to_string()].into_iter())?,
+                    );
+                }
+            }
+
+            // Sanity checks:
+            if row.len() != headers.len() {
+                return Err(DbError::InputError(format!(
+                    "Number of row values ({}) != number of headers ({})",
+                    row.len(),
+                    headers.len()
+                )));
+            }
+            if row.len() != columns.len() {
+                return Err(DbError::InputError(format!(
+                    "Number of row values ({}) != number of columns ({})",
+                    row.len(),
+                    columns.len()
+                )));
+            }
+
+            // Each new row will be used to refine the column types that were determined on the
+            // basis of the previous N rows.
+            for i in 0..row.len() {
+                if &row[i] == "" {
+                    if columns[i].not_null {
+                        columns[i].not_null = false;
+                    }
+                } else {
+                    columns[i] =
+                        columns[i].min_column_from_strings(vec![row[i].to_string()].into_iter())?;
+                    if let None = values_seen.get_mut(&headers[i]) {
+                        values_seen.insert(headers[i].to_string(), HashSet::new());
+                    }
+                    let this_column_seen = values_seen.get_mut(&headers[i]).unwrap();
+                    if !this_column_seen.insert(row[i].to_string()) && columns[i].unique {
+                        columns[i].unique = false;
+                    }
+                }
+            }
+        }
+
+        // Zip everything up into an IndexMap:
+        zip(headers, columns)
+            .map(|(key, mut column)| {
+                // Don't forget to copy the column name:
+                column.name = key.to_string();
+                (key, column)
+            })
+            .collect::<IndexMap<_, _>>()
+    };
+
+    Ok(columns)
 }
 
 /// Get the SQL code that is used to define the given view.

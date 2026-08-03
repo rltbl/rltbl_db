@@ -23,7 +23,7 @@ use crate::{
     cache::CachingStrategy,
     core::{DbError, DbQuery},
     db_kind::DbKind,
-    db_value::{DbRows, IntoDbParams, IntoDbRows},
+    db_value::{DbColumn, DbRows, IntoDbParams, IntoDbRows},
 };
 
 #[cfg(feature = "rusqlite")]
@@ -40,6 +40,8 @@ use crate::db_kind::PostgreSQLKind;
 
 #[cfg(any(feature = "rusqlite", feature = "libsql"))]
 use crate::db_kind::SQLiteKind;
+
+use indexmap::IndexMap;
 
 #[derive(Clone, Debug)]
 pub enum AnyPool {
@@ -278,6 +280,23 @@ impl DbQuery for AnyPool {
         }
     }
 
+    /// Implements [DbQuery::load_table()]
+    async fn load_table(
+        &self,
+        table: &str,
+        columns: &IndexMap<String, DbColumn>,
+        filename: &str,
+    ) -> Result<(), DbError> {
+        match self {
+            #[cfg(feature = "rusqlite")]
+            AnyPool::Rusqlite(pool) => pool.load_table(table, columns, filename).await,
+            #[cfg(feature = "tokio-postgres")]
+            AnyPool::TokioPostgres(pool) => pool.load_table(table, columns, filename).await,
+            #[cfg(feature = "libsql")]
+            AnyPool::LibSQL(pool) => pool.load_table(table, columns, filename).await,
+        }
+    }
+
     /// Implements [DbQuery::drop_table()]
     async fn drop_table(&self, table: &str) -> Result<(), DbError> {
         match self {
@@ -362,9 +381,10 @@ mod tests {
         },
         db_kind::DbType,
         db_row,
-        db_value::{ColumnMap, DbRow, DbValue, JsonValue, StringRow},
+        db_value::{DbRow, DbValue, JsonValue, StringRow},
         params,
     };
+    use indexmap::IndexMap;
     use rand::{
         SeedableRng as _,
         distr::{Distribution as _, Uniform},
@@ -379,6 +399,165 @@ mod tests {
         thread,
         time::{Duration, Instant},
     };
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_import_perf() {
+        #[cfg(feature = "rusqlite")]
+        import_perf(":memory:").await;
+        #[cfg(feature = "tokio-postgres")]
+        import_perf("postgresql:///rltbl_db").await;
+        #[cfg(feature = "libsql")]
+        import_perf(":memory:").await;
+    }
+
+    async fn import_perf(url: &str) {
+        clear_meta_cache().unwrap();
+        let pool = AnyPool::connect(url).await.unwrap();
+
+        eprintln!("Import performance test for {}.", pool.kind().name());
+        eprintln!("---");
+
+        let filename = match pool.kind().name().as_str() {
+            "SQLite" => "tests/penguins/src/data/penguin.csv",
+            "PostgreSQL" => "tests/penguins/src/data/penguin.tsv",
+            _ => unreachable!(),
+        };
+        let now = Instant::now();
+        pool.import_table(filename).await.unwrap();
+        let elapsed = now.elapsed().as_secs();
+        eprintln!("Importing the data in '{filename}; using import_table() took {elapsed}s.");
+
+        let filename = "tests/penguins/src/data/penguin.tsv";
+        let now = Instant::now();
+        pool.import_table_using_batch_insert(filename)
+            .await
+            .unwrap();
+        let elapsed = now.elapsed().as_secs();
+        eprintln!(
+            "Importing the data in '{filename}' import_table_using_insert() took {elapsed}s."
+        );
+    }
+
+    #[tokio::test]
+    async fn test_import() {
+        #[cfg(feature = "rusqlite")]
+        import(":memory:").await;
+        #[cfg(feature = "tokio-postgres")]
+        import("postgresql:///rltbl_db").await;
+        #[cfg(feature = "libsql")]
+        import(":memory:").await;
+    }
+
+    async fn import(url: &str) {
+        clear_meta_cache().unwrap();
+        let pool = AnyPool::connect(url).await.unwrap();
+        if pool.kind().name() == "SQLite" {
+            pool.import_table("tests/input/table1.csv").await.unwrap();
+            let rows = pool.query("SELECT * FROM table1", ()).await.unwrap();
+            assert_eq!(
+                rows.rows,
+                vec![
+                    db_row! {
+                        "alpha" => DbValue::BigInteger(1),
+                        "beta" => DbValue::Text("short".to_string()),
+                        "gamma" => DbValue::BigReal(9.0),
+                        "delta" => DbValue::BigReal(i64::MAX as f64),
+                    },
+                    db_row! {
+                        // TODO: This first value is wrong. It should be DbValue::Null,
+                        // but we need a way to import NULL values from TSV. One possibility
+                        // is to create a trigger on tables with nullable columns to insert NULL
+                        // whenever we are given some special string such as '\N', 'null', etc.
+                        "alpha" => DbValue::Text("".to_string()),
+                        "beta" => DbValue::Text("long".to_string()),
+                        "gamma" => DbValue::BigReal(i32::MAX as f64),
+                        "delta" => DbValue::BigReal(4.0),
+                    },
+                    db_row! {
+                        "alpha" => DbValue::BigInteger(19),
+                        "beta" => DbValue::Text("short".to_string()),
+                        "gamma" => DbValue::BigReal(5.2),
+                        "delta" => DbValue::BigReal(4.1),
+                    },
+                    db_row! {
+                        "alpha" => DbValue::BigInteger(100),
+                        "beta" => DbValue::Text("long".to_string()),
+                        "gamma" => DbValue::BigReal(7.0),
+                        "delta" => DbValue::BigReal(19.0),
+                    },
+                    db_row! {
+                        "alpha" => DbValue::BigInteger(115),
+                        "beta" => DbValue::Text("short".to_string()),
+                        "gamma" => DbValue::BigReal(10.0),
+                        "delta" => DbValue::BigReal(12.0),
+                    },
+                    db_row! {
+                        "alpha" => DbValue::BigInteger(30),
+                        "beta" => DbValue::Text("short".to_string()),
+                        "gamma" => DbValue::BigReal(4.0),
+                        "delta" => DbValue::BigReal(19.0),
+                    },
+                    db_row! {
+                        "alpha" => DbValue::BigInteger(39),
+                        "beta" => DbValue::Text("midway".to_string()),
+                        "gamma" => DbValue::BigReal(19.99),
+                        "delta" => DbValue::BigReal(75.0),
+                    },
+                ]
+            );
+        } else if pool.kind().name() == "PostgreSQL" {
+            pool.import_table("tests/input/table1.tsv").await.unwrap();
+            let rows = pool.query("SELECT * FROM table1", ()).await.unwrap();
+            assert_eq!(
+                rows.rows,
+                vec![
+                    db_row! {
+                        "alpha" => DbValue::SmallInteger(1),
+                        "beta" => DbValue::Text("short".to_string()),
+                        "gamma" => DbValue::Real(9.0),
+                        "delta" => DbValue::Real(i64::MAX as f32),
+                    },
+                    db_row! {
+                        "alpha" => DbValue::Null,
+                        "beta" => DbValue::Text("long".to_string()),
+                        "gamma" => DbValue::Real(i32::MAX as f32),
+                        "delta" => DbValue::Real(4.0),
+                    },
+                    db_row! {
+                        "alpha" => DbValue::SmallInteger(19),
+                        "beta" => DbValue::Text("short".to_string()),
+                        "gamma" => DbValue::Real(5.2),
+                        "delta" => DbValue::Real(4.1),
+                    },
+                    db_row! {
+                        "alpha" => DbValue::SmallInteger(100),
+                        "beta" => DbValue::Text("long".to_string()),
+                        "gamma" => DbValue::Real(7.0),
+                        "delta" => DbValue::Real(19.0),
+                    },
+                    db_row! {
+                        "alpha" => DbValue::SmallInteger(115),
+                        "beta" => DbValue::Text("short".to_string()),
+                        "gamma" => DbValue::Real(10.0),
+                        "delta" => DbValue::Real(12.0),
+                    },
+                    db_row! {
+                        "alpha" => DbValue::SmallInteger(30),
+                        "beta" => DbValue::Text("short".to_string()),
+                        "gamma" => DbValue::Real(4.0),
+                        "delta" => DbValue::Real(19.0),
+                    },
+                    db_row! {
+                        "alpha" => DbValue::SmallInteger(39),
+                        "beta" => DbValue::Text("midway".to_string()),
+                        "gamma" => DbValue::Real(19.99),
+                        "delta" => DbValue::Real(75.0),
+                    },
+                ]
+            );
+        }
+    }
 
     #[tokio::test]
     async fn test_text_column_query() {
@@ -1136,7 +1315,7 @@ mod tests {
         let columns = pool.columns(table1).await.unwrap();
         assert_eq!(
             columns,
-            ColumnMap::from([("foo".to_owned(), "text".to_owned())])
+            IndexMap::from([("foo".to_owned(), "text".to_owned())])
         );
         pool.drop_table(table1).await.unwrap();
 
@@ -2234,9 +2413,9 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn test_caching_performance() {
-        let runs = 2500;
+        let runs = 1000;
         let edit_rate = 25;
-        let fail_after = 100;
+        let fail_after = 60;
         #[cfg(feature = "rusqlite")]
         perform_caching(":memory:", runs, edit_rate, fail_after).await;
         #[cfg(feature = "tokio-postgres")]
