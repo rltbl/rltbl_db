@@ -13,7 +13,7 @@ async-trait = "0.1.89"
 bytes = "1.11"
 csv = "1.4.0"
 deadpool-postgres = { version = "0.14.1", features = ["rt_tokio_1", "serde"], optional = true }
-deadpool-sqlite = { version = "0.12.1", features = ["bundled", "csvtab", "vtab"], optional = true }
+deadpool-sqlite = { version = "0.12.1", features = ["bundled", "csvtab", "vtab", "functions"], optional = true }
 deadpool-libsql = { version = "0.1.0", optional = true }
 futures-util = "0.3.33"
 indexmap = { version = "2.12.0", features = ["serde"] }
