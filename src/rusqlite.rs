@@ -11,17 +11,23 @@ use crate::{
 };
 
 use deadpool_sqlite::{
-    Config, Pool, Runtime,
+    Config, Hook, Pool, Runtime,
     rusqlite::{
+        Connection as RusqliteConnection, Error as RusqliteError, Result as RusqliteResult,
         Statement,
         fallible_iterator::FallibleIterator,
+        functions::FunctionFlags,
         types::{Null, ValueRef},
         vtab::csvtab,
     },
 };
 use indexmap::IndexMap;
+use regex::Regex;
 use rust_decimal::Decimal;
+use std::sync::Arc;
 use std::{env, str::from_utf8};
+
+type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 /// Query a database using the given prepared statement and parameters.
 fn query_prepared(
@@ -206,20 +212,17 @@ pub struct RusqlitePool {
 impl RusqlitePool {
     /// Connect to a SQLite database using the given url.
     pub async fn connect(url: &str) -> Result<Self, DbError> {
-        let cfg = Config::new(url);
-        let pool = cfg
-            .create_pool(Runtime::Tokio1)
+        let pool = Config::new(url)
+            .builder(Runtime::Tokio1)
+            .map_err(|err| DbError::ConnectError(format!("Error creating pool: {err}")))?
+            .post_create(Hook::Fn(Box::new(|conn, _metrics| {
+                let guard = conn.lock().expect("lock this connection");
+                csvtab::load_module(&guard).unwrap();
+                add_rusqlite_regexp_function(&guard).expect("add regex_match function");
+                Ok(())
+            })))
+            .build()
             .map_err(|err| DbError::ConnectError(format!("Error creating pool: {err}")))?;
-
-        let conn = pool
-            .get()
-            .await
-            .map_err(|err| DbError::ConnectError(format!("Unable to get pool: {err}")))?;
-        conn.interact(move |conn| {
-            csvtab::load_module(&conn).unwrap();
-        })
-        .await
-        .map_err(|err| DbError::DatabaseError(format!("Error adding csvtab module: {err}")))?;
 
         Ok(Self {
             pool: pool,
@@ -511,10 +514,44 @@ impl DbQuery for RusqlitePool {
     }
 }
 
+fn add_rusqlite_regexp_function(db: &RusqliteConnection) -> RusqliteResult<()> {
+    // This function has been adapted from:
+    // https://docs.rs/rusqlite/0.32.1/rusqlite/functions/index.html
+    db.create_scalar_function(
+        "regexp_match",
+        2,
+        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+        move |ctx| {
+            let num_args = ctx.len();
+            if num_args != 2 {
+                return Err(RusqliteError::UserFunctionError(
+                    format!("Expected 2 arguments but got {num_args}").into(),
+                ));
+            }
+            let text = ctx.get_raw(0);
+            let regexp: Arc<Regex> = ctx.get_or_create_aux(1, |vr| -> Result<_, BoxError> {
+                Ok(Regex::new(vr.as_str()?)?)
+            })?;
+            match text {
+                // If the text to match is NULL then the condition is vacuously true:
+                ValueRef::Null => Ok(true),
+                _ => {
+                    let text = text
+                        .as_str()
+                        .map_err(|e| RusqliteError::UserFunctionError(e.into()))?;
+                    Ok(regexp.is_match(text))
+                }
+            }
+        },
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{db_row, params};
+
+    use serde_json::json;
     use std::ops::Deref;
 
     #[tokio::test]
@@ -673,5 +710,53 @@ mod tests {
         sql.push_str(&values.join(", "));
         pool.execute(&sql, params).await.unwrap();
         pool.drop_table("text_max_params").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_match() {
+        let conn = RusqlitePool::connect("test_match_columns.db")
+            .await
+            .unwrap();
+        conn.execute_batch(
+            "DROP TABLE IF EXISTS test_table_match;\
+             CREATE TABLE test_table_match (\
+                 text_value TEXT,\
+                 alt_text_value TEXT\
+             )",
+        )
+        .await
+        .unwrap();
+        conn.execute(
+            r#"INSERT INTO test_table_match
+               (text_value, alt_text_value)
+               VALUES ($1, $2)"#,
+            &[json!("foo"), json!("123")],
+        )
+        .await
+        .unwrap();
+
+        let value: String = conn
+            .query(
+                "SELECT text_value from test_table_match WHERE regexp_match(text_value, $1) = 1",
+                params!["foo"],
+            )
+            .await
+            .unwrap()
+            .try_into()
+            .unwrap();
+
+        assert_eq!(value, "foo");
+
+        let value: String = conn
+            .query(
+                r#"SELECT alt_text_value from test_table_match WHERE regexp_match(alt_text_value, '\d+') = 1"#,
+                ()
+            )
+            .await
+            .unwrap()
+            .try_into()
+            .unwrap();
+
+        assert_eq!(value, "123");
     }
 }

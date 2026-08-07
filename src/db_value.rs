@@ -920,6 +920,17 @@ pub struct DbRow {
     pub map: IndexMap<String, DbValue>,
 }
 
+impl From<JsonRow> for DbRow {
+    fn from(value: JsonRow) -> Self {
+        DbRow {
+            map: value
+                .into_iter()
+                .map(|(key, val)| (key, DbValue::from(val)))
+                .collect(),
+        }
+    }
+}
+
 /// Enables conversion from something into a [DbRow]
 pub trait IntoDbRow {
     fn into_db_row(self) -> DbRow;
