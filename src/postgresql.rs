@@ -6,6 +6,11 @@ use crate::{Error, Syntax, Type, value::Value};
 pub struct PostgresSyntax;
 
 impl Syntax for PostgresSyntax {
+    /// TODO: Add docstring.
+    fn name(&self) -> &str {
+        "postgresql"
+    }
+
     /// Get a SQL Type by its name in this SQL syntax.
     fn sql_type(&self, name: &str) -> Result<Type, Error> {
         match name.to_uppercase().as_str() {
@@ -20,5 +25,10 @@ impl Syntax for PostgresSyntax {
     /// types of the columns of the given table.
     fn columns_sql(&self, _table: &str) -> (String, [Value; 1]) {
         todo!("write default implementation for columns_sql")
+    }
+
+    /// TODO: Add docstring.
+    fn param_prefix(&self) -> &str {
+        "$"
     }
 }

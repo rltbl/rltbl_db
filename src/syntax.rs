@@ -12,6 +12,9 @@ use crate::{
 };
 
 pub trait Syntax: std::fmt::Debug {
+    /// TODO: Add docstring.
+    fn name(&self) -> &str;
+
     /// Get a SQL Type by its name in this SQL syntax.
     fn sql_type(&self, name: &str) -> Result<Type, Error> {
         match name.to_uppercase().as_str() {
@@ -27,6 +30,9 @@ pub trait Syntax: std::fmt::Debug {
     fn columns_sql(&self, _table: &str) -> (String, [Value; 1]) {
         todo!("write default implementation for columns_sql")
     }
+
+    /// Get the prefix to use for parameters to queries that need to be bound.
+    fn param_prefix(&self) -> &str;
 
     // MC: In rltbl_db there is also a method (that we definitely need) called
     // primary_keys_sql(). There used to be a TODO comment above it (possibly removed now)

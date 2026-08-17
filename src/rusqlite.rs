@@ -151,6 +151,29 @@ impl Query for RusqlitePool {
         &self.syntax
     }
 
+    /// Implements [DbQuery::execute_batch()] for SQLite.
+    async fn execute_batch(&self, sql: &str) -> Result<(), Error> {
+        let conn = self.pool.get().await?;
+        let sql_string = sql.to_string();
+        match conn
+            .interact(move |conn| match conn.execute_batch(&sql_string) {
+                Err(err) => {
+                    return Err(Error::DeadpoolRusqliteError(err));
+                }
+                Ok(_) => Ok(()),
+            })
+            .await
+        {
+            Err(err) => Err(Error::DeadpoolRusqliteInteractError(err)),
+            Ok(_) => {
+                // We need to drop conn here to ensure that any changes to the db are persisted.
+                drop(conn);
+                // TODO: handle cache
+                Ok(())
+            }
+        }
+    }
+
     async fn query(&self, sql: &str, params: &[&Value]) -> Result<Rows, Error> {
         let conn = self.pool.get().await?;
         let sql_string = sql.to_string();
@@ -178,6 +201,21 @@ impl Query for RusqlitePool {
             Ok(Rows { rows })
         })
         .await?
+    }
+
+    /// Implements [DbQuery::drop_table()] for SQLite.
+    async fn drop_table(&self, table: &str) -> Result<(), Error> {
+        // TODO: Add this:
+        // let table = validate_table_name(table)?;
+
+        // TODO: Use the "no_cache_clean" version insteadL
+        // Drop the table:
+        self.execute(&format!(r#"DROP TABLE IF EXISTS "{table}""#), &[])
+            .await?;
+
+        // TODO: Delete dirty entries from the cache in accordance with our caching strategy:
+        // clear_cache_for_dropped_tables(&self.pool(), &[&table]).await?;
+        Ok(())
     }
 }
 
@@ -236,6 +274,11 @@ impl Query for RusqliteTransaction {
         &self.syntax
     }
 
+    #[allow(unused)]
+    async fn execute_batch(&self, _sql: &str) -> Result<(), Error> {
+        todo!()
+    }
+
     async fn query(&self, sql: &str, params: &[&Value]) -> Result<Rows, Error> {
         match &self.conn {
             Some(conn) => {
@@ -269,6 +312,10 @@ impl Query for RusqliteTransaction {
                 "transaction already complete"
             ))),
         }
+    }
+
+    async fn drop_table(&self, _table: &str) -> Result<(), Error> {
+        todo!()
     }
 }
 

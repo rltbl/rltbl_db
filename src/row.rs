@@ -48,7 +48,7 @@ use indexmap::IndexMap;
 
 use crate::{Error, Value};
 
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Row {
     pub map: IndexMap<String, Value>,
 }
@@ -99,7 +99,48 @@ impl FromIterator<(String, Value)> for Row {
     }
 }
 
-#[derive(Debug, Default, PartialEq, Eq)]
+pub type StringRow = IndexMap<String, String>;
+
+impl Into<StringRow> for Row {
+    fn into(self) -> StringRow {
+        self.iter()
+            .map(|(key, value)| (key.clone(), value.into()))
+            .collect()
+    }
+}
+
+impl Into<StringRow> for &Row {
+    fn into(self) -> StringRow {
+        self.clone().into()
+    }
+}
+
+impl From<StringRow> for Row {
+    fn from(row: StringRow) -> Self {
+        row.iter()
+            .map(|(key, value)| (key.clone(), Value::from(value.as_str())))
+            .collect()
+    }
+}
+impl From<&StringRow> for Row {
+    fn from(row: &StringRow) -> Self {
+        row.clone().into()
+    }
+}
+
+impl Into<Vec<StringRow>> for Rows {
+    fn into(self) -> Vec<StringRow> {
+        self.rows.iter().map(|row| row.into()).collect()
+    }
+}
+
+impl Into<Vec<StringRow>> for &Rows {
+    fn into(self) -> Vec<StringRow> {
+        self.clone().into()
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Rows {
     pub rows: Vec<Row>,
 }
@@ -135,5 +176,15 @@ impl Rows {
             Ok(value) => Ok(value),
             Err(_) => Err(Error::ValueError(format!("Could not convert value"))),
         }
+    }
+
+    pub fn to_strings(&self) -> Result<Vec<String>, Error> {
+        self.rows
+            .iter()
+            .map(|row| match row.first() {
+                Some((_key, value)) => Ok(value.to_string()),
+                None => Err(Error::DataError(format!("Missing value"))),
+            })
+            .collect()
     }
 }

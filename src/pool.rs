@@ -93,7 +93,11 @@ impl AnyPool {
         // TODO: handle cache
     }
 
-    // TODO: execute_batch
+    #[allow(unused)]
+    async fn execute_batch(&self, sql: &str) -> Result<(), Error> {
+        self.pool.execute_batch(sql).await
+        // TODO: handle cache
+    }
 
     pub async fn query(
         &self,
@@ -130,10 +134,126 @@ impl AnyPool {
     // TODO: update_returning
     // TODO: upsert
     // TODO: upsert_returning
-    // TODO: drop
+
+    #[allow(unused)]
+    async fn drop_table(&self, table: &str) -> Result<(), Error> {
+        self.pool.drop_table(table).await
+    }
 
     // MC: Right. This is needed for AnyPool to implement "Pool".
     pub async fn transaction(&self) -> Result<AnyTransaction, Error> {
         Ok(AnyTransaction::begin(self.pool.transaction().await?))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{row, row::StringRow};
+
+    #[tokio::test]
+    async fn test_text_column_query() {
+        #[cfg(feature = "rusqlite")]
+        text_column_query(":memory:").await;
+        #[cfg(feature = "tokio-postgres")]
+        text_column_query("postgresql:///rltbl_db").await;
+        // TODO:
+        //#[cfg(feature = "libsql")]
+        //text_column_query(":memory:").await;
+    }
+
+    // TODO (later): Remove #[allow(unused)] from everywhere in the code.
+    // This particular compiler warning happens because this test isn't implemented yet
+    // for libsql.
+    #[allow(unused)]
+    async fn text_column_query(url: &str) {
+        let pool = AnyPool::connect(url).await.unwrap();
+        let syntax = pool.syntax();
+        let pp = syntax.param_prefix().to_string();
+
+        pool.execute_batch(&format!(
+            "DROP TABLE IF EXISTS test_table_text{cascade};\
+             CREATE TABLE test_table_text ( value TEXT )",
+            cascade = match syntax.name() {
+                "postgresql" => " CASCADE",
+                "sqlite" => "",
+                _ => panic!("Invalid syntax '{}'", syntax.name()),
+            }
+        ))
+        .await
+        .unwrap();
+
+        pool.execute(
+            &format!("INSERT INTO test_table_text VALUES ({pp}1)"),
+            // TODO: don't require explicitly calling Value::from() here and elsewhere.
+            &[Value::from("foo")],
+        )
+        .await
+        .unwrap();
+
+        let select_sql = format!("SELECT value FROM test_table_text WHERE value = {pp}1");
+        let value: String = pool
+            .query(&select_sql, &[Value::from("foo")])
+            .await
+            .unwrap()
+            .try_into_value::<String>()
+            .unwrap()
+            .into();
+        assert_eq!("foo", value);
+
+        let string: String = pool
+            .query(&select_sql, &[Value::from("foo")])
+            .await
+            .unwrap()
+            .try_into_value::<String>()
+            .unwrap()
+            .into();
+        assert_eq!("foo", string);
+
+        let strings = pool
+            .query(&select_sql, &[Value::from("foo")])
+            .await
+            .unwrap()
+            .to_strings()
+            .unwrap();
+        assert_eq!(vec!["foo".to_owned()], strings);
+
+        let string_row: StringRow = pool
+            .query(&select_sql, &[Value::from("foo")])
+            .await
+            .unwrap()
+            .row()
+            .unwrap()
+            .into();
+        assert_eq!(
+            StringRow::from([("value".to_owned(), "foo".to_owned())]),
+            string_row
+        );
+
+        let string_rows: Vec<StringRow> = pool
+            .query(&select_sql, &[Value::from("foo")])
+            .await
+            .unwrap()
+            .into();
+        assert_eq!(
+            vec![StringRow::from([("value".to_owned(), "foo".to_owned())])],
+            string_rows
+        );
+
+        let rows = pool
+            .query(&select_sql, &[Value::from("foo")])
+            .await
+            .unwrap();
+        let row = rows.row().unwrap();
+        assert_eq!(row, row! {"value" => "foo",});
+
+        let rows = pool
+            .query(&select_sql, &[Value::from("foo")])
+            .await
+            .unwrap();
+        assert_eq!(rows.rows, [row! {"value" => "foo",}]);
+
+        // Clean up:
+        pool.drop_table("test_table_text").await.unwrap();
     }
 }

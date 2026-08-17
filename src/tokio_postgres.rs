@@ -141,6 +141,15 @@ impl Query for PostgresPool {
         &self.syntax
     }
 
+    /// Implements [DbQuery::execute_batch()] for PostgreSQL
+    async fn execute_batch(&self, sql: &str) -> Result<(), Error> {
+        let client = self.pool.get().await?;
+        client.batch_execute(sql).await?;
+
+        // TODO: Handle cache
+        Ok(())
+    }
+
     /// TODO: Add docstring.
     async fn query(&self, sql: &str, params: &[&Value]) -> Result<Rows, Error> {
         let client = self.pool.get().await?;
@@ -270,6 +279,20 @@ impl Query for PostgresPool {
         }
 
         Ok(Rows { rows: db_rows })
+    }
+
+    /// Implements [DbQuery::drop_table()] for PostgreSQL.
+    async fn drop_table(&self, table: &str) -> Result<(), Error> {
+        // TODO: Add this.
+        // let table = validate_table_name(table)?;
+
+        // TODO: Use the "no_cache_clean" version instead.
+        self.execute(&format!(r#"DROP TABLE IF EXISTS "{table}" CASCADE"#), &[])
+            .await?;
+
+        // TODO: Delete dirty entries from the cache in accordance with our caching strategy:
+        // clear_cache_for_dropped_tables(&self.pool(), &[&table]).await?;
+        Ok(())
     }
 }
 
