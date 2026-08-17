@@ -1,13 +1,17 @@
 //! [tokio-postgres](<https://crates.io/crates/deadpool-postgres>) implementation for rltbl_db.
 
 use crate::{
-    any::AnyPool,
-    cache::{CachingStrategy, clear_cache_for_affected_tables, clear_cache_for_dropped_tables},
-    core::{DbError, DbQuery},
-    db_kind::{DbKind, MAX_PARAMS_POSTGRES, PostgreSQLKind},
-    db_value::{DbColumn, DbParams, DbRow, DbRows, DbValue, IntoDbParams, IntoDbRows, JsonValue},
-    parse::validate_table_name,
-    shared::{EditType, edit},
+    z_old_any::AnyPool,
+    z_old_cache::{
+        CachingStrategy, clear_cache_for_affected_tables, clear_cache_for_dropped_tables,
+    },
+    z_old_core::{DbError, DbQuery},
+    z_old_db_kind::{DbKind, MAX_PARAMS_POSTGRES, PostgreSQLKind},
+    z_old_db_value::{
+        DbColumn, DbParams, DbRow, DbRows, DbValue, IntoDbParams, IntoDbRows, JsonValue,
+    },
+    z_old_parse::validate_table_name,
+    z_old_shared::{EditType, edit},
 };
 
 use bytes::{BufMut, BytesMut};
@@ -630,7 +634,7 @@ impl DbQuery for TokioPostgresPool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{db_row, params};
+    use crate::{z_old_db_row, z_old_params};
     use pretty_assertions::assert_eq;
     use std::{ops::Deref, str::FromStr};
 
@@ -655,7 +659,7 @@ mod tests {
             r#"INSERT INTO test_table_indirect
                (text_value, alt_text_value, float_value, int_value, bool_value)
                VALUES ($1, $2, $3, $4, $5)"#,
-            params!["foo", (), 1.05_f64, 1_i64, true],
+            z_old_params!["foo", (), 1.05_f64, 1_i64, true],
         )
         .await
         .unwrap();
@@ -667,7 +671,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             *rows.deref(),
-            [db_row! {
+            [z_old_db_row! {
                 "max" => 1_i64,
             }]
         );
@@ -682,7 +686,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             *rows.deref(),
-            [db_row! {
+            [z_old_db_row! {
                 "bool_value_alias" => true,
             }]
         );
@@ -697,7 +701,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             *rows.deref(),
-            [db_row! {
+            [z_old_db_row! {
                 "max_int_value" => 1_i64,
             }]
         );
@@ -712,7 +716,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             *rows.deref(),
-            [db_row! {
+            [z_old_db_row! {
                 "int_value" => "1",
             }]
         );
@@ -727,7 +731,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             *rows.deref(),
-            [db_row! {
+            [z_old_db_row! {
                 "int_value_cast" => "1",
             }]
         );
@@ -819,7 +823,7 @@ mod tests {
             let float_param = f64::from_str(value).unwrap();
             pool.execute(
                 r#"insert into test_special_floats values ($1, $2)"#,
-                params![float_param, value],
+                z_old_params![float_param, value],
             )
             .await
             .unwrap();
@@ -848,7 +852,7 @@ mod tests {
         let rows = pool
             .query(
                 r#"select bar from test_special_floats where bar = $1"#,
-                params![DbValue::BigReal(f64::NEG_INFINITY)],
+                z_old_params![DbValue::BigReal(f64::NEG_INFINITY)],
             )
             .await
             .unwrap();
@@ -916,7 +920,7 @@ mod tests {
         let db_value = db_row.get("bar").unwrap();
         pool.execute(
             r#"UPDATE test_other_types SET foo = TRUE WHERE bar = $1"#,
-            params![db_value],
+            z_old_params![db_value],
         )
         .await
         .unwrap();
@@ -963,7 +967,7 @@ mod tests {
         let db_value = db_row.get("bar").unwrap();
         pool.execute(
             r#"UPDATE test_other_types SET foo = TRUE WHERE bar = $1"#,
-            params![db_value],
+            z_old_params![db_value],
         )
         .await
         .unwrap();
@@ -1012,7 +1016,7 @@ mod tests {
         let db_value = db_row.get("bar").unwrap();
         pool.execute(
             r#"UPDATE test_other_types SET foo = TRUE WHERE bar = $1"#,
-            params![db_value],
+            z_old_params![db_value],
         )
         .await
         .unwrap();
@@ -1060,7 +1064,7 @@ mod tests {
         let db_value = db_row.get("bar").unwrap();
         pool.execute(
             r#"UPDATE test_other_types SET foo = TRUE WHERE bar = $1"#,
-            params![db_value],
+            z_old_params![db_value],
         )
         .await
         .unwrap();
@@ -1109,7 +1113,7 @@ mod tests {
         let db_value = db_row.get("bar").unwrap();
         pool.execute(
             r#"UPDATE test_other_types SET foo = TRUE WHERE bar = $1"#,
-            params![db_value],
+            z_old_params![db_value],
         )
         .await
         .unwrap();
@@ -1166,7 +1170,7 @@ mod tests {
         let db_value = db_row.get("bar").unwrap();
         pool.execute(
             r#"UPDATE test_other_types SET foo = TRUE WHERE bar = $1"#,
-            params![db_value],
+            z_old_params![db_value],
         )
         .await
         .unwrap();
@@ -1225,7 +1229,7 @@ mod tests {
         let db_value = db_row.get("bar").unwrap();
         pool.execute(
             r#"UPDATE test_other_types SET foo = TRUE WHERE bar = $1"#,
-            params![db_value],
+            z_old_params![db_value],
         )
         .await
         .unwrap();
@@ -1281,7 +1285,7 @@ mod tests {
         let db_value = db_row.get("bar").unwrap();
         pool.execute(
             r#"UPDATE test_other_types SET foo = TRUE WHERE bar = $1"#,
-            params![db_value],
+            z_old_params![db_value],
         )
         .await
         .unwrap();
@@ -1334,7 +1338,7 @@ mod tests {
         let db_value = db_row.get("bar").unwrap();
         pool.execute(
             r#"UPDATE test_other_types SET foo = TRUE WHERE bar = $1"#,
-            params![db_value],
+            z_old_params![db_value],
         )
         .await
         .unwrap();
@@ -1386,7 +1390,7 @@ mod tests {
         let db_value = db_row.get("bar").unwrap();
         pool.execute(
             r#"UPDATE test_other_types SET foo = TRUE WHERE bar = $1"#,
-            params![db_value],
+            z_old_params![db_value],
         )
         .await
         .unwrap();
@@ -1418,7 +1422,7 @@ mod tests {
         let db_rows = pool
             .query(
                 r#"SELECT * FROM test_other_types WHERE bar = $1"#,
-                params![DbValue::Null],
+                z_old_params![DbValue::Null],
             )
             .await
             .unwrap();
@@ -1433,7 +1437,7 @@ mod tests {
 
         pool.execute(
             r#"UPDATE test_other_types SET bar = $1"#,
-            params![DbValue::Null],
+            z_old_params![DbValue::Null],
         )
         .await
         .unwrap();
@@ -1441,7 +1445,7 @@ mod tests {
         let mut db_rows = pool
             .query(
                 r#"SELECT * FROM test_other_types WHERE bar IS NOT DISTINCT FROM $1"#,
-                params![DbValue::Null],
+                z_old_params![DbValue::Null],
             )
             .await
             .unwrap();
@@ -1488,7 +1492,7 @@ mod tests {
 
         pool.execute(
             r#"UPDATE test_jsonb SET foo = TRUE WHERE bar = $1"#,
-            params![db_value],
+            z_old_params![db_value],
         )
         .await
         .unwrap();

@@ -4,7 +4,7 @@ use axum::{
     response::{Html, IntoResponse},
     routing::get,
 };
-use rltbl_db::{any::AnyPool, core::DbQuery, db_row, db_value::DbRow};
+use rltbl_db::{z_old_any::AnyPool, z_old_core::DbQuery, z_old_db_row, z_old_db_value::DbRow};
 use std::{marker::Sync, sync::Arc};
 use tower_service::Service;
 
@@ -35,7 +35,7 @@ async fn run_axum(url: &str) {
     pool.insert(
         "test",
         &["value"],
-        &[&db_row! {
+        &[&z_old_db_row! {
             "value" => "foo",
         }],
     )

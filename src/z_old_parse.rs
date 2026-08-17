@@ -1,8 +1,8 @@
 //! Code for parsing SQL expressions.
 
 use crate::{
-    cache::{QUERY_CACHE_TABLE, TABLE_CACHE_TABLE},
-    core::DbError,
+    z_old_cache::{QUERY_CACHE_TABLE, TABLE_CACHE_TABLE},
+    z_old_core::DbError,
 };
 use lazy_static::lazy_static;
 use regex::Regex;

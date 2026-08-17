@@ -1,10 +1,10 @@
 //! Code for query caching.
 
 use crate::{
-    core::{DbError, DbQuery, get_view_sql, which_are_views},
-    db_value::{DbParams, DbRow, DbValue},
-    params,
-    parse::{get_affected_tables, get_view_tables},
+    z_old_core::{DbError, DbQuery, get_view_sql, which_are_views},
+    z_old_db_value::{DbParams, DbRow, DbValue},
+    z_old_params,
+    z_old_parse::{get_affected_tables, get_view_tables},
 };
 
 use indexmap::IndexMap;
@@ -564,7 +564,8 @@ pub async fn update_last_modified_times(
                         prefix = pool.kind().param_prefix(),
                         ts = pool.kind().get_epoch_time_sql(),
                     );
-                    pool.execute_no_cache_clean(&sql, params![table]).await?;
+                    pool.execute_no_cache_clean(&sql, z_old_params![table])
+                        .await?;
                 }
             }
         }

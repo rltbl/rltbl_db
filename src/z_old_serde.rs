@@ -1,8 +1,8 @@
 //! Serialization / deserialization implementations for rltbl_db.
 
 use crate::{
-    core::DbError,
-    db_value::{DbRow, DbValue, JsonRow, JsonValue},
+    z_old_core::DbError,
+    z_old_db_value::{DbRow, DbValue, JsonRow, JsonValue},
 };
 use serde::{
     Deserialize, Serialize,
@@ -1265,8 +1265,8 @@ impl<'de> de::MapAccess<'de> for DbRowDeserializer<'de> {
 mod tests {
     use super::*;
     use crate::{
-        db_row,
-        db_value::{DbValue, JsonValue},
+        z_old_db_row,
+        z_old_db_value::{DbValue, JsonValue},
     };
     use rust_decimal::{Decimal, dec};
     use serde::Deserialize;
@@ -1284,7 +1284,7 @@ mod tests {
             foo: "FOO".to_string(),
             bar: "".to_string(),
         };
-        let db_row = db_row! {
+        let db_row = z_old_db_row! {
             "foo" => "FOO",
             // "bar" => "",
         };
@@ -1612,7 +1612,7 @@ mod tests {
             }),
         };
 
-        let expected_db_row = db_row! {
+        let expected_db_row = z_old_db_row! {
             "json_simple_1" => json!(1724),
             "json_simple_2" => JsonValue::Null,
             "json_simple_3" => JsonValue::Bool(true),

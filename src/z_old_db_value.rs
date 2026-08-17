@@ -1,6 +1,6 @@
 //! Code related to database values.
 
-use crate::{core::DbError, db_kind::DbType};
+use crate::{z_old_core::DbError, z_old_db_kind::DbType};
 
 use indexmap::{self, IndexMap, IndexSet};
 use rust_decimal::Decimal;
@@ -1053,7 +1053,7 @@ impl DbRow {
     where
         T: for<'de> Deserialize<'de>,
     {
-        let mut deserializer = crate::serde::DbRowDeserializer::from_db_row(self);
+        let mut deserializer = crate::z_old_serde::DbRowDeserializer::from_db_row(self);
         let t = T::deserialize(&mut deserializer)
             .map_err(|err| DbError::SerdeError(format!("{err} while deserializing {self:?}")));
         t
@@ -1542,7 +1542,7 @@ impl DbColumn {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db_row;
+    use crate::z_old_db_row;
     use indexmap::indexmap;
     use rust_decimal::dec;
     use std::collections::HashMap;
@@ -1725,10 +1725,10 @@ mod tests {
         );
 
         let db_rows = vec![
-            db_row! { "foo" => 1, "bar" => 2.0, "jar" => "alphanum", "har" => true },
-            db_row! { "foo" => f32::MAX, "bar" => 2, "jar" => "alphanum", "har" => true },
-            db_row! { "foo" => 3, "bar" => 2.0, "jar" => "alphanum", "har" => false },
-            db_row! { "foo" => i64::MAX, "bar" => 2.0, "jar" => "alphanum", "har" => DbValue::Null },
+            z_old_db_row! { "foo" => 1, "bar" => 2.0, "jar" => "alphanum", "har" => true },
+            z_old_db_row! { "foo" => f32::MAX, "bar" => 2, "jar" => "alphanum", "har" => true },
+            z_old_db_row! { "foo" => 3, "bar" => 2.0, "jar" => "alphanum", "har" => false },
+            z_old_db_row! { "foo" => i64::MAX, "bar" => 2.0, "jar" => "alphanum", "har" => DbValue::Null },
         ];
 
         let column_map = DbColumn::min_row_from_db_rows(db_rows.into_iter()).unwrap();
@@ -1826,13 +1826,13 @@ mod tests {
 
     #[test]
     fn test_coerce() {
-        let input_row_1 = db_row! {
+        let input_row_1 = z_old_db_row! {
             "foo" => DbValue::SmallInteger(1),
             "bar" => DbValue::SmallInteger(2),
             "jar" => DbValue::Text("3".to_string()),
             "har" => DbValue::Text("t".to_string())
         };
-        let input_row_2 = db_row! {
+        let input_row_2 = z_old_db_row! {
             "foo" => DbValue::BigInteger(i64::MAX),
             "bar" => DbValue::Text("2".to_string()),
             "jar" => DbValue::SmallInteger(9),
@@ -1864,13 +1864,13 @@ mod tests {
                 unique: true,
             }
         };
-        let expected_row_1 = db_row! {
+        let expected_row_1 = z_old_db_row! {
             "foo" => DbValue::Real(1.0),
             "bar" => DbValue::SmallInteger(2),
             "jar" => DbValue::BigInteger(3),
             "har" => DbValue::Boolean(true),
         };
-        let expected_row_2 = db_row! {
+        let expected_row_2 = z_old_db_row! {
             "foo" => DbValue::Real(9.223372e18),
             "bar" => DbValue::SmallInteger(2),
             "jar" => DbValue::BigInteger(9),

@@ -1,11 +1,11 @@
 //! Code specific to supported database kinds.
 
 use crate::{
-    cache::{QUERY_CACHE_TABLE, TABLE_CACHE_TABLE},
-    core::DbError,
-    db_value::{DbColumn, DbValue, IntoDbValue, JsonValue},
-    params,
-    parse::validate_table_name,
+    z_old_cache::{QUERY_CACHE_TABLE, TABLE_CACHE_TABLE},
+    z_old_core::DbError,
+    z_old_db_value::{DbColumn, DbValue, IntoDbValue, JsonValue},
+    z_old_params,
+    z_old_parse::validate_table_name,
 };
 use indexmap::IndexMap;
 use rust_decimal::{Decimal, dec};
@@ -218,7 +218,7 @@ impl DbKind for SQLiteKind {
                FROM pragma_table_info(?1)
                ORDER BY "column_name""#
                 .to_string(),
-            params![table],
+            z_old_params![table],
         )
     }
 
@@ -230,7 +230,7 @@ impl DbKind for SQLiteKind {
                WHERE "pk" > 0
                ORDER BY "pk""#
                 .to_string(),
-            params![table],
+            z_old_params![table],
         )
     }
 
@@ -331,7 +331,7 @@ impl DbKind for SQLiteKind {
             r#"SELECT "sql" FROM "sqlite_master"
                WHERE "type" = 'view' AND "name" = ?1"#
                 .to_string(),
-            params![view],
+            z_old_params![view],
         )
     }
 
@@ -430,7 +430,7 @@ impl DbKind for PostgreSQLKind {
                  AND "columns"."table_name" = $1
                ORDER BY "columns"."ordinal_position""#
                 .to_string(),
-            params![table],
+            z_old_params![table],
         )
     }
 
@@ -451,7 +451,7 @@ impl DbKind for PostgreSQLKind {
               )
               ORDER by "kcu"."ordinal_position""#
                 .to_string(),
-            params![table],
+            z_old_params![table],
         )
     }
 
@@ -572,7 +572,7 @@ impl DbKind for PostgreSQLKind {
                      WHERE "name" = 'search_path'
                    )"#
             ),
-            params![view],
+            z_old_params![view],
         )
     }
 

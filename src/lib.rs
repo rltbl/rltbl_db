@@ -1,33 +1,196 @@
-//! Module declarations and macro definitions for rltbl_db.
+//! # Relatable DB
+//!
+//! `rltbl_db` provides an async API
+//! that abstracts over differences between SQL databases,
+//! letting you choose your database driver at runtime,
+//! and work with database schemas that you don't know in advance.
+//! Our goal is to provide easy access
+//! to the core functionality of a SQL database.
+//! If you need the specialized functionality of a specific SQL database,
+//! this is not the crate for you.
+//!
+//! MC: While that is true as a general rule, it is still the case that there are certain
+//!     database-specific features that we _do_ support, e.g., certain non-standard types in
+//!     PostgreSQL, or direct CSV/TSV loading in the case of both PostgreSQL and SQLite.
+//!     Additionally, we support basically *anything* at all, syntax-wise, as long as
+//!     you write your own SQL and as long as the syntax is supported by the driver
+//!     (rltbl_db will happily pass any string you like to the database).
+//!     I suggest mentioning this here, since otherwise this comment makes it seem as
+//!     though we only support ANSI SQL and nothing else.
+//!
+//! We provide structs to handle differences between SQL types and values,
+//! and support `serde` for converting these to and from Rust structs.
+//! The `Syntax` trait allows for multiple "flavours" of the SQL language.
+//! A handful of other traits allow for different database "drivers"
+//! to handle the details of the pooled database connection.
+//! The `AnyPool` struct connects you to your database at runtime,
+//! providing `execute`, `query`, `insert`, and similar methods,
+//! plus a configurable caching system.
+//!
+//! ## Usage
+//!
+//! Here we connect to an in-memory SQLite database and do some basic operations.
+//!
+//! ```ignore
+//! use rltbl_db_api::{AnyPool, row, Error as DbError, values};
+//!
+//! async fn basic_example() -> Result<(), DbError> {
+//!     // Use a URL to connect to a SQLite in-memory database.
+//!     let url = ":memory:";
+//!     let pool = AnyPool::connect(url).await?;
+//!
+//!     // Get one value.
+//!     let value: i64 = pool.query("SELECT 1", []).await?.try_into_value()?;
+//!     assert_eq!(value, 1);
+//!
+//!     // Execute a statement.
+//!     pool.execute("CREATE TABLE foo ( bar INT )", []).await?;
+//!
+//!     // Insert one row.
+//!     let row = row!{ "bar" => 2 };
+//!     pool.insert("foo", &["bar"], [&row]).await?;
+//!
+//!     // Retrieve the inserted row.
+//!     let result = pool.query("SELECT bar FROM foo", []).await?.row()?;
+//!     assert_eq!(result, row);
+//!
+//!     // Query with parameters.
+//!     let result = pool.query("SELECT * FROM foo WHERE bar = $1", &values![2]).await?.row()?;
+//!     assert_eq!(result, row);
+//!
+//!     Ok(())
+//! }
+//!
+//! # #[tokio::main]
+//! # async fn main() {
+//! #     basic_example().await.unwrap();
+//! # }
+//! ```
+//!
+//! Given a struct with named fields that implements `serde` `Serialize` and `Deserialize`,
+//! we can convert it to a row to insert it into the database,
+//! and from a row back into a struct.
+//!
+//! ```ignore
+//! use rltbl_db_api::{AnyPool, to_row, Error as DbError};
+//! use serde::{Deserialize, Serialize};
+//!
+//! #[derive(Deserialize, Serialize)]
+//! struct Foo {
+//!     bar: i64,
+//!     baz: String,
+//! }
+//!
+//! async fn serde_example() -> Result<(), DbError> {
+//!     let pool = AnyPool::connect(":memory:").await?;
+//!
+//!     let test = Foo { bar: 1, baz: "b" };
+//!     let row = to_row(test)?;
+//!     pool.execute("CREATE TABLE foo ( bar INT, baz TEXT )", ()).await?;
+//!     pool.insert("foo", &["bar", "baz"], [&row]).await?;
+//!
+//!     // Retrieve the inserted row as a Foo struct.
+//!     let result: Foo = pool.query("SELECT bar FROM foo", ()).await?.row()?.try_into()?;
+//!     assert_eq!(result, test);
+//!
+//!     Ok(())
+//! }
+//!
+//! # #[tokio::main]
+//! # async fn main() {
+//! #     serde_example().await.unwrap();
+//! # }
+//! ```
+//!
+//! Given a CSV or TSV file,
+//! we can determine a schema for the data,
+//! and load it into a new table.
+//!
+//! ```ignore
+//! use rltbl_db_api::{AnyPool, Error as DbError};
+//!
+//! async fn tsv_example() -> Result<(), DbError> {
+//!     let pool = AnyPool::connect(":memory:").await?;
+//!
+//!     // determine table schema from TSV
+//!     // create table
+//!     // load TSV into table
+//!     // query from table
+//!
+//!     Ok(())
+//! }
+//!
+//! # #[tokio::main]
+//! # async fn main() {
+//! #     tsv_example().await.unwrap();
+//! # }
+//! ```
+//!
+//!
+//! ## Limitations
+//!
+//! Different SQL databases use variations on the SQL language,
+//! different datatypes,
+//! and provide different functions and features.
+//! The main goal of `rltbl_db` is to switch between databases at runtime,
+//! which means that we support core SQL functionality
+//! that's common to any SQL database.
+//!
+//! MC: See my comment above.
+//!
+//! You may need to write your queries differently to support multiple databases,
+//! or provide different SQL strings for different cases.
+//!
+//! ## Extension
+//!
+//! We currently support PostgreSQL and SQLite syntaxes,
+//! and
+//! `tokio_posgtgres`,
+//! `ruqslite`,
+//! and `libsql` drivers.
+//!
+//! You can support a new SQL database by implementing these traits:
+//!
+//! 1. [Syntax] trait with your SQL language "flavour"
+//! 2. [Query] trait to run a query
+//! 3. [Pool] trait to connect to a database pool
+//! 4. [Transaction] trait to support transactions
+//!
+//! Each of these traits has default implementations of most methods,
+//! so only a few method implementations are required.
 
-pub mod any;
-pub mod cache;
-pub mod core;
-pub mod db_kind;
-pub mod db_value;
-pub mod parse;
-pub mod serde;
-pub mod shared;
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+pub mod z_old_any;
+pub mod z_old_cache;
+pub mod z_old_core;
+pub mod z_old_db_kind;
+pub mod z_old_db_value;
+pub mod z_old_parse;
+pub mod z_old_serde;
+pub mod z_old_shared;
 
 #[cfg(feature = "rusqlite")]
-pub mod rusqlite;
+pub mod z_old_rusqlite;
 
 #[cfg(feature = "tokio-postgres")]
-pub mod tokio_postgres;
+pub mod z_old_tokio_postgres;
 
 #[cfg(feature = "libsql")]
-pub mod libsql;
+pub mod z_old_libsql;
 
 // Macro definitions
 
 /// Converts a list of assorted types implementing [db_value::IntoDbValue] into [db_value::DbParams]
 #[macro_export]
-macro_rules! params {
+macro_rules! z_old_params {
     () => {
        ()
     };
     ($($value:expr),* $(,)?) => {{
-        use $crate::db_value::IntoDbValue;
+        use $crate::z_old_db_value::IntoDbValue;
         [$($value.into_db_value()),*]
 
     }};
@@ -35,7 +198,7 @@ macro_rules! params {
 
 /// Converts a set of pairs into a [db_value::DbRow].
 #[macro_export]
-macro_rules! db_row {
+macro_rules! z_old_db_row {
     ($($key:expr => $value:expr,)+) => {
         DbRow {map: indexmap::indexmap!($($key.to_string() => $value.into()),+) }
     };
@@ -53,11 +216,11 @@ macro_rules! db_row {
 
 #[cfg(test)]
 mod tests {
-    use crate::db_value::{DbRow, DbValue};
+    use crate::z_old_db_value::{DbRow, DbValue};
 
     #[test]
     fn test_macros() {
-        let params = params![1_i32, "foo", 1.1_f64];
+        let params = z_old_params![1_i32, "foo", 1.1_f64];
         assert_eq!(
             params,
             [
@@ -79,10 +242,10 @@ mod tests {
 
         assert_eq!(
             expected_db_row,
-            db_row! { "foo" => true, "bar" => 1_f64}
+            z_old_db_row! { "foo" => true, "bar" => 1_f64}
         );
 
         // Empty row:
-        assert_eq!(db_row! { }, DbRow::new());
+        assert_eq!(z_old_db_row! { }, DbRow::new());
     }
 }

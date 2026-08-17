@@ -1,13 +1,17 @@
 //! [rusqlite](<https://crates.io/crates/deadpool-sqlite>) implementation for rltbl_db.
 
 use crate::{
-    any::AnyPool,
-    cache::{CachingStrategy, clear_cache_for_affected_tables, clear_cache_for_dropped_tables},
-    core::{DbError, DbQuery},
-    db_kind::{DbKind, MAX_PARAMS_SQLITE, SQLiteKind},
-    db_value::{DbColumn, DbParams, DbRow, DbRows, DbValue, IntoDbParams, IntoDbRows, JsonValue},
-    parse::validate_table_name,
-    shared::{EditType, batch_insert, edit},
+    z_old_any::AnyPool,
+    z_old_cache::{
+        CachingStrategy, clear_cache_for_affected_tables, clear_cache_for_dropped_tables,
+    },
+    z_old_core::{DbError, DbQuery},
+    z_old_db_kind::{DbKind, MAX_PARAMS_SQLITE, SQLiteKind},
+    z_old_db_value::{
+        DbColumn, DbParams, DbRow, DbRows, DbValue, IntoDbParams, IntoDbRows, JsonValue,
+    },
+    z_old_parse::validate_table_name,
+    z_old_shared::{EditType, batch_insert, edit},
 };
 
 use deadpool_sqlite::{
@@ -549,7 +553,7 @@ fn add_rusqlite_regexp_function(db: &RusqliteConnection) -> RusqliteResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{db_row, params};
+    use crate::{z_old_db_row, z_old_params};
 
     use serde_json::json;
     use std::ops::Deref;
@@ -573,7 +577,7 @@ mod tests {
             r#"INSERT INTO test_table_indirect
                (text_value, alt_text_value, float_value, int_value, bool_value)
                VALUES (?1, ?2, ?3, ?4, ?5)"#,
-            params!["foo", (), 1.05_f64, 1_i64, true],
+            z_old_params!["foo", (), 1.05_f64, 1_i64, true],
         )
         .await
         .unwrap();
@@ -585,7 +589,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             *rows.deref(),
-            [db_row! {
+            [z_old_db_row! {
                 "MAX(int_value)" => 1_i64,
             }]
         );
@@ -598,7 +602,10 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(*rows.deref(), [db_row! {"bool_value_alias" => 1_i64,}]);
+        assert_eq!(
+            *rows.deref(),
+            [z_old_db_row! {"bool_value_alias" => 1_i64,}]
+        );
 
         // Test aggregate with alias:
         let rows = pool
@@ -609,7 +616,7 @@ mod tests {
             .await
             .unwrap();
         // Note that the alias is not shown in the results:
-        assert_eq!(*rows.deref(), [db_row! {"max_int_value" => 1_i64,}]);
+        assert_eq!(*rows.deref(), [z_old_db_row! {"max_int_value" => 1_i64,}]);
 
         // Test non-aggregate function:
         let rows = pool
@@ -621,7 +628,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             *rows.deref(),
-            [db_row! {
+            [z_old_db_row! {
                 "CAST(int_value AS TEXT)" => "1",
             }]
         );
@@ -636,7 +643,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             *rows.deref(),
-            [db_row! {
+            [z_old_db_row! {
                 "int_value_cast" => "1",
             }]
         );
@@ -657,7 +664,7 @@ mod tests {
         // sqlite.
         assert_eq!(
             *rows.deref(),
-            [db_row! {
+            [z_old_db_row! {
                 "MAX(bool_value)" => 1_i64,
             }]
         );
@@ -738,7 +745,7 @@ mod tests {
         let value: String = conn
             .query(
                 "SELECT text_value from test_table_match WHERE regexp_match(text_value, $1) = 1",
-                params!["foo"],
+                z_old_params!["foo"],
             )
             .await
             .unwrap()

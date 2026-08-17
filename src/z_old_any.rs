@@ -3,7 +3,7 @@
 /// To connect to any supported database using a URL:
 ///
 /// ```
-/// use rltbl_db::{any::AnyPool, core::{DbError, DbQuery}};
+/// use rltbl_db::{z_old_any::AnyPool, z_old_core::{DbError, DbQuery}};
 ///
 /// async fn example() -> Result<String, DbError> {
 ///     let pool = AnyPool::connect("test.db").await?;
@@ -20,26 +20,26 @@
 /// }
 /// ```
 use crate::{
-    cache::CachingStrategy,
-    core::{DbError, DbQuery},
-    db_kind::DbKind,
-    db_value::{DbColumn, DbRows, IntoDbParams, IntoDbRows},
+    z_old_cache::CachingStrategy,
+    z_old_core::{DbError, DbQuery},
+    z_old_db_kind::DbKind,
+    z_old_db_value::{DbColumn, DbRows, IntoDbParams, IntoDbRows},
 };
 
 #[cfg(feature = "rusqlite")]
-use crate::rusqlite::RusqlitePool;
+use crate::z_old_rusqlite::RusqlitePool;
 
 #[cfg(feature = "tokio-postgres")]
-use crate::tokio_postgres::TokioPostgresPool;
+use crate::z_old_tokio_postgres::TokioPostgresPool;
 
 #[cfg(feature = "libsql")]
-use crate::libsql::LibSQLPool;
+use crate::z_old_libsql::LibSQLPool;
 
 #[cfg(feature = "tokio-postgres")]
-use crate::db_kind::PostgreSQLKind;
+use crate::z_old_db_kind::PostgreSQLKind;
 
 #[cfg(any(feature = "rusqlite", feature = "libsql"))]
-use crate::db_kind::SQLiteKind;
+use crate::z_old_db_kind::SQLiteKind;
 
 use indexmap::IndexMap;
 
@@ -374,15 +374,15 @@ impl DbQuery for AnyPool {
 mod tests {
     use super::*;
     use crate::{
-        cache::{CachingStrategy, QUERY_CACHE_TABLE, TABLE_CACHE_TABLE},
-        cache::{
-            clear_memory_query_cache, clear_memory_table_cache, clear_meta_cache,
-            get_memory_query_cache_contents, get_memory_table_cache_contents,
+        z_old_cache::{
+            CachingStrategy, QUERY_CACHE_TABLE, TABLE_CACHE_TABLE, clear_memory_query_cache,
+            clear_memory_table_cache, clear_meta_cache, get_memory_query_cache_contents,
+            get_memory_table_cache_contents,
         },
-        db_kind::DbType,
-        db_row,
-        db_value::{DbRow, DbValue, JsonValue, StringRow},
-        params,
+        z_old_db_kind::DbType,
+        z_old_db_row,
+        z_old_db_value::{DbRow, DbValue, JsonValue, StringRow},
+        z_old_params,
     };
     use indexmap::IndexMap;
     use rand::{
@@ -458,13 +458,13 @@ mod tests {
             assert_eq!(
                 rows.rows,
                 vec![
-                    db_row! {
+                    z_old_db_row! {
                         "alpha" => DbValue::BigInteger(1),
                         "beta" => DbValue::Text("short".to_string()),
                         "gamma" => DbValue::BigReal(9.0),
                         "delta" => DbValue::BigReal(i64::MAX as f64),
                     },
-                    db_row! {
+                    z_old_db_row! {
                         // TODO: This first value is wrong. It should be DbValue::Null,
                         // but we need a way to import NULL values from TSV. One possibility
                         // is to create a trigger on tables with nullable columns to insert NULL
@@ -474,31 +474,31 @@ mod tests {
                         "gamma" => DbValue::BigReal(i32::MAX as f64),
                         "delta" => DbValue::BigReal(4.0),
                     },
-                    db_row! {
+                    z_old_db_row! {
                         "alpha" => DbValue::BigInteger(19),
                         "beta" => DbValue::Text("short".to_string()),
                         "gamma" => DbValue::BigReal(5.2),
                         "delta" => DbValue::BigReal(4.1),
                     },
-                    db_row! {
+                    z_old_db_row! {
                         "alpha" => DbValue::BigInteger(100),
                         "beta" => DbValue::Text("long".to_string()),
                         "gamma" => DbValue::BigReal(7.0),
                         "delta" => DbValue::BigReal(19.0),
                     },
-                    db_row! {
+                    z_old_db_row! {
                         "alpha" => DbValue::BigInteger(115),
                         "beta" => DbValue::Text("short".to_string()),
                         "gamma" => DbValue::BigReal(10.0),
                         "delta" => DbValue::BigReal(12.0),
                     },
-                    db_row! {
+                    z_old_db_row! {
                         "alpha" => DbValue::BigInteger(30),
                         "beta" => DbValue::Text("short".to_string()),
                         "gamma" => DbValue::BigReal(4.0),
                         "delta" => DbValue::BigReal(19.0),
                     },
-                    db_row! {
+                    z_old_db_row! {
                         "alpha" => DbValue::BigInteger(39),
                         "beta" => DbValue::Text("midway".to_string()),
                         "gamma" => DbValue::BigReal(19.99),
@@ -512,43 +512,43 @@ mod tests {
             assert_eq!(
                 rows.rows,
                 vec![
-                    db_row! {
+                    z_old_db_row! {
                         "alpha" => DbValue::SmallInteger(1),
                         "beta" => DbValue::Text("short".to_string()),
                         "gamma" => DbValue::Real(9.0),
                         "delta" => DbValue::Real(i64::MAX as f32),
                     },
-                    db_row! {
+                    z_old_db_row! {
                         "alpha" => DbValue::Null,
                         "beta" => DbValue::Text("long".to_string()),
                         "gamma" => DbValue::Real(i32::MAX as f32),
                         "delta" => DbValue::Real(4.0),
                     },
-                    db_row! {
+                    z_old_db_row! {
                         "alpha" => DbValue::SmallInteger(19),
                         "beta" => DbValue::Text("short".to_string()),
                         "gamma" => DbValue::Real(5.2),
                         "delta" => DbValue::Real(4.1),
                     },
-                    db_row! {
+                    z_old_db_row! {
                         "alpha" => DbValue::SmallInteger(100),
                         "beta" => DbValue::Text("long".to_string()),
                         "gamma" => DbValue::Real(7.0),
                         "delta" => DbValue::Real(19.0),
                     },
-                    db_row! {
+                    z_old_db_row! {
                         "alpha" => DbValue::SmallInteger(115),
                         "beta" => DbValue::Text("short".to_string()),
                         "gamma" => DbValue::Real(10.0),
                         "delta" => DbValue::Real(12.0),
                     },
-                    db_row! {
+                    z_old_db_row! {
                         "alpha" => DbValue::SmallInteger(30),
                         "beta" => DbValue::Text("short".to_string()),
                         "gamma" => DbValue::Real(4.0),
                         "delta" => DbValue::Real(19.0),
                     },
-                    db_row! {
+                    z_old_db_row! {
                         "alpha" => DbValue::SmallInteger(39),
                         "beta" => DbValue::Text("midway".to_string()),
                         "gamma" => DbValue::Real(19.99),
@@ -639,10 +639,10 @@ mod tests {
 
         let rows = pool.query(&select_sql, &["foo"]).await.unwrap();
         let row = rows.row().unwrap();
-        assert_eq!(*row, db_row! {"value" => "foo",});
+        assert_eq!(*row, z_old_db_row! {"value" => "foo",});
 
         let rows = pool.query(&select_sql, &["foo"]).await.unwrap();
-        assert_eq!(*rows.deref(), [db_row! {"value" => "foo",}]);
+        assert_eq!(*rows.deref(), [z_old_db_row! {"value" => "foo",}]);
 
         // Clean up:
         pool.drop_table("test_table_text").await.unwrap();
@@ -677,16 +677,16 @@ mod tests {
 
         pool.execute(
             &format!("INSERT INTO test_table_int VALUES ({p}1, {p}2, {p}3)"),
-            params![1_i16, 1_i32, 1_i64],
+            z_old_params![1_i16, 1_i32, 1_i64],
         )
         .await
         .unwrap();
 
         for column in ["value_2", "value_4", "value_8"] {
             let params = match column {
-                "value_2" => params![1_i16],
-                "value_4" => params![1_i32],
-                "value_8" => params![1_i64],
+                "value_2" => z_old_params![1_i16],
+                "value_4" => z_old_params![1_i32],
+                "value_8" => z_old_params![1_i64],
                 _ => unreachable!(),
             };
             let select_sql = format!("SELECT {column} FROM test_table_int WHERE {column} = {p}1");
@@ -788,10 +788,10 @@ mod tests {
 
         let rows = pool.query(&select_sql, &[1.0_f64]).await.unwrap();
         let row = rows.row().unwrap();
-        assert_eq!(*row, db_row! {"value" => 1.05,});
+        assert_eq!(*row, z_old_db_row! {"value" => 1.05,});
 
         let rows = pool.query(&select_sql, &[1.0_f64]).await.unwrap();
-        assert_eq!(*rows.deref(), [db_row! {"value" => 1.05,}]);
+        assert_eq!(*rows.deref(), [z_old_db_row! {"value" => 1.05,}]);
 
         // FLOAT4
         pool.execute_batch(&format!(
@@ -875,7 +875,7 @@ mod tests {
                    )
                    VALUES ({p}1, {p}2, {p}3, {p}4, {p}5, {p}6, {p}7, {p}8, {p}9, {p}10)"#,
             ),
-            params!["foo", (), 1.05_f64, (), 1_i64, (), true, (), dec!(1), ()],
+            z_old_params!["foo", (), 1.05_f64, (), 1_i64, (), true, (), dec!(1), ()],
         )
         .await
         .unwrap();
@@ -910,13 +910,13 @@ mod tests {
                  AND bool_value = {p}5
                  AND numeric_value > {p}6"#
         );
-        let params = params!["foo", (), 1.0_f64, 0_i64, true, dec!(0.999)];
+        let params = z_old_params!["foo", (), 1.0_f64, 0_i64, true, dec!(0.999)];
 
         let rows = pool.query(&select_sql, params.clone()).await.unwrap();
         let row = rows.row().unwrap();
         assert_eq!(
             *row,
-            db_row! {
+            z_old_db_row! {
                 "text_value" => "foo",
                 "alt_text_value" => DbValue::Null,
                 "float_value" => 1.05,
@@ -937,7 +937,7 @@ mod tests {
         let rows = pool.query(&select_sql, params.clone()).await.unwrap();
         assert_eq!(
             *rows.deref(),
-            [db_row! {
+            [z_old_db_row! {
                 "text_value" => "foo",
                 "alt_text_value" => DbValue::Null,
                 "float_value" => 1.05,
@@ -1066,7 +1066,7 @@ mod tests {
                  (bar, car, dar, far, gar, har, jar, kar) \
                  VALUES ({p}1, {p}2, {p}3, {p}4, {p}5 ,{p}6, {p}7, {p}8)"
             ),
-            params![
+            z_old_params![
                 "four",
                 123_i16,
                 123_i32,
@@ -1123,8 +1123,8 @@ mod tests {
             "test_insert",
             &["text_value", "int_value", "bool_value"],
             &[
-                &db_row! {"text_value" => "TEXT",},
-                &db_row! {
+                &z_old_db_row! {"text_value" => "TEXT",},
+                &z_old_db_row! {
                     "int_value" => 1_i64,
                     "bool_value" => match kind.to_string().as_str() {
                         "sqlite" => DbValue::from(1_i64),
@@ -1145,14 +1145,14 @@ mod tests {
         assert_eq!(
             *rows.deref(),
             [
-                db_row! {
+                z_old_db_row! {
                     "text_value" => "TEXT",
                     "alt_text_value" => DbValue::Null,
                     "float_value" => DbValue::Null,
                     "int_value" => DbValue::Null,
                     "bool_value" => DbValue::Null,
                 },
-                db_row! {
+                z_old_db_row! {
                     "text_value" => DbValue::Null,
                     "alt_text_value" => DbValue::Null,
                     "float_value" => DbValue::Null,
@@ -1208,8 +1208,8 @@ mod tests {
                 "test_insert_returning",
                 &["text_value", "int_value", "bool_value"],
                 &[
-                    &db_row! {"text_value" => "TEXT",},
-                    &db_row! {
+                    &z_old_db_row! {"text_value" => "TEXT",},
+                    &z_old_db_row! {
                         "int_value" => 1_i64,
                         "bool_value" => true,
                     },
@@ -1221,14 +1221,14 @@ mod tests {
         assert_eq!(
             *rows.deref(),
             [
-                db_row! {
+                z_old_db_row! {
                     "text_value" => "TEXT",
                     "alt_text_value" => DbValue::Null,
                     "float_value" => DbValue::Null,
                     "int_value" => DbValue::Null,
                     "bool_value" => DbValue::Null,
                 },
-                db_row! {
+                z_old_db_row! {
                     "text_value" => DbValue::Null,
                     "alt_text_value" => DbValue::Null,
                     "float_value" => DbValue::Null,
@@ -1248,10 +1248,10 @@ mod tests {
                 "test_insert_returning",
                 &["text_value", "int_value", "bool_value"],
                 &[
-                    &db_row! {
+                    &z_old_db_row! {
                         "text_value" => "TEXT",
                     },
-                    &db_row! {
+                    &z_old_db_row! {
                         "int_value" => 1_i64,
                         "bool_value" => true,
                     },
@@ -1263,11 +1263,11 @@ mod tests {
         assert_eq!(
             *rows.deref(),
             [
-                db_row! {
+                z_old_db_row! {
                     "float_value" => DbValue::Null,
                     "int_value" => DbValue::Null,
                 },
-                db_row! {
+                z_old_db_row! {
                     "float_value" => DbValue::Null,
                     "int_value" => 1_i64,
                 }
@@ -1413,9 +1413,9 @@ mod tests {
             "test_update",
             &["foo"],
             &[
-                &db_row! {"foo" => 1_i64,},
-                &db_row! {"foo" => 2_i64,},
-                &db_row! {"foo" => 3_i64,},
+                &z_old_db_row! {"foo" => 1_i64,},
+                &z_old_db_row! {"foo" => 2_i64,},
+                &z_old_db_row! {"foo" => 3_i64,},
             ],
         )
         .await
@@ -1425,21 +1425,21 @@ mod tests {
             "test_update",
             &["foo", "bar", "car", "dar", "ear"],
             &[
-                &db_row! {
+                &z_old_db_row! {
                     "foo" => 1_i64,
                     "bar" => 10_i64,
                     "car" => 11_i64,
                     "dar" => 12_i64,
                     "ear" => 13_i64,
                 },
-                &db_row! {
+                &z_old_db_row! {
                     "foo" => 2_i64,
                     "bar" => 14_i64,
                     "car" => 15_i64,
                     "dar" => 16_i64,
                     "ear" => 17_i64,
                 },
-                &db_row! {
+                &z_old_db_row! {
                     "foo" => 3_i64,
                     "bar" => 18_i64,
                     "car" => 19_i64,
@@ -1455,21 +1455,21 @@ mod tests {
         assert_eq!(
             *rows.deref(),
             [
-                db_row! {
+                z_old_db_row! {
                     "foo" => 1_i64,
                     "bar" => 10_i64,
                     "car" => 11_i64,
                     "dar" => 12_i64,
                     "ear" => 13_i64,
                 },
-                db_row! {
+                z_old_db_row! {
                     "foo" => 2_i64,
                     "bar" => 14_i64,
                     "car" => 15_i64,
                     "dar" => 16_i64,
                     "ear" => 17_i64,
                 },
-                db_row! {
+                z_old_db_row! {
                     "foo" => 3_i64,
                     "bar" => 18_i64,
                     "car" => 19_i64,
@@ -1520,15 +1520,15 @@ mod tests {
             "test_update_returning",
             &["foo", "bar", "car", "dar", "ear"],
             &[
-                &db_row! {
+                &z_old_db_row! {
                     "foo" => 1_i64,
                     "bar" => 1_i64,
                 },
-                &db_row! {
+                &z_old_db_row! {
                     "foo" => 2_i64,
                     "bar" => 2_i64,
                 },
-                &db_row! {
+                &z_old_db_row! {
                     "foo" => 3_i64,
                     "bar" => 3_i64,
                 },
@@ -1540,17 +1540,17 @@ mod tests {
         let check_returning_rows = |rows: &Vec<DbRow>| {
             assert!(rows.iter().all(|row| {
                 [
-                    db_row! {
+                    z_old_db_row! {
                         "car" => 10_i64,
                         "dar" => 11_i64,
                         "ear" => 12_i64,
                     },
-                    db_row! {
+                    z_old_db_row! {
                         "car" => 13_i64,
                         "dar" => 14_i64,
                         "ear" => 15_i64,
                     },
-                    db_row! {
+                    z_old_db_row! {
                         "car" => 16_i64,
                         "dar" => 17_i64,
                         "ear" => 18_i64,
@@ -1566,21 +1566,21 @@ mod tests {
                     "test_update_returning",
                     &["foo", "bar", "car", "dar", "ear"],
                     &[
-                        &db_row! {
+                        &z_old_db_row! {
                             "foo" => 1_i64,
                             "bar" => 1_i64,
                             "car" => 10_i64,
                             "dar" => 11_i64,
                             "ear" => 12_i64,
                         },
-                        &db_row! {
+                        &z_old_db_row! {
                             "foo" => 2_i64,
                             "bar" => 2_i64,
                             "car" => 13_i64,
                             "dar" => 14_i64,
                             "ear" => 15_i64,
                         },
-                        &db_row! {
+                        &z_old_db_row! {
                             "foo" => 3_i64,
                             "bar" => 3_i64,
                             "car" => 16_i64,
@@ -1604,15 +1604,15 @@ mod tests {
             "test_update_returning",
             &["foo", "bar"],
             &[
-                &db_row! {
+                &z_old_db_row! {
                     "foo" => 1_i64,
                     "bar" => 1_i64,
                 },
-                &db_row! {
+                &z_old_db_row! {
                     "foo" => 2_i64,
                     "bar" => 2_i64,
                 },
-                &db_row! {
+                &z_old_db_row! {
                     "foo" => 3_i64,
                     "bar" => 3_i64,
                 },
@@ -1627,21 +1627,21 @@ mod tests {
                     "test_update_returning",
                     &["foo", "bar", "car", "dar", "ear"],
                     &[
-                        &db_row! {
+                        &z_old_db_row! {
                             "ear" => 15_i64,
                             "bar" => 2_i64,
                             "car" => 13_i64,
                             "dar" => 14_i64,
                             "foo" => 2_i64,
                         },
-                        &db_row! {
+                        &z_old_db_row! {
                             "foo" => 1_i64,
                             "car" => 10_i64,
                             "bar" => 1_i64,
                             "ear" => 12_i64,
                             "dar" => 11_i64,
                         },
-                        &db_row! {
+                        &z_old_db_row! {
                             "car" => 16_i64,
                             "dar" => 17_i64,
                             "ear" => 18_i64,
@@ -1662,21 +1662,21 @@ mod tests {
             .unwrap();
         assert!(rows.iter().all(|row| {
             [
-                db_row! {
+                z_old_db_row! {
                     "foo" => 1_i64,
                     "bar" => 1_i64,
                     "car" => 10_i64,
                     "dar" => 11_i64,
                     "ear" => 12_i64,
                 },
-                db_row! {
+                z_old_db_row! {
                     "foo" => 2_i64,
                     "bar" => 2_i64,
                     "car" => 13_i64,
                     "dar" => 14_i64,
                     "ear" => 15_i64,
                 },
-                db_row! {
+                z_old_db_row! {
                     "foo" => 3_i64,
                     "bar" => 3_i64,
                     "car" => 16_i64,
@@ -1727,13 +1727,13 @@ mod tests {
             "test_upsert",
             &["foo"],
             &[
-                &db_row! {
+                &z_old_db_row! {
                     "foo" => 1_i64,
                 },
-                &db_row! {
+                &z_old_db_row! {
                     "foo" => 2_i64,
                 },
-                &db_row! {
+                &z_old_db_row! {
                     "foo" => 3_i64,
                 },
             ],
@@ -1745,21 +1745,21 @@ mod tests {
             "test_upsert",
             &["foo", "bar", "car", "dar", "ear"],
             &[
-                &db_row! {
+                &z_old_db_row! {
                     "foo" => 1_i64,
                     "bar" => 10_i64,
                     "car" => 11_i64,
                     "dar" => 12_i64,
                     "ear" => 13_i64,
                 },
-                &db_row! {
+                &z_old_db_row! {
                     "foo" => 2_i64,
                     "bar" => 14_i64,
                     "car" => 15_i64,
                     "dar" => 16_i64,
                     "ear" => 17_i64,
                 },
-                &db_row! {
+                &z_old_db_row! {
                     "foo" => 3_i64,
                     "bar" => 18_i64,
                     "car" => 19_i64,
@@ -1775,21 +1775,21 @@ mod tests {
         assert_eq!(
             *rows.deref(),
             [
-                db_row! {
+                z_old_db_row! {
                     "foo" => 1_i64,
                     "bar" => 10_i64,
                     "car" => 11_i64,
                     "dar" => 12_i64,
                     "ear" => 13_i64,
                 },
-                db_row! {
+                z_old_db_row! {
                     "foo" => 2_i64,
                     "bar" => 14_i64,
                     "car" => 15_i64,
                     "dar" => 16_i64,
                     "ear" => 17_i64,
                 },
-                db_row! {
+                z_old_db_row! {
                     "foo" => 3_i64,
                     "bar" => 18_i64,
                     "car" => 19_i64,
@@ -1840,15 +1840,15 @@ mod tests {
             "test_upsert_returning",
             &["foo", "bar", "car", "dar", "ear"],
             &[
-                &db_row! {
+                &z_old_db_row! {
                     "foo" => 1_i64,
                     "bar" => 1_i64,
                 },
-                &db_row! {
+                &z_old_db_row! {
                     "foo" => 2_i64,
                     "bar" => 2_i64,
                 },
-                &db_row! {
+                &z_old_db_row! {
                     "foo" => 3_i64,
                     "bar" => 3_i64,
                 },
@@ -1862,21 +1862,21 @@ mod tests {
                 "test_upsert_returning",
                 &["foo", "bar", "car", "dar", "ear"],
                 &[
-                    &db_row! {
+                    &z_old_db_row! {
                         "foo" => 1_i64,
                         "bar" => 1_i64,
                         "car" => 10_i64,
                         "dar" => 11_i64,
                         "ear" => 12_i64,
                     },
-                    &db_row! {
+                    &z_old_db_row! {
                         "foo" => 2_i64,
                         "bar" => 2_i64,
                         "car" => 13_i64,
                         "dar" => 14_i64,
                         "ear" => 15_i64,
                     },
-                    &db_row! {
+                    &z_old_db_row! {
                         "foo" => 3_i64,
                         "bar" => 3_i64,
                         "car" => 16_i64,
@@ -1890,17 +1890,17 @@ mod tests {
             .unwrap();
         assert!(rows.iter().all(|row| {
             [
-                db_row! {
+                z_old_db_row! {
                     "car" => 10_i64,
                     "dar" => 11_i64,
                     "ear" => 12_i64,
                 },
-                db_row! {
+                z_old_db_row! {
                     "car" => 13_i64,
                     "dar" => 14_i64,
                     "ear" => 15_i64,
                 },
-                db_row! {
+                z_old_db_row! {
                     "car" => 16_i64,
                     "dar" => 17_i64,
                     "ear" => 18_i64,
@@ -2009,10 +2009,10 @@ mod tests {
             "test_table_caching_1",
             &["value"],
             &[
-                &db_row! {
+                &z_old_db_row! {
                     "value" => "alpha",
                 },
-                &db_row! {
+                &z_old_db_row! {
                     "value" => "beta",
                 },
             ],
@@ -2033,10 +2033,10 @@ mod tests {
         assert_eq!(
             *rows.deref(),
             vec![
-                db_row! {
+                z_old_db_row! {
                     "value" => "alpha",
                 },
-                db_row! {
+                z_old_db_row! {
                     "value" => "beta",
                 },
             ]
@@ -2055,10 +2055,10 @@ mod tests {
         assert_eq!(
             *rows.deref(),
             vec![
-                db_row! {
+                z_old_db_row! {
                     "value" => "alpha",
                 },
-                db_row! {
+                z_old_db_row! {
                     "value" => "beta",
                 },
             ]
@@ -2068,10 +2068,10 @@ mod tests {
             "test_table_caching_1",
             &["value"],
             &[
-                &db_row! {
+                &z_old_db_row! {
                     "value" => "gamma",
                 },
-                &db_row! {
+                &z_old_db_row! {
                     "value" => "delta",
                 },
             ],
@@ -2098,16 +2098,16 @@ mod tests {
         assert_eq!(
             *rows.deref(),
             vec![
-                db_row! {
+                z_old_db_row! {
                     "value" => "alpha",
                 },
-                db_row! {
+                z_old_db_row! {
                     "value" => "beta",
                 },
-                db_row! {
+                z_old_db_row! {
                     "value" => "gamma",
                 },
-                db_row! {
+                z_old_db_row! {
                     "value" => "delta",
                 },
             ]
@@ -2121,16 +2121,16 @@ mod tests {
         assert_eq!(
             *rows.deref(),
             vec![
-                db_row! {
+                z_old_db_row! {
                     "value" => "alpha",
                 },
-                db_row! {
+                z_old_db_row! {
                     "value" => "beta",
                 },
-                db_row! {
+                z_old_db_row! {
                     "value" => "gamma",
                 },
-                db_row! {
+                z_old_db_row! {
                     "value" => "delta",
                 },
             ]
@@ -2182,22 +2182,22 @@ mod tests {
         assert_eq!(
             *rows.deref(),
             vec![
-                db_row! {
+                z_old_db_row! {
                     "value" => "alpha",
                 },
-                db_row! {
+                z_old_db_row! {
                     "value" => "beta",
                 },
-                db_row! {
+                z_old_db_row! {
                     "value" => "gamma",
                 },
-                db_row! {
+                z_old_db_row! {
                     "value" => "delta",
                 },
-                db_row! {
+                z_old_db_row! {
                     "value" => "rho",
                 },
-                db_row! {
+                z_old_db_row! {
                     "value" => "sigma",
                 },
             ]
@@ -2316,7 +2316,7 @@ mod tests {
         pool.insert(
             "test_vcaching_table",
             &["foo", "bar"],
-            &[&db_row! {
+            &[&z_old_db_row! {
                 "foo" => 2_u64,
                 "bar" => 2_u64,
             }],
@@ -2374,7 +2374,7 @@ mod tests {
         pool.insert(
             "test_vcaching_table",
             &["foo", "bar"],
-            &[&db_row! {
+            &[&z_old_db_row! {
                 "foo" => 27_u64,
                 "bar" => 27_u64,
             }],
@@ -2645,7 +2645,7 @@ mod tests {
         let db_value = db_row.get("bar").unwrap();
         pool.execute(
             r#"UPDATE test_json_values SET foo = 1, bar = $1"#,
-            params![db_value],
+            z_old_params![db_value],
         )
         .await
         .unwrap();
@@ -2724,7 +2724,7 @@ mod tests {
         };
         assert_eq!(delta_type, DbType::BigReal("double precision".to_string()));
 
-        let db_row = db_row! {
+        let db_row = z_old_db_row! {
             "alpha" => alpha_type.parse("foo").unwrap(),
             "beta" => beta_type.parse(json!(11)).unwrap(),
             "gamma" => gamma_type.convert(&DbValue::Integer(12)).unwrap(),

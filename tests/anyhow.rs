@@ -1,5 +1,5 @@
 use anyhow::Result;
-use rltbl_db::{any::AnyPool, core::DbQuery, db_value::DbRows};
+use rltbl_db::{z_old_any::AnyPool, z_old_core::DbQuery, z_old_db_value::DbRows};
 
 #[tokio::test]
 async fn test_anyhow() {
