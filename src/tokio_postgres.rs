@@ -32,9 +32,7 @@ impl PostgresPool {
                     .strip_prefix("postgresql:///")
                     .ok_or(Error::ConnectError("Invalid PostgreSQL URL".to_string()))?;
                 cfg.dbname = Some(db_name.to_string());
-                let pool = cfg
-                    .create_pool(Some(Runtime::Tokio1), NoTls)
-                    .map_err(|err| Error::ConnectError(format!("Error creating pool: {err:?}")))?;
+                let pool = cfg.create_pool(Some(Runtime::Tokio1), NoTls)?;
                 Ok(Self {
                     pool: pool,
                     syntax: PostgresSyntax,
@@ -51,59 +49,49 @@ impl PostgresPool {
 fn extract_value(row: &PgRow, idx: usize) -> Result<Value, Error> {
     let column = &row.columns()[idx];
     match column.type_() {
-        &Type::TEXT | &Type::VARCHAR | &Type::NAME => match row
-            .try_get::<usize, Option<&str>>(idx)
-            .map_err(|err| Error::DataError(err.to_string()))?
-        {
-            Some(value) => Ok(value.into()),
-            None => Ok(Value::Null),
-        },
+        &Type::TEXT | &Type::VARCHAR | &Type::NAME => {
+            match row.try_get::<usize, Option<&str>>(idx)? {
+                Some(value) => Ok(value.into()),
+                None => Ok(Value::Null),
+            }
+        }
         // &Type::INT2 => match row
-        //     .try_get::<usize, Option<i16>>(idx)
-        //     .map_err(|err| Error::DataError(err.to_string()))?
+        //     .try_get::<usize, Option<i16>>(idx)?
         // {
         //     Some(value) => Ok(value.into()),
         //     None => Ok(Value::Null),
         // },
         // &Type::INT4 => match row
-        //     .try_get::<usize, Option<i32>>(idx)
-        //     .map_err(|err| Error::DataError(err.to_string()))?
+        //     .try_get::<usize, Option<i32>>(idx)?
         // {
         //     Some(value) => Ok(value.into()),
         //     None => Ok(Value::Null),
         // },
-        &Type::INT8 => match row
-            .try_get::<usize, Option<i64>>(idx)
-            .map_err(|err| Error::DataError(err.to_string()))?
-        {
+        &Type::INT8 => match row.try_get::<usize, Option<i64>>(idx)? {
             Some(value) => Ok(value.into()),
             None => Ok(Value::Null),
         },
         // &Type::BOOL => match row
-        //     .try_get::<usize, Option<bool>>(idx)
-        //     .map_err(|err| Error::DataError(err.to_string()))?
+        //     .try_get::<usize, Option<bool>>(idx)?
         // {
         //     Some(value) => Ok(value.into()),
         //     None => Ok(Value::Null),
         // },
         // &Type::FLOAT4 => match row
-        //     .try_get::<usize, Option<f32>>(idx)
-        //     .map_err(|err| Error::DataError(err.to_string()))?
+        //     .try_get::<usize, Option<f32>>(idx)?
         // {
         //     Some(value) => Ok(value.into()),
         //     None => Ok(Value::Null),
         // },
         // &Type::FLOAT8 => match row
-        //     .try_get::<usize, Option<f64>>(idx)
-        //     .map_err(|err| Error::DataError(err.to_string()))?
+        //     .try_get::<usize, Option<f64>>(idx)?
         // {
         //     Some(value) => Ok(value.into()),
         //     None => Ok(Value::Null),
         // },
         // // WARN: This downcasts a Postgres NUMERIC to a 64 bit Number.
         // &Type::NUMERIC => match row
-        //     .try_get::<usize, Option<Decimal>>(idx)
-        //     .map_err(|err| Error::DataError(err.to_string()))?
+        //     .try_get::<usize, Option<Decimal>>(idx)?
         // {
         //     Some(value) => {
         //         let v = value.to_string();
@@ -123,16 +111,11 @@ fn extract_value(row: &PgRow, idx: usize) -> Result<Value, Error> {
         // },
         // &Type::JSON | &Type::JSONB => {
         //     let value = row
-        //         .try_get::<usize, JsonValue>(idx)
-        //         .map_err(|err| Error::DataError(err.to_string()))?;
+        //         .try_get::<usize, JsonValue>(idx)?;
         //     Ok(Value::Json(value))
         // }
         // other => {
-        //     let value: Result<GenericTypeValue, Error> = row.try_get(idx).map_err(|_err| {
-        //         Error::DataError(format!(
-        //             "Error getting value of type '{other}' at index {idx} from row {row:?}"
-        //         ))
-        //     });
+        //     let value: Result<GenericTypeValue, Error> = row.try_get(idx);
         //     match value {
         //         Ok(value) => match value.bytes {
         //             Some(bytes) => {
@@ -160,19 +143,10 @@ impl Query for PostgresPool {
 
     /// TODO: Add docstring.
     async fn query(&self, sql: &str, params: &[&Value]) -> Result<Rows, Error> {
-        let client = self
-            .pool
-            .get()
-            .await
-            .map_err(|err| Error::ConnectError(format!("Unable to get from pool: {err:?}")))?;
+        let client = self.pool.get().await?;
 
         // The expected types of all of the parameters as reported by the database via prepare():
-        let param_pg_types = client
-            .prepare(sql)
-            .await
-            .map_err(|err| Error::DatabaseError(format!("Error preparing statement: {err:?}")))?
-            .params()
-            .to_vec();
+        let param_pg_types = client.prepare(sql).await?.params().to_vec();
 
         let mut paramses: Vec<Box<dyn ToSql + Sync + Send>> = Vec::new();
         let gen_err = |param: &Value, sql_type: &str| -> String {
@@ -275,10 +249,7 @@ impl Query for PostgresPool {
             .iter()
             .map(|p| p.as_ref() as &(dyn ToSql + Sync))
             .collect();
-        let rows = client
-            .query(sql, &query_params)
-            .await
-            .map_err(|err| Error::DatabaseError(format!("Error in query(): {err:?}")))?;
+        let rows = client.query(sql, &query_params).await?;
         let mut db_rows = vec![];
         for row in &rows {
             let mut db_row = Row::new();

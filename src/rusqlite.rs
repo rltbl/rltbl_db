@@ -24,15 +24,8 @@ impl RusqlitePool {
     pub async fn connect(url: &str) -> Result<Self, Error> {
         let cfg = Config::new(url);
         let pool = match url {
-            ":memory:" => cfg
-                .builder(Runtime::Tokio1)
-                .unwrap()
-                .max_size(1)
-                .build()
-                .map_err(|err| Error::ConnectError(format!("Error creating pool: {err}")))?,
-            _ => cfg
-                .create_pool(Runtime::Tokio1)
-                .map_err(|err| Error::ConnectError(format!("Error creating pool: {err}")))?,
+            ":memory:" => cfg.builder(Runtime::Tokio1).unwrap().max_size(1).build()?,
+            _ => cfg.create_pool(Runtime::Tokio1)?,
         };
         let syntax = SqliteSyntax;
         Ok(Self { syntax, pool })
@@ -43,48 +36,28 @@ fn query_prepared(stmt: &mut Statement<'_>, params: &[Value]) -> Result<Vec<Row>
     for (i, param) in params.iter().enumerate() {
         match param {
             Value::Text(text) => {
-                stmt.raw_bind_parameter(i + 1, text).map_err(|err| {
-                    Error::InputError(format!("Error binding parameter '{param:?}': {err}"))
-                })?;
+                stmt.raw_bind_parameter(i + 1, text)?;
             }
             // MC: Are these commented out because we are dropping support?
             // JO: No, I was just getting basic tests to compile.
             // We will have at least as many Value variants as `rlbtl_db` currently has.
 
             // Value::SmallInteger(num) => {
-            //     stmt.raw_bind_parameter(i + 1, num.to_string())
-            //         .map_err(|err| {
-            //             Error::InputError(format!("Error binding parameter '{param:?}': {err}"))
-            //         })?;
+            //     stmt.raw_bind_parameter(i + 1, num.to_string())?;
             // }
             // Value::Integer(num) => {
-            //     stmt.raw_bind_parameter(i + 1, num.to_string())
-            //         .map_err(|err| {
-            //             Error::InputError(format!("Error binding parameter '{param:?}': {err}"))
-            //         })?;
+            //     stmt.raw_bind_parameter(i + 1, num.to_string())?;
             // }
             Value::BigInteger(num) => {
-                stmt.raw_bind_parameter(i + 1, num.to_string())
-                    .map_err(|err| {
-                        Error::InputError(format!("Error binding parameter '{param:?}': {err}"))
-                    })?;
+                stmt.raw_bind_parameter(i + 1, num.to_string())?;
             } // Value::Real(num) => {
-            //     stmt.raw_bind_parameter(i + 1, num.to_string())
-            //         .map_err(|err| {
-            //             Error::InputError(format!("Error binding parameter '{param:?}': {err}"))
-            //         })?;
+            //     stmt.raw_bind_parameter(i + 1, num.to_string())?;
             // }
             Value::BigReal(num) => {
-                stmt.raw_bind_parameter(i + 1, num.to_string())
-                    .map_err(|err| {
-                        Error::InputError(format!("Error binding parameter '{param:?}': {err}"))
-                    })?;
+                stmt.raw_bind_parameter(i + 1, num.to_string())?;
             }
             // Value::Numeric(num) => {
-            //     stmt.raw_bind_parameter(i + 1, num.to_string())
-            //         .map_err(|err| {
-            //             Error::InputError(format!("Error binding parameter '{param:?}': {err}"))
-            //         })?;
+            //     stmt.raw_bind_parameter(i + 1, num.to_string())?;
             // }
             Value::Boolean(flag) => {
                 // Note that SQLite's type affinity means that booleans are actually
@@ -93,23 +66,16 @@ fn query_prepared(stmt: &mut Statement<'_>, params: &[Value]) -> Result<Vec<Row>
                     true => 1,
                     false => 0,
                 };
-                stmt.raw_bind_parameter(i + 1, num.to_string())
-                    .map_err(|err| {
-                        Error::InputError(format!("Error binding parameter '{param:?}': {err}"))
-                    })?;
+                stmt.raw_bind_parameter(i + 1, num.to_string())?;
             }
             Value::Null => {
-                stmt.raw_bind_parameter(i + 1, &Null).map_err(|err| {
-                    Error::InputError(format!("Error binding parameter '{param:?}': {err}"))
-                })?;
+                stmt.raw_bind_parameter(i + 1, &Null)?;
             } // Value::Json(value) => {
               //     let value = match value {
               //         JsonValue::String(value) => value.to_string(),
               //         _ => value.to_string(),
               //     };
-              //     stmt.raw_bind_parameter(i + 1, value).map_err(|err| {
-              //         Error::InputError(format!("Error binding parameter '{param:?}': {err}"))
-              //     })?;
+              //     stmt.raw_bind_parameter(i + 1, value)?;
               // }
               // Value::Other(type_name, bytes, string_opt) => {
               //     return Err(Error::InputError(format!(
@@ -176,7 +142,7 @@ fn query_prepared(stmt: &mut Statement<'_>, params: &[Value]) -> Result<Vec<Row>
             Ok(db_row)
         })
         .collect::<Vec<_>>();
-    results.map_err(|err| Error::DatabaseError(err.to_string()))
+    results.map_err(|err| Error::DeadpoolRusqliteError(err))
 }
 
 #[async_trait]
@@ -186,26 +152,20 @@ impl Query for RusqlitePool {
     }
 
     async fn query(&self, sql: &str, params: &[&Value]) -> Result<Rows, Error> {
-        let conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|err| Error::ConnectError(format!("Error getting from pool: {err}")))?;
+        let conn = self.pool.get().await?;
         let sql_string = sql.to_string();
         let params: Vec<Value> = params.iter().cloned().map(|v| v.clone()).collect();
         conn.interact(move |conn| {
             let mut stmt = conn
                 .prepare(&sql_string)
-                .map_err(|err| Error::DatabaseError(format!("Error preparing statement: {err}")))
+                .map_err(|err| Error::DeadpoolRusqliteError(err))
+                // TODO: Replace expect() with a proper error if possible.
                 .expect("generate statement");
             for (i, param) in params.iter().enumerate() {
                 stmt.raw_bind_parameter(i + 1, param.to_string())
                     .expect("bind parameter");
             }
-            let rows: Vec<Row> = query_prepared(&mut stmt, &params)
-                .map_err(|err: Error| {
-                    Error::DatabaseError(format!("Error querying prepared statement: {err}"))
-                })?
+            let rows: Vec<Row> = query_prepared(&mut stmt, &params)?
                 .into_iter()
                 .map(|row| {
                     row.map
@@ -217,8 +177,7 @@ impl Query for RusqlitePool {
 
             Ok(Rows { rows })
         })
-        .await
-        .map_err(|err| Error::DatabaseError(err.to_string()))?
+        .await?
     }
 }
 
@@ -285,9 +244,8 @@ impl Query for RusqliteTransaction {
                 conn.interact(move |conn| {
                     let mut stmt = conn
                         .prepare(&sql_string)
-                        .map_err(|err| {
-                            Error::DatabaseError(format!("Error preparing statement: {err}"))
-                        })
+                        .map_err(|err| Error::DeadpoolRusqliteError(err))
+                        // TODO: Replace expect() with a proper error if possible.
                         .expect("generate statement");
                     for (i, param) in params.iter().enumerate() {
                         stmt.raw_bind_parameter(i + 1, param.to_string())
@@ -305,8 +263,7 @@ impl Query for RusqliteTransaction {
                         .unwrap();
                     Ok(Rows { rows })
                 })
-                .await
-                .map_err(|err| Error::DatabaseError(err.to_string()))?
+                .await?
             }
             None => Err(Error::DatabaseError(format!(
                 "transaction already complete"

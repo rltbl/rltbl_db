@@ -42,7 +42,7 @@ pub async fn connect(url: &str) -> Result<Box<dyn Pool>, Error> {
         }
         #[cfg(not(feature = "tokio-postgres"))]
         {
-            Err(DbError::ConnectError(format!("Unsupported URL: '{url}'")))
+            Err(Error::ConnectError(format!("Unsupported URL: '{url}'")))
         }
     } else {
         #[cfg(feature = "rusqlite")]
@@ -52,7 +52,7 @@ pub async fn connect(url: &str) -> Result<Box<dyn Pool>, Error> {
         }
         #[cfg(not(feature = "rusqlite"))]
         {
-            Err(DbError::ConnectError(format!("Unsupported URL: '{url}'")))
+            Err(Error::ConnectError(format!("Unsupported URL: '{url}'")))
         }
     }
 }
