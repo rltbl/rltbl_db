@@ -32,7 +32,7 @@
 //! Here we connect to an in-memory SQLite database and do some basic operations.
 //!
 //! ```ignore
-//! use rltbl_db_api::{AnyPool, row, Error as DbError, values};
+//! use rltbl_db::{AnyPool, row, Error as DbError, values};
 //!
 //! async fn basic_example() -> Result<(), DbError> {
 //!     // Use a URL to connect to a SQLite in-memory database.
@@ -72,7 +72,7 @@
 //! and from a row back into a struct.
 //!
 //! ```ignore
-//! use rltbl_db_api::{AnyPool, to_row, Error as DbError};
+//! use rltbl_db::{AnyPool, to_row, Error as DbError};
 //! use serde::{Deserialize, Serialize};
 //!
 //! #[derive(Deserialize, Serialize)]
@@ -107,7 +107,7 @@
 //! and load it into a new table.
 //!
 //! ```ignore
-//! use rltbl_db_api::{AnyPool, Error as DbError};
+//! use rltbl_db::{AnyPool, Error as DbError};
 //!
 //! async fn tsv_example() -> Result<(), DbError> {
 //!     let pool = AnyPool::connect(":memory:").await?;
@@ -159,9 +159,94 @@
 //! Each of these traits has default implementations of most methods,
 //! so only a few method implementations are required.
 
+pub use self::column::Column;
+pub use self::error::Error;
+pub use self::pool::{AnyPool, Pool};
+pub use self::query::Query;
+pub use self::row::{Row, Rows};
+pub use self::syntax::Syntax;
+pub use self::table::Table;
+pub use self::transaction::{AnyTransaction, Transaction};
+pub use self::value::{Type, Value};
 
+// all modules use error
+pub mod error;
 
-////////////////////////////////////////////////////////////////////////////////////////////////////
+// types and values
+pub mod value;
+
+// database columns
+pub mod column;
+
+// rows of values
+pub mod row;
+
+// database tables
+pub mod table;
+
+// define syntax trait
+pub mod syntax;
+
+// syntax implementations
+pub mod sqlite;
+pub mod postgresql;
+
+// define query trait
+pub mod query;
+
+// transaction extends query
+pub mod transaction;
+
+// pool extends query and returns a transaction
+pub mod pool;
+
+// driver implementations
+//
+#[cfg(feature = "rusqlite")]
+pub mod rusqlite;
+
+#[cfg(feature = "tokio-postgres")]
+pub mod tokio_postgres;
+
+// MC: I guess we are not dropping libsql support then?
+// JO: Yes, we will support libsql, and hopefully more "drivers".
+// I just didn't want to write stubs for it at this point.
+
+// #[cfg(feature = "libsql")]
+// pub mod libsql;
+
+// macros
+
+/// Convert a list of items that implement `Into<Value>` into a list of [Value]s.
+#[macro_export]
+macro_rules! values {
+    () => {
+       ()
+    };
+    ($($value:expr),* $(,)?) => {{
+        use $crate::value::Value;
+        [$(Into::<Value>::into($value)),*]
+    }};
+}
+
+#[macro_export]
+macro_rules! row {
+    ($($key:expr => $value:expr,)+) => {
+        $crate::row::Row {map: indexmap::indexmap!($($key.to_string() => $value.into()),+) }
+    };
+    ($($key:expr => $value:expr),*) => {
+        {
+            const CAP: usize = <[()]>::len(&[$({ stringify!($key); }),*]);
+            let mut _map = indexmap::IndexMap::with_capacity(CAP);
+            $(
+                let _ = _map.insert($key.to_string(), $value.into());
+            )*
+                $crate::row::Row { map: _map }
+        }
+    };
+}
+
+///////////////////////////// OLD CODE /////////////////////////////////////////////////////////////
 
 pub mod z_old_any;
 pub mod z_old_cache;
