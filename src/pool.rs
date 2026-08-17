@@ -149,7 +149,7 @@ impl AnyPool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{row, row::StringRow};
+    use crate::{row, row::StringRow, values};
 
     #[tokio::test]
     async fn test_text_column_query() {
@@ -169,7 +169,7 @@ mod tests {
     async fn text_column_query(url: &str) {
         let pool = AnyPool::connect(url).await.unwrap();
         let syntax = pool.syntax();
-        let pp = syntax.param_prefix().to_string();
+        let pp = syntax.param_prefix();
 
         pool.execute_batch(&format!(
             "DROP TABLE IF EXISTS test_table_text{cascade};\
@@ -255,5 +255,83 @@ mod tests {
 
         // Clean up:
         pool.drop_table("test_table_text").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_integer_column_query() {
+        #[cfg(feature = "rusqlite")]
+        integer_column_query(":memory:").await;
+        #[cfg(feature = "tokio-postgres")]
+        integer_column_query("postgresql:///rltbl_db").await;
+        // TODO:
+        //#[cfg(feature = "libsql")]
+        //integer_column_query(":memory:").await;
+    }
+
+    #[allow(unused)]
+    async fn integer_column_query(url: &str) {
+        let pool = AnyPool::connect(url).await.unwrap();
+        let syntax = pool.syntax();
+        let pp = syntax.param_prefix();
+
+        pool.execute_batch(&format!(
+            "DROP TABLE IF EXISTS test_table_int{cascade};\
+             CREATE TABLE test_table_int ( value_2 INT2, value_4 INT4, value_8 INT8 )",
+            cascade = match syntax.name() {
+                "postgresql" => " CASCADE",
+                "sqlite" => "",
+                _ => panic!("Invalid syntax '{}'", syntax.name()),
+            }
+        ))
+        .await
+        .unwrap();
+
+        pool.execute(
+            &format!("INSERT INTO test_table_int VALUES ({pp}1, {pp}2, {pp}3)"),
+            &values![Value::from(1_i16), Value::from(1_i32), Value::from(1_i64)],
+        )
+        .await
+        .unwrap();
+
+        for column in ["value_2", "value_4", "value_8"] {
+            let params = match column {
+                "value_2" => values![1_i16],
+                "value_4" => values![1_i32],
+                "value_8" => values![1_i64],
+                _ => unreachable!(),
+            };
+            let select_sql = format!("SELECT {column} FROM test_table_int WHERE {column} = {pp}1");
+            let rows = pool.query(&select_sql, &params.clone()).await.unwrap();
+            let value: i64 = rows.try_into_value::<i64>().unwrap().try_into().unwrap();
+            assert_eq!(1, value);
+
+            let rows = pool.query(&select_sql, &params.clone()).await.unwrap();
+            let unsigned: u64 = rows.try_into_value::<u64>().unwrap().try_into().unwrap();
+            assert_eq!(1, unsigned);
+
+            let rows = pool.query(&select_sql, &params.clone()).await.unwrap();
+            let signed: i64 = rows.try_into_value::<i64>().unwrap().try_into().unwrap();
+            assert_eq!(1, signed);
+
+            let string: String = pool
+                .query(&select_sql, &params.clone())
+                .await
+                .unwrap()
+                .try_into_value::<String>()
+                .unwrap()
+                .into();
+            assert_eq!("1", string);
+
+            let strings = pool
+                .query(&select_sql, &params.clone())
+                .await
+                .unwrap()
+                .to_strings()
+                .unwrap();
+            assert_eq!(vec!["1".to_owned()], strings);
+        }
+
+        // Clean up:
+        pool.drop_table("test_table_int").await.unwrap();
     }
 }

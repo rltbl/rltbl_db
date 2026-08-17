@@ -55,18 +55,14 @@ fn extract_value(row: &PgRow, idx: usize) -> Result<Value, Error> {
                 None => Ok(Value::Null),
             }
         }
-        // &Type::INT2 => match row
-        //     .try_get::<usize, Option<i16>>(idx)?
-        // {
-        //     Some(value) => Ok(value.into()),
-        //     None => Ok(Value::Null),
-        // },
-        // &Type::INT4 => match row
-        //     .try_get::<usize, Option<i32>>(idx)?
-        // {
-        //     Some(value) => Ok(value.into()),
-        //     None => Ok(Value::Null),
-        // },
+        &Type::INT2 => match row.try_get::<usize, Option<i16>>(idx)? {
+            Some(value) => Ok(value.into()),
+            None => Ok(Value::Null),
+        },
+        &Type::INT4 => match row.try_get::<usize, Option<i32>>(idx)? {
+            Some(value) => Ok(value.into()),
+            None => Ok(Value::Null),
+        },
         &Type::INT8 => match row.try_get::<usize, Option<i64>>(idx)? {
             Some(value) => Ok(value.into()),
             None => Ok(Value::Null),
@@ -141,7 +137,7 @@ impl Query for PostgresPool {
         &self.syntax
     }
 
-    /// Implements [DbQuery::execute_batch()] for PostgreSQL
+    /// Implements [Query::execute_batch()] for PostgreSQL
     async fn execute_batch(&self, sql: &str) -> Result<(), Error> {
         let client = self.pool.get().await?;
         client.batch_execute(sql).await?;
@@ -172,20 +168,20 @@ impl Query for PostgresPool {
                         _ => return Err(Error::InputError(gen_err(&param, "TEXT"))),
                     };
                 }
-                // &Type::INT2 => {
-                //     match param {
-                //         Value::Null => paramses.push(Box::new(None::<i16>)),
-                //         Value::SmallInteger(num) => paramses.push(Box::new(*num)),
-                //         _ => return Err(Error::InputError(gen_err(&param, "INT2"))),
-                //     };
-                // }
-                // &Type::INT4 => {
-                //     match param {
-                //         Value::Null => paramses.push(Box::new(None::<i32>)),
-                //         Value::Integer(num) => paramses.push(Box::new(*num)),
-                //         _ => return Err(Error::InputError(gen_err(&param, "INT4"))),
-                //     };
-                // }
+                &Type::INT2 => {
+                    match param {
+                        Value::Null => paramses.push(Box::new(None::<i16>)),
+                        Value::SmallInteger(num) => paramses.push(Box::new(*num)),
+                        _ => return Err(Error::InputError(gen_err(&param, "INT2"))),
+                    };
+                }
+                &Type::INT4 => {
+                    match param {
+                        Value::Null => paramses.push(Box::new(None::<i32>)),
+                        Value::Integer(num) => paramses.push(Box::new(*num)),
+                        _ => return Err(Error::InputError(gen_err(&param, "INT4"))),
+                    };
+                }
                 &Type::INT8 => {
                     match param {
                         Value::Null => paramses.push(Box::new(None::<i64>)),
@@ -281,7 +277,7 @@ impl Query for PostgresPool {
         Ok(Rows { rows: db_rows })
     }
 
-    /// Implements [DbQuery::drop_table()] for PostgreSQL.
+    /// Implements [Query::drop_table()] for PostgreSQL.
     async fn drop_table(&self, table: &str) -> Result<(), Error> {
         // TODO: Add this.
         // let table = validate_table_name(table)?;

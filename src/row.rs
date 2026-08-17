@@ -23,12 +23,12 @@
 //!
 //! let row1 = Row {
 //!     map: IndexMap::from([
-//!         (String::from("bar"), Value::from(2)),
+//!         (String::from("bar"), Value::from(2_i64)),
 //!         (String::from("baz"), Value::from("b")),
 //!     ])
 //! };
 //! let row2 = row! {
-//!     "bar" => 2,
+//!     "bar" => 2_i64,
 //!     "baz" => "b",
 //! };
 //! assert_eq!(row1, row2);

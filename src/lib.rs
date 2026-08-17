@@ -269,7 +269,7 @@ pub mod z_old_libsql;
 
 // Macro definitions
 
-/// Converts a list of assorted types implementing [db_value::IntoDbValue] into [db_value::DbParams]
+/// Converts a list of assorted types implementing [z_old_db_value::IntoDbValue] into [z_old_db_value::DbParams]
 #[macro_export]
 macro_rules! z_old_params {
     () => {
@@ -282,7 +282,7 @@ macro_rules! z_old_params {
     }};
 }
 
-/// Converts a set of pairs into a [db_value::DbRow].
+/// Converts a set of pairs into a [z_old_db_value::DbRow].
 #[macro_export]
 macro_rules! z_old_db_row {
     ($($key:expr => $value:expr,)+) => {

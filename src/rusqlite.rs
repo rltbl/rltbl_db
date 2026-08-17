@@ -41,16 +41,16 @@ fn query_prepared(stmt: &mut Statement<'_>, params: &[Value]) -> Result<Vec<Row>
             // MC: Are these commented out because we are dropping support?
             // JO: No, I was just getting basic tests to compile.
             // We will have at least as many Value variants as `rlbtl_db` currently has.
-
-            // Value::SmallInteger(num) => {
-            //     stmt.raw_bind_parameter(i + 1, num.to_string())?;
-            // }
-            // Value::Integer(num) => {
-            //     stmt.raw_bind_parameter(i + 1, num.to_string())?;
-            // }
+            Value::SmallInteger(num) => {
+                stmt.raw_bind_parameter(i + 1, num.to_string())?;
+            }
+            Value::Integer(num) => {
+                stmt.raw_bind_parameter(i + 1, num.to_string())?;
+            }
             Value::BigInteger(num) => {
                 stmt.raw_bind_parameter(i + 1, num.to_string())?;
-            } // Value::Real(num) => {
+            }
+            // Value::Real(num) => {
             //     stmt.raw_bind_parameter(i + 1, num.to_string())?;
             // }
             Value::BigReal(num) => {
@@ -151,7 +151,7 @@ impl Query for RusqlitePool {
         &self.syntax
     }
 
-    /// Implements [DbQuery::execute_batch()] for SQLite.
+    /// Implements [Query::execute_batch()] for SQLite.
     async fn execute_batch(&self, sql: &str) -> Result<(), Error> {
         let conn = self.pool.get().await?;
         let sql_string = sql.to_string();
@@ -203,7 +203,7 @@ impl Query for RusqlitePool {
         .await?
     }
 
-    /// Implements [DbQuery::drop_table()] for SQLite.
+    /// Implements [Query::drop_table()] for SQLite.
     async fn drop_table(&self, table: &str) -> Result<(), Error> {
         // TODO: Add this:
         // let table = validate_table_name(table)?;

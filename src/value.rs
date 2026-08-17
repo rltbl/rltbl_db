@@ -23,10 +23,10 @@
 //! use rltbl_db::{values, Value};
 //!
 //! let values1 = [
-//!      Value::from(2),
+//!      Value::from(2_i64),
 //!      Value::from("b"),
 //! ];
-//! let values2 = values![2, "b"];
+//! let values2 = values![2_i64, "b"];
 //! assert_eq!(values1, values2);
 //! ```
 //!
@@ -77,6 +77,8 @@ pub enum Value {
     Null,
     Boolean(bool),
     BigInteger(i64),
+    Integer(i32),
+    SmallInteger(i16),
     BigReal(f64),
     Text(String),
 }
@@ -152,10 +154,35 @@ impl From<i64> for Value {
     }
 }
 
+impl From<i32> for Value {
+    fn from(value: i32) -> Self {
+        Self::Integer(value)
+    }
+}
+
+impl From<i16> for Value {
+    fn from(value: i16) -> Self {
+        Self::SmallInteger(value)
+    }
+}
+
+impl From<u64> for Value {
+    fn from(item: u64) -> Self {
+        if item <= i64::MAX as u64 {
+            Value::BigInteger(item as i64)
+        } else {
+            todo!()
+            // Value::Numeric(Decimal::from(item))
+        }
+    }
+}
+
 impl Into<String> for Value {
     fn into(self) -> String {
         match self {
             Value::BigInteger(i) => i.to_string(),
+            Value::Integer(i) => i.to_string(),
+            Value::SmallInteger(i) => i.to_string(),
             Value::Text(string) => string.to_string(),
             Value::Null => todo!(),
             Value::Boolean(_) => todo!(),
@@ -170,8 +197,64 @@ impl TryFrom<Value> for i64 {
     fn try_from(value: Value) -> Result<Self, Self::Error> {
         match value {
             Value::BigInteger(i) => Ok(i),
+            Value::Integer(i) => Ok(i as i64),
+            Value::SmallInteger(i) => Ok(i as i64),
             Value::Text(text) => Err(Error::ValueError(format!(
                 "Cannot convert text '{text}' to i64"
+            ))),
+            Value::Null => todo!(),
+            Value::Boolean(_) => todo!(),
+            Value::BigReal(_) => todo!(),
+        }
+    }
+}
+
+impl TryFrom<Value> for i32 {
+    type Error = Error;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::Integer(i) => Ok(i),
+            Value::BigInteger(_) => todo!(),
+            Value::SmallInteger(_) => todo!(),
+            Value::Text(text) => Err(Error::ValueError(format!(
+                "Cannot convert text '{text}' to i32"
+            ))),
+            Value::Null => todo!(),
+            Value::Boolean(_) => todo!(),
+            Value::BigReal(_) => todo!(),
+        }
+    }
+}
+
+impl TryFrom<Value> for i16 {
+    type Error = Error;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::SmallInteger(i) => Ok(i),
+            Value::BigInteger(_) => todo!(),
+            Value::Integer(_) => todo!(),
+            Value::Text(text) => Err(Error::ValueError(format!(
+                "Cannot convert text '{text}' to i16"
+            ))),
+            Value::Null => todo!(),
+            Value::Boolean(_) => todo!(),
+            Value::BigReal(_) => todo!(),
+        }
+    }
+}
+
+impl TryFrom<Value> for u64 {
+    type Error = Error;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::BigInteger(i) => Ok(i.try_into().unwrap()),
+            Value::Integer(i) => Ok(i.try_into().unwrap()),
+            Value::SmallInteger(i) => Ok(i.try_into().unwrap()),
+            Value::Text(text) => Err(Error::ValueError(format!(
+                "Cannot convert text '{text}' to u64"
             ))),
             Value::Null => todo!(),
             Value::Boolean(_) => todo!(),
