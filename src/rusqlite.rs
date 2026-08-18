@@ -56,9 +56,9 @@ fn query_prepared(stmt: &mut Statement<'_>, params: &[Value]) -> Result<Vec<Row>
             Value::BigReal(num) => {
                 stmt.raw_bind_parameter(i + 1, num.to_string())?;
             }
-            // Value::Numeric(num) => {
-            //     stmt.raw_bind_parameter(i + 1, num.to_string())?;
-            // }
+            Value::Numeric(num) => {
+                stmt.raw_bind_parameter(i + 1, num.to_string())?;
+            }
             Value::Boolean(flag) => {
                 // Note that SQLite's type affinity means that booleans are actually
                 // implemented as numbers (see https://sqlite.org/datatype3.html).

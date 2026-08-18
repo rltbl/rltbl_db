@@ -28,6 +28,9 @@ pub enum Error {
     /// An error that occurred when trying to convert one primitive rust type to another.
     IntegerConversionError(std::num::TryFromIntError),
 
+    /// An error that occurred when trying to convert a primitive type to a [rust_decimal::Decimal].
+    DecimalConversionError(rust_decimal::Error),
+
     /// TODO: Not sure if this is really needed. It's basically guaranteed never to occur?
     /// It's the result of a call like: i16::try_from(1_i16) which in principle should never fail.
     InfallibleError(std::convert::Infallible),
@@ -78,6 +81,12 @@ impl From<std::convert::Infallible> for Error {
 impl From<std::num::TryFromIntError> for Error {
     fn from(err: std::num::TryFromIntError) -> Error {
         Error::IntegerConversionError(err)
+    }
+}
+
+impl From<rust_decimal::Error> for Error {
+    fn from(err: rust_decimal::Error) -> Error {
+        Error::DecimalConversionError(err)
     }
 }
 
@@ -154,6 +163,7 @@ impl std::fmt::Display for Error {
             | Error::SerdeError(err) => write!(f, "{err}"),
             Error::InfallibleError(err) => write!(f, "{err}"),
             Error::IntegerConversionError(err) => write!(f, "{err}"),
+            Error::DecimalConversionError(err) => write!(f, "{err}"),
             #[cfg(feature = "rusqlite")]
             Error::DeadpoolRusqliteError(err) => write!(f, "{err}"),
             #[cfg(feature = "rusqlite")]

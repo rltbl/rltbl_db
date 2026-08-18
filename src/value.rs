@@ -36,6 +36,7 @@
 //! For Rust primitives the serlialization is trivial.
 //! We represent complex cases as JSON using `serde_json`.
 
+use rust_decimal::Decimal;
 use std::fmt::Display;
 
 use crate::Error;
@@ -81,6 +82,7 @@ pub enum Value {
     SmallInteger(i16),
     Real(f32),
     BigReal(f64),
+    Numeric(Decimal),
     Text(String),
 }
 
@@ -134,14 +136,15 @@ impl Eq for Value {}
 impl Into<String> for Value {
     fn into(self) -> String {
         match self {
-            Value::BigInteger(i) => i.to_string(),
-            Value::Integer(i) => i.to_string(),
-            Value::SmallInteger(i) => i.to_string(),
-            Value::Text(string) => string.to_string(),
-            Value::Null => todo!(),
-            Value::Boolean(_) => todo!(),
-            Value::Real(i) => i.to_string(),
-            Value::BigReal(i) => i.to_string(),
+            Value::BigInteger(val) => val.to_string(),
+            Value::Integer(val) => val.to_string(),
+            Value::SmallInteger(val) => val.to_string(),
+            Value::Text(val) => val.to_string(),
+            Value::Null => String::new(),
+            Value::Boolean(val) => val.to_string(),
+            Value::Real(val) => val.to_string(),
+            Value::BigReal(val) => val.to_string(),
+            Value::Numeric(val) => val.to_string(),
         }
     }
 }
@@ -161,6 +164,12 @@ impl From<&str> for Value {
 impl From<String> for Value {
     fn from(value: String) -> Self {
         Self::Text(value)
+    }
+}
+
+impl From<bool> for Value {
+    fn from(item: bool) -> Self {
+        Value::Boolean(item)
     }
 }
 
@@ -205,19 +214,20 @@ impl From<f64> for Value {
     }
 }
 
-impl TryInto<f64> for &Value {
-    type Error = Error;
-
-    fn try_into(self) -> Result<f64, Error> {
-        self.clone().try_into()
+impl From<Decimal> for Value {
+    fn from(item: Decimal) -> Self {
+        Value::Numeric(item)
     }
 }
 
-impl TryInto<f32> for &Value {
+impl TryFrom<Value> for bool {
     type Error = Error;
 
-    fn try_into(self) -> Result<f32, Error> {
-        self.clone().try_into()
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::Boolean(value) => Ok(value),
+            _ => Err(Error::InputError(format!("Not a boolean: {value:?}"))),
+        }
     }
 }
 
@@ -302,6 +312,22 @@ impl TryFrom<Value> for f64 {
             Value::SmallInteger(number) => Ok(f64::try_from(number)?),
             Value::Integer(number) => Ok(f64::try_from(number)?),
             _ => Err(Error::InputError(format!("Not an f64: {value:?}"))),
+        }
+    }
+}
+
+impl TryFrom<Value> for Decimal {
+    type Error = Error;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::Real(number) => Ok(Decimal::try_from(number)?),
+            Value::BigReal(number) => Ok(Decimal::try_from(number)?),
+            Value::Numeric(number) => Ok(Decimal::try_from(number)?),
+            Value::SmallInteger(number) => Ok(Decimal::try_from(number)?),
+            Value::Integer(number) => Ok(Decimal::try_from(number)?),
+            Value::BigInteger(number) => Ok(Decimal::try_from(number)?),
+            _ => Err(Error::InputError(format!("Not a decimal: {value:?}"))),
         }
     }
 }

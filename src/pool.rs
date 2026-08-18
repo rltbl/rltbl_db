@@ -150,6 +150,7 @@ impl AnyPool {
 mod tests {
     use super::*;
     use crate::{row, row::StringRow, values};
+    use rust_decimal::dec;
 
     #[tokio::test]
     async fn test_text_column_query() {
@@ -429,5 +430,159 @@ mod tests {
 
         // Clean up:
         pool.drop_table("test_table_float").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_mixed_column_query() {
+        #[cfg(feature = "rusqlite")]
+        mixed_column_query(":memory:").await;
+        #[cfg(feature = "tokio-postgres")]
+        mixed_column_query("postgresql:///rltbl_db").await;
+        // TODO:
+        // #[cfg(feature = "libsql")]
+        // mixed_column_query(":memory:").await;
+    }
+
+    #[allow(unused)]
+    async fn mixed_column_query(url: &str) {
+        let pool = AnyPool::connect(url).await.unwrap();
+        let syntax = pool.syntax();
+        let pp = syntax.param_prefix().to_string();
+
+        pool.execute_batch(&format!(
+            "DROP TABLE IF EXISTS test_table_mixed{cascade};\
+             CREATE TABLE test_table_mixed (\
+               text_value TEXT,\
+               alt_text_value TEXT,\
+               float_value FLOAT8,\
+               alt_float_value FLOAT8,\
+               int_value INT8,\
+               alt_int_value INT8,\
+               bool_value BOOL,\
+               alt_bool_value BOOL,\
+               numeric_value NUMERIC,\
+               alt_numeric_value NUMERIC\
+             )",
+            cascade = match syntax.name() {
+                "postgresql" => " CASCADE",
+                "sqlite" => "",
+                _ => panic!("Invalid syntax '{}'", syntax.name()),
+            }
+        ))
+        .await
+        .unwrap();
+
+        pool.execute(
+            &format!(
+                r#"INSERT INTO test_table_mixed
+                   (
+                     text_value,
+                     alt_text_value,
+                     float_value,
+                     alt_float_value,
+                     int_value,
+                     alt_int_value,
+                     bool_value,
+                     alt_bool_value,
+                     numeric_value,
+                     alt_numeric_value
+                   )
+                   VALUES ({pp}1, {pp}2, {pp}3, {pp}4, {pp}5, {pp}6, {pp}7, {pp}8, {pp}9, {pp}10)"#,
+            ),
+            // TODO: It would be nice if we could use the old syntax here:
+            //&values!["foo", (), 1.05_f64, (), 1_i64, (), true, (), dec!(1), ()],
+            &values![
+                "foo",
+                Value::Null,
+                1.05_f64,
+                Value::Null,
+                1_i64,
+                Value::Null,
+                true,
+                Value::Null,
+                dec!(1),
+                Value::Null
+            ],
+        )
+        .await
+        .unwrap();
+
+        let select_sql =
+            format!("SELECT text_value FROM test_table_mixed WHERE text_value = {pp}1");
+        let value: String = pool
+            .query(&select_sql, &["foo".into()])
+            .await
+            .unwrap()
+            .try_into_value::<String>()
+            .unwrap();
+        assert_eq!("foo", value);
+
+        let select_sql = format!(
+            r#"SELECT
+                 text_value,
+                 alt_text_value,
+                 float_value,
+                 alt_float_value,
+                 int_value,
+                 alt_int_value,
+                 bool_value,
+                 alt_bool_value,
+                 numeric_value,
+                 alt_numeric_value
+               FROM test_table_mixed
+               WHERE text_value = {pp}1
+                 AND alt_text_value IS NOT DISTINCT FROM {pp}2
+                 AND float_value > {pp}3
+                 AND int_value > {pp}4
+                 AND bool_value = {pp}5
+                 AND numeric_value > {pp}6"#
+        );
+        let params = values!["foo", Value::Null, 1.0_f64, 0_i64, true, dec!(0.999)];
+
+        let rows = pool.query(&select_sql, &params.clone()).await.unwrap();
+        let row = rows.row().unwrap();
+        assert_eq!(
+            row,
+            row! {
+                "text_value" => "foo",
+                "alt_text_value" => Value::Null,
+                "float_value" => 1.05,
+                "alt_float_value" => Value::Null,
+                "int_value" => 1_i64,
+                "alt_int_value" => Value::Null,
+                "bool_value" => match syntax.name() {
+                    "sqlite" => Value::from(1_i64),
+                    "postgresql" => Value::from(true),
+                    _ => panic!("Invalid syntax '{}'", syntax.name()),
+                },
+                "alt_bool_value" => Value::Null,
+                "numeric_value" => 1_i64,
+                "alt_numeric_value" => Value::Null,
+            }
+        );
+
+        let rows = pool.query(&select_sql, &params.clone()).await.unwrap();
+        assert_eq!(
+            rows.rows,
+            [row! {
+                "text_value" => "foo",
+                "alt_text_value" => Value::Null,
+                "float_value" => 1.05,
+                "alt_float_value" => Value::Null,
+                "int_value" => 1_i64,
+                "alt_int_value" => Value::Null,
+                "bool_value" => match syntax.name() {
+                    "sqlite" => Value::from(1_i64),
+                    "postgresql" => Value::from(true),
+                    _ => panic!("Invalid syntax '{}'", syntax.name()),
+                },
+                "alt_bool_value" => Value::Null,
+                "numeric_value" => 1_i64,
+                "alt_numeric_value" => Value::Null,
+            }]
+        );
+
+        // Clean up:
+        pool.drop_table("test_table_mixed").await.unwrap();
     }
 }

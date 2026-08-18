@@ -12,6 +12,7 @@ use deadpool_postgres::{
         types::{ToSql, Type},
     },
 };
+use rust_decimal::Decimal;
 
 use crate::{
     Error, Pool, Query, Row, Rows, Syntax, Transaction, Value, postgresql::PostgresSyntax,
@@ -67,12 +68,10 @@ fn extract_value(row: &PgRow, idx: usize) -> Result<Value, Error> {
             Some(value) => Ok(value.into()),
             None => Ok(Value::Null),
         },
-        // &Type::BOOL => match row
-        //     .try_get::<usize, Option<bool>>(idx)?
-        // {
-        //     Some(value) => Ok(value.into()),
-        //     None => Ok(Value::Null),
-        // },
+        &Type::BOOL => match row.try_get::<usize, Option<bool>>(idx)? {
+            Some(value) => Ok(value.into()),
+            None => Ok(Value::Null),
+        },
         &Type::FLOAT4 => match row.try_get::<usize, Option<f32>>(idx)? {
             Some(value) => Ok(value.into()),
             None => Ok(Value::Null),
@@ -81,26 +80,22 @@ fn extract_value(row: &PgRow, idx: usize) -> Result<Value, Error> {
             Some(value) => Ok(value.into()),
             None => Ok(Value::Null),
         },
-        // // WARN: This downcasts a Postgres NUMERIC to a 64 bit Number.
-        // &Type::NUMERIC => match row
-        //     .try_get::<usize, Option<Decimal>>(idx)?
-        // {
-        //     Some(value) => {
-        //         let v = value.to_string();
-        //         if let Ok(number) = v.parse::<u64>() {
-        //             Ok(number.into())
-        //         } else if let Ok(number) = v.parse::<i64>() {
-        //             Ok(number.into())
-        //         } else if let Ok(number) = v.parse::<f64>() {
-        //             Ok(number.into())
-        //         } else {
-        //             Err(Error::DataError(format!(
-        //                 "Not a u64, i64, or f64: {value}"
-        //             )))
-        //         }
-        //     }
-        //     None => Ok(Value::Null),
-        // },
+        // WARN: This downcasts a Postgres NUMERIC to a 64 bit Number.
+        &Type::NUMERIC => match row.try_get::<usize, Option<Decimal>>(idx)? {
+            Some(value) => {
+                let v = value.to_string();
+                if let Ok(number) = v.parse::<u64>() {
+                    Ok(number.into())
+                } else if let Ok(number) = v.parse::<i64>() {
+                    Ok(number.into())
+                } else if let Ok(number) = v.parse::<f64>() {
+                    Ok(number.into())
+                } else {
+                    Err(Error::DataError(format!("Not a u64, i64, or f64: {value}")))
+                }
+            }
+            None => Ok(Value::Null),
+        },
         // &Type::JSON | &Type::JSONB => {
         //     let value = row
         //         .try_get::<usize, JsonValue>(idx)?;
@@ -199,13 +194,13 @@ impl Query for PostgresPool {
                         _ => return Err(Error::InputError(gen_err(&param, "FLOAT8"))),
                     };
                 }
-                // &Type::NUMERIC => {
-                //     match param {
-                //         Value::Null => paramses.push(Box::new(None::<Decimal>)),
-                //         Value::Numeric(num) => paramses.push(Box::new(*num)),
-                //         _ => return Err(Error::InputError(gen_err(&param, "NUMERIC"))),
-                //     };
-                // }
+                &Type::NUMERIC => {
+                    match param {
+                        Value::Null => paramses.push(Box::new(None::<Decimal>)),
+                        Value::Numeric(num) => paramses.push(Box::new(*num)),
+                        _ => return Err(Error::InputError(gen_err(&param, "NUMERIC"))),
+                    };
+                }
                 &Type::BOOL => {
                     match param {
                         Value::Null => paramses.push(Box::new(None::<bool>)),
