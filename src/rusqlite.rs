@@ -50,9 +50,9 @@ fn query_prepared(stmt: &mut Statement<'_>, params: &[Value]) -> Result<Vec<Row>
             Value::BigInteger(num) => {
                 stmt.raw_bind_parameter(i + 1, num.to_string())?;
             }
-            // Value::Real(num) => {
-            //     stmt.raw_bind_parameter(i + 1, num.to_string())?;
-            // }
+            Value::Real(num) => {
+                stmt.raw_bind_parameter(i + 1, num.to_string())?;
+            }
             Value::BigReal(num) => {
                 stmt.raw_bind_parameter(i + 1, num.to_string())?;
             }

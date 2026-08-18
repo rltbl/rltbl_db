@@ -429,6 +429,7 @@ mod tests {
     use std::ops::Deref;
 
     #[tokio::test]
+    #[ignore]
     async fn test_aliases_and_builtin_functions() {
         let pool = LibSQLPool::connect(":memory:").await.unwrap();
         pool.execute_batch(

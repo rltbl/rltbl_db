@@ -73,18 +73,14 @@ fn extract_value(row: &PgRow, idx: usize) -> Result<Value, Error> {
         //     Some(value) => Ok(value.into()),
         //     None => Ok(Value::Null),
         // },
-        // &Type::FLOAT4 => match row
-        //     .try_get::<usize, Option<f32>>(idx)?
-        // {
-        //     Some(value) => Ok(value.into()),
-        //     None => Ok(Value::Null),
-        // },
-        // &Type::FLOAT8 => match row
-        //     .try_get::<usize, Option<f64>>(idx)?
-        // {
-        //     Some(value) => Ok(value.into()),
-        //     None => Ok(Value::Null),
-        // },
+        &Type::FLOAT4 => match row.try_get::<usize, Option<f32>>(idx)? {
+            Some(value) => Ok(value.into()),
+            None => Ok(Value::Null),
+        },
+        &Type::FLOAT8 => match row.try_get::<usize, Option<f64>>(idx)? {
+            Some(value) => Ok(value.into()),
+            None => Ok(Value::Null),
+        },
         // // WARN: This downcasts a Postgres NUMERIC to a 64 bit Number.
         // &Type::NUMERIC => match row
         //     .try_get::<usize, Option<Decimal>>(idx)?
@@ -189,13 +185,13 @@ impl Query for PostgresPool {
                         _ => return Err(Error::InputError(gen_err(&param, "INT8"))),
                     };
                 }
-                // &Type::FLOAT4 => {
-                //     match param {
-                //         Value::Null => paramses.push(Box::new(None::<f32>)),
-                //         Value::Real(num) => paramses.push(Box::new(*num)),
-                //         _ => return Err(Error::InputError(gen_err(&param, "FLOAT4"))),
-                //     };
-                // }
+                &Type::FLOAT4 => {
+                    match param {
+                        Value::Null => paramses.push(Box::new(None::<f32>)),
+                        Value::Real(num) => paramses.push(Box::new(*num)),
+                        _ => return Err(Error::InputError(gen_err(&param, "FLOAT4"))),
+                    };
+                }
                 &Type::FLOAT8 => {
                     match param {
                         Value::Null => paramses.push(Box::new(None::<f64>)),

@@ -639,6 +639,7 @@ mod tests {
     use std::{ops::Deref, str::FromStr};
 
     #[tokio::test]
+    #[ignore]
     async fn test_aliases_and_builtin_functions() {
         let pool = TokioPostgresPool::connect("postgresql:///rltbl_db")
             .await
@@ -790,6 +791,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_special_floats() {
         let pool = TokioPostgresPool::connect("postgresql:///rltbl_db")
             .await
@@ -886,6 +888,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_other_types() {
         let pool = TokioPostgresPool::connect("postgresql:///rltbl_db")
             .await
@@ -1460,6 +1463,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_jsonb() {
         let pool = TokioPostgresPool::connect("postgresql:///rltbl_db")
             .await

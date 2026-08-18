@@ -4,8 +4,9 @@
 #[derive(Debug)]
 #[non_exhaustive] // We may add more specific error types in the future.
 pub enum Error {
+    /////////////////////////////
     // Internal error types:
-    //
+    /////////////////////////////
     /// An error that occurred while connecting to a database.
     ConnectError(String),
     /// An error in the arguments to a function that accessed the database.
@@ -16,12 +17,20 @@ pub enum Error {
     DatabaseError(String),
     /// An error with the data type of a value.
     DatatypeError(String),
-    /// An error that occurred while attempting to parse a SQL string or value.
+    /// An error that occurred while attempting to parse a SQL string.
     ParseError(String),
     /// An error finding or converting a value.
     ValueError(String),
 
+    /////////////////////////////
     // Upstream error types:
+    /////////////////////////////
+    /// An error that occurred when trying to convert one primitive rust type to another.
+    IntegerConversionError(std::num::TryFromIntError),
+
+    /// TODO: Not sure if this is really needed. It's basically guaranteed never to occur?
+    /// It's the result of a call like: i16::try_from(1_i16) which in principle should never fail.
+    InfallibleError(std::convert::Infallible),
 
     // TODO: Replace this with the upstream error:
     /// An error that occurred during serialization or deserialization.
@@ -59,6 +68,18 @@ pub enum Error {
 }
 
 impl std::error::Error for Error {}
+
+impl From<std::convert::Infallible> for Error {
+    fn from(err: std::convert::Infallible) -> Error {
+        Error::InfallibleError(err)
+    }
+}
+
+impl From<std::num::TryFromIntError> for Error {
+    fn from(err: std::num::TryFromIntError) -> Error {
+        Error::IntegerConversionError(err)
+    }
+}
 
 // Rusqlite error implementations:
 
@@ -131,6 +152,8 @@ impl std::fmt::Display for Error {
             | Error::ParseError(err)
             | Error::ValueError(err)
             | Error::SerdeError(err) => write!(f, "{err}"),
+            Error::InfallibleError(err) => write!(f, "{err}"),
+            Error::IntegerConversionError(err) => write!(f, "{err}"),
             #[cfg(feature = "rusqlite")]
             Error::DeadpoolRusqliteError(err) => write!(f, "{err}"),
             #[cfg(feature = "rusqlite")]

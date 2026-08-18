@@ -79,6 +79,7 @@ pub enum Value {
     BigInteger(i64),
     Integer(i32),
     SmallInteger(i16),
+    Real(f32),
     BigReal(f64),
     Text(String),
 }
@@ -102,16 +103,16 @@ impl PartialEq for Value {
         match (self, other) {
             (Value::Null, Value::Null) => true,
             (Value::Boolean(a), Value::Boolean(b)) => a == b,
-            // (Value::SmallInteger(a), Value::SmallInteger(b)) => a == b,
-            // (Value::Integer(a), Value::Integer(b)) => a == b,
+            (Value::SmallInteger(a), Value::SmallInteger(b)) => a == b,
+            (Value::Integer(a), Value::Integer(b)) => a == b,
             (Value::BigInteger(a), Value::BigInteger(b)) => a == b,
-            // (Value::Real(a), Value::Real(b)) => {
-            //     if a.is_finite() && b.is_finite() {
-            //         a == b
-            //     } else {
-            //         false
-            //     }
-            // }
+            (Value::Real(a), Value::Real(b)) => {
+                if a.is_finite() && b.is_finite() {
+                    a == b
+                } else {
+                    false
+                }
+            }
             (Value::BigReal(a), Value::BigReal(b)) => {
                 if a.is_finite() && b.is_finite() {
                     a == b
@@ -129,6 +130,21 @@ impl PartialEq for Value {
 }
 
 impl Eq for Value {}
+
+impl Into<String> for Value {
+    fn into(self) -> String {
+        match self {
+            Value::BigInteger(i) => i.to_string(),
+            Value::Integer(i) => i.to_string(),
+            Value::SmallInteger(i) => i.to_string(),
+            Value::Text(string) => string.to_string(),
+            Value::Null => todo!(),
+            Value::Boolean(_) => todo!(),
+            Value::Real(i) => i.to_string(),
+            Value::BigReal(i) => i.to_string(),
+        }
+    }
+}
 
 impl Into<String> for &Value {
     fn into(self) -> String {
@@ -148,9 +164,9 @@ impl From<String> for Value {
     }
 }
 
-impl From<i64> for Value {
-    fn from(value: i64) -> Self {
-        Self::BigInteger(value)
+impl From<i16> for Value {
+    fn from(value: i16) -> Self {
+        Self::SmallInteger(value)
     }
 }
 
@@ -160,9 +176,9 @@ impl From<i32> for Value {
     }
 }
 
-impl From<i16> for Value {
-    fn from(value: i16) -> Self {
-        Self::SmallInteger(value)
+impl From<i64> for Value {
+    fn from(value: i64) -> Self {
+        Self::BigInteger(value)
     }
 }
 
@@ -177,34 +193,43 @@ impl From<u64> for Value {
     }
 }
 
-impl Into<String> for Value {
-    fn into(self) -> String {
-        match self {
-            Value::BigInteger(i) => i.to_string(),
-            Value::Integer(i) => i.to_string(),
-            Value::SmallInteger(i) => i.to_string(),
-            Value::Text(string) => string.to_string(),
-            Value::Null => todo!(),
-            Value::Boolean(_) => todo!(),
-            Value::BigReal(_) => todo!(),
-        }
+impl From<f32> for Value {
+    fn from(item: f32) -> Self {
+        Value::Real(item)
     }
 }
 
-impl TryFrom<Value> for i64 {
+impl From<f64> for Value {
+    fn from(item: f64) -> Self {
+        Value::BigReal(item)
+    }
+}
+
+impl TryInto<f64> for &Value {
+    type Error = Error;
+
+    fn try_into(self) -> Result<f64, Error> {
+        self.clone().try_into()
+    }
+}
+
+impl TryInto<f32> for &Value {
+    type Error = Error;
+
+    fn try_into(self) -> Result<f32, Error> {
+        self.clone().try_into()
+    }
+}
+
+impl TryFrom<Value> for i16 {
     type Error = Error;
 
     fn try_from(value: Value) -> Result<Self, Self::Error> {
         match value {
-            Value::BigInteger(i) => Ok(i),
-            Value::Integer(i) => Ok(i as i64),
-            Value::SmallInteger(i) => Ok(i as i64),
-            Value::Text(text) => Err(Error::ValueError(format!(
-                "Cannot convert text '{text}' to i64"
-            ))),
-            Value::Null => todo!(),
-            Value::Boolean(_) => todo!(),
-            Value::BigReal(_) => todo!(),
+            Value::SmallInteger(number) => Ok(i16::try_from(number)?),
+            Value::Integer(number) => Ok(i16::try_from(number)?),
+            Value::BigInteger(number) => Ok(i16::try_from(number)?),
+            _ => Err(Error::InputError(format!("Not an integer: {value:?}"))),
         }
     }
 }
@@ -214,33 +239,23 @@ impl TryFrom<Value> for i32 {
 
     fn try_from(value: Value) -> Result<Self, Self::Error> {
         match value {
-            Value::Integer(i) => Ok(i),
-            Value::BigInteger(_) => todo!(),
-            Value::SmallInteger(_) => todo!(),
-            Value::Text(text) => Err(Error::ValueError(format!(
-                "Cannot convert text '{text}' to i32"
-            ))),
-            Value::Null => todo!(),
-            Value::Boolean(_) => todo!(),
-            Value::BigReal(_) => todo!(),
+            Value::SmallInteger(number) => Ok(i32::try_from(number)?),
+            Value::Integer(number) => Ok(i32::try_from(number)?),
+            Value::BigInteger(number) => Ok(i32::try_from(number)?),
+            _ => Err(Error::InputError(format!("Not an integer: {value:?}"))),
         }
     }
 }
 
-impl TryFrom<Value> for i16 {
+impl TryFrom<Value> for i64 {
     type Error = Error;
 
     fn try_from(value: Value) -> Result<Self, Self::Error> {
         match value {
-            Value::SmallInteger(i) => Ok(i),
-            Value::BigInteger(_) => todo!(),
-            Value::Integer(_) => todo!(),
-            Value::Text(text) => Err(Error::ValueError(format!(
-                "Cannot convert text '{text}' to i16"
-            ))),
-            Value::Null => todo!(),
-            Value::Boolean(_) => todo!(),
-            Value::BigReal(_) => todo!(),
+            Value::SmallInteger(number) => Ok(i64::try_from(number)?),
+            Value::Integer(number) => Ok(i64::try_from(number)?),
+            Value::BigInteger(number) => Ok(i64::try_from(number)?),
+            _ => Err(Error::InputError(format!("Not an integer: {value:?}"))),
         }
     }
 }
@@ -250,21 +265,49 @@ impl TryFrom<Value> for u64 {
 
     fn try_from(value: Value) -> Result<Self, Self::Error> {
         match value {
-            Value::BigInteger(i) => Ok(i.try_into().unwrap()),
-            Value::Integer(i) => Ok(i.try_into().unwrap()),
-            Value::SmallInteger(i) => Ok(i.try_into().unwrap()),
-            Value::Text(text) => Err(Error::ValueError(format!(
-                "Cannot convert text '{text}' to u64"
-            ))),
-            Value::Null => todo!(),
-            Value::Boolean(_) => todo!(),
-            Value::BigReal(_) => todo!(),
+            Value::SmallInteger(number) => Ok(u64::try_from(number)?),
+            Value::Integer(number) => Ok(u64::try_from(number)?),
+            Value::BigInteger(number) => Ok(u64::try_from(number)?),
+            _ => Err(Error::InputError(format!("Not an integer: {value:?}"))),
         }
     }
 }
 
-// TODO: I was trying to use these to make it possible to simply pass argument lists
-// such as: &["foo", 1, 3.2] to execute(), but it still needs work.
+impl TryFrom<Value> for f32 {
+    type Error = Error;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::Real(number) => Ok(f32::try_from(number)?),
+            Value::BigReal(number) => Ok(number as f32),
+            //Value::Numeric(number) => {
+            //    Ok(f32::try_from(number)?)
+            //}
+            Value::SmallInteger(number) => Ok(f32::try_from(number)?),
+            _ => Err(Error::InputError(format!("Not an f32: {value:?}"))),
+        }
+    }
+}
+
+impl TryFrom<Value> for f64 {
+    type Error = Error;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::Real(number) => Ok(f64::try_from(number)?),
+            Value::BigReal(number) => Ok(f64::try_from(number)?),
+            //Value::Numeric(number) => {
+            //    Ok(f64::try_from(number)?)
+            //}
+            Value::SmallInteger(number) => Ok(f64::try_from(number)?),
+            Value::Integer(number) => Ok(f64::try_from(number)?),
+            _ => Err(Error::InputError(format!("Not an f64: {value:?}"))),
+        }
+    }
+}
+
+// TODO: I have been trying to use these to make it possible to simply pass argument lists
+// such as: &["foo", 1, 3.2] to execute(), but this still needs work.
 // These do not seem to be needed for anything else so I'll leave all of this commented
 // out for now.
 // ///////////////////////////////////////////////////////////////////////////////

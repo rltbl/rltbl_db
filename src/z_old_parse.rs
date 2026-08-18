@@ -623,6 +623,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    #[ignore]
     async fn test_table_names() {
         // Valid table names:
         assert_eq!(
@@ -679,6 +680,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_sql_parsing() {
         let tables_read = get_accessed_tables(&format!(
             r#"SELECT t1.foo

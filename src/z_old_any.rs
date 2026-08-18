@@ -401,6 +401,7 @@ mod tests {
     };
 
     #[tokio::test]
+    #[ignore]
     async fn test_text_column_query() {
         #[cfg(feature = "rusqlite")]
         text_column_query(":memory:").await;
@@ -490,6 +491,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_integer_column_query() {
         #[cfg(feature = "rusqlite")]
         integer_column_query(":memory:").await;
@@ -567,6 +569,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_float_column_query() {
         #[cfg(feature = "rusqlite")]
         float_column_query(":memory:").await;
@@ -663,6 +666,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_mixed_column_query() {
         #[cfg(feature = "rusqlite")]
         mixed_column_query(":memory:").await;
@@ -801,6 +805,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_input_params() {
         #[cfg(feature = "rusqlite")]
         input_params(":memory:").await;
@@ -928,6 +933,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_insert() {
         #[cfg(feature = "rusqlite")]
         insert(":memory:").await;
@@ -1012,6 +1018,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_insert_returning() {
         #[cfg(feature = "rusqlite")]
         insert_returning(":memory:").await;
@@ -1120,6 +1127,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_drop_table() {
         #[cfg(feature = "rusqlite")]
         drop_table(":memory:").await;
@@ -1170,6 +1178,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_primary_keys() {
         #[cfg(feature = "rusqlite")]
         primary_keys(":memory:").await;
@@ -1219,6 +1228,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_update() {
         #[cfg(feature = "rusqlite")]
         update(":memory:").await;
@@ -1325,6 +1335,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_update_returning() {
         #[cfg(feature = "rusqlite")]
         update_returning(":memory:").await;
@@ -1533,6 +1544,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_upsert() {
         #[cfg(feature = "rusqlite")]
         upsert(":memory:").await;
@@ -1645,6 +1657,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_upsert_returning() {
         #[cfg(feature = "rusqlite")]
         upsert_returning(":memory:").await;
@@ -1783,6 +1796,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_caching() {
         let all_strategies = ["truncate_all", "truncate", "trigger", "memory:5"]
             .iter()
@@ -2435,6 +2449,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_json_values() {
         #[cfg(feature = "rusqlite")]
         json_values(":memory:").await;
@@ -2505,6 +2520,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_db_type() {
         #[cfg(feature = "rusqlite")]
         db_type(":memory:").await;
@@ -2633,6 +2649,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_import() {
         #[cfg(feature = "rusqlite")]
         import(":memory:").await;

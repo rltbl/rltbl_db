@@ -198,8 +198,7 @@ mod tests {
             .await
             .unwrap()
             .try_into_value::<String>()
-            .unwrap()
-            .into();
+            .unwrap();
         assert_eq!("foo", value);
 
         let string: String = pool
@@ -207,8 +206,7 @@ mod tests {
             .await
             .unwrap()
             .try_into_value::<String>()
-            .unwrap()
-            .into();
+            .unwrap();
         assert_eq!("foo", string);
 
         let strings = pool
@@ -303,15 +301,15 @@ mod tests {
             };
             let select_sql = format!("SELECT {column} FROM test_table_int WHERE {column} = {pp}1");
             let rows = pool.query(&select_sql, &params.clone()).await.unwrap();
-            let value: i64 = rows.try_into_value::<i64>().unwrap().try_into().unwrap();
+            let value: i64 = rows.try_into_value::<i64>().unwrap();
             assert_eq!(1, value);
 
             let rows = pool.query(&select_sql, &params.clone()).await.unwrap();
-            let unsigned: u64 = rows.try_into_value::<u64>().unwrap().try_into().unwrap();
+            let unsigned: u64 = rows.try_into_value::<u64>().unwrap();
             assert_eq!(1, unsigned);
 
             let rows = pool.query(&select_sql, &params.clone()).await.unwrap();
-            let signed: i64 = rows.try_into_value::<i64>().unwrap().try_into().unwrap();
+            let signed: i64 = rows.try_into_value::<i64>().unwrap();
             assert_eq!(1, signed);
 
             let string: String = pool
@@ -319,8 +317,7 @@ mod tests {
                 .await
                 .unwrap()
                 .try_into_value::<String>()
-                .unwrap()
-                .into();
+                .unwrap();
             assert_eq!("1", string);
 
             let strings = pool
@@ -334,5 +331,103 @@ mod tests {
 
         // Clean up:
         pool.drop_table("test_table_int").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_float_column_query() {
+        #[cfg(feature = "rusqlite")]
+        float_column_query(":memory:").await;
+        #[cfg(feature = "tokio-postgres")]
+        float_column_query("postgresql:///rltbl_db").await;
+        // TODO:
+        //#[cfg(feature = "libsql")]
+        //float_column_query(":memory:").await;
+    }
+
+    #[allow(unused)]
+    async fn float_column_query(url: &str) {
+        let pool = AnyPool::connect(url).await.unwrap();
+        let syntax = pool.syntax();
+        let pp = syntax.param_prefix().to_string();
+
+        // FLOAT8
+        pool.execute_batch(&format!(
+            "DROP TABLE IF EXISTS test_table_float{cascade};\
+             CREATE TABLE test_table_float ( value FLOAT8 )",
+            cascade = match syntax.name() {
+                "postgresql" => " CASCADE",
+                "sqlite" => "",
+                _ => panic!("Invalid syntax '{}'", syntax.name()),
+            }
+        ))
+        .await
+        .unwrap();
+
+        pool.execute(
+            &format!("INSERT INTO test_table_float VALUES ({pp}1)"),
+            &[1.05_f64.into()],
+        )
+        .await
+        .unwrap();
+
+        let select_sql = format!("SELECT value FROM test_table_float WHERE value > {pp}1");
+        let rows = pool.query(&select_sql, &[1.0_f64.into()]).await.unwrap();
+        let float = rows.try_into_value::<f64>().unwrap();
+        assert_eq!("1.05", format!("{float:.2}"));
+
+        let rows = pool.query(&select_sql, &[1.0_f64.into()]).await.unwrap();
+        let float = rows.try_into_value::<f64>().unwrap();
+        assert_eq!(1.05, float);
+
+        let string: String = pool
+            .query(&select_sql, &[1.0_f64.into()])
+            .await
+            .unwrap()
+            .try_into_value::<String>()
+            .unwrap();
+        assert_eq!("1.05", string);
+
+        let strings = pool
+            .query(&select_sql, &[1.0_f64.into()])
+            .await
+            .unwrap()
+            .to_strings()
+            .unwrap();
+        assert_eq!(vec!["1.05".to_owned()], strings);
+
+        let rows = pool.query(&select_sql, &[1.0_f64.into()]).await.unwrap();
+        let row = rows.row().unwrap();
+        assert_eq!(row, row! {"value" => 1.05,});
+
+        let rows = pool.query(&select_sql, &[1.0_f64.into()]).await.unwrap();
+        assert_eq!(rows.rows, [row! {"value" => 1.05,}]);
+
+        // FLOAT4
+        pool.execute_batch(&format!(
+            "DROP TABLE IF EXISTS test_table_float{cascade};\
+             CREATE TABLE test_table_float ( value FLOAT4 )",
+            cascade = match syntax.name() {
+                "postgresql" => " CASCADE",
+                "sqlite" => "",
+                _ => panic!("Invalid syntax '{}'", syntax.name()),
+            }
+        ))
+        .await
+        .unwrap();
+
+        pool.execute(
+            &format!("INSERT INTO test_table_float VALUES ({pp}1)"),
+            &[1.05_f32.into()],
+        )
+        .await
+        .unwrap();
+
+        let select_sql = format!("SELECT value FROM test_table_float WHERE value > {pp}1");
+        let rows = pool.query(&select_sql, &[1.0_f32.into()]).await.unwrap();
+        let float = rows.try_into_value::<f32>().unwrap();
+        assert_eq!("1.05", format!("{float:.2}"));
+
+        // Clean up:
+        pool.drop_table("test_table_float").await.unwrap();
     }
 }
