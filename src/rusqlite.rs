@@ -12,7 +12,10 @@ use deadpool_sqlite::{
 };
 use indexmap::indexmap;
 
-use crate::{Error, Pool, Query, Row, Rows, Syntax, Transaction, Value, sqlite::SqliteSyntax};
+use crate::{
+    Error, Pool, Query, Row, Rows, Syntax, Transaction, Value, shared::EditType, shared::edit,
+    sqlite::MAX_PARAMS_SQLITE, sqlite::SqliteSyntax,
+};
 
 #[derive(Debug)]
 pub struct RusqlitePool {
@@ -203,6 +206,28 @@ impl Query for RusqlitePool {
         .await?
     }
 
+    /// Implements [DbQuery::insert()] for SQLite.
+    async fn insert(
+        &self,
+        table: &str,
+        columns: &[&str],
+        // TODO: This should be an iterator.
+        rows: &Rows,
+    ) -> Result<(), Error> {
+        edit(
+            self,
+            &EditType::Insert,
+            &MAX_PARAMS_SQLITE,
+            table,
+            columns,
+            rows,
+            false,
+            &[],
+        )
+        .await?;
+        Ok(())
+    }
+
     /// Implements [Query::drop_table()] for SQLite.
     async fn drop_table(&self, table: &str) -> Result<(), Error> {
         // TODO: Add this:
@@ -312,6 +337,17 @@ impl Query for RusqliteTransaction {
                 "transaction already complete"
             ))),
         }
+    }
+
+    /// Implements [DbQuery::insert()] for PostgreSQL
+    async fn insert(
+        &self,
+        _table: &str,
+        _columns: &[&str],
+        // TODO: This should be an iterator.
+        _rows: &Rows,
+    ) -> Result<(), Error> {
+        todo!()
     }
 
     async fn drop_table(&self, _table: &str) -> Result<(), Error> {

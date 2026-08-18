@@ -28,8 +28,14 @@ pub trait Syntax: std::fmt::Debug {
     /// Generate the SQL and parameters needed to query the database's metadata for the names and
     /// types of the columns of the given table.
     fn columns_sql(&self, _table: &str) -> (String, [Value; 1]) {
+        // MC: I don't see why we need a default implementation? What would it be applicable to?
         todo!("write default implementation for columns_sql")
     }
+
+    // TODO: Combine primary_keys_sql with columns_sql if possible.
+    /// Generate the SQL and parameters needed to query the database's metadata for the primary
+    /// key columns of the given table.
+    fn primary_keys_sql(&self, table: &str) -> (String, [Value; 1]);
 
     /// Get the prefix to use for parameters to queries that need to be bound.
     fn param_prefix(&self) -> &str;

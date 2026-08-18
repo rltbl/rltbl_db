@@ -15,7 +15,8 @@ use deadpool_postgres::{
 use rust_decimal::Decimal;
 
 use crate::{
-    Error, Pool, Query, Row, Rows, Syntax, Transaction, Value, postgresql::PostgresSyntax,
+    Error, Pool, Query, Row, Rows, Syntax, Transaction, Value, postgresql::MAX_PARAMS_POSTGRES,
+    postgresql::PostgresSyntax, shared::EditType, shared::edit,
 };
 
 #[derive(Debug)]
@@ -266,6 +267,28 @@ impl Query for PostgresPool {
         }
 
         Ok(Rows { rows: db_rows })
+    }
+
+    /// Implements [DbQuery::insert()] for PostgreSQL
+    async fn insert(
+        &self,
+        table: &str,
+        columns: &[&str],
+        // TODO: This should be an iterator.
+        rows: &Rows,
+    ) -> Result<(), Error> {
+        edit(
+            self,
+            &EditType::Insert,
+            &MAX_PARAMS_POSTGRES,
+            table,
+            columns,
+            rows,
+            false,
+            &[],
+        )
+        .await?;
+        Ok(())
     }
 
     /// Implements [Query::drop_table()] for PostgreSQL.

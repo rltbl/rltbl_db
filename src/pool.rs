@@ -5,7 +5,7 @@ use std::{iter::IntoIterator, sync::Arc};
 use async_trait::async_trait;
 use indexmap::IndexMap;
 
-use crate::{AnyTransaction, Error, Query, Row, Rows, Syntax, Transaction, Value};
+use crate::{AnyTransaction, Error, Query, Rows, Syntax, Transaction, Value};
 
 // MC: But why is it named Pool if it is for using transactions? How About CreateTransaction?
 // JO: The Pool is a database pool.
@@ -32,7 +32,7 @@ pub struct AnyPool {
     pub meta_cache: Arc<IndexMap<String, String>>,
 }
 
-// This is dyn compatible ONLY if every impl DbQuery uses #[async_trait].
+// This is dyn compatible ONLY if every impl Query uses #[async_trait].
 pub async fn connect(url: &str) -> Result<Box<dyn Pool>, Error> {
     if url.starts_with("postgresql://") {
         #[cfg(feature = "tokio-postgres")]
@@ -117,18 +117,11 @@ impl AnyPool {
         todo!("implement AnyPool::cache")
     }
 
-    pub async fn insert(
-        &self,
-        _table: &str,
-        _columns: &[&str],
-        _rows: impl IntoIterator<Item = &Row>,
-    ) -> Result<(), Error> {
-        let sql = "INSERT INTO foo(bar) VALUES (2)";
-        self.pool.execute(sql, &[]).await
-        // TODO: handle cache
+    pub async fn insert(&self, table: &str, columns: &[&str], rows: &Rows) -> Result<(), Error> {
+        self.pool.insert(table, columns, rows).await
+        // TODO: handle cache here? Or in shared.rs?
     }
 
-    // TODO: insert
     // TODO: insert_returning
     // TODO: update
     // TODO: update_returning
@@ -712,5 +705,92 @@ mod tests {
         pool.drop_table("test_any_table_input_params")
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_insert() {
+        #[cfg(feature = "rusqlite")]
+        insert(":memory:").await;
+        #[cfg(feature = "tokio-postgres")]
+        insert("postgresql:///rltbl_db").await;
+        // TODO:
+        // #[cfg(feature = "libsql")]
+        // insert(":memory:").await;
+    }
+
+    #[allow(unused)]
+    async fn insert(url: &str) {
+        let pool = AnyPool::connect(url).await.unwrap();
+        let syntax = pool.syntax();
+        let cascade = match syntax.name() {
+            "postgresql" => " CASCADE",
+            "sqlite" => "",
+            _ => panic!("Invalid syntax '{}'", syntax.name()),
+        };
+        pool.execute_batch(&format!(
+            "DROP TABLE IF EXISTS test_insert{cascade};\
+             CREATE TABLE test_insert (\
+               text_value TEXT,\
+               alt_text_value TEXT,\
+               float_value FLOAT8,\
+               int_value INT8,\
+               bool_value BOOL\
+             )"
+        ))
+        .await
+        .unwrap();
+
+        // Insert rows:
+        pool.insert(
+            "test_insert",
+            &["text_value", "int_value", "bool_value"],
+            &Rows {
+                rows: vec![
+                    row! {"text_value" => "TEXT",},
+                    row! {
+                        "int_value" => 1_i64,
+                        "bool_value" => match syntax.name() {
+                            "sqlite" => Value::from(1_i64),
+                            "postgresql" => Value::from(true),
+                            _ => panic!("Invalid syntax '{}'", syntax.name()),
+                        },
+                    },
+                ],
+            },
+        )
+        .await
+        .unwrap();
+
+        // Validate the inserted data:
+        let rows = pool
+            .query(r#"SELECT * FROM test_insert"#, &[])
+            .await
+            .unwrap();
+        assert_eq!(
+            rows.rows,
+            [
+                row! {
+                    "text_value" => "TEXT",
+                    "alt_text_value" => Value::Null,
+                    "float_value" => Value::Null,
+                    "int_value" => Value::Null,
+                    "bool_value" => Value::Null,
+                },
+                row! {
+                    "text_value" => Value::Null,
+                    "alt_text_value" => Value::Null,
+                    "float_value" => Value::Null,
+                    "int_value" => 1_i64,
+                    "bool_value" => match syntax.name() {
+                        "sqlite" => Value::from(1_i64),
+                        "postgresql" => Value::from(true),
+                        _ => panic!("Invalid syntax '{}'", syntax.name()),
+                    },
+                }
+            ]
+        );
+
+        // Clean up.
+        pool.drop_table("test_insert").await.unwrap();
     }
 }

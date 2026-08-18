@@ -4,7 +4,11 @@
 // making a comment about it. It is starting to remind me of a Java project ;-)
 // JO: Yes, that's my preference. This one will be big enough once `Syntax` is filled out.
 
-use crate::{Error, Syntax, Type, value::Value};
+use crate::{Error, Syntax, Type, value::Value, values};
+
+/// The [maximum number of parameters](https://www.sqlite.org/limits.html#max_variable_number)
+/// that can be bound to a SQLite query
+pub static MAX_PARAMS_SQLITE: usize = 32766;
 
 #[derive(Debug)]
 pub struct SqliteSyntax;
@@ -27,8 +31,26 @@ impl Syntax for SqliteSyntax {
 
     /// Generate the SQL and parameters needed to query the database's metadata for the names and
     /// types of the columns of the given table.
-    fn columns_sql(&self, _table: &str) -> (String, [Value; 1]) {
-        todo!("write default implementation for columns_sql")
+    fn columns_sql(&self, table: &str) -> (String, [Value; 1]) {
+        (
+            r#"SELECT "name" AS "column_name", "type" AS "data_type"
+               FROM pragma_table_info(?1)
+               ORDER BY "column_name""#
+                .to_string(),
+            values![table],
+        )
+    }
+
+    /// Implements [DbKind::primary_keys_sql()] for SQLiteKind.
+    fn primary_keys_sql(&self, table: &str) -> (String, [Value; 1]) {
+        (
+            r#"SELECT "name" AS "column_name"
+               FROM pragma_table_info(?1)
+               WHERE "pk" > 0
+               ORDER BY "pk""#
+                .to_string(),
+            values![table],
+        )
     }
 
     /// TODO: Add doctring.

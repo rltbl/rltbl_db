@@ -169,38 +169,41 @@ pub use self::table::Table;
 pub use self::transaction::{AnyTransaction, Transaction};
 pub use self::value::{Type, Value};
 
-// all modules use error
+// All modules use error.
 pub mod error;
 
-// types and values
+// Types and values.
 pub mod value;
 
-// database columns
+// Database columns.
 pub mod column;
 
-// rows of values
+// Rows of values.
 pub mod row;
 
-// database tables
+// Database tables.
 pub mod table;
 
-// define syntax trait
+// Define syntax trait.
 pub mod syntax;
 
-// syntax implementations
+// Syntax implementations.
 pub mod sqlite;
 pub mod postgresql;
 
-// define query trait
+// Define query trait.
 pub mod query;
 
-// transaction extends query
+// Transaction extends query.
 pub mod transaction;
 
-// pool extends query and returns a transaction
+// Pool extends query and returns a transaction.
 pub mod pool;
 
-// driver implementations
+// Utility functions used by all pool types:.
+pub mod shared;
+
+// Driver implementations.
 //
 #[cfg(feature = "rusqlite")]
 pub mod rusqlite;
