@@ -185,8 +185,9 @@ mod tests {
 
         pool.execute(
             &format!("INSERT INTO test_table_text VALUES ({pp}1)"),
-            // TODO: don't require explicitly calling Value::from() here and elsewhere.
-            &[Value::from("foo")],
+            // TODO: don't require explicitly calling into() (or Value::from()) here and elsewhere.
+            &["foo".into()],
+            // ["foo"],
         )
         .await
         .unwrap();

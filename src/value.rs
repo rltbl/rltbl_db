@@ -262,3 +262,68 @@ impl TryFrom<Value> for u64 {
         }
     }
 }
+
+// TODO: I was trying to use these to make it possible to simply pass argument lists
+// such as: &["foo", 1, 3.2] to execute(), but it still needs work.
+// These do not seem to be needed for anything else so I'll leave all of this commented
+// out for now.
+// ///////////////////////////////////////////////////////////////////////////////
+// // IntoValue
+// ///////////////////////////////////////////////////////////////////////////////
+//
+// /// Types that implement this trait can be converted into a [Value].
+// pub trait IntoValue {
+//     fn into_value(self) -> Value;
+// }
+//
+// /// Implements [IntoValue] for types that implement [TryFrom] for [Value].
+// impl<T: Into<Value>> IntoValue for T {
+//     fn into_value(self) -> Value {
+//         self.into()
+//     }
+// }
+//
+// /////////////////////////////////
+//
+// /// Types that implement this trait can be converted into [Params]
+// pub trait IntoParams {
+//     fn into_params(self) -> Vec<Value>;
+// }
+//
+// /// Implements [IntoParams] for references to [Params]
+// impl IntoParams for &Vec<Value> {
+//     fn into_params(self) -> Vec<Value> {
+//         self.clone()
+//     }
+// }
+//
+// /// Implements [IntoParams] for an empty tuple. Always returns [Params::None].
+// impl IntoParams for () {
+//     fn into_params(self) -> Vec<Value> {
+//         vec![]
+//     }
+// }
+//
+// /// Implements [IntoParams] for fixed-length arrays of types that implement [IntoValue]
+// impl<T: IntoValue, const N: usize> IntoParams for [T; N] {
+//     fn into_params(self) -> Vec<Value> {
+//         self.into_iter().collect::<Vec<_>>().into_params()
+//     }
+// }
+//
+// /// Implements [IntoParams] for references to fixed-length arrays of types that implement
+// /// [IntoValue]
+// impl<T: IntoValue + Clone, const N: usize> IntoParams for &[T; N] {
+//     fn into_params(self) -> Vec<Value> {
+//         self.iter().cloned().collect::<Vec<_>>().into_params()
+//     }
+// }
+//
+// /// Implements [IntoParams] for vectors of types that implement [IntoValue]
+// impl<T: IntoValue> IntoParams for Vec<T> {
+//     fn into_params(self) -> Vec<Value> {
+//         let values = self.into_iter().map(|i| i.into_value()).collect::<Vec<_>>();
+//         values
+//     }
+// }
+//
