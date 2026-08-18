@@ -585,4 +585,132 @@ mod tests {
         // Clean up:
         pool.drop_table("test_table_mixed").await.unwrap();
     }
+
+    #[tokio::test]
+    async fn test_input_params() {
+        #[cfg(feature = "rusqlite")]
+        input_params(":memory:").await;
+        #[cfg(feature = "tokio-postgres")]
+        input_params("postgresql:///rltbl_db").await;
+        // TODO:
+        // #[cfg(feature = "libsql")]
+        // input_params(":memory:").await;
+    }
+
+    #[allow(unused)]
+    async fn input_params(url: &str) {
+        let pool = AnyPool::connect(url).await.unwrap();
+        let syntax = pool.syntax();
+        let pp = syntax.param_prefix().to_string();
+        let cascade = match syntax.name() {
+            "postgresql" => " CASCADE",
+            "sqlite" => "",
+            _ => panic!("Invalid syntax '{}'", syntax.name()),
+        };
+        pool.execute(
+            &format!("DROP TABLE IF EXISTS test_any_table_input_params{cascade}"),
+            &[],
+        )
+        .await
+        .unwrap();
+        pool.execute(
+            "CREATE TABLE test_any_table_input_params (\
+               bar TEXT,\
+               car INT2,\
+               dar INT4,\
+               far INT8,\
+               gar FLOAT4,\
+               har FLOAT8,\
+               jar NUMERIC,\
+               kar BOOL
+             )",
+            &[],
+        )
+        .await
+        .unwrap();
+        pool.execute(
+            &format!("INSERT INTO test_any_table_input_params (bar) VALUES ({pp}1)"),
+            &["one".into()],
+        )
+        .await
+        .unwrap();
+        pool.execute(
+            &format!("INSERT INTO test_any_table_input_params (far) VALUES ({pp}1)"),
+            &[1_i64.into()],
+        )
+        .await
+        .unwrap();
+        pool.execute(
+            &format!("INSERT INTO test_any_table_input_params (bar) VALUES ({pp}1)"),
+            &["two".into()],
+        )
+        .await
+        .unwrap();
+        pool.execute(
+            &format!("INSERT INTO test_any_table_input_params (far) VALUES ({pp}1)"),
+            &[2_i64.into()],
+        )
+        .await
+        .unwrap();
+        pool.execute(
+            &format!("INSERT INTO test_any_table_input_params (bar) VALUES ({pp}1)"),
+            &vec!["three".into()],
+        )
+        .await
+        .unwrap();
+        pool.execute(
+            &format!("INSERT INTO test_any_table_input_params (far) VALUES ({pp}1)"),
+            &vec![3_i64.into()],
+        )
+        .await
+        .unwrap();
+        pool.execute(
+            &format!("INSERT INTO test_any_table_input_params (gar) VALUES ({pp}1)"),
+            &vec![3_f32.into()],
+        )
+        .await
+        .unwrap();
+        pool.execute(
+            &format!("INSERT INTO test_any_table_input_params (har) VALUES ({pp}1)"),
+            &vec![3_f64.into()],
+        )
+        .await
+        .unwrap();
+        pool.execute(
+            &format!("INSERT INTO test_any_table_input_params (jar) VALUES ({pp}1)"),
+            &vec![dec!(3).into()],
+        )
+        .await
+        .unwrap();
+        pool.execute(
+            &format!("INSERT INTO test_any_table_input_params (kar) VALUES ({pp}1)"),
+            &vec![true.into()],
+        )
+        .await
+        .unwrap();
+        pool.execute(
+            &format!(
+                "INSERT INTO test_any_table_input_params \
+                 (bar, car, dar, far, gar, har, jar, kar) \
+                 VALUES ({pp}1, {pp}2, {pp}3, {pp}4, {pp}5 ,{pp}6, {pp}7, {pp}8)"
+            ),
+            &values![
+                "four",
+                123_i16,
+                123_i32,
+                123_i64,
+                123_f32,
+                123_f64,
+                dec!(123),
+                true,
+            ],
+        )
+        .await
+        .unwrap();
+
+        // Clean up:
+        pool.drop_table("test_any_table_input_params")
+            .await
+            .unwrap();
+    }
 }
