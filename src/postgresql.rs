@@ -49,7 +49,7 @@ impl Syntax for PostgresSyntax {
         )
     }
 
-    /// Implements [DbKind::primary_keys_sql()] for PostgreSQLKind.
+    /// Implements [Syntax::primary_keys_sql()] for PostgreSQLKind.
     fn primary_keys_sql(&self, table: &str) -> (String, [Value; 1]) {
         (
             r#"SELECT "kcu"."column_name"

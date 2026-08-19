@@ -1,6 +1,7 @@
 use crate::{Error, Query, Rows, Value};
 use std::fmt::Display;
 
+#[allow(unused)]
 #[derive(PartialEq, Eq)]
 pub(crate) enum EditType {
     Insert,
@@ -21,6 +22,7 @@ impl Display for EditType {
 
 // Generate a SQL UPDATE statement for the given table and columns using the given clauses
 // and the given value lines.
+#[allow(unused)]
 pub(crate) fn generate_update_statement(
     table: &str,
     columns: &[&str],
@@ -63,6 +65,7 @@ WHERE {where_clause}{returning_clause}"#,
 
 // Generate a SQL INSERT statement for the given table and columns using the given clauses
 // and the given value lines.
+#[allow(unused)]
 pub(crate) fn generate_insert_statement(
     table: &str,
     columns: &[&str],
@@ -86,6 +89,7 @@ VALUES
 
 // Generate SQL statement of the form:
 // INSERT INTO <table> VALUES <tuples> ON CONFLICT (<primary key constraint>) DO UPDATE ...
+#[allow(unused)]
 pub(crate) fn generate_upsert_statement(
     table: &str,
     columns: &[&str],
@@ -125,6 +129,7 @@ ON CONFLICT ({constraint_clause}) DO UPDATE SET {set_clause}{returning_clause}"#
 /// clause (set with_returning = false to turn this off). When generating the SQL statements
 /// used to edit the table, do not use more than max_params bound parameters at a time. If more
 /// than max_params are required, multiple SQL statements will be generated.
+#[allow(unused)]
 pub(crate) async fn edit(
     pool: &(impl Query + Sync),
     edit_type: &EditType,

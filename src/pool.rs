@@ -83,6 +83,16 @@ impl AnyPool {
         self.pool.syntax()
     }
 
+    pub async fn columns(&self, table: &str) -> Result<IndexMap<String, String>, Error> {
+        self.pool.columns(table).await
+    }
+
+    // TODO: Combine this with columns() if possible
+    /// Retrieve the primary key column names for a given table.
+    pub async fn primary_keys(&self, table: &str) -> Result<Vec<String>, Error> {
+        self.pool.primary_keys(table).await
+    }
+
     pub async fn execute(
         &self,
         sql: &str,
@@ -119,14 +129,54 @@ impl AnyPool {
 
     pub async fn insert(&self, table: &str, columns: &[&str], rows: &Rows) -> Result<(), Error> {
         self.pool.insert(table, columns, rows).await
-        // TODO: handle cache here? Or in shared.rs?
     }
 
-    // TODO: insert_returning
-    // TODO: update
-    // TODO: update_returning
-    // TODO: upsert
-    // TODO: upsert_returning
+    pub async fn insert_returning(
+        &self,
+        table: &str,
+        columns: &[&str],
+        rows: &Rows,
+        returning: &[&str],
+    ) -> Result<Rows, Error> {
+        self.pool
+            .insert_returning(table, columns, rows, returning)
+            .await
+    }
+
+    pub async fn update(&self, table: &str, columns: &[&str], rows: &Rows) -> Result<(), Error> {
+        self.pool.update(table, columns, rows).await
+    }
+
+    pub async fn update_returning(
+        &self,
+        table: &str,
+        columns: &[&str],
+        rows: &Rows,
+        returning: &[&str],
+    ) -> Result<Rows, Error> {
+        self.pool
+            .update_returning(table, columns, rows, returning)
+            .await
+    }
+
+    pub async fn upsert(&self, table: &str, columns: &[&str], rows: &Rows) -> Result<(), Error> {
+        self.pool.upsert(table, columns, rows).await
+    }
+
+    /// Like [Query::upsert()], but in addition this function also returns the data that was
+    /// upserted for the columns included in `returning`, or all of the upserted data if
+    /// `returning` is an empty list.
+    pub async fn upsert_returning(
+        &self,
+        table: &str,
+        columns: &[&str],
+        rows: &Rows,
+        returning: &[&str],
+    ) -> Result<Rows, Error> {
+        self.pool
+            .upsert_returning(table, columns, rows, returning)
+            .await
+    }
 
     #[allow(unused)]
     async fn drop_table(&self, table: &str) -> Result<(), Error> {
@@ -142,7 +192,7 @@ impl AnyPool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{row, row::StringRow, values};
+    use crate::{Row, row, row::StringRow, values};
     use rust_decimal::dec;
 
     #[tokio::test]
@@ -708,6 +758,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_drop_table() {
+        #[cfg(feature = "rusqlite")]
+        drop_table(":memory:").await;
+        #[cfg(feature = "tokio-postgres")]
+        drop_table("postgresql:///rltbl_db").await;
+        // TODO:
+        //#[cfg(feature = "libsql")]
+        //drop_table(":memory:").await;
+    }
+
+    #[allow(unused)]
+    async fn drop_table(url: &str) {
+        let pool = AnyPool::connect(url).await.unwrap();
+        let syntax = pool.syntax();
+        let cascade = match syntax.name() {
+            "postgresql" => " CASCADE",
+            "sqlite" => "",
+            _ => panic!("Invalid syntax '{}'", syntax.name()),
+        };
+        let table1 = "test_drop1";
+        let table2 = "test_drop2";
+        pool.execute_batch(&format!(
+            "DROP TABLE IF EXISTS {table1}{cascade};\
+             DROP TABLE IF EXISTS {table2}{cascade};\
+             CREATE TABLE {table1} (\
+                 foo TEXT PRIMARY KEY\
+             );\
+             CREATE TABLE {table2} (\
+                 foo TEXT REFERENCES {table1}(foo)\
+             );",
+        ))
+        .await
+        .unwrap();
+
+        let columns = pool.columns(table1).await.unwrap();
+        assert_eq!(
+            columns,
+            IndexMap::from([("foo".to_owned(), "text".to_owned())])
+        );
+        pool.drop_table(table1).await.unwrap();
+
+        match pool.columns(table1).await {
+            Ok(columns) => panic!("No columns expected for '{table1}' but got {columns:?}"),
+            Err(_) => (),
+        };
+
+        // Clean up.
+        pool.drop_table(table2).await.unwrap();
+    }
+
+    #[tokio::test]
     async fn test_insert() {
         #[cfg(feature = "rusqlite")]
         insert(":memory:").await;
@@ -730,11 +831,11 @@ mod tests {
         pool.execute_batch(&format!(
             "DROP TABLE IF EXISTS test_insert{cascade};\
              CREATE TABLE test_insert (\
-               text_value TEXT,\
-               alt_text_value TEXT,\
-               float_value FLOAT8,\
-               int_value INT8,\
-               bool_value BOOL\
+             text_value TEXT,\
+             alt_text_value TEXT,\
+             float_value FLOAT8,\
+             int_value INT8,\
+             bool_value BOOL\
              )"
         ))
         .await
@@ -792,5 +893,678 @@ mod tests {
 
         // Clean up.
         pool.drop_table("test_insert").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_insert_returning() {
+        #[cfg(feature = "rusqlite")]
+        insert_returning(":memory:").await;
+        #[cfg(feature = "tokio-postgres")]
+        insert_returning("postgresql:///rltbl_db").await;
+        // TODO:
+        // #[cfg(feature = "libsql")]
+        // insert_returning(":memory:").await;
+    }
+
+    #[allow(unused)]
+    async fn insert_returning(url: &str) {
+        let pool = AnyPool::connect(url).await.unwrap();
+        let syntax = pool.syntax();
+        let cascade = match syntax.name() {
+            "postgresql" => " CASCADE",
+            "sqlite" => "",
+            _ => panic!("Invalid syntax '{}'", syntax.name()),
+        };
+        pool.execute_batch(&format!(
+            "DROP TABLE IF EXISTS test_insert_returning{cascade};\
+             CREATE TABLE test_insert_returning (\
+             text_value TEXT,\
+             alt_text_value TEXT,\
+             float_value FLOAT8,\
+             int_value INT8,\
+             bool_value BOOL\
+             )",
+        ))
+        .await
+        .unwrap();
+
+        // Without specific returning columns:
+        let rows = pool
+            .insert_returning(
+                "test_insert_returning",
+                &["text_value", "int_value", "bool_value"],
+                &Rows {
+                    rows: vec![
+                        row! {"text_value" => "TEXT",},
+                        row! {
+                            "int_value" => 1_i64,
+                            "bool_value" => true,
+                        },
+                    ],
+                },
+                &[],
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            rows.rows,
+            [
+                row! {
+                    "text_value" => "TEXT",
+                    "alt_text_value" => Value::Null,
+                    "float_value" => Value::Null,
+                    "int_value" => Value::Null,
+                    "bool_value" => Value::Null,
+                },
+                row! {
+                    "text_value" => Value::Null,
+                    "alt_text_value" => Value::Null,
+                    "float_value" => Value::Null,
+                    "int_value" => 1_i64,
+                    "bool_value" => match syntax.name() {
+                        "sqlite" => Value::from(1_i64),
+                        "postgresql" => Value::from(true),
+                        _ => panic!("Invalid syntax '{}'", syntax.name()),
+                    },
+                }
+            ]
+        );
+
+        // With specific returning columns:
+        let rows = pool
+            .insert_returning(
+                "test_insert_returning",
+                &["text_value", "int_value", "bool_value"],
+                &Rows {
+                    rows: vec![
+                        row! {
+                            "text_value" => "TEXT",
+                        },
+                        row! {
+                            "int_value" => 1_i64,
+                            "bool_value" => true,
+                        },
+                    ],
+                },
+                &["int_value", "float_value"],
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            rows.rows,
+            [
+                row! {
+                    "float_value" => Value::Null,
+                    "int_value" => Value::Null,
+                },
+                row! {
+                    "float_value" => Value::Null,
+                    "int_value" => 1_i64,
+                }
+            ]
+        );
+
+        // Clean up.
+        pool.drop_table("test_insert_returning").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_update() {
+        #[cfg(feature = "rusqlite")]
+        update(":memory:").await;
+        #[cfg(feature = "tokio-postgres")]
+        update("postgresql:///rltbl_db").await;
+        // TODO:
+        //#[cfg(feature = "libsql")]
+        //update(":memory:").await;
+    }
+
+    #[allow(unused)]
+    async fn update(url: &str) {
+        let pool = AnyPool::connect(url).await.unwrap();
+        let syntax = pool.syntax();
+        let cascade = match syntax.name() {
+            "postgresql" => " CASCADE",
+            "sqlite" => "",
+            _ => panic!("Invalid syntax '{}'", syntax.name()),
+        };
+        pool.execute_batch(&format!(
+            "DROP TABLE IF EXISTS test_update{cascade};\
+             CREATE TABLE test_update (\
+             foo BIGINT PRIMARY KEY,\
+             bar BIGINT,\
+             car BIGINT,\
+             dar BIGINT,\
+             ear BIGINT\
+             )",
+        ))
+        .await
+        .unwrap();
+
+        pool.insert(
+            "test_update",
+            &["foo"],
+            &Rows {
+                rows: vec![
+                    row! {"foo" => 1_i64,},
+                    row! {"foo" => 2_i64,},
+                    row! {"foo" => 3_i64,},
+                ],
+            },
+        )
+        .await
+        .unwrap();
+
+        pool.update(
+            "test_update",
+            &["foo", "bar", "car", "dar", "ear"],
+            &Rows {
+                rows: vec![
+                    row! {
+                        "foo" => 1_i64,
+                        "bar" => 10_i64,
+                        "car" => 11_i64,
+                        "dar" => 12_i64,
+                        "ear" => 13_i64,
+                    },
+                    row! {
+                        "foo" => 2_i64,
+                        "bar" => 14_i64,
+                        "car" => 15_i64,
+                        "dar" => 16_i64,
+                        "ear" => 17_i64,
+                    },
+                    row! {
+                        "foo" => 3_i64,
+                        "bar" => 18_i64,
+                        "car" => 19_i64,
+                        "dar" => 20_i64,
+                        "ear" => 21_i64,
+                    },
+                ],
+            },
+        )
+        .await
+        .unwrap();
+
+        let rows = pool.query("SELECT * from test_update", &[]).await.unwrap();
+        assert_eq!(
+            rows.rows,
+            [
+                row! {
+                    "foo" => 1_i64,
+                    "bar" => 10_i64,
+                    "car" => 11_i64,
+                    "dar" => 12_i64,
+                    "ear" => 13_i64,
+                },
+                row! {
+                    "foo" => 2_i64,
+                    "bar" => 14_i64,
+                    "car" => 15_i64,
+                    "dar" => 16_i64,
+                    "ear" => 17_i64,
+                },
+                row! {
+                    "foo" => 3_i64,
+                    "bar" => 18_i64,
+                    "car" => 19_i64,
+                    "dar" => 20_i64,
+                    "ear" => 21_i64,
+                },
+            ]
+        );
+
+        // Clean up:
+        pool.drop_table("test_update").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_update_returning() {
+        #[cfg(feature = "rusqlite")]
+        update_returning(":memory:").await;
+        #[cfg(feature = "tokio-postgres")]
+        update_returning("postgresql:///rltbl_db").await;
+        // TODO:
+        // #[cfg(feature = "libsql")]
+        // update_returning(":memory:").await;
+    }
+
+    #[allow(unused)]
+    async fn update_returning(url: &str) {
+        let pool = AnyPool::connect(url).await.unwrap();
+        let syntax = pool.syntax();
+        let cascade = match syntax.name() {
+            "postgresql" => " CASCADE",
+            "sqlite" => "",
+            _ => panic!("Invalid syntax '{}'", syntax.name()),
+        };
+        pool.execute_batch(&format!(
+            "DROP TABLE IF EXISTS test_update_returning{cascade};\
+             CREATE TABLE test_update_returning (\
+             foo BIGINT,\
+             bar BIGINT,\
+             car BIGINT,\
+             dar BIGINT,\
+             ear BIGINT,\
+             PRIMARY KEY (foo, bar)\
+             )",
+        ))
+        .await
+        .unwrap();
+
+        pool.insert(
+            "test_update_returning",
+            &["foo", "bar", "car", "dar", "ear"],
+            &Rows {
+                rows: vec![
+                    row! {
+                        "foo" => 1_i64,
+                        "bar" => 1_i64,
+                    },
+                    row! {
+                        "foo" => 2_i64,
+                        "bar" => 2_i64,
+                    },
+                    row! {
+                        "foo" => 3_i64,
+                        "bar" => 3_i64,
+                    },
+                ],
+            },
+        )
+        .await
+        .unwrap();
+
+        let check_returning_rows = |rows: &Vec<Row>| {
+            assert!(rows.iter().all(|row| {
+                [
+                    row! {
+                        "car" => 10_i64,
+                        "dar" => 11_i64,
+                        "ear" => 12_i64,
+                    },
+                    row! {
+                        "car" => 13_i64,
+                        "dar" => 14_i64,
+                        "ear" => 15_i64,
+                    },
+                    row! {
+                        "car" => 16_i64,
+                        "dar" => 17_i64,
+                        "ear" => 18_i64,
+                    },
+                ]
+                .contains(&row)
+            }));
+        };
+
+        check_returning_rows(
+            &pool
+                .update_returning(
+                    "test_update_returning",
+                    &["foo", "bar", "car", "dar", "ear"],
+                    &Rows {
+                        rows: vec![
+                            row! {
+                                "foo" => 1_i64,
+                                "bar" => 1_i64,
+                                "car" => 10_i64,
+                                "dar" => 11_i64,
+                                "ear" => 12_i64,
+                            },
+                            row! {
+                                "foo" => 2_i64,
+                                "bar" => 2_i64,
+                                "car" => 13_i64,
+                                "dar" => 14_i64,
+                                "ear" => 15_i64,
+                            },
+                            row! {
+                                "foo" => 3_i64,
+                                "bar" => 3_i64,
+                                "car" => 16_i64,
+                                "dar" => 17_i64,
+                                "ear" => 18_i64,
+                            },
+                        ],
+                    },
+                    &["car", "dar", "ear"],
+                )
+                .await
+                .unwrap(),
+        );
+
+        // This is the same update as the first one above, just with the columns of the input
+        // rows to the update, as well as the rows themselves, specified in a different order.
+        pool.execute("DELETE FROM test_update_returning", &[])
+            .await
+            .unwrap();
+
+        pool.insert(
+            "test_update_returning",
+            &["foo", "bar"],
+            &Rows {
+                rows: vec![
+                    row! {
+                        "foo" => 1_i64,
+                        "bar" => 1_i64,
+                    },
+                    row! {
+                        "foo" => 2_i64,
+                        "bar" => 2_i64,
+                    },
+                    row! {
+                        "foo" => 3_i64,
+                        "bar" => 3_i64,
+                    },
+                ],
+            },
+        )
+        .await
+        .unwrap();
+
+        check_returning_rows(
+            &pool
+                .update_returning(
+                    "test_update_returning",
+                    &["foo", "bar", "car", "dar", "ear"],
+                    &Rows {
+                        rows: vec![
+                            row! {
+                                "ear" => 15_i64,
+                                "bar" => 2_i64,
+                                "car" => 13_i64,
+                                "dar" => 14_i64,
+                                "foo" => 2_i64,
+                            },
+                            row! {
+                                "foo" => 1_i64,
+                                "car" => 10_i64,
+                                "bar" => 1_i64,
+                                "ear" => 12_i64,
+                                "dar" => 11_i64,
+                            },
+                            row! {
+                                "car" => 16_i64,
+                                "dar" => 17_i64,
+                                "ear" => 18_i64,
+                                "bar" => 3_i64,
+                                "foo" => 3_i64,
+                            },
+                        ],
+                    },
+                    &["car", "dar", "ear"],
+                )
+                .await
+                .unwrap(),
+        );
+
+        // Final sanity check on the values of all columns:
+        let rows = pool
+            .query("SELECT * from test_update_returning", &[])
+            .await
+            .unwrap();
+        assert!(rows.iter().all(|row| {
+            [
+                row! {
+                    "foo" => 1_i64,
+                    "bar" => 1_i64,
+                    "car" => 10_i64,
+                    "dar" => 11_i64,
+                    "ear" => 12_i64,
+                },
+                row! {
+                    "foo" => 2_i64,
+                    "bar" => 2_i64,
+                    "car" => 13_i64,
+                    "dar" => 14_i64,
+                    "ear" => 15_i64,
+                },
+                row! {
+                    "foo" => 3_i64,
+                    "bar" => 3_i64,
+                    "car" => 16_i64,
+                    "dar" => 17_i64,
+                    "ear" => 18_i64,
+                },
+            ]
+            .contains(&row)
+        }));
+
+        // Clean up:
+        pool.drop_table("test_update_returning").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_upsert() {
+        #[cfg(feature = "rusqlite")]
+        upsert(":memory:").await;
+        #[cfg(feature = "tokio-postgres")]
+        upsert("postgresql:///rltbl_db").await;
+        // TODO:
+        // #[cfg(feature = "libsql")]
+        // upsert(":memory:").await;
+    }
+
+    #[allow(unused)]
+    async fn upsert(url: &str) {
+        let pool = AnyPool::connect(url).await.unwrap();
+        let syntax = pool.syntax();
+        let cascade = match syntax.name() {
+            "postgresql" => " CASCADE",
+            "sqlite" => "",
+            _ => panic!("Invalid syntax '{}'", syntax.name()),
+        };
+        pool.execute_batch(&format!(
+            "DROP TABLE IF EXISTS test_upsert{cascade};\
+             CREATE TABLE test_upsert (\
+             foo BIGINT PRIMARY KEY,\
+             bar BIGINT,\
+             car BIGINT,\
+             dar BIGINT,\
+             ear BIGINT\
+             )",
+        ))
+        .await
+        .unwrap();
+
+        pool.insert(
+            "test_upsert",
+            &["foo"],
+            &Rows {
+                rows: vec![
+                    row! {
+                        "foo" => 1_i64,
+                    },
+                    row! {
+                        "foo" => 2_i64,
+                    },
+                    row! {
+                        "foo" => 3_i64,
+                    },
+                ],
+            },
+        )
+        .await
+        .unwrap();
+
+        pool.upsert(
+            "test_upsert",
+            &["foo", "bar", "car", "dar", "ear"],
+            &Rows {
+                rows: vec![
+                    row! {
+                        "foo" => 1_i64,
+                        "bar" => 10_i64,
+                        "car" => 11_i64,
+                        "dar" => 12_i64,
+                        "ear" => 13_i64,
+                    },
+                    row! {
+                        "foo" => 2_i64,
+                        "bar" => 14_i64,
+                        "car" => 15_i64,
+                        "dar" => 16_i64,
+                        "ear" => 17_i64,
+                    },
+                    row! {
+                        "foo" => 3_i64,
+                        "bar" => 18_i64,
+                        "car" => 19_i64,
+                        "dar" => 20_i64,
+                        "ear" => 21_i64,
+                    },
+                ],
+            },
+        )
+        .await
+        .unwrap();
+
+        let rows = pool.query("SELECT * from test_upsert", &[]).await.unwrap();
+        assert_eq!(
+            rows.rows,
+            [
+                row! {
+                    "foo" => 1_i64,
+                    "bar" => 10_i64,
+                    "car" => 11_i64,
+                    "dar" => 12_i64,
+                    "ear" => 13_i64,
+                },
+                row! {
+                    "foo" => 2_i64,
+                    "bar" => 14_i64,
+                    "car" => 15_i64,
+                    "dar" => 16_i64,
+                    "ear" => 17_i64,
+                },
+                row! {
+                    "foo" => 3_i64,
+                    "bar" => 18_i64,
+                    "car" => 19_i64,
+                    "dar" => 20_i64,
+                    "ear" => 21_i64,
+                },
+            ]
+        );
+
+        // Clean up:
+        pool.drop_table("test_upsert").await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_upsert_returning() {
+        #[cfg(feature = "rusqlite")]
+        upsert_returning(":memory:").await;
+        #[cfg(feature = "tokio-postgres")]
+        upsert_returning("postgresql:///rltbl_db").await;
+        // TODO:
+        //#[cfg(feature = "libsql")]
+        //upsert_returning(":memory:").await;
+    }
+
+    #[allow(unused)]
+    async fn upsert_returning(url: &str) {
+        let pool = AnyPool::connect(url).await.unwrap();
+        let syntax = pool.syntax();
+        let cascade = match syntax.name() {
+            "postgresql" => " CASCADE",
+            "sqlite" => "",
+            _ => panic!("Invalid syntax '{}'", syntax.name()),
+        };
+        pool.execute_batch(&format!(
+            "DROP TABLE IF EXISTS test_upsert_returning{cascade};\
+             CREATE TABLE test_upsert_returning (\
+             foo BIGINT,\
+             bar BIGINT,\
+             car BIGINT,\
+             dar BIGINT,\
+             ear BIGINT,\
+             PRIMARY KEY (foo, bar)\
+             )",
+        ))
+        .await
+        .unwrap();
+
+        pool.insert(
+            "test_upsert_returning",
+            &["foo", "bar", "car", "dar", "ear"],
+            &Rows {
+                rows: vec![
+                    row! {
+                        "foo" => 1_i64,
+                        "bar" => 1_i64,
+                    },
+                    row! {
+                        "foo" => 2_i64,
+                        "bar" => 2_i64,
+                    },
+                    row! {
+                        "foo" => 3_i64,
+                        "bar" => 3_i64,
+                    },
+                ],
+            },
+        )
+        .await
+        .unwrap();
+
+        let rows = pool
+            .upsert_returning(
+                "test_upsert_returning",
+                &["foo", "bar", "car", "dar", "ear"],
+                &Rows {
+                    rows: vec![
+                        row! {
+                            "foo" => 1_i64,
+                            "bar" => 1_i64,
+                            "car" => 10_i64,
+                            "dar" => 11_i64,
+                            "ear" => 12_i64,
+                        },
+                        row! {
+                            "foo" => 2_i64,
+                            "bar" => 2_i64,
+                            "car" => 13_i64,
+                            "dar" => 14_i64,
+                            "ear" => 15_i64,
+                        },
+                        row! {
+                            "foo" => 3_i64,
+                            "bar" => 3_i64,
+                            "car" => 16_i64,
+                            "dar" => 17_i64,
+                            "ear" => 18_i64,
+                        },
+                    ],
+                },
+                &["car", "dar", "ear"],
+            )
+            .await
+            .unwrap();
+        assert!(rows.iter().all(|row| {
+            [
+                row! {
+                    "car" => 10_i64,
+                    "dar" => 11_i64,
+                    "ear" => 12_i64,
+                },
+                row! {
+                    "car" => 13_i64,
+                    "dar" => 14_i64,
+                    "ear" => 15_i64,
+                },
+                row! {
+                    "car" => 16_i64,
+                    "dar" => 17_i64,
+                    "ear" => 18_i64,
+                },
+            ]
+            .contains(&row)
+        }));
+
+        // Clean up:
+        pool.drop_table("test_upsert_returning").await.unwrap();
     }
 }

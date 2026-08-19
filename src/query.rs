@@ -92,15 +92,52 @@ pub trait Query: std::fmt::Debug + Sync {
         &self,
         table: &str,
         columns: &[&str],
-        // TODO: This should be an iterator.
+        // TODO: This should be an iterator (and also in update, upsert, etc., below)..
         rows: &Rows,
     ) -> Result<(), Error>;
 
-    // TODO: insert_returning
-    // TODO: update
-    // TODO: update_returning
-    // TODO: upsert
-    // TODO: upsert_returning
+    /// Like [Query::insert()], but in addition this function also returns the data that was
+    /// inserted into the columns included in `returning`, or all of the inserted data if
+    /// `returning` is an empty list.
+    async fn insert_returning(
+        &self,
+        table: &str,
+        columns: &[&str],
+        rows: &Rows,
+        returning: &[&str],
+    ) -> Result<Rows, Error>;
+
+    /// Update the given columns of the given table using the given rows. The table should have a
+    /// primary key and any columns that are part of the primary key should be present within each
+    /// input row. The primary key column values will be used as a way of identifying the rows to
+    /// update, while the other columns in the row will be updated to the given new values.
+    async fn update(&self, table: &str, columns: &[&str], rows: &Rows) -> Result<(), Error>;
+
+    /// Like [Query::update()], but in addition this function also returns the data that was
+    /// updated for the columns included in `returning`, or all of the updated data if
+    /// `returning` is an empty list.
+    async fn update_returning(
+        &self,
+        table: &str,
+        columns: &[&str],
+        rows: &Rows,
+        returning: &[&str],
+    ) -> Result<Rows, Error>;
+
+    /// Attempt to insert the given rows to the given table, similarly to [Query::insert()].
+    /// In case there is a conflict, update the table instead, similarly to [Query::update()].
+    async fn upsert(&self, table: &str, columns: &[&str], rows: &Rows) -> Result<(), Error>;
+
+    /// Like [Query::upsert()], but in addition this function also returns the data that was
+    /// upserted for the columns included in `returning`, or all of the upserted data if
+    /// `returning` is an empty list.
+    async fn upsert_returning(
+        &self,
+        table: &str,
+        columns: &[&str],
+        rows: &Rows,
+        returning: &[&str],
+    ) -> Result<Rows, Error>;
 
     /// Drop the given table from the database. Note that for PostgreSQL (see
     /// <https://www.postgresql.org/docs/current/sql-droptable.html>), if the dropped table,

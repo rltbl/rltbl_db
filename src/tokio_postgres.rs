@@ -147,7 +147,7 @@ impl Query for PostgresPool {
 
         let mut paramses: Vec<Box<dyn ToSql + Sync + Send>> = Vec::new();
         let gen_err = |param: &Value, sql_type: &str| -> String {
-            format!("DbParam {param:?} is wrong type for {sql_type} in query: {sql}")
+            format!("Param {param:?} is wrong type for {sql_type} in query: {sql}")
         };
 
         for (i, param) in params.iter().enumerate() {
@@ -269,12 +269,12 @@ impl Query for PostgresPool {
         Ok(Rows { rows: db_rows })
     }
 
-    /// Implements [DbQuery::insert()] for PostgreSQL
+    /// Implements [Query::insert()] for PostgreSQL
     async fn insert(
         &self,
         table: &str,
         columns: &[&str],
-        // TODO: This should be an iterator.
+        // TODO: This should be an iterator (and also below)..
         rows: &Rows,
     ) -> Result<(), Error> {
         edit(
@@ -289,6 +289,101 @@ impl Query for PostgresPool {
         )
         .await?;
         Ok(())
+    }
+
+    /// Implements [Query::insert_returning()] for PostgreSQL
+    async fn insert_returning(
+        &self,
+        table: &str,
+        columns: &[&str],
+        rows: &Rows,
+        returning: &[&str],
+    ) -> Result<Rows, Error> {
+        edit(
+            self,
+            &EditType::Insert,
+            &MAX_PARAMS_POSTGRES,
+            table,
+            columns,
+            rows,
+            true,
+            returning,
+        )
+        .await
+    }
+
+    /// Implements [Query::update()] for PostgreSQL.
+    async fn update(&self, table: &str, columns: &[&str], rows: &Rows) -> Result<(), Error> {
+        edit(
+            self,
+            &EditType::Update,
+            &MAX_PARAMS_POSTGRES,
+            table,
+            columns,
+            rows,
+            false,
+            &[],
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Implements [Query::update_returning()] for PostgreSQL.
+    async fn update_returning(
+        &self,
+        table: &str,
+        columns: &[&str],
+        rows: &Rows,
+        returning: &[&str],
+    ) -> Result<Rows, Error> {
+        edit(
+            self,
+            &EditType::Update,
+            &MAX_PARAMS_POSTGRES,
+            table,
+            columns,
+            rows,
+            true,
+            returning,
+        )
+        .await
+    }
+
+    /// Implements [Query::upsert()] for PostgreSQL.
+    async fn upsert(&self, table: &str, columns: &[&str], rows: &Rows) -> Result<(), Error> {
+        edit(
+            self,
+            &EditType::Upsert,
+            &MAX_PARAMS_POSTGRES,
+            table,
+            columns,
+            rows,
+            false,
+            &[],
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Implements [Query::upsert_returning()] for PostgreSQL.
+    async fn upsert_returning(
+        &self,
+        table: &str,
+        columns: &[&str],
+        rows: &Rows,
+        returning: &[&str],
+    ) -> Result<Rows, Error> {
+        edit(
+            self,
+            &EditType::Upsert,
+            &MAX_PARAMS_POSTGRES,
+            table,
+            columns,
+            rows,
+            true,
+            returning,
+        )
+        .await
     }
 
     /// Implements [Query::drop_table()] for PostgreSQL.

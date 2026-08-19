@@ -206,7 +206,7 @@ impl Query for RusqlitePool {
         .await?
     }
 
-    /// Implements [DbQuery::insert()] for SQLite.
+    /// Implements [Query::insert()] for SQLite.
     async fn insert(
         &self,
         table: &str,
@@ -226,6 +226,101 @@ impl Query for RusqlitePool {
         )
         .await?;
         Ok(())
+    }
+
+    /// Implements [Query::insert_returning()] for SQLite.
+    async fn insert_returning(
+        &self,
+        table: &str,
+        columns: &[&str],
+        rows: &Rows,
+        returning: &[&str],
+    ) -> Result<Rows, Error> {
+        edit(
+            self,
+            &EditType::Insert,
+            &MAX_PARAMS_SQLITE,
+            table,
+            columns,
+            rows,
+            true,
+            returning,
+        )
+        .await
+    }
+
+    /// Implements [Query::update()] for SQLite.
+    async fn update(&self, table: &str, columns: &[&str], rows: &Rows) -> Result<(), Error> {
+        edit(
+            self,
+            &EditType::Update,
+            &MAX_PARAMS_SQLITE,
+            table,
+            columns,
+            rows,
+            false,
+            &[],
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Implements [Query::update_returning()] for SQLite.
+    async fn update_returning(
+        &self,
+        table: &str,
+        columns: &[&str],
+        rows: &Rows,
+        returning: &[&str],
+    ) -> Result<Rows, Error> {
+        edit(
+            self,
+            &EditType::Update,
+            &MAX_PARAMS_SQLITE,
+            table,
+            columns,
+            rows,
+            true,
+            returning,
+        )
+        .await
+    }
+
+    /// Implements [Query::upsert()] for SQLite.
+    async fn upsert(&self, table: &str, columns: &[&str], rows: &Rows) -> Result<(), Error> {
+        edit(
+            self,
+            &EditType::Upsert,
+            &MAX_PARAMS_SQLITE,
+            table,
+            columns,
+            rows,
+            false,
+            &[],
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Implements [Query::upsert_returning()] for SQLite.
+    async fn upsert_returning(
+        &self,
+        table: &str,
+        columns: &[&str],
+        rows: &Rows,
+        returning: &[&str],
+    ) -> Result<Rows, Error> {
+        edit(
+            self,
+            &EditType::Upsert,
+            &MAX_PARAMS_SQLITE,
+            table,
+            columns,
+            rows,
+            true,
+            returning,
+        )
+        .await
     }
 
     /// Implements [Query::drop_table()] for SQLite.
@@ -339,7 +434,7 @@ impl Query for RusqliteTransaction {
         }
     }
 
-    /// Implements [DbQuery::insert()] for PostgreSQL
+    /// Implements [Query::insert()] for PostgreSQL
     async fn insert(
         &self,
         _table: &str,
@@ -347,6 +442,59 @@ impl Query for RusqliteTransaction {
         // TODO: This should be an iterator.
         _rows: &Rows,
     ) -> Result<(), Error> {
+        todo!()
+    }
+
+    /// Like [Query::insert()], but in addition this function also returns the data that was
+    /// inserted into the columns included in `returning`, or all of the inserted data if
+    /// `returning` is an empty list.
+    async fn insert_returning(
+        &self,
+        _table: &str,
+        _columns: &[&str],
+        _rows: &Rows,
+        _returning: &[&str],
+    ) -> Result<Rows, Error> {
+        todo!()
+    }
+
+    /// Update the given columns of the given table using the given rows. The table should have a
+    /// primary key and any columns that are part of the primary key should be present within each
+    /// input row. The primary key column values will be used as a way of identifying the rows to
+    /// update, while the other columns in the row will be updated to the given new values.
+    async fn update(&self, _table: &str, _columns: &[&str], _rows: &Rows) -> Result<(), Error> {
+        todo!()
+    }
+
+    /// Like [Query::update()], but in addition this function also returns the data that was
+    /// updated for the columns included in `returning`, or all of the updated data if
+    /// `returning` is an empty list.
+    async fn update_returning(
+        &self,
+        _table: &str,
+        _columns: &[&str],
+        _rows: &Rows,
+        _returning: &[&str],
+    ) -> Result<Rows, Error> {
+        todo!()
+    }
+
+    /// Attempt to insert the given rows to the given table, similarly to [Query::insert()].
+    /// In case there is a conflict, update the table instead, similarly to [Query::update()].
+    async fn upsert(&self, _table: &str, _columns: &[&str], _rows: &Rows) -> Result<(), Error> {
+        todo!()
+    }
+
+    /// Like [Query::upsert()], but in addition this function also returns the data that was
+    /// upserted for the columns included in `returning`, or all of the upserted data if
+    /// `returning` is an empty list.
+    async fn upsert_returning(
+        &self,
+        _table: &str,
+        _columns: &[&str],
+        _rows: &Rows,
+        _returning: &[&str],
+    ) -> Result<Rows, Error> {
         todo!()
     }
 

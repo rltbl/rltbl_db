@@ -41,7 +41,7 @@ impl Syntax for SqliteSyntax {
         )
     }
 
-    /// Implements [DbKind::primary_keys_sql()] for SQLiteKind.
+    /// Implements [Syntax::primary_keys_sql()] for SQLiteKind.
     fn primary_keys_sql(&self, table: &str) -> (String, [Value; 1]) {
         (
             r#"SELECT "name" AS "column_name"
