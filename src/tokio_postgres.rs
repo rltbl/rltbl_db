@@ -1,12 +1,9 @@
-//! Driver using deadpool-sqlite (rusqlite).
+//! Driver using deadpool-postgres (tokio-postgres).
 
 use async_trait::async_trait;
 use deadpool_postgres::{
-    Config,
-    // Pool,
-    Runtime,
+    Config, Runtime,
     tokio_postgres::{
-        // Error,
         NoTls,
         row::Row as PgRow,
         types::{ToSql, Type},
@@ -15,39 +12,12 @@ use deadpool_postgres::{
 use rust_decimal::Decimal;
 
 use crate::{
-    Error, Pool, Query, Row, Rows, Syntax, Transaction, Value, postgresql::MAX_PARAMS_POSTGRES,
-    postgresql::PostgresSyntax, shared::EditType, shared::edit,
+    Error, Pool, Query, Row, Rows, Syntax, Transaction, Value,
+    postgres::{MAX_PARAMS_POSTGRES, PostgresSyntax},
+    shared::{EditType, edit},
 };
 
-#[derive(Debug)]
-pub struct PostgresPool {
-    syntax: PostgresSyntax,
-    pool: deadpool_postgres::Pool,
-}
-
-impl PostgresPool {
-    pub async fn connect(url: &str) -> Result<Self, Error> {
-        match url.starts_with("postgresql:///") {
-            true => {
-                let mut cfg = Config::new();
-                let db_name = url
-                    .strip_prefix("postgresql:///")
-                    .ok_or(Error::ConnectError("Invalid PostgreSQL URL".to_string()))?;
-                cfg.dbname = Some(db_name.to_string());
-                let pool = cfg.create_pool(Some(Runtime::Tokio1), NoTls)?;
-                Ok(Self {
-                    pool: pool,
-                    syntax: PostgresSyntax,
-                })
-            }
-            false => Err(Error::ConnectError(format!(
-                "Invalid PostgreSQL URL: '{url}'"
-            ))),
-        }
-    }
-}
-
-/// TODO: Add docstring.
+/// Extracts the value at the given index from the given [PgRow].
 fn extract_value(row: &PgRow, idx: usize) -> Result<Value, Error> {
     let column = &row.columns()[idx];
     match column.type_() {
@@ -122,14 +92,44 @@ fn extract_value(row: &PgRow, idx: usize) -> Result<Value, Error> {
     }
 }
 
+/// Represents a deadool-postgres database connection pool.
+#[derive(Debug)]
+pub struct PostgresPool {
+    syntax: PostgresSyntax,
+    pool: deadpool_postgres::Pool,
+}
+
+impl PostgresPool {
+    /// Connect to the PostgreSQL database at the given URL.
+    pub async fn connect(url: &str) -> Result<Self, Error> {
+        match url.starts_with("postgresql:///") {
+            true => {
+                let mut cfg = Config::new();
+                let db_name = url
+                    .strip_prefix("postgresql:///")
+                    .ok_or(Error::ConnectError("Invalid Postgres URL".to_string()))?;
+                cfg.dbname = Some(db_name.to_string());
+                let pool = cfg.create_pool(Some(Runtime::Tokio1), NoTls)?;
+                Ok(Self {
+                    pool: pool,
+                    syntax: PostgresSyntax,
+                })
+            }
+            false => Err(Error::ConnectError(format!(
+                "Invalid Postgres URL: '{url}'"
+            ))),
+        }
+    }
+}
+
 #[async_trait]
 impl Query for PostgresPool {
-    /// TODO: Add docstring.
+    /// Implements [Query::syntax()] for [PostgresPool]
     fn syntax(&self) -> &dyn Syntax {
         &self.syntax
     }
 
-    /// Implements [Query::execute_batch()] for PostgreSQL
+    /// Implements [Query::execute_batch()] for [PostgresPool]
     async fn execute_batch(&self, sql: &str) -> Result<(), Error> {
         let client = self.pool.get().await?;
         client.batch_execute(sql).await?;
@@ -138,7 +138,7 @@ impl Query for PostgresPool {
         Ok(())
     }
 
-    /// TODO: Add docstring.
+    /// Implements [Query::query()] for [PostgresPool]
     async fn query(&self, sql: &str, params: &[&Value]) -> Result<Rows, Error> {
         let client = self.pool.get().await?;
 
@@ -269,7 +269,7 @@ impl Query for PostgresPool {
         Ok(Rows { rows: db_rows })
     }
 
-    /// Implements [Query::insert()] for PostgreSQL
+    /// Implements [Query::insert()] for [PostgresPool]
     async fn insert(
         &self,
         table: &str,
@@ -291,7 +291,7 @@ impl Query for PostgresPool {
         Ok(())
     }
 
-    /// Implements [Query::insert_returning()] for PostgreSQL
+    /// Implements [Query::insert_returning()] for [PostgresPool]
     async fn insert_returning(
         &self,
         table: &str,
@@ -312,7 +312,7 @@ impl Query for PostgresPool {
         .await
     }
 
-    /// Implements [Query::update()] for PostgreSQL.
+    /// Implements [Query::update()] for [PostgresPool].
     async fn update(&self, table: &str, columns: &[&str], rows: &Rows) -> Result<(), Error> {
         edit(
             self,
@@ -328,7 +328,7 @@ impl Query for PostgresPool {
         Ok(())
     }
 
-    /// Implements [Query::update_returning()] for PostgreSQL.
+    /// Implements [Query::update_returning()] for [PostgresPool].
     async fn update_returning(
         &self,
         table: &str,
@@ -349,7 +349,7 @@ impl Query for PostgresPool {
         .await
     }
 
-    /// Implements [Query::upsert()] for PostgreSQL.
+    /// Implements [Query::upsert()] for [PostgresPool].
     async fn upsert(&self, table: &str, columns: &[&str], rows: &Rows) -> Result<(), Error> {
         edit(
             self,
@@ -365,7 +365,7 @@ impl Query for PostgresPool {
         Ok(())
     }
 
-    /// Implements [Query::upsert_returning()] for PostgreSQL.
+    /// Implements [Query::upsert_returning()] for [PostgresPool]
     async fn upsert_returning(
         &self,
         table: &str,
@@ -386,7 +386,7 @@ impl Query for PostgresPool {
         .await
     }
 
-    /// Implements [Query::drop_table()] for PostgreSQL.
+    /// Implements [Query::drop_table()] for [PostgresPool]
     async fn drop_table(&self, table: &str) -> Result<(), Error> {
         // TODO: Add this.
         // let table = validate_table_name(table)?;

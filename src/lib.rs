@@ -1,38 +1,24 @@
 //! # Relatable DB
 //!
-//! `rltbl_db` provides an async API
-//! that abstracts over differences between SQL databases,
-//! letting you choose your database driver at runtime,
-//! and work with database schemas that you don't know in advance.
-//! Our goal is to provide easy access
-//! to the core functionality of a SQL database.
-//! If you need the specialized functionality of a specific SQL database,
-//! this is not the crate for you.
+//! `rltbl_db` provides an async API that abstracts over differences between SQL databases,
+//! letting you choose your database driver at runtime, and work with database schemas that
+//! you don't know in advance. Our goal is to provide easy access to the core functionality
+//! of a SQL database. If you need the specialized functionality of a specific SQL database,
+//! this is likely not the crate for you.
 //!
-//! MC: While that is true as a general rule, it is still the case that there are certain
-//!     database-specific features that we _do_ support, e.g., certain non-standard types in
-//!     PostgreSQL, or direct CSV/TSV loading in the case of both PostgreSQL and SQLite.
-//!     Additionally, we support basically *anything* at all, syntax-wise, as long as
-//!     you write your own SQL and as long as the syntax is supported by the driver
-//!     (rltbl_db will happily pass any string you like to the database).
-//!     I suggest mentioning this here, since otherwise this comment makes it seem as
-//!     though we only support ANSI SQL and nothing else.
-//!
-//! We provide structs to handle differences between SQL types and values,
-//! and support `serde` for converting these to and from Rust structs.
-//! The `Syntax` trait allows for multiple "flavours" of the SQL language.
-//! A handful of other traits allow for different database "drivers"
-//! to handle the details of the pooled database connection.
-//! The `AnyPool` struct connects you to your database at runtime,
-//! providing `execute`, `query`, `insert`, and similar methods,
-//! plus a configurable caching system.
+//! We provide structs to handle differences between SQL types and values, and support `serde`
+//! for converting these to and from Rust structs. The `Syntax` trait allows for multiple
+//! "flavours" of the SQL language. A handful of other traits allow for different database
+//! "drivers" to handle the details of the pooled database connection. The `AnyPool` struct
+//! connects you to your database at runtime, providing `execute`, `query`, `insert`, and
+//! similar methods, plus a configurable caching system.
 //!
 //! ## Usage
 //!
 //! Here we connect to an in-memory SQLite database and do some basic operations.
 //!
-//! ```ignore
-//! use rltbl_db::{AnyPool, row, Error as DbError, values};
+//! ```
+//! use rltbl_db::{AnyPool, row, Rows, Error as DbError, values};
 //!
 //! async fn basic_example() -> Result<(), DbError> {
 //!     // Use a URL to connect to a SQLite in-memory database.
@@ -47,8 +33,8 @@
 //!     pool.execute("CREATE TABLE foo ( bar INT )", []).await?;
 //!
 //!     // Insert one row.
-//!     let row = row!{ "bar" => 2 };
-//!     pool.insert("foo", &["bar"], [&row]).await?;
+//!     let row = row!{ "bar" => 2_i64 };
+//!     pool.insert("foo", &["bar"], &Rows { rows: vec![row.clone()] }).await?;
 //!
 //!     // Retrieve the inserted row.
 //!     let result = pool.query("SELECT bar FROM foo", []).await?.row()?;
@@ -61,15 +47,16 @@
 //!     Ok(())
 //! }
 //!
-//! # #[tokio::main]
-//! # async fn main() {
-//! #     basic_example().await.unwrap();
-//! # }
+//! #[tokio::main]
+//! async fn main() {
+//!     // TODO: Remove this cfg line later:
+//!     #[cfg(not(feature = "libsql"))]
+//!     basic_example().await.unwrap();
+//! }
 //! ```
 //!
 //! Given a struct with named fields that implements `serde` `Serialize` and `Deserialize`,
-//! we can convert it to a row to insert it into the database,
-//! and from a row back into a struct.
+//! we can convert it to a row to insert it into the database, and from a row back into a struct.
 //!
 //! ```ignore
 //! use rltbl_db::{AnyPool, to_row, Error as DbError};
@@ -96,15 +83,13 @@
 //!     Ok(())
 //! }
 //!
-//! # #[tokio::main]
-//! # async fn main() {
-//! #     serde_example().await.unwrap();
-//! # }
+//! #[tokio::main]
+//! async fn main() {
+//!     serde_example().await.unwrap();
+//! }
 //! ```
 //!
-//! Given a CSV or TSV file,
-//! we can determine a schema for the data,
-//! and load it into a new table.
+//! Given a CSV or TSV file, we can determine a schema for the data, and load it into a new table.
 //!
 //! ```ignore
 //! use rltbl_db::{AnyPool, Error as DbError};
@@ -120,44 +105,37 @@
 //!     Ok(())
 //! }
 //!
-//! # #[tokio::main]
-//! # async fn main() {
-//! #     tsv_example().await.unwrap();
-//! # }
+//! #[tokio::main]
+//! async fn main() {
+//!     tsv_example().await.unwrap();
+//! }
 //! ```
-//!
 //!
 //! ## Limitations
 //!
-//! Different SQL databases use variations on the SQL language,
-//! different datatypes,
-//! and provide different functions and features.
-//! The main goal of `rltbl_db` is to switch between databases at runtime,
-//! which means that we support core SQL functionality
-//! that's common to any SQL database.
-//!
-//! MC: See my comment above.
-//!
-//! You may need to write your queries differently to support multiple databases,
-//! or provide different SQL strings for different cases.
+//! Different SQL databases use variations on the SQL language, different datatypes, and
+//! provide different basic functions and features. The main goal of `rltbl_db` is to
+//! switch between databases at runtime, which means that we support core SQL functionality
+//! that's common to any SQL database, as well as direct querying using the specific syntax
+//! for that database. Thus, you may need to write your queries differently depending on the
+//! underlying database, or provide different SQL strings for different cases.
 //!
 //! ## Extension
 //!
-//! We currently support PostgreSQL and SQLite syntaxes,
-//! and
-//! `tokio_posgtgres`,
-//! `ruqslite`,
-//! and `libsql` drivers.
+//! We currently support PostgreSQL and SQLite syntaxes. We use the
+//! [deadpool_postgres](https://crates.io/crates/deadpool-postgres) driver for PostgreSQL,
+//! and support both the [deadpool_sqlite](https://crates.io/crates/deadpool-sqlite) and
+//! [deadpool_libsql](https://crates.io/crates/deadpool-libsql) drivers for SQLite.
 //!
-//! You can support a new SQL database by implementing these traits:
+//! You can support a new SQL database type by implementing these traits:
 //!
 //! 1. [Syntax] trait with your SQL language "flavour"
 //! 2. [Query] trait to run a query
 //! 3. [Pool] trait to connect to a database pool
 //! 4. [Transaction] trait to support transactions
 //!
-//! Each of these traits has default implementations of most methods,
-//! so only a few method implementations are required.
+//! Each of these traits has default implementations of most methods, so only a few method
+//! implementations are required.
 
 pub use self::column::Column;
 pub use self::error::Error;
@@ -172,53 +150,53 @@ pub use self::value::{Type, Value};
 // All modules use error.
 pub mod error;
 
-// Types and values.
+// Types and values
 pub mod value;
 
-// Database columns.
+// Database columns
 pub mod column;
 
-// Rows of values.
+// Rows of values
 pub mod row;
 
-// Database tables.
+// Database tables
 pub mod table;
 
-// Define syntax trait.
+// The Syntax trait
 pub mod syntax;
 
-// Syntax implementations.
+// Syntax trait implementations
 pub mod sqlite;
-pub mod postgresql;
+pub mod postgres;
 
-// Define query trait.
+// The Query trait
 pub mod query;
 
-// Transaction extends query.
+// The Transaction trait (extends query)
 pub mod transaction;
 
-// Pool extends query and returns a transaction.
+// The Pool trait (extends query)
 pub mod pool;
 
-// Utility functions used by all pool types:.
+// Functions shared by all database types
 pub mod shared;
 
-// Driver implementations.
-//
+///////////////////////////////////////////////
+// Driver-specific implementations.
+///////////////////////////////////////////////
 #[cfg(feature = "rusqlite")]
 pub mod rusqlite;
 
 #[cfg(feature = "tokio-postgres")]
 pub mod tokio_postgres;
 
-// MC: I guess we are not dropping libsql support then?
-// JO: Yes, we will support libsql, and hopefully more "drivers".
-// I just didn't want to write stubs for it at this point.
-
+// TODO:
 // #[cfg(feature = "libsql")]
 // pub mod libsql;
 
-// macros
+///////////////////////////////////////////////
+// Macros
+///////////////////////////////////////////////
 
 /// Convert a list of items that implement `Into<Value>` into a list of [Value]s.
 #[macro_export]
@@ -232,6 +210,8 @@ macro_rules! values {
     }};
 }
 
+/// Converts key-value pairs into a [Row], with identical syntax to
+/// [indexmap!](indexmap::indexmap).
 #[macro_export]
 macro_rules! row {
     ($($key:expr => $value:expr,)+) => {
@@ -249,7 +229,7 @@ macro_rules! row {
     };
 }
 
-// TODO: Remove this later.
+// TODO: Remove everything below later.
 ///////////////////////////// OLD CODE /////////////////////////////////////////////////////////////
 
 pub mod z_old_any;

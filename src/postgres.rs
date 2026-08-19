@@ -1,6 +1,6 @@
-//! PostgreSQL syntax
+//! Postgres Syntax
 
-use crate::{Error, Syntax, Type, value::Value, values};
+use crate::{Error, Syntax, Type, Value, values};
 
 /// The [maximum number of parameters](https://www.postgresql.org/docs/current/limits.html)
 /// that can be bound to a Postgres query is 65535. This has been true since at least PostgreSQL
@@ -8,27 +8,31 @@ use crate::{Error, Syntax, Type, value::Value, values};
 /// parameters to just under half that number.
 pub static MAX_PARAMS_POSTGRES: usize = 32765;
 
+// TODO: It would be more efficient to use an enum for this.
+/// The identifying name of [this syntax](PostgresSyntax).
+pub static POSTGRES_SYNTAX_NAME: &str = "postgres";
+
 #[derive(Debug)]
 pub struct PostgresSyntax;
 
 impl Syntax for PostgresSyntax {
-    /// TODO: Add docstring.
+    /// Implements [Syntax::name()] for [PostgresSyntax]. Returns [POSTGRES_SYNTAX_NAME].
     fn name(&self) -> &str {
-        "postgresql"
+        POSTGRES_SYNTAX_NAME
     }
 
-    /// Get a SQL Type by its name in this SQL syntax.
+    /// Implements [Syntax::sql_type()] for [PostgresSyntax]
     fn sql_type(&self, name: &str) -> Result<Type, Error> {
         match name.to_uppercase().as_str() {
             "TEXT" => Ok(Type::Text(name.to_string())),
+            // TODO: Add more.
             _ => Err(Error::DatatypeError(format!(
                 "Unrecoganized type name: {name}"
             ))),
         }
     }
 
-    /// Generate the SQL and parameters needed to query the database's metadata for the names and
-    /// types of the columns of the given table.
+    /// Implements [Syntax::columns_sql()] for [PostgresSyntax]
     fn columns_sql(&self, table: &str) -> (String, [Value; 1]) {
         (
             r#"SELECT
@@ -49,7 +53,7 @@ impl Syntax for PostgresSyntax {
         )
     }
 
-    /// Implements [Syntax::primary_keys_sql()] for PostgreSQLKind.
+    /// Implements [Syntax::primary_keys_sql()] for [PostgresSyntax].
     fn primary_keys_sql(&self, table: &str) -> (String, [Value; 1]) {
         (
             r#"SELECT "kcu"."column_name"
@@ -70,7 +74,7 @@ impl Syntax for PostgresSyntax {
         )
     }
 
-    /// TODO: Add docstring.
+    /// Implements [Syntax::param_prefix()] for [PostgresSyntax]
     fn param_prefix(&self) -> &str {
         "$"
     }

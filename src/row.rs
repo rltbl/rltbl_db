@@ -1,21 +1,18 @@
 //! Database rows.
 //!
-//! We represent a database [Row] as an [IndexMap]
-//! from the column name as a [String] to the [Value].
-//! The `IndexMap` preserves the order of columns,
-//! allowing us to iterate over them
-//! in the same order we see the columns in the table.
+//! We represent a database [Row] as an [IndexMap] from the column name as a [String] to the
+//! [Value] in that column. The `IndexMap` preserves the order of columns, allowing us to
+//! iterate over them in the same order we see the columns in the table.
+//!
 //! We represent [Rows] as a vector of `Row`s.
 //!
-//! MC: Is Rows really useful? In the old API I thought it made things a bit more
-//! confusing and I couldn't see what the real advantage is in using this. I realise it
-//! is useful insofar as it functions as a shorthand, but at least for me it comes at
-//! the cost of extra (unneeded?) complication.
-//! JO: I thing I do want `Rows` because we can attach some
-//! convenience methods and (Try)From/Into methods to it.
+//! We also provide an alias, [StringRow], for `IndexMap<String, String>`, which represents
+//! the row with its column values converted into strings.
 //!
-//! For both `Row` and `Rows` we provide a number of convenience methods.
-//! The `row!` macro is a convenient way to create a `Row`:
+//! For both `Row` and `Rows` we provide a number of convenience methods, including for
+//! conversion into `StringRow`.
+//!
+//! The [row!](crate::row!) macro is a convenient way to create a `Row`:
 //!
 //! ```
 //! use indexmap::IndexMap;
@@ -34,32 +31,34 @@
 //! assert_eq!(row1, row2);
 //! ```
 //!
-//! A "normal" Rust struct with named fields
-//! can be converted back and forth from a `Row`
+//! A "normal" Rust struct with named fields can be converted back and forth from a `Row`
 //! if it implements [serde::Serialize] and [serde::Deserialize].
 //!
 //! MC: Do we want to mention the subtleties involved in handling JSON values in these
 //! comments?
 //! JO: Yes, eventually.
 
-use std::ops::{Deref, DerefMut};
-
 use indexmap::IndexMap;
+use std::ops::{Deref, DerefMut};
 
 use crate::{Error, Value};
 
+/// Represents a database row.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Row {
+    /// A map from column names to column values.
     pub map: IndexMap<String, Value>,
 }
 
 impl Row {
+    // Create an empty row.
     pub fn new() -> Self {
         Row {
             map: IndexMap::new(),
         }
     }
 
+    // Returns the first value of the first column of this row.
     pub fn value(mut self) -> Result<Value, Error> {
         match self.map.shift_remove_index(0) {
             Some((_, value)) => Ok(value),
@@ -99,6 +98,7 @@ impl FromIterator<(String, Value)> for Row {
     }
 }
 
+/// A stringified version of [Row], where each column value is represented as a [String].
 pub type StringRow = IndexMap<String, String>;
 
 impl Into<StringRow> for Row {
@@ -122,24 +122,14 @@ impl From<StringRow> for Row {
             .collect()
     }
 }
+
 impl From<&StringRow> for Row {
     fn from(row: &StringRow) -> Self {
         row.clone().into()
     }
 }
 
-impl Into<Vec<StringRow>> for Rows {
-    fn into(self) -> Vec<StringRow> {
-        self.rows.iter().map(|row| row.into()).collect()
-    }
-}
-
-impl Into<Vec<StringRow>> for &Rows {
-    fn into(self) -> Vec<StringRow> {
-        self.clone().into()
-    }
-}
-
+/// Represents a vector of rows.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Rows {
     pub rows: Vec<Row>,
@@ -159,7 +149,20 @@ impl DerefMut for Rows {
     }
 }
 
+impl Into<Vec<StringRow>> for Rows {
+    fn into(self) -> Vec<StringRow> {
+        self.rows.iter().map(|row| row.into()).collect()
+    }
+}
+
+impl Into<Vec<StringRow>> for &Rows {
+    fn into(self) -> Vec<StringRow> {
+        self.clone().into()
+    }
+}
+
 impl Rows {
+    /// Returns the first of these rows.
     pub fn row(mut self) -> Result<Row, Error> {
         match self.rows.len() {
             0 => Err(Error::DataError("No rows returned".to_string())),
@@ -167,10 +170,7 @@ impl Rows {
         }
     }
 
-    // pub fn try_into_value<T>(self) -> Result<T, Error>
-    // where
-    //     T: TryFrom<Value, Error = crate::error::Error>,
-    // {
+    /// Returns the first value from the first of these rows.
     pub fn try_into_value<T: TryFrom<Value>>(self) -> Result<T, Error> {
         match self.row()?.value()?.try_into() {
             Ok(value) => Ok(value),
@@ -178,6 +178,7 @@ impl Rows {
         }
     }
 
+    /// Returns the first value from each of these rows as a vector of Strings.
     pub fn to_strings(&self) -> Result<Vec<String>, Error> {
         self.rows
             .iter()

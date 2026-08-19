@@ -9,13 +9,13 @@ pub enum Error {
     /////////////////////////////
     /// An error that occurred while connecting to a database.
     ConnectError(String),
-    /// An error in the arguments to a function that accessed the database.
-    InputError(String),
-    /// An error in the data retrieved from the database.
-    DataError(String),
     /// An error that originated from the database.
     DatabaseError(String),
-    /// An error with the data type of a value.
+    /// An error in the input to a function.
+    InputError(String),
+    /// An error related to the content of retrieved data.
+    DataError(String),
+    /// An error related to the data type of a value.
     DatatypeError(String),
     /// An error that occurred while attempting to parse a SQL string.
     ParseError(String),
@@ -31,38 +31,44 @@ pub enum Error {
     /// An error that occurred when trying to convert a primitive type to a [rust_decimal::Decimal].
     DecimalConversionError(rust_decimal::Error),
 
-    /// TODO: Not sure if this is really needed. It's basically guaranteed never to occur?
-    /// It's the result of a call like: i16::try_from(1_i16) which in principle should never fail.
+    // TODO: Not sure if this is really needed. It's basically guaranteed never to occur?
+    // It's the result of a call like: i16::try_from(1_i16) which in principle should never fail.
+    // See https://stackoverflow.com/questions/67830696/
+    //             what-is-the-point-of-an-infallible-result-over-just-returning-the-ok-branch
+    // for an explanation of the rationale behind Infallible.
+    /// An error that occurred (impossibly?) as the result of an [std::convert::Infallible]
+    /// operation.
     InfallibleError(std::convert::Infallible),
 
-    // TODO: Replace this with the upstream error:
+    // TODO: Replace this with the upstream error (or keep both, in case we want to have a
+    // generic Serde error type as well.
     /// An error that occurred during serialization or deserialization.
     SerdeError(String),
 
     #[cfg(feature = "rusqlite")]
-    /// TODO: add docstring.
+    /// A wrapper around [deadpool_sqlite::rusqlite::Error]
     DeadpoolRusqliteError(deadpool_sqlite::rusqlite::Error),
     #[cfg(feature = "rusqlite")]
-    /// TODO: add docstring.
+    /// A wrapper around [deadpool_sqlite::BuildError]
     DeadpoolRusqliteBuildError(deadpool_sqlite::BuildError),
     #[cfg(feature = "rusqlite")]
-    /// TODO: add docstring.
+    /// A wrapper around [deadpool_sqlite::CreatePoolError]
     DeadpoolRusqliteCreatePoolError(deadpool_sqlite::CreatePoolError),
     #[cfg(feature = "rusqlite")]
-    /// TODO: Add doctring.
+    /// A wrapper around [deadpool_sqlite::PoolError]
     DeadpoolRusqlitePoolError(deadpool_sqlite::PoolError),
     #[cfg(feature = "rusqlite")]
-    /// TODO: Add doctring.
+    /// A wrapper around [deadpool_sqlite::InteractError]
     DeadpoolRusqliteInteractError(deadpool_sqlite::InteractError),
 
     #[cfg(feature = "tokio-postgres")]
-    /// TODO: Add docstring
+    /// A wrapper around [deadpool_postgres::tokio_postgres::Error]
     DeadpoolPostgresError(deadpool_postgres::tokio_postgres::Error),
     #[cfg(feature = "tokio-postgres")]
-    /// TODO: Add docstring
+    /// A wrapper around [deadpool_postgres::CreatePoolError]
     DeadpoolPostgresCreatePoolError(deadpool_postgres::CreatePoolError),
     #[cfg(feature = "tokio-postgres")]
-    /// TODO: Add docstring
+    /// A wrapper around [deadpool_postgres::PoolError]
     DeadpoolPostgresPoolError(deadpool_postgres::PoolError),
     //
     // TODO: libsql errors
@@ -203,6 +209,6 @@ impl std::fmt::Display for Error {
 //
 // I think this is a good point in general, but I am not too concerned in our case.
 // I would be more worried about this if some of the errors above did not implement Display.
-// That was true of sqlx::Error, if I recall correctly, which was a source of some frustration,
+// That was true of sqlx::Error, if I recall correctly, which was a source of some frustration.
 // But in our case, all of the above errors implement Display so the user will at least be able
 // to print the information.

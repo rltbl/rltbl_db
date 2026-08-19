@@ -1,23 +1,16 @@
 //! Database values.
 //!
-//! Our goal with rltbl_db is to provide core functionality of SQL databases.
-//! Each SQL database uses different types --
-//! SQLite has very few, while PostgreSQL has many.
-//! So we need to abstract over differences in these types.
+//! Our goal with rltbl_db is to provide core functionality of SQL databases. Each SQL database
+//! uses different types -- SQLite has very few, while Postgres has many. So we need to abstract
+//! over differences in these types.
 //!
-//! We do this by defining a [Value] enum,
-//! which includes null,
-//! wraps Rust primitives: booleans, integers, floats, and text,
-//! as well as a flexbile JSON type,
-//! and an "Other" type as a catchall.
-//! We can parse a `Value` from a string,
-//! and compare and convert between `Value`s of different types.
-//! The `values!` macro is a convenient way to create a list of `Value`s,
+//! We do this by defining a [Value] enum, which includes null, wraps Rust primitives:
+//! booleans, integers, floats, and text, as well as a flexbile JSON type, and an "Other" type
+//! as a catchall.
 //!
-//! MC: Just to clarify: values!() is what was previously called params!(), correct?
-//!
-//! such as when you specify parameters for a query,
-//! especially when the values have a mix of types.
+//! We can parse a `Value` from a string, and compare and convert between `Value`s of different
+//! types. The `values!` macro is a convenient way to create a list of `Value`s, such as when
+//! you specify parameters for a query, especially when the values have a mix of types.
 //!
 //! ```
 //! use rltbl_db::{values, Value};
@@ -30,11 +23,11 @@
 //! assert_eq!(values1, values2);
 //! ```
 //!
-//! We implement `Into<Value>` and `TryFrom<Value>` for all the Rust primitives.
+//! We implement `From<PRIMITIVE>` into `Value`, and `TryFrom<Value>` into PRIMITIVE,
+//! for all the Rust primitives.
 //!
-//! We implement [serde::Serialize] and [serde::Deserialize] for `Value`.
-//! For Rust primitives the serlialization is trivial.
-//! We represent complex cases as JSON using `serde_json`.
+//! We implement [serde::Serialize] and [serde::Deserialize] for `Value`. For Rust primitives
+//! the serlialization is trivial. We represent complex cases as JSON using `serde_json`.
 
 use rust_decimal::Decimal;
 use std::fmt::Display;
@@ -167,6 +160,8 @@ impl From<String> for Value {
     }
 }
 
+// TODO: Add more From<..> and TryFrom<Value> blocks for all of the other rust primitive types.
+
 impl From<bool> for Value {
     fn from(item: bool) -> Self {
         Value::Boolean(item)
@@ -290,9 +285,7 @@ impl TryFrom<Value> for f32 {
         match value {
             Value::Real(number) => Ok(f32::try_from(number)?),
             Value::BigReal(number) => Ok(number as f32),
-            //Value::Numeric(number) => {
-            //    Ok(f32::try_from(number)?)
-            //}
+            Value::Numeric(number) => Ok(f32::try_from(number)?),
             Value::SmallInteger(number) => Ok(f32::try_from(number)?),
             _ => Err(Error::InputError(format!("Not an f32: {value:?}"))),
         }
@@ -306,9 +299,7 @@ impl TryFrom<Value> for f64 {
         match value {
             Value::Real(number) => Ok(f64::try_from(number)?),
             Value::BigReal(number) => Ok(f64::try_from(number)?),
-            //Value::Numeric(number) => {
-            //    Ok(f64::try_from(number)?)
-            //}
+            Value::Numeric(number) => Ok(f64::try_from(number)?),
             Value::SmallInteger(number) => Ok(f64::try_from(number)?),
             Value::Integer(number) => Ok(f64::try_from(number)?),
             _ => Err(Error::InputError(format!("Not an f64: {value:?}"))),

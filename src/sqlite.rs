@@ -1,25 +1,25 @@
 //! SQLite syntax
 
-// MC: There are *a lot* of files in this repository now. I'm not necessarily objecting, just
-// making a comment about it. It is starting to remind me of a Java project ;-)
-// JO: Yes, that's my preference. This one will be big enough once `Syntax` is filled out.
-
-use crate::{Error, Syntax, Type, value::Value, values};
+use crate::{Error, Syntax, Type, Value, values};
 
 /// The [maximum number of parameters](https://www.sqlite.org/limits.html#max_variable_number)
 /// that can be bound to a SQLite query
 pub static MAX_PARAMS_SQLITE: usize = 32766;
 
+// TODO: It would be more efficient to use an enum for this.
+/// The identifying name of [this syntax](SqliteSyntax).
+pub static SQLITE_SYNTAX_NAME: &str = "sqlite";
+
 #[derive(Debug)]
 pub struct SqliteSyntax;
 
 impl Syntax for SqliteSyntax {
-    /// TODO: Add docstring.
+    /// Implements [Syntax::name()] for SQLite.
     fn name(&self) -> &str {
-        "sqlite"
+        SQLITE_SYNTAX_NAME
     }
 
-    /// Get a SQL Type by its name in this SQL syntax.
+    /// Implements [Syntax::sql_type()] for SQLite.
     fn sql_type(&self, name: &str) -> Result<Type, Error> {
         match name.to_uppercase().as_str() {
             "TEXT" => Ok(Type::Text(name.to_string())),
@@ -29,8 +29,7 @@ impl Syntax for SqliteSyntax {
         }
     }
 
-    /// Generate the SQL and parameters needed to query the database's metadata for the names and
-    /// types of the columns of the given table.
+    /// Implements [Syntax::columns_sql()] for SQLite.
     fn columns_sql(&self, table: &str) -> (String, [Value; 1]) {
         (
             r#"SELECT "name" AS "column_name", "type" AS "data_type"
@@ -53,7 +52,7 @@ impl Syntax for SqliteSyntax {
         )
     }
 
-    /// TODO: Add doctring.
+    /// Implements [Syntax::param_prefix()] for SQLite.
     fn param_prefix(&self) -> &str {
         "?"
     }

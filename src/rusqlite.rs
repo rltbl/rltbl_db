@@ -1,5 +1,4 @@
 //! Driver using deadpool-sqlite (rusqlite).
-use std::str::from_utf8;
 
 use async_trait::async_trait;
 use deadpool_sqlite::{
@@ -11,39 +10,23 @@ use deadpool_sqlite::{
     },
 };
 use indexmap::indexmap;
+use std::str::from_utf8;
 
 use crate::{
-    Error, Pool, Query, Row, Rows, Syntax, Transaction, Value, shared::EditType, shared::edit,
-    sqlite::MAX_PARAMS_SQLITE, sqlite::SqliteSyntax,
+    Error, Pool, Query, Row, Rows, Syntax, Transaction, Value,
+    shared::{EditType, edit},
+    sqlite::{MAX_PARAMS_SQLITE, SqliteSyntax},
 };
 
-#[derive(Debug)]
-pub struct RusqlitePool {
-    syntax: SqliteSyntax,
-    pool: deadpool_sqlite::Pool,
-}
-
-impl RusqlitePool {
-    pub async fn connect(url: &str) -> Result<Self, Error> {
-        let cfg = Config::new(url);
-        let pool = match url {
-            ":memory:" => cfg.builder(Runtime::Tokio1).unwrap().max_size(1).build()?,
-            _ => cfg.create_pool(Runtime::Tokio1)?,
-        };
-        let syntax = SqliteSyntax;
-        Ok(Self { syntax, pool })
-    }
-}
-
+/// Uses the rusqlite driver to directly query a database using the given prepared [Statement]
+/// and parameters.
 fn query_prepared(stmt: &mut Statement<'_>, params: &[Value]) -> Result<Vec<Row>, Error> {
+    // Begin by binding all of the parameters to the statement:
     for (i, param) in params.iter().enumerate() {
         match param {
             Value::Text(text) => {
                 stmt.raw_bind_parameter(i + 1, text)?;
             }
-            // MC: Are these commented out because we are dropping support?
-            // JO: No, I was just getting basic tests to compile.
-            // We will have at least as many Value variants as `rlbtl_db` currently has.
             Value::SmallInteger(num) => {
                 stmt.raw_bind_parameter(i + 1, num.to_string())?;
             }
@@ -89,7 +72,8 @@ fn query_prepared(stmt: &mut Statement<'_>, params: &[Value]) -> Result<Vec<Row>
         };
     }
 
-    // Define the struct that we will use to represent information about a given column:
+    // Define the struct that we will use (internally to this function) to represent information
+    // about a given column:
     struct ColumnConfig {
         name: String,
         datatype: Option<String>,
@@ -128,7 +112,6 @@ fn query_prepared(stmt: &mut Statement<'_>, params: &[Value]) -> Result<Vec<Row>
                     },
                     ValueRef::Real(value) => Value::BigReal(value),
                     ValueRef::Text(value) | ValueRef::Blob(value) => match column_type {
-                        // MC: Are we dropping numeric support?
                         // Some(ctype) if ctype.to_lowercase() == "numeric" => {
                         //     let value = from_utf8(value).unwrap_or_default();
                         //     let value = value.parse::<Decimal>().unwrap();
@@ -148,8 +131,32 @@ fn query_prepared(stmt: &mut Statement<'_>, params: &[Value]) -> Result<Vec<Row>
     results.map_err(|err| Error::DeadpoolRusqliteError(err))
 }
 
+/// Represents a deadpool-sqlite database connection pool.
+#[derive(Debug)]
+pub struct RusqlitePool {
+    /// The [Syntax] of this type of pool is [SqliteSyntax].
+    syntax: SqliteSyntax,
+    pool: deadpool_sqlite::Pool,
+}
+
+impl RusqlitePool {
+    /// Connect to the database at the given URL using rusqlite.
+    pub async fn connect(url: &str) -> Result<Self, Error> {
+        let cfg = Config::new(url);
+        let pool = match url {
+            ":memory:" => cfg.builder(Runtime::Tokio1)?.max_size(1).build()?,
+            _ => cfg.create_pool(Runtime::Tokio1)?,
+        };
+        Ok(Self {
+            syntax: SqliteSyntax,
+            pool,
+        })
+    }
+}
+
 #[async_trait]
 impl Query for RusqlitePool {
+    /// Implements [Query::syntax()] for SQLite.
     fn syntax(&self) -> &dyn Syntax {
         &self.syntax
     }
@@ -177,9 +184,11 @@ impl Query for RusqlitePool {
         }
     }
 
+    /// Implements [Query::query()] for SQLite.
     async fn query(&self, sql: &str, params: &[&Value]) -> Result<Rows, Error> {
         let conn = self.pool.get().await?;
         let sql_string = sql.to_string();
+        // TODO: All of this cloning is annoying and probably unnecessary.
         let params: Vec<Value> = params.iter().cloned().map(|v| v.clone()).collect();
         conn.interact(move |conn| {
             let mut stmt = conn
@@ -325,10 +334,10 @@ impl Query for RusqlitePool {
 
     /// Implements [Query::drop_table()] for SQLite.
     async fn drop_table(&self, table: &str) -> Result<(), Error> {
-        // TODO: Add this:
+        // TODO: Add this function:
         // let table = validate_table_name(table)?;
 
-        // TODO: Use the "no_cache_clean" version insteadL
+        // TODO: Use the "no_cache_clean" version instead:
         // Drop the table:
         self.execute(&format!(r#"DROP TABLE IF EXISTS "{table}""#), &[])
             .await?;
@@ -341,6 +350,7 @@ impl Query for RusqlitePool {
 
 #[async_trait]
 impl Pool for RusqlitePool {
+    /// Begins a new [Transaction].
     async fn transaction(&self) -> Result<Box<dyn Transaction>, Error> {
         match RusqliteTransaction::begin(self.pool.clone()).await {
             Ok(tx) => Ok(Box::new(tx)),
@@ -349,15 +359,18 @@ impl Pool for RusqlitePool {
     }
 }
 
+/// Represents a SQLite transaction.
 #[derive(Debug)]
 #[allow(dead_code)]
 struct RusqliteTransaction {
+    /// The syntax used for this transaction.
     syntax: SqliteSyntax,
     pool: deadpool_sqlite::Pool,
     conn: Option<Connection>,
 }
 
 impl RusqliteTransaction {
+    /// Creates a new [RusqliteTransaction].
     pub async fn begin(pool: deadpool_sqlite::Pool) -> Result<Self, Error> {
         let conn = pool.get().await.unwrap();
         conn.interact(move |conn| conn.execute("BEGIN TRANSACTION;", []).unwrap())
@@ -369,15 +382,14 @@ impl RusqliteTransaction {
     }
 }
 
-// MC: I guess Drop is part of std::ops and does not need an explicit `use std::ops::Drop`?
-// I hadn't actually come across `Drop` before. Maybe it is worth a comment to say
-// explicitly what this trait is for.
-// JO: It would be fine to fully-qualify this.
-impl Drop for RusqliteTransaction {
+impl std::ops::Drop for RusqliteTransaction {
+    /// Called whenever the object representing the RusqliteTransaction is dropped.
+    /// Executes a ROLLBACK of the transaction.
     fn drop(&mut self) {
         match &self.conn {
             Some(conn) => match conn.lock() {
                 Ok(guard) => {
+                    // TODO: Remove this println! or replace it with a logger.
                     println!("ROLLING BACK!");
                     let _ = guard.execute("ROLLBACK;", []);
                 }
@@ -390,19 +402,23 @@ impl Drop for RusqliteTransaction {
 
 #[async_trait]
 impl Query for RusqliteTransaction {
+    /// Implements [Query::syntax()] for [RusqliteTransaction]
     fn syntax(&self) -> &dyn Syntax {
         &self.syntax
     }
 
     #[allow(unused)]
+    /// Implements [Query::execute_batch()] for [RusqliteTransaction]
     async fn execute_batch(&self, _sql: &str) -> Result<(), Error> {
         todo!()
     }
 
+    /// Implements [Query::query()] for [RusqliteTransaction]
     async fn query(&self, sql: &str, params: &[&Value]) -> Result<Rows, Error> {
         match &self.conn {
             Some(conn) => {
                 let sql_string = sql.to_string();
+                // TODO: So much cloning ...
                 let params: Vec<Value> = params.iter().cloned().map(|v| v.clone()).collect();
                 conn.interact(move |conn| {
                     let mut stmt = conn
@@ -434,7 +450,7 @@ impl Query for RusqliteTransaction {
         }
     }
 
-    /// Implements [Query::insert()] for PostgreSQL
+    /// Implements [Query::insert()] for [RusqliteTransaction]
     async fn insert(
         &self,
         _table: &str,
@@ -445,9 +461,7 @@ impl Query for RusqliteTransaction {
         todo!()
     }
 
-    /// Like [Query::insert()], but in addition this function also returns the data that was
-    /// inserted into the columns included in `returning`, or all of the inserted data if
-    /// `returning` is an empty list.
+    /// Implements [Query::insert_returning()] for [RusqliteTransaction]
     async fn insert_returning(
         &self,
         _table: &str,
@@ -458,17 +472,12 @@ impl Query for RusqliteTransaction {
         todo!()
     }
 
-    /// Update the given columns of the given table using the given rows. The table should have a
-    /// primary key and any columns that are part of the primary key should be present within each
-    /// input row. The primary key column values will be used as a way of identifying the rows to
-    /// update, while the other columns in the row will be updated to the given new values.
+    /// Implements [Query::update()] for [RusqliteTransaction]
     async fn update(&self, _table: &str, _columns: &[&str], _rows: &Rows) -> Result<(), Error> {
         todo!()
     }
 
-    /// Like [Query::update()], but in addition this function also returns the data that was
-    /// updated for the columns included in `returning`, or all of the updated data if
-    /// `returning` is an empty list.
+    /// Implements [Query::update_returning()] for [RusqliteTransaction]
     async fn update_returning(
         &self,
         _table: &str,
@@ -479,15 +488,12 @@ impl Query for RusqliteTransaction {
         todo!()
     }
 
-    /// Attempt to insert the given rows to the given table, similarly to [Query::insert()].
-    /// In case there is a conflict, update the table instead, similarly to [Query::update()].
+    /// Implements [Query::upsert()] for [RusqliteTransaction]
     async fn upsert(&self, _table: &str, _columns: &[&str], _rows: &Rows) -> Result<(), Error> {
         todo!()
     }
 
-    /// Like [Query::upsert()], but in addition this function also returns the data that was
-    /// upserted for the columns included in `returning`, or all of the upserted data if
-    /// `returning` is an empty list.
+    /// Implements [Query::upsert_returning()] for [RusqliteTransaction]
     async fn upsert_returning(
         &self,
         _table: &str,
@@ -498,6 +504,7 @@ impl Query for RusqliteTransaction {
         todo!()
     }
 
+    /// Implements [Query::drop_table()] for [RusqliteTransaction]
     async fn drop_table(&self, _table: &str) -> Result<(), Error> {
         todo!()
     }
@@ -505,6 +512,7 @@ impl Query for RusqliteTransaction {
 
 #[async_trait]
 impl Transaction for RusqliteTransaction {
+    /// Rolls back this transaction.
     async fn rollback(&mut self) -> Result<(), Error> {
         match &self.conn {
             Some(conn) => {
@@ -520,6 +528,7 @@ impl Transaction for RusqliteTransaction {
         }
     }
 
+    /// Commits this transaction.
     async fn commit(&mut self) -> Result<(), Error> {
         match &self.conn {
             Some(conn) => {
@@ -545,7 +554,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn text_transaction() {
+    async fn test_transaction() {
         let url = ":memory:";
         let pool = RusqlitePool::connect(url).await.expect("connect to sqlite");
         pool.query("DROP TABLE IF EXISTS foo", &[])

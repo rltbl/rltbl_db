@@ -1,11 +1,9 @@
-//! Trait for querying a database pool or transaction.
-//!
-//! Our [Query] trait is
+//! The Query trait, for querying a database pool or transaction.
 
 use async_trait::async_trait;
 use indexmap::IndexMap;
 
-use crate::{error::Error, row::Rows, syntax::Syntax, value::Value};
+use crate::{Error, Rows, Syntax, Value};
 
 // JO: The Query trait provides the main database methods,
 // which are shared by both Pool and Transaction.
@@ -13,15 +11,20 @@ use crate::{error::Error, row::Rows, syntax::Syntax, value::Value};
 // to ensure that theyre dyn-compatible.
 // The "normal" AnyPool, AnyTransaction structs can use traits and impls as convenient,
 // because the structs don't have to be dyn-compatible.
+//
+// MC: The arguments to functions like insert(), update(), etc., should take iterators as
+// arguments if possible.
 
 #[async_trait]
 pub trait Query: std::fmt::Debug + Sync {
+    /// Returns the SQL syntax supported by this [Query]-able.
     fn syntax(&self) -> &dyn Syntax;
 
     /// Given a table, return an [IndexMap] from column names to column SQL types.
     async fn columns(&self, table: &str) -> Result<IndexMap<String, String>, Error> {
         let mut columns = IndexMap::new();
         let (sql, params) = self.syntax().columns_sql(table);
+        // TODO: It's annoying that we have to do this first:
         let params = &params.iter().map(|val| val).collect::<Vec<_>>()[..];
         // TODO: Use the "no_cache_clean" version instead here:
         let rows = self.query(&sql, params).await?;
@@ -50,10 +53,10 @@ pub trait Query: std::fmt::Debug + Sync {
         }
     }
 
-    // TODO: Combine this with columns() if possible
     /// Retrieve the primary key column names for a given table.
     async fn primary_keys(&self, table: &str) -> Result<Vec<String>, Error> {
         let (sql, params) = self.syntax().primary_keys_sql(table);
+        // TODO: It's annoying that we have to do this first:
         let params = &params.iter().map(|val| val).collect::<Vec<_>>()[..];
         // TODO: Use the "no_cache_clean" version of query().
         let rows = self.query(&sql, params).await?;
@@ -82,6 +85,7 @@ pub trait Query: std::fmt::Debug + Sync {
 
     /// Execute a query returning a collection of [Rows].
     async fn query(&self, _sql: &str, _params: &[&Value]) -> Result<Rows, Error> {
+        // MC: Why do we need this?
         todo!("default implementation of Query::query")
     }
 

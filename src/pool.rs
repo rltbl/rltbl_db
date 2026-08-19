@@ -1,4 +1,4 @@
-//! Trait for database connection pool
+//! The Pool Trait, for implementing a database connection pool
 
 use std::{iter::IntoIterator, sync::Arc};
 
@@ -7,33 +7,28 @@ use indexmap::IndexMap;
 
 use crate::{AnyTransaction, Error, Query, Rows, Syntax, Transaction, Value};
 
-// MC: But why is it named Pool if it is for using transactions? How About CreateTransaction?
-// JO: The Pool is a database pool.
-// It implements Query, and it also lets you start a transaction.
-
-// MC: Why do you say it is synchronous when the method is asynchronous?
-// JO: It should not have said "synchronous."
+/// A trait for implementing a database connection pool.
 #[async_trait]
 pub trait Pool: Query + std::fmt::Debug {
-    // MC: This *creates* a transaction correct?
+    /// Start a transaction.
     async fn transaction(&self) -> Result<Box<dyn Transaction>, Error>;
 }
 
+/// An abstraction over the supported pool types.
 #[derive(Debug)]
 pub struct AnyPool {
     pool: Box<dyn Pool>,
-    // MC: Why is this needed?
-    // JO: It's just dead-code in this stub.
-    // I would like the caches to be fields on the AnyPool, not global.
     #[allow(dead_code)]
     caching_strategy: String,
-    // JO: This shouldn't be "pub" -- I was just testing.
-    // It doesn't have to be an IndexMap.
-    pub meta_cache: Arc<IndexMap<String, String>>,
+    // TODO: This should not be an IndexMap. It should be a plain vector.
+    #[allow(dead_code)]
+    meta_cache: Arc<IndexMap<String, String>>,
+    // TODO: Other caches will go here (these others are IndexMaps).
 }
 
-// This is dyn compatible ONLY if every impl Query uses #[async_trait].
+// Note: This is dyn compatible ONLY if every impl Query uses #[async_trait].
 pub async fn connect(url: &str) -> Result<Box<dyn Pool>, Error> {
+    // TODO: Add libsql support.
     if url.starts_with("postgresql://") {
         #[cfg(feature = "tokio-postgres")]
         {
@@ -58,41 +53,39 @@ pub async fn connect(url: &str) -> Result<Box<dyn Pool>, Error> {
 }
 
 impl From<Box<dyn Pool>> for AnyPool {
-    fn from(value: Box<dyn Pool>) -> Self {
+    fn from(pool: Box<dyn Pool>) -> Self {
         AnyPool {
-            // MC: So an AnyPool has three fields: for caching strategy, meta cache, and
-            // for something called "pool" that implements a trait called "Pool" which
-            // is for using database transactions.
-            pool: value,
+            pool,
             caching_strategy: "None".to_string(),
             meta_cache: Arc::new(IndexMap::default()),
         }
     }
 }
 
-// MC: This is *a lot* cleaner than before.
 impl AnyPool {
+    /// Returns a connection to the database located at the giveb URL.
     pub async fn connect(url: &str) -> Result<Self, Error> {
         let pool = connect(url).await?;
         Ok(AnyPool::from(pool))
     }
 
-    // MC: "syntax" / "Syntax" are just the new names for "kind" / "DbKind", correct?
-    // JO: Yes
+    /// [Query::syntax()] for [AnyPool]
     pub fn syntax(&self) -> &dyn Syntax {
         self.pool.syntax()
     }
 
+    /// [Query::columns()] for [AnyPool]
     pub async fn columns(&self, table: &str) -> Result<IndexMap<String, String>, Error> {
         self.pool.columns(table).await
     }
 
     // TODO: Combine this with columns() if possible
-    /// Retrieve the primary key column names for a given table.
+    /// [Query::primary_keys()] for [AnyPool]
     pub async fn primary_keys(&self, table: &str) -> Result<Vec<String>, Error> {
         self.pool.primary_keys(table).await
     }
 
+    /// [Query::execute()] for [AnyPool]
     pub async fn execute(
         &self,
         sql: &str,
@@ -104,11 +97,13 @@ impl AnyPool {
     }
 
     #[allow(unused)]
+    /// [Query::execute_batch()]
     async fn execute_batch(&self, sql: &str) -> Result<(), Error> {
         self.pool.execute_batch(sql).await
         // TODO: handle cache
     }
 
+    /// [Query::query()]
     pub async fn query(
         &self,
         sql: &str,
@@ -119,6 +114,7 @@ impl AnyPool {
         // TODO: handle cache
     }
 
+    /// TODO: Add docstring.
     pub async fn cache(
         &self,
         _sql: &str,
@@ -127,10 +123,12 @@ impl AnyPool {
         todo!("implement AnyPool::cache")
     }
 
+    /// [Query::insert()]
     pub async fn insert(&self, table: &str, columns: &[&str], rows: &Rows) -> Result<(), Error> {
         self.pool.insert(table, columns, rows).await
     }
 
+    /// [Query::insert_returning()]
     pub async fn insert_returning(
         &self,
         table: &str,
@@ -143,10 +141,12 @@ impl AnyPool {
             .await
     }
 
+    /// [Query::update()]
     pub async fn update(&self, table: &str, columns: &[&str], rows: &Rows) -> Result<(), Error> {
         self.pool.update(table, columns, rows).await
     }
 
+    /// [Query::update_returning()]
     pub async fn update_returning(
         &self,
         table: &str,
@@ -159,13 +159,12 @@ impl AnyPool {
             .await
     }
 
+    /// [Query::upsert()]
     pub async fn upsert(&self, table: &str, columns: &[&str], rows: &Rows) -> Result<(), Error> {
         self.pool.upsert(table, columns, rows).await
     }
 
-    /// Like [Query::upsert()], but in addition this function also returns the data that was
-    /// upserted for the columns included in `returning`, or all of the upserted data if
-    /// `returning` is an empty list.
+    /// [Query::upsert_returning()]
     pub async fn upsert_returning(
         &self,
         table: &str,
@@ -179,11 +178,12 @@ impl AnyPool {
     }
 
     #[allow(unused)]
+    /// [Query::drop_table()]
     async fn drop_table(&self, table: &str) -> Result<(), Error> {
         self.pool.drop_table(table).await
     }
 
-    // MC: Right. This is needed for AnyPool to implement "Pool".
+    /// TODO: Add docstring.
     pub async fn transaction(&self) -> Result<AnyTransaction, Error> {
         Ok(AnyTransaction::begin(self.pool.transaction().await?))
     }
@@ -219,7 +219,7 @@ mod tests {
             "DROP TABLE IF EXISTS test_table_text{cascade};\
              CREATE TABLE test_table_text ( value TEXT )",
             cascade = match syntax.name() {
-                "postgresql" => " CASCADE",
+                "postgres" => " CASCADE",
                 "sqlite" => "",
                 _ => panic!("Invalid syntax '{}'", syntax.name()),
             }
@@ -321,7 +321,7 @@ mod tests {
             "DROP TABLE IF EXISTS test_table_int{cascade};\
              CREATE TABLE test_table_int ( value_2 INT2, value_4 INT4, value_8 INT8 )",
             cascade = match syntax.name() {
-                "postgresql" => " CASCADE",
+                "postgres" => " CASCADE",
                 "sqlite" => "",
                 _ => panic!("Invalid syntax '{}'", syntax.name()),
             }
@@ -399,7 +399,7 @@ mod tests {
             "DROP TABLE IF EXISTS test_table_float{cascade};\
              CREATE TABLE test_table_float ( value FLOAT8 )",
             cascade = match syntax.name() {
-                "postgresql" => " CASCADE",
+                "postgres" => " CASCADE",
                 "sqlite" => "",
                 _ => panic!("Invalid syntax '{}'", syntax.name()),
             }
@@ -451,7 +451,7 @@ mod tests {
             "DROP TABLE IF EXISTS test_table_float{cascade};\
              CREATE TABLE test_table_float ( value FLOAT4 )",
             cascade = match syntax.name() {
-                "postgresql" => " CASCADE",
+                "postgres" => " CASCADE",
                 "sqlite" => "",
                 _ => panic!("Invalid syntax '{}'", syntax.name()),
             }
@@ -507,7 +507,7 @@ mod tests {
                alt_numeric_value NUMERIC\
              )",
             cascade = match syntax.name() {
-                "postgresql" => " CASCADE",
+                "postgres" => " CASCADE",
                 "sqlite" => "",
                 _ => panic!("Invalid syntax '{}'", syntax.name()),
             }
@@ -595,7 +595,7 @@ mod tests {
                 "alt_int_value" => Value::Null,
                 "bool_value" => match syntax.name() {
                     "sqlite" => Value::from(1_i64),
-                    "postgresql" => Value::from(true),
+                    "postgres" => Value::from(true),
                     _ => panic!("Invalid syntax '{}'", syntax.name()),
                 },
                 "alt_bool_value" => Value::Null,
@@ -616,7 +616,7 @@ mod tests {
                 "alt_int_value" => Value::Null,
                 "bool_value" => match syntax.name() {
                     "sqlite" => Value::from(1_i64),
-                    "postgresql" => Value::from(true),
+                    "postgres" => Value::from(true),
                     _ => panic!("Invalid syntax '{}'", syntax.name()),
                 },
                 "alt_bool_value" => Value::Null,
@@ -646,7 +646,7 @@ mod tests {
         let syntax = pool.syntax();
         let pp = syntax.param_prefix().to_string();
         let cascade = match syntax.name() {
-            "postgresql" => " CASCADE",
+            "postgres" => " CASCADE",
             "sqlite" => "",
             _ => panic!("Invalid syntax '{}'", syntax.name()),
         };
@@ -773,7 +773,7 @@ mod tests {
         let pool = AnyPool::connect(url).await.unwrap();
         let syntax = pool.syntax();
         let cascade = match syntax.name() {
-            "postgresql" => " CASCADE",
+            "postgres" => " CASCADE",
             "sqlite" => "",
             _ => panic!("Invalid syntax '{}'", syntax.name()),
         };
@@ -824,7 +824,7 @@ mod tests {
         let pool = AnyPool::connect(url).await.unwrap();
         let syntax = pool.syntax();
         let cascade = match syntax.name() {
-            "postgresql" => " CASCADE",
+            "postgres" => " CASCADE",
             "sqlite" => "",
             _ => panic!("Invalid syntax '{}'", syntax.name()),
         };
@@ -852,7 +852,7 @@ mod tests {
                         "int_value" => 1_i64,
                         "bool_value" => match syntax.name() {
                             "sqlite" => Value::from(1_i64),
-                            "postgresql" => Value::from(true),
+                            "postgres" => Value::from(true),
                             _ => panic!("Invalid syntax '{}'", syntax.name()),
                         },
                     },
@@ -884,7 +884,7 @@ mod tests {
                     "int_value" => 1_i64,
                     "bool_value" => match syntax.name() {
                         "sqlite" => Value::from(1_i64),
-                        "postgresql" => Value::from(true),
+                        "postgres" => Value::from(true),
                         _ => panic!("Invalid syntax '{}'", syntax.name()),
                     },
                 }
@@ -911,7 +911,7 @@ mod tests {
         let pool = AnyPool::connect(url).await.unwrap();
         let syntax = pool.syntax();
         let cascade = match syntax.name() {
-            "postgresql" => " CASCADE",
+            "postgres" => " CASCADE",
             "sqlite" => "",
             _ => panic!("Invalid syntax '{}'", syntax.name()),
         };
@@ -963,7 +963,7 @@ mod tests {
                     "int_value" => 1_i64,
                     "bool_value" => match syntax.name() {
                         "sqlite" => Value::from(1_i64),
-                        "postgresql" => Value::from(true),
+                        "postgres" => Value::from(true),
                         _ => panic!("Invalid syntax '{}'", syntax.name()),
                     },
                 }
@@ -1024,7 +1024,7 @@ mod tests {
         let pool = AnyPool::connect(url).await.unwrap();
         let syntax = pool.syntax();
         let cascade = match syntax.name() {
-            "postgresql" => " CASCADE",
+            "postgres" => " CASCADE",
             "sqlite" => "",
             _ => panic!("Invalid syntax '{}'", syntax.name()),
         };
@@ -1135,7 +1135,7 @@ mod tests {
         let pool = AnyPool::connect(url).await.unwrap();
         let syntax = pool.syntax();
         let cascade = match syntax.name() {
-            "postgresql" => " CASCADE",
+            "postgres" => " CASCADE",
             "sqlite" => "",
             _ => panic!("Invalid syntax '{}'", syntax.name()),
         };
@@ -1352,7 +1352,7 @@ mod tests {
         let pool = AnyPool::connect(url).await.unwrap();
         let syntax = pool.syntax();
         let cascade = match syntax.name() {
-            "postgresql" => " CASCADE",
+            "postgres" => " CASCADE",
             "sqlite" => "",
             _ => panic!("Invalid syntax '{}'", syntax.name()),
         };
@@ -1469,7 +1469,7 @@ mod tests {
         let pool = AnyPool::connect(url).await.unwrap();
         let syntax = pool.syntax();
         let cascade = match syntax.name() {
-            "postgresql" => " CASCADE",
+            "postgres" => " CASCADE",
             "sqlite" => "",
             _ => panic!("Invalid syntax '{}'", syntax.name()),
         };

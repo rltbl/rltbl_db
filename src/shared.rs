@@ -1,6 +1,8 @@
-use crate::{Error, Query, Rows, Value};
 use std::fmt::Display;
 
+use crate::{Error, Query, Rows, Value};
+
+/// Ways in which to edit a table.
 #[allow(unused)]
 #[derive(PartialEq, Eq)]
 pub(crate) enum EditType {
@@ -20,8 +22,8 @@ impl Display for EditType {
     }
 }
 
-// Generate a SQL UPDATE statement for the given table and columns using the given clauses
-// and the given value lines.
+/// Generate a SQL UPDATE statement for the given table and columns using the given clauses
+/// and the given value lines.
 #[allow(unused)]
 pub(crate) fn generate_update_statement(
     table: &str,
@@ -63,8 +65,8 @@ WHERE {where_clause}{returning_clause}"#,
     )
 }
 
-// Generate a SQL INSERT statement for the given table and columns using the given clauses
-// and the given value lines.
+/// Generate a SQL INSERT statement for the given table and columns using the given clauses
+/// and the given value lines.
 #[allow(unused)]
 pub(crate) fn generate_insert_statement(
     table: &str,
@@ -87,8 +89,8 @@ VALUES
     )
 }
 
-// Generate SQL statement of the form:
-// INSERT INTO <table> VALUES <tuples> ON CONFLICT (<primary key constraint>) DO UPDATE ...
+/// Generate SQL statement of the form:
+/// INSERT INTO <table> VALUES <tuples> ON CONFLICT (<primary key constraint>) DO UPDATE ...
 #[allow(unused)]
 pub(crate) fn generate_upsert_statement(
     table: &str,
@@ -125,7 +127,7 @@ ON CONFLICT ({constraint_clause}) DO UPDATE SET {set_clause}{returning_clause}"#
     )
 }
 
-/// Edit the given rows in the given table using the given queryable pool and optional returning
+/// Edit the given rows in the given table using the given queryable and optional returning
 /// clause (set with_returning = false to turn this off). When generating the SQL statements
 /// used to edit the table, do not use more than max_params bound parameters at a time. If more
 /// than max_params are required, multiple SQL statements will be generated.
@@ -290,7 +292,7 @@ pub(crate) async fn edit(
             // In the CTE we generate for UPDATE statements, tokio-postgres can't infer the types
             // of the VALUES, so we explicitly cast them.
             if *edit_type == EditType::Update
-                && pool.syntax().name() == "postgresql"
+                && pool.syntax().name() == "postgres"
                 // We only need to cast the first value row. The rest are inferred by Postgres:
                 && lines_to_bind.len() == 0
             {
