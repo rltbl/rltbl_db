@@ -5,7 +5,9 @@ use std::{iter::IntoIterator, sync::Arc};
 use async_trait::async_trait;
 use indexmap::IndexMap;
 
-use crate::{AnyTransaction, Error, Query, Row, Rows, Syntax, Transaction, Value};
+use crate::{
+    AnyTransaction, Error, Query, Row, Rows, Syntax, Transaction, Value, value::IntoValues,
+};
 
 /// A trait for implementing a database connection pool.
 #[async_trait]
@@ -86,13 +88,9 @@ impl AnyPool {
     }
 
     /// [Query::execute()] for [AnyPool]
-    pub async fn execute(
-        &self,
-        sql: &str,
-        params: impl IntoIterator<Item = &Value>,
-    ) -> Result<(), Error> {
-        let refs: Vec<&Value> = params.into_iter().collect();
-        self.pool.execute(sql, &refs).await
+    pub async fn execute(&self, sql: &str, params: impl IntoValues) -> Result<(), Error> {
+        let params = params.into_params()?.map(|val| val).collect::<Vec<_>>();
+        self.pool.execute(sql, &params[..]).await
         // TODO: handle cache
     }
 
@@ -104,13 +102,9 @@ impl AnyPool {
     }
 
     /// [Query::query()]
-    pub async fn query(
-        &self,
-        sql: &str,
-        params: impl IntoIterator<Item = &Value>,
-    ) -> Result<Rows, Error> {
-        let refs: Vec<&Value> = params.into_iter().collect();
-        self.pool.query(sql, &refs).await
+    pub async fn query(&self, sql: &str, params: impl IntoValues) -> Result<Rows, Error> {
+        let params = params.into_params()?.map(|val| val).collect::<Vec<_>>();
+        self.pool.query(sql, &params).await
         // TODO: handle cache
     }
 
@@ -283,9 +277,7 @@ mod tests {
 
         pool.execute(
             &format!("INSERT INTO test_table_text VALUES ({pp}1)"),
-            // TODO: don't require explicitly calling into() (or Value::from()) here and elsewhere.
-            &["foo".into()],
-            // ["foo"],
+            &["foo"],
         )
         .await
         .unwrap();
@@ -463,22 +455,22 @@ mod tests {
 
         pool.execute(
             &format!("INSERT INTO test_table_float VALUES ({pp}1)"),
-            &[1.05_f64.into()],
+            &[1.05_f64],
         )
         .await
         .unwrap();
 
         let select_sql = format!("SELECT value FROM test_table_float WHERE value > {pp}1");
-        let rows = pool.query(&select_sql, &[1.0_f64.into()]).await.unwrap();
+        let rows = pool.query(&select_sql, &[1.0_f64]).await.unwrap();
         let float = rows.try_into_value::<f64>().unwrap();
         assert_eq!("1.05", format!("{float:.2}"));
 
-        let rows = pool.query(&select_sql, &[1.0_f64.into()]).await.unwrap();
+        let rows = pool.query(&select_sql, &[1.0_f64]).await.unwrap();
         let float = rows.try_into_value::<f64>().unwrap();
         assert_eq!(1.05, float);
 
         let string: String = pool
-            .query(&select_sql, &[1.0_f64.into()])
+            .query(&select_sql, &[1.0_f64])
             .await
             .unwrap()
             .try_into_value::<String>()
@@ -486,18 +478,18 @@ mod tests {
         assert_eq!("1.05", string);
 
         let strings = pool
-            .query(&select_sql, &[1.0_f64.into()])
+            .query(&select_sql, &[1.0_f64])
             .await
             .unwrap()
             .to_strings()
             .unwrap();
         assert_eq!(vec!["1.05".to_owned()], strings);
 
-        let rows = pool.query(&select_sql, &[1.0_f64.into()]).await.unwrap();
+        let rows = pool.query(&select_sql, &[1.0_f64]).await.unwrap();
         let row = rows.row().unwrap();
         assert_eq!(row, row! {"value" => 1.05,});
 
-        let rows = pool.query(&select_sql, &[1.0_f64.into()]).await.unwrap();
+        let rows = pool.query(&select_sql, &[1.0_f64]).await.unwrap();
         assert_eq!(rows.rows, [row! {"value" => 1.05,}]);
 
         // FLOAT4
@@ -515,13 +507,13 @@ mod tests {
 
         pool.execute(
             &format!("INSERT INTO test_table_float VALUES ({pp}1)"),
-            &[1.05_f32.into()],
+            &[1.05_f32],
         )
         .await
         .unwrap();
 
         let select_sql = format!("SELECT value FROM test_table_float WHERE value > {pp}1");
-        let rows = pool.query(&select_sql, &[1.0_f32.into()]).await.unwrap();
+        let rows = pool.query(&select_sql, &[1.0_f32]).await.unwrap();
         let float = rows.try_into_value::<f32>().unwrap();
         assert_eq!("1.05", format!("{float:.2}"));
 
@@ -607,7 +599,7 @@ mod tests {
         let select_sql =
             format!("SELECT text_value FROM test_table_mixed WHERE text_value = {pp}1");
         let value: String = pool
-            .query(&select_sql, &["foo".into()])
+            .query(&select_sql, &["foo"])
             .await
             .unwrap()
             .try_into_value::<String>()
@@ -706,7 +698,7 @@ mod tests {
         };
         pool.execute(
             &format!("DROP TABLE IF EXISTS test_any_table_input_params{cascade}"),
-            &[],
+            (),
         )
         .await
         .unwrap();
@@ -721,67 +713,67 @@ mod tests {
                jar NUMERIC,\
                kar BOOL
              )",
-            &[],
+            (),
         )
         .await
         .unwrap();
         pool.execute(
             &format!("INSERT INTO test_any_table_input_params (bar) VALUES ({pp}1)"),
-            &["one".into()],
+            &["one"],
         )
         .await
         .unwrap();
         pool.execute(
             &format!("INSERT INTO test_any_table_input_params (far) VALUES ({pp}1)"),
-            &[1_i64.into()],
+            &[1_i64],
         )
         .await
         .unwrap();
         pool.execute(
             &format!("INSERT INTO test_any_table_input_params (bar) VALUES ({pp}1)"),
-            &["two".into()],
+            &["two"],
         )
         .await
         .unwrap();
         pool.execute(
             &format!("INSERT INTO test_any_table_input_params (far) VALUES ({pp}1)"),
-            &[2_i64.into()],
+            &[2_i64],
         )
         .await
         .unwrap();
         pool.execute(
             &format!("INSERT INTO test_any_table_input_params (bar) VALUES ({pp}1)"),
-            &vec!["three".into()],
+            &vec!["three"],
         )
         .await
         .unwrap();
         pool.execute(
             &format!("INSERT INTO test_any_table_input_params (far) VALUES ({pp}1)"),
-            &vec![3_i64.into()],
+            &vec![3_i64],
         )
         .await
         .unwrap();
         pool.execute(
             &format!("INSERT INTO test_any_table_input_params (gar) VALUES ({pp}1)"),
-            &vec![3_f32.into()],
+            &vec![3_f32],
         )
         .await
         .unwrap();
         pool.execute(
             &format!("INSERT INTO test_any_table_input_params (har) VALUES ({pp}1)"),
-            &vec![3_f64.into()],
+            &vec![3_f64],
         )
         .await
         .unwrap();
         pool.execute(
             &format!("INSERT INTO test_any_table_input_params (jar) VALUES ({pp}1)"),
-            &vec![dec!(3).into()],
+            &vec![dec!(3)],
         )
         .await
         .unwrap();
         pool.execute(
             &format!("INSERT INTO test_any_table_input_params (kar) VALUES ({pp}1)"),
-            &vec![true.into()],
+            &vec![true],
         )
         .await
         .unwrap();
@@ -916,7 +908,7 @@ mod tests {
 
         // Validate the inserted data:
         let rows = pool
-            .query(r#"SELECT * FROM test_insert"#, &[])
+            .query(r#"SELECT * FROM test_insert"#, ())
             .await
             .unwrap();
         assert_eq!(
@@ -1131,7 +1123,7 @@ mod tests {
         .await
         .unwrap();
 
-        let rows = pool.query("SELECT * from test_update", &[]).await.unwrap();
+        let rows = pool.query("SELECT * from test_update", ()).await.unwrap();
         assert_eq!(
             rows.rows,
             [
@@ -1277,7 +1269,7 @@ mod tests {
 
         // This is the same update as the first one above, just with the columns of the input
         // rows to the update, as well as the rows themselves, specified in a different order.
-        pool.execute("DELETE FROM test_update_returning", &[])
+        pool.execute("DELETE FROM test_update_returning", ())
             .await
             .unwrap();
 
@@ -1338,7 +1330,7 @@ mod tests {
 
         // Final sanity check on the values of all columns:
         let rows = pool
-            .query("SELECT * from test_update_returning", &[])
+            .query("SELECT * from test_update_returning", ())
             .await
             .unwrap();
         assert!(rows.iter().all(|row| {
@@ -1453,7 +1445,7 @@ mod tests {
         .await
         .unwrap();
 
-        let rows = pool.query("SELECT * from test_upsert", &[]).await.unwrap();
+        let rows = pool.query("SELECT * from test_upsert", ()).await.unwrap();
         assert_eq!(
             rows.rows,
             [

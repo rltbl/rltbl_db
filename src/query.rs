@@ -22,10 +22,8 @@ pub trait Query: std::fmt::Debug + Sync {
     async fn columns(&self, table: &str) -> Result<IndexMap<String, String>, Error> {
         let mut columns = IndexMap::new();
         let (sql, params) = self.syntax().columns_sql(table);
-        // TODO: It's annoying that we have to do this first:
-        let params = &params.iter().map(|val| val).collect::<Vec<_>>()[..];
         // TODO: Use the "no_cache_clean" version instead here:
-        let rows = self.query(&sql, params).await?;
+        let rows = self.query(&sql, &params[..]).await?;
         for row in rows.iter() {
             match (
                 row.get("column_name")
@@ -54,10 +52,8 @@ pub trait Query: std::fmt::Debug + Sync {
     /// Retrieve the primary key column names for a given table.
     async fn primary_keys(&self, table: &str) -> Result<Vec<String>, Error> {
         let (sql, params) = self.syntax().primary_keys_sql(table);
-        // TODO: It's annoying that we have to do this first:
-        let params = &params.iter().map(|val| val).collect::<Vec<_>>()[..];
         // TODO: Use the "no_cache_clean" version of query().
-        let rows = self.query(&sql, params).await?;
+        let rows = self.query(&sql, &params[..]).await?;
         rows.rows
             .iter()
             .map(|row| {
@@ -73,7 +69,7 @@ pub trait Query: std::fmt::Debug + Sync {
     }
 
     /// Execute a query without returning any values.
-    async fn execute(&self, sql: &str, params: &[&Value]) -> Result<(), Error> {
+    async fn execute(&self, sql: &str, params: &[Value]) -> Result<(), Error> {
         self.query(sql, params).await?;
         Ok(())
     }
@@ -82,7 +78,7 @@ pub trait Query: std::fmt::Debug + Sync {
     async fn execute_batch(&self, sql: &str) -> Result<(), Error>;
 
     /// Execute a query returning a collection of [Rows].
-    async fn query(&self, _sql: &str, _params: &[&Value]) -> Result<Rows, Error> {
+    async fn query(&self, _sql: &str, _params: &[Value]) -> Result<Rows, Error> {
         // MC: Why do we need this? Every driver is going to require its own implementation of
         // query().
         todo!("default implementation of Query::query")

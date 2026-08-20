@@ -139,7 +139,7 @@ impl Query for PostgresPool {
     }
 
     /// Implements [Query::query()] for [PostgresPool]
-    async fn query(&self, sql: &str, params: &[&Value]) -> Result<Rows, Error> {
+    async fn query(&self, sql: &str, params: &[Value]) -> Result<Rows, Error> {
         let client = self.pool.get().await?;
 
         // The expected types of all of the parameters as reported by the database via prepare():
@@ -413,15 +413,15 @@ mod tests {
         let pool: Box<dyn Pool> = Box::new(pool);
         let pool = AnyPool::from(pool);
 
-        let _rows = pool.query("DROP TABLE IF EXISTS foo CASCADE", &[]).await?;
+        let _rows = pool.query("DROP TABLE IF EXISTS foo CASCADE", ()).await?;
         let _rows = pool
-            .query("CREATE TABLE foo (bar BIGINT, gar TEXT)", &[])
+            .query("CREATE TABLE foo (bar BIGINT, gar TEXT)", ())
             .await?;
         let sql = "INSERT INTO foo VALUES ($1, $2)";
         let values = vec![Value::from(1_i64), Value::from("foo")];
         let _values = values![1_i64, "foo"];
         let _rows = pool.query(sql, &values).await?;
-        let _rows = pool.query("DROP TABLE foo CASCADE", &[]).await?;
+        let _rows = pool.query("DROP TABLE foo CASCADE", ()).await?;
 
         Ok(())
     }

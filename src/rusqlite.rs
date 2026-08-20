@@ -185,7 +185,7 @@ impl Query for RusqlitePool {
     }
 
     /// Implements [Query::query()] for SQLite.
-    async fn query(&self, sql: &str, params: &[&Value]) -> Result<Rows, Error> {
+    async fn query(&self, sql: &str, params: &[Value]) -> Result<Rows, Error> {
         let conn = self.pool.get().await?;
         let sql_string = sql.to_string();
         // TODO: All of this cloning is annoying and probably unnecessary.
@@ -408,7 +408,7 @@ impl Query for RusqliteTransaction {
     }
 
     /// Implements [Query::query()] for [RusqliteTransaction]
-    async fn query(&self, sql: &str, params: &[&Value]) -> Result<Rows, Error> {
+    async fn query(&self, sql: &str, params: &[Value]) -> Result<Rows, Error> {
         match &self.conn {
             Some(conn) => {
                 let sql_string = sql.to_string();

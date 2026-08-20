@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 
-use crate::{Value, error::Error, query::Query, row::Rows};
+use crate::{error::Error, query::Query, row::Rows, value::IntoValues};
 
 /// An asynchronous trait for using database transactions
 #[async_trait]
@@ -21,9 +21,6 @@ pub struct AnyTransaction {
 }
 
 impl AnyTransaction {
-    // TODO: Is "begin()" really a good name for this? That implies that something actually
-    // happens in the database as a result of calling this function, but that is not true.
-    // Why not just implement AnyTransaction::from() instead?
     /// Wraps a transaction type into an [AnyTransaction].
     pub fn begin(tx: Box<dyn Transaction>) -> Self {
         Self {
@@ -33,15 +30,10 @@ impl AnyTransaction {
     }
 
     /// Query the database.
-    pub async fn query(
-        &self,
-        sql: &str,
-        // TODO: I think this should be concrete (and an iterator).
-        params: impl IntoIterator<Item = &Value>,
-    ) -> Result<Rows, Error> {
+    pub async fn query(&self, sql: &str, params: impl IntoValues) -> Result<Rows, Error> {
         // TODO: track modified tables
-        let refs: Vec<&Value> = params.into_iter().collect();
-        self.tx.query(sql, &refs).await
+        let params = params.into_params()?.map(|val| val).collect::<Vec<_>>();
+        self.tx.query(sql, &params).await
     }
 
     // TODO: execute

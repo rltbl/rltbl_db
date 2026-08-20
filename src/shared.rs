@@ -257,8 +257,7 @@ pub(crate) async fn edit(
             ),
         };
         // TODO: Use the "no_cache_clean" version of query().
-        let params_slice = &params_to_be_bound.iter().map(|val| val).collect::<Vec<_>>()[..];
-        let rows = pool.query(&sql, &params_slice).await?;
+        let rows = pool.query(&sql, &params_to_be_bound[..]).await?;
         lines_to_bind.clear();
         params_to_be_bound.clear();
         *param_idx = 0;

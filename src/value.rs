@@ -282,8 +282,8 @@ impl Value {
     }
 
     /// Note that db_value.as_str() and db_value.to_string() differ in more than just their
-    /// return type. The latter will format a [DbValue] as a string regardless of its type.
-    /// This method returns a string slice only if the underlying type is [DbValue::Text].
+    /// return type. The latter will format a [Value] as a string regardless of its type.
+    /// This method returns a string slice only if the underlying type is [Value::Text].
     pub fn as_str(&self) -> Option<&str> {
         match self {
             Value::Text(txt) => Some(txt),
@@ -292,8 +292,9 @@ impl Value {
     }
 
     /// Note that: db_value.as_json() gives a different result from into().
-    /// The latter will format a [DbValue] as a [JsonValue] regardless of its type.
-    /// The as_json() method returns a JsonValue only if the underlying type is [DbValue::Json].
+    /// The latter will format a [Value] as a [JsonValue] regardless of its type.
+    /// The as_json() method returns a JsonValue only if the underlying type is
+    // /// [Value::Json].
     pub fn as_json(&self) -> Option<JsonValue> {
         todo!()
         // match self {
@@ -671,69 +672,58 @@ impl TryFrom<&Value> for Decimal {
     }
 }
 
-// TODO: I have been trying to use these to make it possible to simply pass argument lists
-// such as: &["foo", 1, 3.2] to execute(), but this still needs work.
-// These do not seem to be needed for anything else so I'll leave all of this commented
-// out for now.
-//
-// Maybe what we is an IntoRow trait? (see z_old_db_value.rs)
-// ///////////////////////////////////////////////////////////////////////////////
-// // IntoValue
-// ///////////////////////////////////////////////////////////////////////////////
-//
-// /// Types that implement this trait can be converted into a [Value].
-// pub trait IntoValue {
-//     fn into_value(self) -> Value;
-// }
-//
-// /// Implements [IntoValue] for types that implement [TryFrom] for [Value].
-// impl<T: Into<Value>> IntoValue for T {
-//     fn into_value(self) -> Value {
-//         self.into()
-//     }
-// }
-//
-// /////////////////////////////////
-//
-// /// Types that implement this trait can be converted into [Params]
-// pub trait IntoParams {
-//     fn into_params(self) -> Vec<Value>;
-// }
-//
-// /// Implements [IntoParams] for references to [Params]
-// impl IntoParams for &Vec<Value> {
-//     fn into_params(self) -> Vec<Value> {
-//         self.clone()
-//     }
-// }
-//
-// /// Implements [IntoParams] for an empty tuple. Always returns [Params::None].
-// impl IntoParams for () {
-//     fn into_params(self) -> Vec<Value> {
-//         vec![]
-//     }
-// }
-//
-// /// Implements [IntoParams] for fixed-length arrays of types that implement [IntoValue]
-// impl<T: IntoValue, const N: usize> IntoParams for [T; N] {
-//     fn into_params(self) -> Vec<Value> {
-//         self.into_iter().collect::<Vec<_>>().into_params()
-//     }
-// }
-//
-// /// Implements [IntoParams] for references to fixed-length arrays of types that implement
-// /// [IntoValue]
-// impl<T: IntoValue + Clone, const N: usize> IntoParams for &[T; N] {
-//     fn into_params(self) -> Vec<Value> {
-//         self.iter().cloned().collect::<Vec<_>>().into_params()
-//     }
-// }
-//
-// /// Implements [IntoParams] for vectors of types that implement [IntoValue]
-// impl<T: IntoValue> IntoParams for Vec<T> {
-//     fn into_params(self) -> Vec<Value> {
-//         let values = self.into_iter().map(|i| i.into_value()).collect::<Vec<_>>();
-//         values
-//     }
-// }
-//
+///////////////////////////////////////////////////////////////////////////////
+// IntoValue
+///////////////////////////////////////////////////////////////////////////////
+
+/// Types that implement this trait can be converted into a [Value].
+pub trait IntoValue: Clone {
+    fn into_value(self) -> Value;
+}
+
+/// Implements [IntoValue] for types that implement [Into] for [Value].
+impl<T: Into<Value> + Clone> IntoValue for T {
+    fn into_value(self) -> Value {
+        self.into()
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// IntoValues
+///////////////////////////////////////////////////////////////////////////////
+
+/// Any type that implements this trait can be converted into an [Iterator] of [Value]s.
+pub trait IntoValues {
+    fn into_params(self) -> Result<impl Iterator<Item = Value>, Error>;
+}
+
+/// Implements [IntoValues] for an empty tuple.
+impl IntoValues for () {
+    fn into_params(self) -> Result<impl Iterator<Item = Value>, Error> {
+        Ok(vec![].into_iter())
+    }
+}
+
+impl<T: IntoValue, const N: usize> IntoValues for [T; N] {
+    fn into_params(self) -> Result<impl Iterator<Item = Value>, Error> {
+        Ok(self.into_iter().map(|value| value.into_value()))
+    }
+}
+
+impl<T: IntoValue + Clone, const N: usize> IntoValues for &[T; N] {
+    fn into_params(self) -> Result<impl Iterator<Item = Value>, Error> {
+        Ok(self.clone().into_iter().map(|value| value.into_value()))
+    }
+}
+
+impl<T: IntoValue> IntoValues for Vec<T> {
+    fn into_params(self) -> Result<impl Iterator<Item = Value>, Error> {
+        Ok(self.into_iter().map(|value| value.into_value()))
+    }
+}
+
+impl<T: IntoValue> IntoValues for &Vec<T> {
+    fn into_params(self) -> Result<impl Iterator<Item = Value>, Error> {
+        Ok(self.clone().into_iter().map(|value| value.into_value()))
+    }
+}
