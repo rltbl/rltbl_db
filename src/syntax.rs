@@ -4,7 +4,7 @@
 //! different syntax. Our [Syntax] trait abstracts over some of those differences, so we can
 //! write our Rust code once and use different SQL databases at runtime.
 
-use crate::{Error, Type, Value};
+use crate::{Error, Value, ValueType};
 
 pub trait Syntax: std::fmt::Debug {
     // TODO: Do we really need this? Since SqliteSyntax and PostgresSyntax are unit structs,
@@ -13,10 +13,10 @@ pub trait Syntax: std::fmt::Debug {
     /// Returns the name for this syntax.
     fn name(&self) -> &str;
 
-    /// Get a SQL Type by its name in this SQL syntax.
-    fn sql_type(&self, name: &str) -> Result<Type, Error> {
+    /// Get a SQL ValueType by its name in this SQL syntax.
+    fn sql_type(&self, name: &str) -> Result<ValueType, Error> {
         match name.to_uppercase().as_str() {
-            "TEXT" => Ok(Type::Text(name.to_string())),
+            "TEXT" => Ok(ValueType::Text(name.to_string())),
             // TODO: Add more?
             _ => Err(Error::DatatypeError(format!(
                 "Unrecoganized type name: {name}"
@@ -27,7 +27,8 @@ pub trait Syntax: std::fmt::Debug {
     /// Generate the SQL and parameters needed to query the database's metadata for the names and
     /// types of the columns of the given table.
     fn columns_sql(&self, _table: &str) -> (String, [Value; 1]) {
-        // MC: I don't see why we need a default implementation? What would it be applicable to?
+        // MC: I don't see why we need a default implementation of this function?
+        // What would it be valid for?
         todo!("write default implementation for columns_sql")
     }
 

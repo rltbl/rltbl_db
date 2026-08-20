@@ -40,8 +40,8 @@ pub enum Error {
     /// operation.
     InfallibleError(std::convert::Infallible),
 
-    // TODO: Replace this with the upstream error (or keep both, in case we want to have a
-    // generic Serde error type as well.
+    // TODO: Eventually replace this with the upstream error (or keep both, in case we want to
+    // have a generic Serde error type as well.
     /// An error that occurred during serialization or deserialization.
     SerdeError(String),
 

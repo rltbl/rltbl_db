@@ -30,9 +30,15 @@
 //! the serlialization is trivial. We represent complex cases as JSON using `serde_json`.
 
 use rust_decimal::Decimal;
-use std::fmt::Display;
+use std::{
+    fmt::Display,
+    hash::{Hash, Hasher},
+};
 
 use crate::Error;
+
+// A useful alias:
+pub type JsonValue = serde_json::Value;
 
 // MC: I noticed that there is nothing corresponding to DbParams in this repository. In
 // rltbl_db the main convenience of DbParams was (if I remember right) to be able to easily
@@ -40,14 +46,9 @@ use crate::Error;
 // when trying to handle this without a wrapper struct, but I could be wrong. Have you tested
 // that case, or is the state of the code still too preliminary to think about this?
 
-// MC: I'm confused about the difference between this struct and column::Type. I noticed
-// that this one defines a Null type but the other one does not. What are these each
-// intended to be used for?
-// JO: I think we want to distinguish between the type of a value (which might be NULL)
-// and the type of a column (which cannot be NULL).
-// Using two different enums is one way to do that, but maybe not the best way.
-// TODO: Maybe this should be ColumnType, which would exclude Null.
-pub enum Type {
+/// The type of a [Value], including the name of the type according to the underlying database,
+/// as a [String].
+pub enum ValueType {
     Null(String),
     Boolean(String),
     BigInteger(String),
@@ -92,6 +93,42 @@ impl Display for Value {
     }
 }
 
+impl Hash for Value {
+    fn hash<H: Hasher>(&self, h: &mut H) {
+        match self {
+            Value::Null => ().hash(h),
+            Value::Text(txt) => txt.hash(h),
+            Value::Boolean(num) => num.hash(h),
+            Value::SmallInteger(num) => num.hash(h),
+            Value::Integer(num) => num.hash(h),
+            Value::BigInteger(num) => num.hash(h),
+            Value::Real(num) => {
+                if *num == 0.0f32 {
+                    // There are 2 zero representations, +0 and -0, which
+                    // compare equal but have different bits. We use the +0 hash
+                    // for both so that hash(+0) == hash(-0).
+                    0.0f32.to_bits().hash(h)
+                } else {
+                    num.to_bits().hash(h)
+                }
+            }
+            Value::BigReal(num) => {
+                if *num == 0.0f64 {
+                    // There are 2 zero representations, +0 and -0, which
+                    // compare equal but have different bits. We use the +0 hash
+                    // for both so that hash(+0) == hash(-0).
+                    0.0f64.to_bits().hash(h)
+                } else {
+                    num.to_bits().hash(h)
+                }
+            }
+            Value::Numeric(num) => num.hash(h),
+            // Value::Json(value) => value.hash(h),
+            // Value::Other(_, _, _) => format!("{self:?}").hash(h),
+        }
+    }
+}
+
 // f32 and f64 don't implement PartialEq, so we have to do it ourselves.
 impl PartialEq for Value {
     fn eq(&self, other: &Self) -> bool {
@@ -126,6 +163,167 @@ impl PartialEq for Value {
 
 impl Eq for Value {}
 
+// is_*() and as_*() methods for converting a Value to a primitive type.
+impl Value {
+    // is_*() methods
+
+    pub fn is_null(&self) -> bool {
+        self.as_null().is_some()
+    }
+
+    pub fn is_bool(&self) -> bool {
+        self.as_bool().is_some()
+    }
+
+    pub fn is_i8(&self) -> bool {
+        self.as_i8().is_some()
+    }
+
+    pub fn is_i16(&self) -> bool {
+        self.as_i16().is_some()
+    }
+
+    pub fn is_i32(&self) -> bool {
+        self.as_i32().is_some()
+    }
+
+    pub fn is_i64(&self) -> bool {
+        self.as_i64().is_some()
+    }
+
+    pub fn is_u8(&self) -> bool {
+        self.as_u8().is_some()
+    }
+
+    pub fn is_u16(&self) -> bool {
+        self.as_u16().is_some()
+    }
+
+    pub fn is_u32(&self) -> bool {
+        self.as_u32().is_some()
+    }
+
+    pub fn is_u64(&self) -> bool {
+        self.as_u64().is_some()
+    }
+
+    pub fn is_f32(&self) -> bool {
+        self.as_f32().is_some()
+    }
+
+    pub fn is_f64(&self) -> bool {
+        self.as_f64().is_some()
+    }
+
+    pub fn is_decimal(&self) -> bool {
+        self.as_decimal().is_some()
+    }
+
+    pub fn is_string(&self) -> bool {
+        self.as_str().is_some()
+    }
+
+    pub fn is_json(&self) -> bool {
+        self.as_json().is_some()
+    }
+
+    // as_*() methods
+
+    pub fn as_null(&self) -> Option<()> {
+        self.try_into().ok()
+    }
+
+    pub fn as_bool(&self) -> Option<bool> {
+        self.try_into().ok()
+    }
+
+    pub fn as_i8(&self) -> Option<i8> {
+        self.try_into().ok()
+    }
+
+    pub fn as_i16(&self) -> Option<i16> {
+        self.try_into().ok()
+    }
+
+    pub fn as_i32(&self) -> Option<i32> {
+        self.try_into().ok()
+    }
+
+    pub fn as_i64(&self) -> Option<i64> {
+        self.try_into().ok()
+    }
+
+    pub fn as_u8(&self) -> Option<u8> {
+        self.try_into().ok()
+    }
+
+    pub fn as_u16(&self) -> Option<u16> {
+        self.try_into().ok()
+    }
+
+    pub fn as_u32(&self) -> Option<u32> {
+        self.try_into().ok()
+    }
+
+    pub fn as_u64(&self) -> Option<u64> {
+        self.try_into().ok()
+    }
+
+    pub fn as_f32(&self) -> Option<f32> {
+        self.try_into().ok()
+    }
+
+    pub fn as_f64(&self) -> Option<f64> {
+        self.try_into().ok()
+    }
+
+    pub fn as_decimal(&self) -> Option<Decimal> {
+        self.try_into().ok()
+    }
+
+    /// Note that db_value.as_str() and db_value.to_string() differ in more than just their
+    /// return type. The latter will format a [DbValue] as a string regardless of its type.
+    /// This method returns a string slice only if the underlying type is [DbValue::Text].
+    pub fn as_str(&self) -> Option<&str> {
+        match self {
+            Value::Text(txt) => Some(txt),
+            _ => None,
+        }
+    }
+
+    /// Note that: db_value.as_json() gives a different result from into().
+    /// The latter will format a [DbValue] as a [JsonValue] regardless of its type.
+    /// The as_json() method returns a JsonValue only if the underlying type is [DbValue::Json].
+    pub fn as_json(&self) -> Option<JsonValue> {
+        todo!()
+        // match self {
+        //     Value::Json(value) => Some(value.clone()),
+        //     _ => None,
+        // }
+    }
+}
+
+// NULL conversions
+impl TryInto<()> for Value {
+    type Error = Error;
+
+    fn try_into(self) -> Result<(), Error> {
+        match self {
+            Value::Null => Ok(()),
+            _ => Err(Error::InputError(format!("Not a Null: {self:?}"))),
+        }
+    }
+}
+
+impl TryInto<()> for &Value {
+    type Error = Error;
+
+    fn try_into(self) -> Result<(), Error> {
+        self.clone().try_into()
+    }
+}
+
+// String and &str conversions:
 impl Into<String> for Value {
     fn into(self) -> String {
         match self {
@@ -160,7 +358,10 @@ impl From<String> for Value {
     }
 }
 
-// TODO: Add more From<..> and TryFrom<Value> blocks for all of the other rust primitive types.
+// Other primitive type conversions.
+
+// TODO: Add more for all of the remaining rust primitive types, including isize and usize, and
+// also for JsonValue types.
 
 impl From<bool> for Value {
     fn from(item: bool) -> Self {
@@ -191,8 +392,7 @@ impl From<u64> for Value {
         if item <= i64::MAX as u64 {
             Value::BigInteger(item as i64)
         } else {
-            todo!()
-            // Value::Numeric(Decimal::from(item))
+            Value::Numeric(Decimal::from(item))
         }
     }
 }
@@ -222,6 +422,19 @@ impl TryFrom<Value> for bool {
         match value {
             Value::Boolean(value) => Ok(value),
             _ => Err(Error::InputError(format!("Not a boolean: {value:?}"))),
+        }
+    }
+}
+
+impl TryFrom<Value> for i8 {
+    type Error = Error;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::SmallInteger(number) => Ok(i8::try_from(number)?),
+            Value::Integer(number) => Ok(i8::try_from(number)?),
+            Value::BigInteger(number) => Ok(i8::try_from(number)?),
+            _ => Err(Error::InputError(format!("Not an integer: {value:?}"))),
         }
     }
 }
@@ -260,6 +473,45 @@ impl TryFrom<Value> for i64 {
             Value::SmallInteger(number) => Ok(i64::try_from(number)?),
             Value::Integer(number) => Ok(i64::try_from(number)?),
             Value::BigInteger(number) => Ok(i64::try_from(number)?),
+            _ => Err(Error::InputError(format!("Not an integer: {value:?}"))),
+        }
+    }
+}
+
+impl TryFrom<Value> for u8 {
+    type Error = Error;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::SmallInteger(number) => Ok(u8::try_from(number)?),
+            Value::Integer(number) => Ok(u8::try_from(number)?),
+            Value::BigInteger(number) => Ok(u8::try_from(number)?),
+            _ => Err(Error::InputError(format!("Not an integer: {value:?}"))),
+        }
+    }
+}
+
+impl TryFrom<Value> for u16 {
+    type Error = Error;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::SmallInteger(number) => Ok(u16::try_from(number)?),
+            Value::Integer(number) => Ok(u16::try_from(number)?),
+            Value::BigInteger(number) => Ok(u16::try_from(number)?),
+            _ => Err(Error::InputError(format!("Not an integer: {value:?}"))),
+        }
+    }
+}
+
+impl TryFrom<Value> for u32 {
+    type Error = Error;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::SmallInteger(number) => Ok(u32::try_from(number)?),
+            Value::Integer(number) => Ok(u32::try_from(number)?),
+            Value::BigInteger(number) => Ok(u32::try_from(number)?),
             _ => Err(Error::InputError(format!("Not an integer: {value:?}"))),
         }
     }
@@ -323,10 +575,108 @@ impl TryFrom<Value> for Decimal {
     }
 }
 
+impl TryFrom<&Value> for bool {
+    type Error = Error;
+
+    fn try_from(value: &Value) -> Result<Self, Self::Error> {
+        value.clone().try_into()
+    }
+}
+
+impl TryFrom<&Value> for i8 {
+    type Error = Error;
+
+    fn try_from(value: &Value) -> Result<Self, Self::Error> {
+        value.clone().try_into()
+    }
+}
+
+impl TryFrom<&Value> for i16 {
+    type Error = Error;
+
+    fn try_from(value: &Value) -> Result<Self, Self::Error> {
+        value.clone().try_into()
+    }
+}
+
+impl TryFrom<&Value> for i32 {
+    type Error = Error;
+
+    fn try_from(value: &Value) -> Result<Self, Self::Error> {
+        value.clone().try_into()
+    }
+}
+
+impl TryFrom<&Value> for i64 {
+    type Error = Error;
+
+    fn try_from(value: &Value) -> Result<Self, Self::Error> {
+        value.clone().try_into()
+    }
+}
+
+impl TryFrom<&Value> for u8 {
+    type Error = Error;
+
+    fn try_from(value: &Value) -> Result<Self, Self::Error> {
+        value.clone().try_into()
+    }
+}
+
+impl TryFrom<&Value> for u16 {
+    type Error = Error;
+
+    fn try_from(value: &Value) -> Result<Self, Self::Error> {
+        value.clone().try_into()
+    }
+}
+
+impl TryFrom<&Value> for u32 {
+    type Error = Error;
+
+    fn try_from(value: &Value) -> Result<Self, Self::Error> {
+        value.clone().try_into()
+    }
+}
+
+impl TryFrom<&Value> for u64 {
+    type Error = Error;
+
+    fn try_from(value: &Value) -> Result<Self, Self::Error> {
+        value.clone().try_into()
+    }
+}
+
+impl TryFrom<&Value> for f32 {
+    type Error = Error;
+
+    fn try_from(value: &Value) -> Result<Self, Self::Error> {
+        value.clone().try_into()
+    }
+}
+
+impl TryFrom<&Value> for f64 {
+    type Error = Error;
+
+    fn try_from(value: &Value) -> Result<Self, Self::Error> {
+        value.clone().try_into()
+    }
+}
+
+impl TryFrom<&Value> for Decimal {
+    type Error = Error;
+
+    fn try_from(value: &Value) -> Result<Self, Self::Error> {
+        value.clone().try_into()
+    }
+}
+
 // TODO: I have been trying to use these to make it possible to simply pass argument lists
 // such as: &["foo", 1, 3.2] to execute(), but this still needs work.
 // These do not seem to be needed for anything else so I'll leave all of this commented
 // out for now.
+//
+// Maybe what we is an IntoRow trait? (see z_old_db_value.rs)
 // ///////////////////////////////////////////////////////////////////////////////
 // // IntoValue
 // ///////////////////////////////////////////////////////////////////////////////

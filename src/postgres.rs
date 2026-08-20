@@ -1,6 +1,6 @@
 //! Postgres Syntax
 
-use crate::{Error, Syntax, Type, Value, values};
+use crate::{Error, Syntax, Value, ValueType, values};
 
 /// The [maximum number of parameters](https://www.postgresql.org/docs/current/limits.html)
 /// that can be bound to a Postgres query is 65535. This has been true since at least PostgreSQL
@@ -22,9 +22,9 @@ impl Syntax for PostgresSyntax {
     }
 
     /// Implements [Syntax::sql_type()] for [PostgresSyntax]
-    fn sql_type(&self, name: &str) -> Result<Type, Error> {
+    fn sql_type(&self, name: &str) -> Result<ValueType, Error> {
         match name.to_uppercase().as_str() {
-            "TEXT" => Ok(Type::Text(name.to_string())),
+            "TEXT" => Ok(ValueType::Text(name.to_string())),
             // TODO: Add more.
             _ => Err(Error::DatatypeError(format!(
                 "Unrecoganized type name: {name}"

@@ -216,13 +216,7 @@ impl Query for RusqlitePool {
     }
 
     /// Implements [Query::insert()] for SQLite.
-    async fn insert(
-        &self,
-        table: &str,
-        columns: &[&str],
-        // TODO: This should be an iterator.
-        rows: &Rows,
-    ) -> Result<(), Error> {
+    async fn insert(&self, table: &str, columns: &[&str], rows: &[&Row]) -> Result<(), Error> {
         edit(
             self,
             &EditType::Insert,
@@ -242,7 +236,7 @@ impl Query for RusqlitePool {
         &self,
         table: &str,
         columns: &[&str],
-        rows: &Rows,
+        rows: &[&Row],
         returning: &[&str],
     ) -> Result<Rows, Error> {
         edit(
@@ -259,7 +253,7 @@ impl Query for RusqlitePool {
     }
 
     /// Implements [Query::update()] for SQLite.
-    async fn update(&self, table: &str, columns: &[&str], rows: &Rows) -> Result<(), Error> {
+    async fn update(&self, table: &str, columns: &[&str], rows: &[&Row]) -> Result<(), Error> {
         edit(
             self,
             &EditType::Update,
@@ -279,7 +273,7 @@ impl Query for RusqlitePool {
         &self,
         table: &str,
         columns: &[&str],
-        rows: &Rows,
+        rows: &[&Row],
         returning: &[&str],
     ) -> Result<Rows, Error> {
         edit(
@@ -296,7 +290,7 @@ impl Query for RusqlitePool {
     }
 
     /// Implements [Query::upsert()] for SQLite.
-    async fn upsert(&self, table: &str, columns: &[&str], rows: &Rows) -> Result<(), Error> {
+    async fn upsert(&self, table: &str, columns: &[&str], rows: &[&Row]) -> Result<(), Error> {
         edit(
             self,
             &EditType::Upsert,
@@ -316,7 +310,7 @@ impl Query for RusqlitePool {
         &self,
         table: &str,
         columns: &[&str],
-        rows: &Rows,
+        rows: &[&Row],
         returning: &[&str],
     ) -> Result<Rows, Error> {
         edit(
@@ -451,13 +445,7 @@ impl Query for RusqliteTransaction {
     }
 
     /// Implements [Query::insert()] for [RusqliteTransaction]
-    async fn insert(
-        &self,
-        _table: &str,
-        _columns: &[&str],
-        // TODO: This should be an iterator.
-        _rows: &Rows,
-    ) -> Result<(), Error> {
+    async fn insert(&self, _table: &str, _columns: &[&str], _rows: &[&Row]) -> Result<(), Error> {
         todo!()
     }
 
@@ -466,14 +454,14 @@ impl Query for RusqliteTransaction {
         &self,
         _table: &str,
         _columns: &[&str],
-        _rows: &Rows,
+        _rows: &[&Row],
         _returning: &[&str],
     ) -> Result<Rows, Error> {
         todo!()
     }
 
     /// Implements [Query::update()] for [RusqliteTransaction]
-    async fn update(&self, _table: &str, _columns: &[&str], _rows: &Rows) -> Result<(), Error> {
+    async fn update(&self, _table: &str, _columns: &[&str], _rows: &[&Row]) -> Result<(), Error> {
         todo!()
     }
 
@@ -482,14 +470,14 @@ impl Query for RusqliteTransaction {
         &self,
         _table: &str,
         _columns: &[&str],
-        _rows: &Rows,
+        _rows: &[&Row],
         _returning: &[&str],
     ) -> Result<Rows, Error> {
         todo!()
     }
 
     /// Implements [Query::upsert()] for [RusqliteTransaction]
-    async fn upsert(&self, _table: &str, _columns: &[&str], _rows: &Rows) -> Result<(), Error> {
+    async fn upsert(&self, _table: &str, _columns: &[&str], _rows: &[&Row]) -> Result<(), Error> {
         todo!()
     }
 
@@ -498,7 +486,7 @@ impl Query for RusqliteTransaction {
         &self,
         _table: &str,
         _columns: &[&str],
-        _rows: &Rows,
+        _rows: &[&Row],
         _returning: &[&str],
     ) -> Result<Rows, Error> {
         todo!()

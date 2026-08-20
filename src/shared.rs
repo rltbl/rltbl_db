@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use crate::{Error, Query, Rows, Value};
+use crate::{Error, Query, Row, Rows, Value};
 
 /// Ways in which to edit a table.
 #[allow(unused)]
@@ -138,7 +138,7 @@ pub(crate) async fn edit(
     max_params: &usize,
     table: &str,
     columns: &[&str],
-    rows: &Rows,
+    rows: &[&Row],
     with_returning: bool,
     returning: &[&str],
 ) -> Result<Rows, Error> {
@@ -265,7 +265,6 @@ pub(crate) async fn edit(
         Ok(rows)
     };
 
-    let rows = &rows.rows;
     for row in rows.iter() {
         // If we have reached the limit on the number of bound parameters, edit the rows that
         // we have processed so far and then reset all of the counters and collections:

@@ -34,7 +34,7 @@
 //!
 //!     // Insert one row.
 //!     let row = row!{ "bar" => 2_i64 };
-//!     pool.insert("foo", &["bar"], &Rows { rows: vec![row.clone()] }).await?;
+//!     pool.insert("foo", &["bar"], &[row.clone()]).await?;
 //!
 //!     // Retrieve the inserted row.
 //!     let result = pool.query("SELECT bar FROM foo", []).await?.row()?;
@@ -145,7 +145,7 @@ pub use self::row::{Row, Rows};
 pub use self::syntax::Syntax;
 pub use self::table::Table;
 pub use self::transaction::{AnyTransaction, Transaction};
-pub use self::value::{Type, Value};
+pub use self::value::{ValueType, Value};
 
 // All modules use error.
 pub mod error;

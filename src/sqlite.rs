@@ -1,6 +1,6 @@
 //! SQLite syntax
 
-use crate::{Error, Syntax, Type, Value, values};
+use crate::{Error, Syntax, Value, ValueType, values};
 
 /// The [maximum number of parameters](https://www.sqlite.org/limits.html#max_variable_number)
 /// that can be bound to a SQLite query
@@ -20,9 +20,9 @@ impl Syntax for SqliteSyntax {
     }
 
     /// Implements [Syntax::sql_type()] for SQLite.
-    fn sql_type(&self, name: &str) -> Result<Type, Error> {
+    fn sql_type(&self, name: &str) -> Result<ValueType, Error> {
         match name.to_uppercase().as_str() {
-            "TEXT" => Ok(Type::Text(name.to_string())),
+            "TEXT" => Ok(ValueType::Text(name.to_string())),
             _ => Err(Error::DatatypeError(format!(
                 "Unrecoganized type name: {name}"
             ))),

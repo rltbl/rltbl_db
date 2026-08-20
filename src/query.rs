@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use indexmap::IndexMap;
 
-use crate::{Error, Rows, Syntax, Value};
+use crate::{Error, Row, Rows, Syntax, Value};
 
 // JO: The Query trait provides the main database methods,
 // which are shared by both Pool and Transaction.
@@ -11,9 +11,7 @@ use crate::{Error, Rows, Syntax, Value};
 // to ensure that theyre dyn-compatible.
 // The "normal" AnyPool, AnyTransaction structs can use traits and impls as convenient,
 // because the structs don't have to be dyn-compatible.
-//
-// MC: The arguments to functions like insert(), update(), etc., should take iterators as
-// arguments if possible.
+// MC: See my somewhat skeptical comment regarding this in pool.rs, in the insert() method.
 
 #[async_trait]
 pub trait Query: std::fmt::Debug + Sync {
@@ -85,20 +83,15 @@ pub trait Query: std::fmt::Debug + Sync {
 
     /// Execute a query returning a collection of [Rows].
     async fn query(&self, _sql: &str, _params: &[&Value]) -> Result<Rows, Error> {
-        // MC: Why do we need this?
+        // MC: Why do we need this? Every driver is going to require its own implementation of
+        // query().
         todo!("default implementation of Query::query")
     }
 
     /// Insert rows into the given columns of the given table. If an input row does not have a
     /// key corresponding to one of the given columns, use NULL as the value of that column when
     /// inserting the row to the table.
-    async fn insert(
-        &self,
-        table: &str,
-        columns: &[&str],
-        // TODO: This should be an iterator (and also in update, upsert, etc., below)..
-        rows: &Rows,
-    ) -> Result<(), Error>;
+    async fn insert(&self, table: &str, columns: &[&str], rows: &[&Row]) -> Result<(), Error>;
 
     /// Like [Query::insert()], but in addition this function also returns the data that was
     /// inserted into the columns included in `returning`, or all of the inserted data if
@@ -107,7 +100,7 @@ pub trait Query: std::fmt::Debug + Sync {
         &self,
         table: &str,
         columns: &[&str],
-        rows: &Rows,
+        rows: &[&Row],
         returning: &[&str],
     ) -> Result<Rows, Error>;
 
@@ -115,7 +108,7 @@ pub trait Query: std::fmt::Debug + Sync {
     /// primary key and any columns that are part of the primary key should be present within each
     /// input row. The primary key column values will be used as a way of identifying the rows to
     /// update, while the other columns in the row will be updated to the given new values.
-    async fn update(&self, table: &str, columns: &[&str], rows: &Rows) -> Result<(), Error>;
+    async fn update(&self, table: &str, columns: &[&str], rows: &[&Row]) -> Result<(), Error>;
 
     /// Like [Query::update()], but in addition this function also returns the data that was
     /// updated for the columns included in `returning`, or all of the updated data if
@@ -124,13 +117,13 @@ pub trait Query: std::fmt::Debug + Sync {
         &self,
         table: &str,
         columns: &[&str],
-        rows: &Rows,
+        rows: &[&Row],
         returning: &[&str],
     ) -> Result<Rows, Error>;
 
     /// Attempt to insert the given rows to the given table, similarly to [Query::insert()].
     /// In case there is a conflict, update the table instead, similarly to [Query::update()].
-    async fn upsert(&self, table: &str, columns: &[&str], rows: &Rows) -> Result<(), Error>;
+    async fn upsert(&self, table: &str, columns: &[&str], rows: &[&Row]) -> Result<(), Error>;
 
     /// Like [Query::upsert()], but in addition this function also returns the data that was
     /// upserted for the columns included in `returning`, or all of the upserted data if
@@ -139,7 +132,7 @@ pub trait Query: std::fmt::Debug + Sync {
         &self,
         table: &str,
         columns: &[&str],
-        rows: &Rows,
+        rows: &[&Row],
         returning: &[&str],
     ) -> Result<Rows, Error>;
 

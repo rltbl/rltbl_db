@@ -5,7 +5,7 @@ use std::{iter::IntoIterator, sync::Arc};
 use async_trait::async_trait;
 use indexmap::IndexMap;
 
-use crate::{AnyTransaction, Error, Query, Rows, Syntax, Transaction, Value};
+use crate::{AnyTransaction, Error, Query, Row, Rows, Syntax, Transaction, Value};
 
 /// A trait for implementing a database connection pool.
 #[async_trait]
@@ -124,8 +124,47 @@ impl AnyPool {
     }
 
     /// [Query::insert()]
-    pub async fn insert(&self, table: &str, columns: &[&str], rows: &Rows) -> Result<(), Error> {
-        self.pool.insert(table, columns, rows).await
+    pub async fn insert(
+        &self,
+        table: &str,
+        columns: &[&str],
+        rows: impl IntoIterator<Item = &Row>,
+    ) -> Result<(), Error> {
+        // MC: By collecting the iterator into a Vec here, don't we nullify much of the
+        // advantagge of having an iterator in the first place? How is this better than
+        // simply accepting a &[&Row] argument? Is there some rust feature that I'm unaware of
+        // that makes this better?
+        // Another option, which might not be acceptable, is to *not* include insert_*(),
+        // update_*() and insert_*() in the Query interface. We can directly call the methods
+        // defined in shared.rs instead (or just copy them inline here).
+        // Note that another argument for this is that, in lib.rs, we promised users that they
+        // wouldn't have to implement many new methods when they are adding their own drivers.
+        // However, with the current design, despite the code in shared.rs being shared by all
+        // drivers, we still have to include a concrete call to edit() within
+        // the code for each concrete driver, otherwise rust's compiler complains that the size
+        // of the pool is not known at compile time. That means users will have to define all of
+        // their own insert_*(), update_*() and upsert_*() methods, even though all that
+        // they need to do is to call edit() as follows (not just for upsert(), but for them all):
+        //
+        // async fn upsert(
+        //     &self, table: &str, columns: &[&str], rows: &[&Row]
+        // ) -> Result<(), Error> {
+        // edit(
+        //     self,
+        //     &EditType::Upsert,
+        //     &MAX_PARAMS_POSTGRES,
+        //     table,
+        //     columns,
+        //     rows,
+        //     false,
+        //     &[],
+        // )
+        // .await?;
+        // Ok(())
+        //
+        // It doesn't seem ideal for the user to have to do this.
+        let refs: Vec<&Row> = rows.into_iter().collect();
+        self.pool.insert(table, columns, &refs).await
     }
 
     /// [Query::insert_returning()]
@@ -133,17 +172,24 @@ impl AnyPool {
         &self,
         table: &str,
         columns: &[&str],
-        rows: &Rows,
+        rows: impl IntoIterator<Item = &Row>,
         returning: &[&str],
     ) -> Result<Rows, Error> {
+        let refs: Vec<&Row> = rows.into_iter().collect();
         self.pool
-            .insert_returning(table, columns, rows, returning)
+            .insert_returning(table, columns, &refs, returning)
             .await
     }
 
     /// [Query::update()]
-    pub async fn update(&self, table: &str, columns: &[&str], rows: &Rows) -> Result<(), Error> {
-        self.pool.update(table, columns, rows).await
+    pub async fn update(
+        &self,
+        table: &str,
+        columns: &[&str],
+        rows: impl IntoIterator<Item = &Row>,
+    ) -> Result<(), Error> {
+        let refs: Vec<&Row> = rows.into_iter().collect();
+        self.pool.update(table, columns, &refs).await
     }
 
     /// [Query::update_returning()]
@@ -151,17 +197,24 @@ impl AnyPool {
         &self,
         table: &str,
         columns: &[&str],
-        rows: &Rows,
+        rows: impl IntoIterator<Item = &Row>,
         returning: &[&str],
     ) -> Result<Rows, Error> {
+        let refs: Vec<&Row> = rows.into_iter().collect();
         self.pool
-            .update_returning(table, columns, rows, returning)
+            .update_returning(table, columns, &refs, returning)
             .await
     }
 
     /// [Query::upsert()]
-    pub async fn upsert(&self, table: &str, columns: &[&str], rows: &Rows) -> Result<(), Error> {
-        self.pool.upsert(table, columns, rows).await
+    pub async fn upsert(
+        &self,
+        table: &str,
+        columns: &[&str],
+        rows: impl IntoIterator<Item = &Row>,
+    ) -> Result<(), Error> {
+        let refs: Vec<&Row> = rows.into_iter().collect();
+        self.pool.upsert(table, columns, &refs).await
     }
 
     /// [Query::upsert_returning()]
@@ -169,11 +222,12 @@ impl AnyPool {
         &self,
         table: &str,
         columns: &[&str],
-        rows: &Rows,
+        rows: impl IntoIterator<Item = &Row>,
         returning: &[&str],
     ) -> Result<Rows, Error> {
+        let refs: Vec<&Row> = rows.into_iter().collect();
         self.pool
-            .upsert_returning(table, columns, rows, returning)
+            .upsert_returning(table, columns, &refs, returning)
             .await
     }
 
@@ -845,19 +899,17 @@ mod tests {
         pool.insert(
             "test_insert",
             &["text_value", "int_value", "bool_value"],
-            &Rows {
-                rows: vec![
-                    row! {"text_value" => "TEXT",},
-                    row! {
-                        "int_value" => 1_i64,
-                        "bool_value" => match syntax.name() {
-                            "sqlite" => Value::from(1_i64),
-                            "postgres" => Value::from(true),
-                            _ => panic!("Invalid syntax '{}'", syntax.name()),
-                        },
+            &[
+                row! {"text_value" => "TEXT",},
+                row! {
+                    "int_value" => 1_i64,
+                    "bool_value" => match syntax.name() {
+                        "sqlite" => Value::from(1_i64),
+                        "postgres" => Value::from(true),
+                        _ => panic!("Invalid syntax '{}'", syntax.name()),
                     },
-                ],
-            },
+                },
+            ],
         )
         .await
         .unwrap();
@@ -933,15 +985,13 @@ mod tests {
             .insert_returning(
                 "test_insert_returning",
                 &["text_value", "int_value", "bool_value"],
-                &Rows {
-                    rows: vec![
-                        row! {"text_value" => "TEXT",},
-                        row! {
-                            "int_value" => 1_i64,
-                            "bool_value" => true,
-                        },
-                    ],
-                },
+                &[
+                    row! {"text_value" => "TEXT",},
+                    row! {
+                        "int_value" => 1_i64,
+                        "bool_value" => true,
+                    },
+                ],
                 &[],
             )
             .await
@@ -975,17 +1025,15 @@ mod tests {
             .insert_returning(
                 "test_insert_returning",
                 &["text_value", "int_value", "bool_value"],
-                &Rows {
-                    rows: vec![
-                        row! {
-                            "text_value" => "TEXT",
-                        },
-                        row! {
-                            "int_value" => 1_i64,
-                            "bool_value" => true,
-                        },
-                    ],
-                },
+                &[
+                    row! {
+                        "text_value" => "TEXT",
+                    },
+                    row! {
+                        "int_value" => 1_i64,
+                        "bool_value" => true,
+                    },
+                ],
                 &["int_value", "float_value"],
             )
             .await
@@ -1044,13 +1092,11 @@ mod tests {
         pool.insert(
             "test_update",
             &["foo"],
-            &Rows {
-                rows: vec![
-                    row! {"foo" => 1_i64,},
-                    row! {"foo" => 2_i64,},
-                    row! {"foo" => 3_i64,},
-                ],
-            },
+            &[
+                row! {"foo" => 1_i64,},
+                row! {"foo" => 2_i64,},
+                row! {"foo" => 3_i64,},
+            ],
         )
         .await
         .unwrap();
@@ -1058,31 +1104,29 @@ mod tests {
         pool.update(
             "test_update",
             &["foo", "bar", "car", "dar", "ear"],
-            &Rows {
-                rows: vec![
-                    row! {
-                        "foo" => 1_i64,
-                        "bar" => 10_i64,
-                        "car" => 11_i64,
-                        "dar" => 12_i64,
-                        "ear" => 13_i64,
-                    },
-                    row! {
-                        "foo" => 2_i64,
-                        "bar" => 14_i64,
-                        "car" => 15_i64,
-                        "dar" => 16_i64,
-                        "ear" => 17_i64,
-                    },
-                    row! {
-                        "foo" => 3_i64,
-                        "bar" => 18_i64,
-                        "car" => 19_i64,
-                        "dar" => 20_i64,
-                        "ear" => 21_i64,
-                    },
-                ],
-            },
+            &[
+                row! {
+                    "foo" => 1_i64,
+                    "bar" => 10_i64,
+                    "car" => 11_i64,
+                    "dar" => 12_i64,
+                    "ear" => 13_i64,
+                },
+                row! {
+                    "foo" => 2_i64,
+                    "bar" => 14_i64,
+                    "car" => 15_i64,
+                    "dar" => 16_i64,
+                    "ear" => 17_i64,
+                },
+                row! {
+                    "foo" => 3_i64,
+                    "bar" => 18_i64,
+                    "car" => 19_i64,
+                    "dar" => 20_i64,
+                    "ear" => 21_i64,
+                },
+            ],
         )
         .await
         .unwrap();
@@ -1156,22 +1200,20 @@ mod tests {
         pool.insert(
             "test_update_returning",
             &["foo", "bar", "car", "dar", "ear"],
-            &Rows {
-                rows: vec![
-                    row! {
-                        "foo" => 1_i64,
-                        "bar" => 1_i64,
-                    },
-                    row! {
-                        "foo" => 2_i64,
-                        "bar" => 2_i64,
-                    },
-                    row! {
-                        "foo" => 3_i64,
-                        "bar" => 3_i64,
-                    },
-                ],
-            },
+            &[
+                row! {
+                    "foo" => 1_i64,
+                    "bar" => 1_i64,
+                },
+                row! {
+                    "foo" => 2_i64,
+                    "bar" => 2_i64,
+                },
+                row! {
+                    "foo" => 3_i64,
+                    "bar" => 3_i64,
+                },
+            ],
         )
         .await
         .unwrap();
@@ -1204,31 +1246,29 @@ mod tests {
                 .update_returning(
                     "test_update_returning",
                     &["foo", "bar", "car", "dar", "ear"],
-                    &Rows {
-                        rows: vec![
-                            row! {
-                                "foo" => 1_i64,
-                                "bar" => 1_i64,
-                                "car" => 10_i64,
-                                "dar" => 11_i64,
-                                "ear" => 12_i64,
-                            },
-                            row! {
-                                "foo" => 2_i64,
-                                "bar" => 2_i64,
-                                "car" => 13_i64,
-                                "dar" => 14_i64,
-                                "ear" => 15_i64,
-                            },
-                            row! {
-                                "foo" => 3_i64,
-                                "bar" => 3_i64,
-                                "car" => 16_i64,
-                                "dar" => 17_i64,
-                                "ear" => 18_i64,
-                            },
-                        ],
-                    },
+                    &[
+                        row! {
+                            "foo" => 1_i64,
+                            "bar" => 1_i64,
+                            "car" => 10_i64,
+                            "dar" => 11_i64,
+                            "ear" => 12_i64,
+                        },
+                        row! {
+                            "foo" => 2_i64,
+                            "bar" => 2_i64,
+                            "car" => 13_i64,
+                            "dar" => 14_i64,
+                            "ear" => 15_i64,
+                        },
+                        row! {
+                            "foo" => 3_i64,
+                            "bar" => 3_i64,
+                            "car" => 16_i64,
+                            "dar" => 17_i64,
+                            "ear" => 18_i64,
+                        },
+                    ],
                     &["car", "dar", "ear"],
                 )
                 .await
@@ -1244,22 +1284,20 @@ mod tests {
         pool.insert(
             "test_update_returning",
             &["foo", "bar"],
-            &Rows {
-                rows: vec![
-                    row! {
-                        "foo" => 1_i64,
-                        "bar" => 1_i64,
-                    },
-                    row! {
-                        "foo" => 2_i64,
-                        "bar" => 2_i64,
-                    },
-                    row! {
-                        "foo" => 3_i64,
-                        "bar" => 3_i64,
-                    },
-                ],
-            },
+            &[
+                row! {
+                    "foo" => 1_i64,
+                    "bar" => 1_i64,
+                },
+                row! {
+                    "foo" => 2_i64,
+                    "bar" => 2_i64,
+                },
+                row! {
+                    "foo" => 3_i64,
+                    "bar" => 3_i64,
+                },
+            ],
         )
         .await
         .unwrap();
@@ -1269,31 +1307,29 @@ mod tests {
                 .update_returning(
                     "test_update_returning",
                     &["foo", "bar", "car", "dar", "ear"],
-                    &Rows {
-                        rows: vec![
-                            row! {
-                                "ear" => 15_i64,
-                                "bar" => 2_i64,
-                                "car" => 13_i64,
-                                "dar" => 14_i64,
-                                "foo" => 2_i64,
-                            },
-                            row! {
-                                "foo" => 1_i64,
-                                "car" => 10_i64,
-                                "bar" => 1_i64,
-                                "ear" => 12_i64,
-                                "dar" => 11_i64,
-                            },
-                            row! {
-                                "car" => 16_i64,
-                                "dar" => 17_i64,
-                                "ear" => 18_i64,
-                                "bar" => 3_i64,
-                                "foo" => 3_i64,
-                            },
-                        ],
-                    },
+                    &[
+                        row! {
+                            "ear" => 15_i64,
+                            "bar" => 2_i64,
+                            "car" => 13_i64,
+                            "dar" => 14_i64,
+                            "foo" => 2_i64,
+                        },
+                        row! {
+                            "foo" => 1_i64,
+                            "car" => 10_i64,
+                            "bar" => 1_i64,
+                            "ear" => 12_i64,
+                            "dar" => 11_i64,
+                        },
+                        row! {
+                            "car" => 16_i64,
+                            "dar" => 17_i64,
+                            "ear" => 18_i64,
+                            "bar" => 3_i64,
+                            "foo" => 3_i64,
+                        },
+                    ],
                     &["car", "dar", "ear"],
                 )
                 .await
@@ -1372,19 +1408,17 @@ mod tests {
         pool.insert(
             "test_upsert",
             &["foo"],
-            &Rows {
-                rows: vec![
-                    row! {
-                        "foo" => 1_i64,
-                    },
-                    row! {
-                        "foo" => 2_i64,
-                    },
-                    row! {
-                        "foo" => 3_i64,
-                    },
-                ],
-            },
+            &[
+                row! {
+                    "foo" => 1_i64,
+                },
+                row! {
+                    "foo" => 2_i64,
+                },
+                row! {
+                    "foo" => 3_i64,
+                },
+            ],
         )
         .await
         .unwrap();
@@ -1392,31 +1426,29 @@ mod tests {
         pool.upsert(
             "test_upsert",
             &["foo", "bar", "car", "dar", "ear"],
-            &Rows {
-                rows: vec![
-                    row! {
-                        "foo" => 1_i64,
-                        "bar" => 10_i64,
-                        "car" => 11_i64,
-                        "dar" => 12_i64,
-                        "ear" => 13_i64,
-                    },
-                    row! {
-                        "foo" => 2_i64,
-                        "bar" => 14_i64,
-                        "car" => 15_i64,
-                        "dar" => 16_i64,
-                        "ear" => 17_i64,
-                    },
-                    row! {
-                        "foo" => 3_i64,
-                        "bar" => 18_i64,
-                        "car" => 19_i64,
-                        "dar" => 20_i64,
-                        "ear" => 21_i64,
-                    },
-                ],
-            },
+            &[
+                row! {
+                    "foo" => 1_i64,
+                    "bar" => 10_i64,
+                    "car" => 11_i64,
+                    "dar" => 12_i64,
+                    "ear" => 13_i64,
+                },
+                row! {
+                    "foo" => 2_i64,
+                    "bar" => 14_i64,
+                    "car" => 15_i64,
+                    "dar" => 16_i64,
+                    "ear" => 17_i64,
+                },
+                row! {
+                    "foo" => 3_i64,
+                    "bar" => 18_i64,
+                    "car" => 19_i64,
+                    "dar" => 20_i64,
+                    "ear" => 21_i64,
+                },
+            ],
         )
         .await
         .unwrap();
@@ -1490,22 +1522,20 @@ mod tests {
         pool.insert(
             "test_upsert_returning",
             &["foo", "bar", "car", "dar", "ear"],
-            &Rows {
-                rows: vec![
-                    row! {
-                        "foo" => 1_i64,
-                        "bar" => 1_i64,
-                    },
-                    row! {
-                        "foo" => 2_i64,
-                        "bar" => 2_i64,
-                    },
-                    row! {
-                        "foo" => 3_i64,
-                        "bar" => 3_i64,
-                    },
-                ],
-            },
+            &[
+                row! {
+                    "foo" => 1_i64,
+                    "bar" => 1_i64,
+                },
+                row! {
+                    "foo" => 2_i64,
+                    "bar" => 2_i64,
+                },
+                row! {
+                    "foo" => 3_i64,
+                    "bar" => 3_i64,
+                },
+            ],
         )
         .await
         .unwrap();
@@ -1514,31 +1544,29 @@ mod tests {
             .upsert_returning(
                 "test_upsert_returning",
                 &["foo", "bar", "car", "dar", "ear"],
-                &Rows {
-                    rows: vec![
-                        row! {
-                            "foo" => 1_i64,
-                            "bar" => 1_i64,
-                            "car" => 10_i64,
-                            "dar" => 11_i64,
-                            "ear" => 12_i64,
-                        },
-                        row! {
-                            "foo" => 2_i64,
-                            "bar" => 2_i64,
-                            "car" => 13_i64,
-                            "dar" => 14_i64,
-                            "ear" => 15_i64,
-                        },
-                        row! {
-                            "foo" => 3_i64,
-                            "bar" => 3_i64,
-                            "car" => 16_i64,
-                            "dar" => 17_i64,
-                            "ear" => 18_i64,
-                        },
-                    ],
-                },
+                &[
+                    row! {
+                        "foo" => 1_i64,
+                        "bar" => 1_i64,
+                        "car" => 10_i64,
+                        "dar" => 11_i64,
+                        "ear" => 12_i64,
+                    },
+                    row! {
+                        "foo" => 2_i64,
+                        "bar" => 2_i64,
+                        "car" => 13_i64,
+                        "dar" => 14_i64,
+                        "ear" => 15_i64,
+                    },
+                    row! {
+                        "foo" => 3_i64,
+                        "bar" => 3_i64,
+                        "car" => 16_i64,
+                        "dar" => 17_i64,
+                        "ear" => 18_i64,
+                    },
+                ],
                 &["car", "dar", "ear"],
             )
             .await
