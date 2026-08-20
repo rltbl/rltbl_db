@@ -282,8 +282,8 @@ impl Value {
     }
 
     /// Note that db_value.as_str() and db_value.to_string() differ in more than just their
-    /// return type. The latter will format a [DbValue] as a string regardless of its type.
-    /// This method returns a string slice only if the underlying type is [DbValue::Text].
+    /// return type. The latter will format a [Value] as a string regardless of its type.
+    /// This method returns a string slice only if the underlying type is [Value::Text].
     pub fn as_str(&self) -> Option<&str> {
         match self {
             Value::Text(txt) => Some(txt),
@@ -292,8 +292,9 @@ impl Value {
     }
 
     /// Note that: db_value.as_json() gives a different result from into().
-    /// The latter will format a [DbValue] as a [JsonValue] regardless of its type.
-    /// The as_json() method returns a JsonValue only if the underlying type is [DbValue::Json].
+    /// The latter will format a [Value] as a [JsonValue] regardless of its type.
+    /// The as_json() method returns a JsonValue only if the underlying type is
+    // ///[Value::Json].
     pub fn as_json(&self) -> Option<JsonValue> {
         todo!()
         // match self {

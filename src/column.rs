@@ -6,9 +6,9 @@
 // MC: Ok that's clear. I'm keeping the enum for now but I'll also keep these comments around
 // until it's time to merge the PR, in case we want to revisit this before then.
 
-/// The type of a [Value], including the name of the type according to the underlying database.
-/// Note that this type is similar to [ValueType](crate::ValueType), but excludes NULL, which
-/// is not a valid type for a column.
+/// The type of a [Value](crate::Value), including the name of the type according to the
+/// underlying database. Note that this type is similar to [ValueType](crate::ValueType),
+/// but excludes NULL, which is not a valid type for a column.
 pub enum ColumnType {
     Boolean(String),
     BigInteger(String),
