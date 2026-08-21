@@ -6,7 +6,10 @@ use async_trait::async_trait;
 use indexmap::IndexMap;
 
 use crate::{
-    AnyTransaction, Error, Query, Row, Rows, Syntax, Transaction, Value, value::IntoValues,
+    AnyTransaction, Error, Query, Row, Rows, Syntax, Transaction, Value, postgres,
+    shared::{EditType, edit},
+    sqlite,
+    value::IntoValues,
 };
 
 /// A trait for implementing a database connection pool.
@@ -117,12 +120,11 @@ impl AnyPool {
         todo!("implement AnyPool::cache")
     }
 
-    /// [Query::insert()]
-    pub async fn insert(
+    pub async fn insert_old(
         &self,
-        table: &str,
-        columns: &[&str],
-        rows: impl IntoIterator<Item = &Row>,
+        _table: &str,
+        _columns: &[&str],
+        _rows: impl IntoIterator<Item = &Row>,
     ) -> Result<(), Error> {
         // MC: By collecting the iterator into a Vec here, don't we nullify much of the
         // advantagge of having an iterator in the first place? How is this better than
@@ -157,11 +159,37 @@ impl AnyPool {
         // Ok(())
         //
         // It doesn't seem ideal for the user to have to do this.
-        let refs: Vec<&Row> = rows.into_iter().collect();
-        self.pool.insert(table, columns, &refs).await
+
+        //let refs: Vec<&Row> = rows.into_iter().collect();
+        //self.pool.insert(table, columns, &refs).await
+        Ok(())
     }
 
-    /// [Query::insert_returning()]
+    pub async fn insert(
+        &self,
+        table: &str,
+        columns: &[&str],
+        rows: impl IntoIterator<Item = &Row>,
+    ) -> Result<(), Error> {
+        let max_params = match self.syntax().name() {
+            "sqlite" => sqlite::MAX_PARAMS_SQLITE,
+            "postgres" => postgres::MAX_PARAMS_POSTGRES,
+            _ => panic!(),
+        };
+        edit(
+            self,
+            &EditType::Insert,
+            &max_params,
+            table,
+            columns,
+            rows,
+            true,
+            &[],
+        )
+        .await?;
+        Ok(())
+    }
+
     pub async fn insert_returning(
         &self,
         table: &str,
@@ -169,24 +197,49 @@ impl AnyPool {
         rows: impl IntoIterator<Item = &Row>,
         returning: &[&str],
     ) -> Result<Rows, Error> {
-        let refs: Vec<&Row> = rows.into_iter().collect();
-        self.pool
-            .insert_returning(table, columns, &refs, returning)
-            .await
+        let max_params = match self.syntax().name() {
+            "sqlite" => sqlite::MAX_PARAMS_SQLITE,
+            "postgres" => postgres::MAX_PARAMS_POSTGRES,
+            _ => panic!(),
+        };
+        edit(
+            self,
+            &EditType::Insert,
+            &max_params,
+            table,
+            columns,
+            rows,
+            true,
+            returning,
+        )
+        .await
     }
 
-    /// [Query::update()]
     pub async fn update(
         &self,
         table: &str,
         columns: &[&str],
         rows: impl IntoIterator<Item = &Row>,
     ) -> Result<(), Error> {
-        let refs: Vec<&Row> = rows.into_iter().collect();
-        self.pool.update(table, columns, &refs).await
+        let max_params = match self.syntax().name() {
+            "sqlite" => sqlite::MAX_PARAMS_SQLITE,
+            "postgres" => postgres::MAX_PARAMS_POSTGRES,
+            _ => panic!(),
+        };
+        edit(
+            self,
+            &EditType::Update,
+            &max_params,
+            table,
+            columns,
+            rows,
+            true,
+            &[],
+        )
+        .await?;
+        Ok(())
     }
 
-    /// [Query::update_returning()]
     pub async fn update_returning(
         &self,
         table: &str,
@@ -194,24 +247,49 @@ impl AnyPool {
         rows: impl IntoIterator<Item = &Row>,
         returning: &[&str],
     ) -> Result<Rows, Error> {
-        let refs: Vec<&Row> = rows.into_iter().collect();
-        self.pool
-            .update_returning(table, columns, &refs, returning)
-            .await
+        let max_params = match self.syntax().name() {
+            "sqlite" => sqlite::MAX_PARAMS_SQLITE,
+            "postgres" => postgres::MAX_PARAMS_POSTGRES,
+            _ => panic!(),
+        };
+        edit(
+            self,
+            &EditType::Update,
+            &max_params,
+            table,
+            columns,
+            rows,
+            true,
+            returning,
+        )
+        .await
     }
 
-    /// [Query::upsert()]
     pub async fn upsert(
         &self,
         table: &str,
         columns: &[&str],
         rows: impl IntoIterator<Item = &Row>,
     ) -> Result<(), Error> {
-        let refs: Vec<&Row> = rows.into_iter().collect();
-        self.pool.upsert(table, columns, &refs).await
+        let max_params = match self.syntax().name() {
+            "sqlite" => sqlite::MAX_PARAMS_SQLITE,
+            "postgres" => postgres::MAX_PARAMS_POSTGRES,
+            _ => panic!(),
+        };
+        edit(
+            self,
+            &EditType::Upsert,
+            &max_params,
+            table,
+            columns,
+            rows,
+            true,
+            &[],
+        )
+        .await?;
+        Ok(())
     }
 
-    /// [Query::upsert_returning()]
     pub async fn upsert_returning(
         &self,
         table: &str,
@@ -219,10 +297,22 @@ impl AnyPool {
         rows: impl IntoIterator<Item = &Row>,
         returning: &[&str],
     ) -> Result<Rows, Error> {
-        let refs: Vec<&Row> = rows.into_iter().collect();
-        self.pool
-            .upsert_returning(table, columns, &refs, returning)
-            .await
+        let max_params = match self.syntax().name() {
+            "sqlite" => sqlite::MAX_PARAMS_SQLITE,
+            "postgres" => postgres::MAX_PARAMS_POSTGRES,
+            _ => panic!(),
+        };
+        edit(
+            self,
+            &EditType::Upsert,
+            &max_params,
+            table,
+            columns,
+            rows,
+            true,
+            returning,
+        )
+        .await
     }
 
     #[allow(unused)]

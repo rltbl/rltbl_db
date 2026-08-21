@@ -727,3 +727,9 @@ impl<T: IntoValue> IntoValues for &Vec<T> {
         Ok(self.clone().into_iter().map(|value| value.into_value()))
     }
 }
+
+impl IntoValues for &[Value] {
+    fn into_params(self) -> Result<impl Iterator<Item = Value>, Error> {
+        Ok(self.into_iter().map(|value| value.clone().into_value()))
+    }
+}

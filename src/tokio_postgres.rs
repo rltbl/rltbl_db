@@ -11,11 +11,7 @@ use deadpool_postgres::{
 };
 use rust_decimal::Decimal;
 
-use crate::{
-    Error, Pool, Query, Row, Rows, Syntax, Transaction, Value,
-    postgres::{MAX_PARAMS_POSTGRES, PostgresSyntax},
-    shared::{EditType, edit},
-};
+use crate::{Error, Pool, Query, Row, Rows, Syntax, Transaction, Value, postgres::PostgresSyntax};
 
 /// Extracts the value at the given index from the given [PgRow].
 fn extract_value(row: &PgRow, idx: usize) -> Result<Value, Error> {
@@ -267,117 +263,6 @@ impl Query for PostgresPool {
         }
 
         Ok(Rows { rows: db_rows })
-    }
-
-    /// Implements [Query::insert()] for [PostgresPool]
-    async fn insert(&self, table: &str, columns: &[&str], rows: &[&Row]) -> Result<(), Error> {
-        edit(
-            self,
-            &EditType::Insert,
-            &MAX_PARAMS_POSTGRES,
-            table,
-            columns,
-            rows,
-            false,
-            &[],
-        )
-        .await?;
-        Ok(())
-    }
-
-    /// Implements [Query::insert_returning()] for [PostgresPool]
-    async fn insert_returning(
-        &self,
-        table: &str,
-        columns: &[&str],
-        rows: &[&Row],
-        returning: &[&str],
-    ) -> Result<Rows, Error> {
-        edit(
-            self,
-            &EditType::Insert,
-            &MAX_PARAMS_POSTGRES,
-            table,
-            columns,
-            rows,
-            true,
-            returning,
-        )
-        .await
-    }
-
-    /// Implements [Query::update()] for [PostgresPool].
-    async fn update(&self, table: &str, columns: &[&str], rows: &[&Row]) -> Result<(), Error> {
-        edit(
-            self,
-            &EditType::Update,
-            &MAX_PARAMS_POSTGRES,
-            table,
-            columns,
-            rows,
-            false,
-            &[],
-        )
-        .await?;
-        Ok(())
-    }
-
-    /// Implements [Query::update_returning()] for [PostgresPool].
-    async fn update_returning(
-        &self,
-        table: &str,
-        columns: &[&str],
-        rows: &[&Row],
-        returning: &[&str],
-    ) -> Result<Rows, Error> {
-        edit(
-            self,
-            &EditType::Update,
-            &MAX_PARAMS_POSTGRES,
-            table,
-            columns,
-            rows,
-            true,
-            returning,
-        )
-        .await
-    }
-
-    /// Implements [Query::upsert()] for [PostgresPool].
-    async fn upsert(&self, table: &str, columns: &[&str], rows: &[&Row]) -> Result<(), Error> {
-        edit(
-            self,
-            &EditType::Upsert,
-            &MAX_PARAMS_POSTGRES,
-            table,
-            columns,
-            rows,
-            false,
-            &[],
-        )
-        .await?;
-        Ok(())
-    }
-
-    /// Implements [Query::upsert_returning()] for [PostgresPool]
-    async fn upsert_returning(
-        &self,
-        table: &str,
-        columns: &[&str],
-        rows: &[&Row],
-        returning: &[&str],
-    ) -> Result<Rows, Error> {
-        edit(
-            self,
-            &EditType::Upsert,
-            &MAX_PARAMS_POSTGRES,
-            table,
-            columns,
-            rows,
-            true,
-            returning,
-        )
-        .await
     }
 
     /// Implements [Query::drop_table()] for [PostgresPool]
