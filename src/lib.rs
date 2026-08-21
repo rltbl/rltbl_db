@@ -58,6 +58,7 @@
 //! Given a struct with named fields that implements `serde` `Serialize` and `Deserialize`,
 //! we can convert it to a row to insert it into the database, and from a row back into a struct.
 //!
+//! TODO: Un-ignore this block.
 //! ```ignore
 //! use rltbl_db::{AnyPool, to_row, Error as DbError};
 //! use serde::{Deserialize, Serialize};
@@ -91,6 +92,7 @@
 //!
 //! Given a CSV or TSV file, we can determine a schema for the data, and load it into a new table.
 //!
+//! TODO: Un-ignore this block.
 //! ```ignore
 //! use rltbl_db::{AnyPool, Error as DbError};
 //!
@@ -147,44 +149,46 @@ pub use self::table::Table;
 pub use self::transaction::{AnyTransaction, Transaction};
 pub use self::value::{ValueType, Value};
 
-// All modules use error.
+/// Error definitions used by all modules.
 pub mod error;
 
-// Types and values
-pub mod value;
-
-// Database columns
-pub mod column;
-
-// Rows of values
-pub mod row;
-
-// Database tables
+/// Database tables
 pub mod table;
 
-// The Syntax trait
+/// Database columns
+pub mod column;
+
+/// Rows of values
+pub mod row;
+
+/// Row values and value types
+pub mod value;
+
+/// The Syntax trait
 pub mod syntax;
 
-// Syntax trait implementations
+// Built-in Syntax trait implementations
+/// SQLite [Syntax] implementaion.
 pub mod sqlite;
+/// Postgres [Syntax] implementaion.
 pub mod postgres;
 
-// The Query trait
+/// The [Query] trait
 pub mod query;
 
-// The Transaction trait (extends query)
-pub mod transaction;
-
-// The Pool trait (extends query)
+/// The [Pool] trait (extends query)
 pub mod pool;
 
-// Functions shared by all database types
-pub mod shared;
+/// The [Transaction] trait (extends query)
+pub mod transaction;
 
-// Caching support:
+/// Caching support
 pub mod cache;
 
-// Unit tests:
+/// Concrete functions shared by all database driver implementations.
+pub mod shared;
+
+/// Unit tests:
 pub mod unit_tests;
 
 ///////////////////////////////////////////////
@@ -201,7 +205,7 @@ pub mod tokio_postgres;
 // pub mod libsql;
 
 ///////////////////////////////////////////////
-// Macros
+// Macro definitions.
 ///////////////////////////////////////////////
 
 /// Convert a list of items that implement `Into<Value>` into a list of [Value]s.

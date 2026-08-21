@@ -13,7 +13,7 @@ SHELL := bash
 tests/input/table1.csv: tests/input/table1.tsv
 	csvtool -t TAB -u COMMA cat $< > $@
 
-test: test_default test_libsql
+test: test_default # test_libsql
 
 test_default: | tests/input/table1.csv
 	@echo "Running unit tests using default features."

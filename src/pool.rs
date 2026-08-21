@@ -4,9 +4,14 @@ use std::{iter::IntoIterator, sync::Arc};
 
 use async_trait::async_trait;
 use indexmap::IndexMap;
+use std::collections::HashMap;
 
 use crate::{
-    AnyTransaction, Error, Query, Row, Rows, Syntax, Transaction, Value, cache::CachingStrategy,
+    AnyTransaction, Error, Query, Row, Rows, Syntax, Transaction, Value,
+    cache::{
+        CachingStrategy, MemoryQueryCacheKey, MemoryQueryCacheValue, QUERY_CACHE_TABLE,
+        TABLE_CACHE_TABLE,
+    },
 };
 
 /// A trait for implementing a database connection pool.
@@ -20,12 +25,16 @@ pub trait Pool: Query + std::fmt::Debug {
 #[derive(Debug)]
 pub struct AnyPool {
     pool: Box<dyn Pool>,
-    #[allow(dead_code)]
     caching_strategy: CachingStrategy,
-    // TODO: This should not be an IndexMap. It should be a plain vector.
-    #[allow(dead_code)]
-    meta_cache: Arc<IndexMap<String, String>>,
-    // TODO: Other caches will go here (these others are IndexMaps).
+    /// When set to true, SQL statements sent to the [Query::query()] and [Query::execute()]
+    /// functions will be parsed and if they will result in tables being edited and/or dropped,
+    /// the cache will be maintained in accordance with the given [CachingStrategy].
+    /// For further information, see [Query::set_cache_aware_query()].
+    cache_aware_query: bool,
+    #[allow(unused)]
+    meta_cache: Arc<Vec<String>>,
+    query_cache: Arc<IndexMap<MemoryQueryCacheKey, MemoryQueryCacheValue>>,
+    table_cache: Arc<HashMap<String, u128>>,
 }
 
 // Note: This is dyn compatible ONLY if every impl Query uses #[async_trait].
@@ -59,7 +68,10 @@ impl From<Box<dyn Pool>> for AnyPool {
         AnyPool {
             pool,
             caching_strategy: CachingStrategy::None,
-            meta_cache: Arc::new(IndexMap::default()),
+            cache_aware_query: false,
+            meta_cache: Arc::new(Vec::default()),
+            query_cache: Arc::new(IndexMap::default()),
+            table_cache: Arc::new(HashMap::default()),
         }
     }
 }
@@ -120,15 +132,6 @@ impl AnyPool {
         let refs: Vec<&Value> = params.into_iter().collect();
         self.pool.query(sql, &refs).await
         // TODO: handle cache
-    }
-
-    /// TODO: Add docstring.
-    pub async fn cache(
-        &self,
-        _sql: &str,
-        _params: impl IntoIterator<Item = &Value>,
-    ) -> Result<Rows, Error> {
-        todo!("implement AnyPool::cache")
     }
 
     /// [Query::insert()]
@@ -240,5 +243,106 @@ impl AnyPool {
     /// TODO: Add docstring.
     pub async fn transaction(&self) -> Result<AnyTransaction, Error> {
         Ok(AnyTransaction::begin(self.pool.transaction().await?))
+    }
+
+    ////////////// Caching ///////////////
+    /// TODO: Add docstring.
+    pub async fn cache(
+        &self,
+        sql: &str,
+        params: impl IntoIterator<Item = &Value>,
+    ) -> Result<Rows, Error> {
+        match self.get_caching_strategy() {
+            CachingStrategy::None => self.cache_tables(&[], sql, params).await,
+            _ => {
+                // TODO: The following line is only to get this to compile. We need to
+                // implement get_accessed_tables() and uncomment the line below it.
+                let tables_read: std::collections::BTreeSet<String> =
+                    std::collections::BTreeSet::new();
+                // let tables_read = get_accessed_tables(sql)?;
+                let tables_read: Vec<_> = tables_read.iter().map(|s| s.as_str()).collect();
+                match tables_read.is_empty() {
+                    false => self.cache_tables(&tables_read, sql, params).await,
+                    true => Err(Error::InputError(format!(
+                        "No tables are read from in SQL: {sql}"
+                    ))),
+                }
+            }
+        }
+    }
+
+    /// Similar to [Query::cache()]. This version accepts an explicit list of tables, which
+    /// must correspond to the tables queried from in the given SQL command(s).
+    async fn cache_tables(
+        &self,
+        _tables: &[&str],
+        _sql: &str,
+        _params: impl IntoIterator<Item = &Value>,
+    ) -> Result<Rows, Error> {
+        match self.get_caching_strategy() {
+            CachingStrategy::None => {
+                todo!()
+            }
+            CachingStrategy::TruncateAll | CachingStrategy::Truncate => {
+                todo!()
+            }
+            CachingStrategy::Trigger => {
+                todo!()
+            }
+            CachingStrategy::Memory(_cache_size) => {
+                todo!()
+            }
+        }
+    }
+
+    pub fn set_caching_strategy(&mut self, strategy: &CachingStrategy) {
+        self.caching_strategy = *strategy;
+    }
+
+    /// Implements [Query::get_caching_strategy()]
+    pub fn get_caching_strategy(&self) -> CachingStrategy {
+        self.caching_strategy
+    }
+
+    /// Implements [Query::set_cache_aware_query()]
+    pub fn set_cache_aware_query(&mut self, value: bool) {
+        self.cache_aware_query = value;
+    }
+
+    /// Implements [Query::get_cache_aware_query()]
+    pub fn get_cache_aware_query(&self) -> bool {
+        self.cache_aware_query
+    }
+
+    /// TODO: Add docstring.
+    pub async fn query_cache_len(&self) -> Result<u64, Error> {
+        match self.caching_strategy {
+            CachingStrategy::None => Ok(0),
+            CachingStrategy::Memory(_) => Ok(self.query_cache.keys().len() as u64),
+            _ => {
+                let rows = self
+                    .query(&format!("SELECT COUNT(1) from {QUERY_CACHE_TABLE}"), &[])
+                    .await
+                    .unwrap();
+                let value: u64 = rows.try_into_value::<u64>()?;
+                Ok(value)
+            }
+        }
+    }
+
+    /// TODO: Add docstring.
+    pub async fn table_cache_len(&self) -> Result<u64, Error> {
+        match self.caching_strategy {
+            CachingStrategy::None => Ok(0),
+            CachingStrategy::Memory(_) => Ok(self.table_cache.keys().len() as u64),
+            _ => {
+                let rows = self
+                    .query(&format!("SELECT COUNT(1) from {TABLE_CACHE_TABLE}"), &[])
+                    .await
+                    .unwrap();
+                let value: u64 = rows.try_into_value::<u64>()?;
+                Ok(value)
+            }
+        }
     }
 }

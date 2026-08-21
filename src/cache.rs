@@ -2,7 +2,7 @@
 
 use std::{fmt::Display, str::FromStr};
 
-use crate::Error;
+use crate::{Error, Row};
 
 /// The name of the database's query cache table.
 pub static QUERY_CACHE_TABLE: &str = "rltbl_db_query_cache";
@@ -74,4 +74,19 @@ impl Display for CachingStrategy {
             CachingStrategy::Memory(size) => write!(f, "memory:{size}"),
         }
     }
+}
+
+/// The structure used to look up query results in the in-memory query cache.
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct MemoryQueryCacheKey {
+    pub tables: String,
+    pub statement: String,
+    pub parameters: String,
+}
+
+/// Represents the value of an entry in the in-memory query cache.
+#[derive(Clone, Debug)]
+pub struct MemoryQueryCacheValue {
+    pub content: Vec<Row>,
+    pub last_verified: u128,
 }

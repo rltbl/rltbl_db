@@ -666,69 +666,118 @@ impl TryFrom<&Value> for Decimal {
     }
 }
 
-// TODO: I have been trying to use these to make it possible to simply pass argument lists
-// such as: &["foo", 1, 3.2] to execute(), but this still needs work.
-// These do not seem to be needed for anything else so I'll leave all of this commented
-// out for now.
-//
-// Maybe what we is an IntoRow trait? (see z_old_db_value.rs)
-// ///////////////////////////////////////////////////////////////////////////////
-// // IntoValue
-// ///////////////////////////////////////////////////////////////////////////////
-//
-// /// Types that implement this trait can be converted into a [Value].
-// pub trait IntoValue {
-//     fn into_value(self) -> Value;
-// }
-//
-// /// Implements [IntoValue] for types that implement [TryFrom] for [Value].
-// impl<T: Into<Value>> IntoValue for T {
-//     fn into_value(self) -> Value {
-//         self.into()
-//     }
-// }
-//
-// /////////////////////////////////
-//
-// /// Types that implement this trait can be converted into [Params]
-// pub trait IntoParams {
-//     fn into_params(self) -> Vec<Value>;
-// }
-//
-// /// Implements [IntoParams] for references to [Params]
-// impl IntoParams for &Vec<Value> {
-//     fn into_params(self) -> Vec<Value> {
-//         self.clone()
-//     }
-// }
-//
-// /// Implements [IntoParams] for an empty tuple. Always returns [Params::None].
-// impl IntoParams for () {
-//     fn into_params(self) -> Vec<Value> {
-//         vec![]
-//     }
-// }
-//
-// /// Implements [IntoParams] for fixed-length arrays of types that implement [IntoValue]
-// impl<T: IntoValue, const N: usize> IntoParams for [T; N] {
-//     fn into_params(self) -> Vec<Value> {
-//         self.into_iter().collect::<Vec<_>>().into_params()
-//     }
-// }
-//
-// /// Implements [IntoParams] for references to fixed-length arrays of types that implement
-// /// [IntoValue]
-// impl<T: IntoValue + Clone, const N: usize> IntoParams for &[T; N] {
-//     fn into_params(self) -> Vec<Value> {
-//         self.iter().cloned().collect::<Vec<_>>().into_params()
-//     }
-// }
-//
-// /// Implements [IntoParams] for vectors of types that implement [IntoValue]
-// impl<T: IntoValue> IntoParams for Vec<T> {
-//     fn into_params(self) -> Vec<Value> {
-//         let values = self.into_iter().map(|i| i.into_value()).collect::<Vec<_>>();
-//         values
-//     }
-// }
-//
+// TODO: The purpose of the code below is to enable simply passing argument lists
+// such as: &["foo", 1, 3.2] to execute() and query().
+// The code below does the job, but because of the way that Query is defined, we must make the
+// iterators concrete before calling query() or execute(), which is inefficient. See the
+// branch rewrite-api-more-tentative-part for code that uses the boilerplate below.
+
+///////////////////////////////////////////////////////////////////////////////
+// IntoValue
+///////////////////////////////////////////////////////////////////////////////
+
+/// Types that implement this trait can be converted into a [Value].
+pub trait IntoValue: Clone {
+    fn into_value(self) -> Value;
+}
+
+/// Implements [IntoValue] for types that implement [Into] for [Value].
+impl<T: Into<Value> + Clone> IntoValue for T {
+    fn into_value(self) -> Value {
+        self.into()
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// IntoValues
+///////////////////////////////////////////////////////////////////////////////
+
+/// Any type that implements this trait can be converted into an [Iterator] of [Value]s.
+pub trait IntoValues {
+    fn into_values(self) -> Result<impl Iterator<Item = Value>, Error>;
+}
+
+/// Implements [IntoValues] for an empty tuple.
+impl IntoValues for () {
+    fn into_values(self) -> Result<impl Iterator<Item = Value>, Error> {
+        Ok(vec![].into_iter())
+    }
+}
+
+impl<T: IntoValue, const N: usize> IntoValues for [T; N] {
+    fn into_values(self) -> Result<impl Iterator<Item = Value>, Error> {
+        Ok(self.into_iter().map(|value| value.into_value()))
+    }
+}
+
+impl<T: IntoValue + Clone, const N: usize> IntoValues for &[T; N] {
+    fn into_values(self) -> Result<impl Iterator<Item = Value>, Error> {
+        Ok(self.clone().into_iter().map(|value| value.into_value()))
+    }
+}
+
+impl<T: IntoValue> IntoValues for Vec<T> {
+    fn into_values(self) -> Result<impl Iterator<Item = Value>, Error> {
+        Ok(self.into_iter().map(|value| value.into_value()))
+    }
+}
+
+impl<T: IntoValue> IntoValues for &Vec<T> {
+    fn into_values(self) -> Result<impl Iterator<Item = Value>, Error> {
+        Ok(self.clone().into_iter().map(|value| value.into_value()))
+    }
+}
+
+impl IntoValues for &[Value] {
+    fn into_values(self) -> Result<impl Iterator<Item = Value>, Error> {
+        Ok(self.into_iter().map(|value| value.clone().into_value()))
+    }
+}
+
+/////////////////////////
+// Alternatives using refs. These actually compile, but they don't work when you try to use
+// them, e.g.,
+// pool.execute(
+//     &format!("INSERT INTO test_table_text VALUES ({pp}1)"),
+//     &[&"foo"],
+// ),
+// because, ultimately, we would need to create a Value from a &str and return a reference to it.
+// That might work in principle if we did not need to allocate more data. But to create a Value
+// from a &str requires creating new data (a new String to wrap as Value::Text()) on the heap,
+// inside a function, and then returning a reference to it, which is impossible.
+/////////////////////////
+
+pub trait IntoValueRef {
+    fn into_value_ref<'a>(&'a self) -> &'a Value;
+}
+
+impl<T: for<'a> Into<&'a Value>> IntoValueRef for T
+where
+    for<'b> &'b Value: From<&'b T>,
+{
+    fn into_value_ref<'a>(&'a self) -> &'a Value {
+        self.into()
+    }
+}
+
+pub trait IntoValueRefs {
+    fn into_value_refs<'a>(&'a self) -> Result<impl Iterator<Item = &'a Value>, Error>;
+}
+
+impl IntoValueRefs for () {
+    fn into_value_refs<'a>(&'a self) -> Result<impl Iterator<Item = &'a Value>, Error> {
+        Ok(vec![].into_iter())
+    }
+}
+
+impl<T: IntoValueRef, const N: usize> IntoValueRefs for [T; N] {
+    fn into_value_refs<'a>(&'a self) -> Result<impl Iterator<Item = &'a Value>, Error> {
+        Ok(self.into_iter().map(|value| value.into_value_ref()))
+    }
+}
+
+impl<T: IntoValueRef, const N: usize> IntoValueRefs for &[T; N] {
+    fn into_value_refs<'a>(&'a self) -> Result<impl Iterator<Item = &'a Value>, Error> {
+        Ok(self.into_iter().map(|value| value.into_value_ref()))
+    }
+}

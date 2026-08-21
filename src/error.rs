@@ -42,10 +42,13 @@ pub enum Error {
     InfallibleError(std::convert::Infallible),
 
     // TODO: Eventually replace this with the upstream error (or keep both, in case we want to
-    // have a generic Serde error type as well.
+    // have a generic Serde error type as well).
     /// An error that occurred during serialization or deserialization.
     SerdeError(String),
 
+    // TODO: Think about (but don't do anything yet) whether it would be better to not
+    // expose driver-specific errors as opposed to having a driver-agnostic version of each
+    // of these error types.
     #[cfg(feature = "rusqlite")]
     /// A wrapper around [deadpool_sqlite::rusqlite::Error]
     DeadpoolRusqliteError(deadpool_sqlite::rusqlite::Error),

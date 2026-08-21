@@ -1400,7 +1400,7 @@ mod tests {
     }
 
     #[allow(unused)]
-    async fn table_caching(pool: &mut AnyPool, _strategy: &CachingStrategy) {
+    async fn table_caching(pool: &mut AnyPool, strategy: &CachingStrategy) {
         pool.drop_table(&format!("{QUERY_CACHE_TABLE}"))
             .await
             .unwrap();
@@ -1420,10 +1420,245 @@ mod tests {
         .await
         .unwrap();
 
-        // TODO:
-        // pool.set_caching_strategy(strategy);
-        // pool.set_cache_aware_query(true);
-        // etc.
+        pool.set_caching_strategy(strategy);
+        pool.set_cache_aware_query(true);
+
+        pool.insert(
+            "test_table_caching_1",
+            &["value"],
+            &[
+                row! {
+                    "value" => "alpha",
+                },
+                row! {
+                    "value" => "beta",
+                },
+            ],
+        )
+        .await
+        .unwrap();
+
+        // TODO: Progressively uncomment the rest of this:
+        /*
+        let rows = pool
+            .cache("SELECT * from test_table_caching_1", &[])
+            .await
+            .unwrap();
+
+        assert_eq!(pool.query_cache_len().await.unwrap(), 1);
+        assert_eq!(
+            rows.rows,
+            vec![
+                row! {
+                    "value" => "alpha",
+                },
+                row! {
+                    "value" => "beta",
+                },
+            ]
+        );
+
+        let rows = pool
+            .cache("SELECT * from test_table_caching_1", ())
+            .await
+            .unwrap();
+
+        match strategy {
+            CachingStrategy::None => (),
+            CachingStrategy::Memory(_) => assert_eq!(count_memory_query_cache_rows(), 1),
+            _ => assert_eq!(count_query_cache_rows(pool).await, 1),
+        };
+        assert_eq!(
+            *rows.deref(),
+            vec![
+                row! {
+                    "value" => "alpha",
+                },
+                row! {
+                    "value" => "beta",
+                },
+            ]
+        );
+
+        pool.insert(
+            "test_table_caching_1",
+            &["value"],
+            &[
+                row! {
+                    "value" => "gamma",
+                },
+                row! {
+                    "value" => "delta",
+                },
+            ],
+        )
+        .await
+        .unwrap();
+
+        match strategy {
+            CachingStrategy::None => (),
+            CachingStrategy::Memory(_) => assert_eq!(count_memory_query_cache_rows(), 0),
+            _ => assert_eq!(count_query_cache_rows(pool).await, 0),
+        };
+
+        let rows = pool
+            .cache("SELECT * from test_table_caching_1", ())
+            .await
+            .unwrap();
+
+        match strategy {
+            CachingStrategy::None => (),
+            CachingStrategy::Memory(_) => assert_eq!(count_memory_query_cache_rows(), 1),
+            _ => assert_eq!(count_query_cache_rows(pool).await, 1),
+        };
+        assert_eq!(
+            *rows.deref(),
+            vec![
+                row! {
+                    "value" => "alpha",
+                },
+                row! {
+                    "value" => "beta",
+                },
+                row! {
+                    "value" => "gamma",
+                },
+                row! {
+                    "value" => "delta",
+                },
+            ]
+        );
+
+        let rows = pool
+            .cache("SELECT * from test_table_caching_1", ())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            *rows.deref(),
+            vec![
+                row! {
+                    "value" => "alpha",
+                },
+                row! {
+                    "value" => "beta",
+                },
+                row! {
+                    "value" => "gamma",
+                },
+                row! {
+                    "value" => "delta",
+                },
+            ]
+        );
+
+        pool.cache("SELECT COUNT(1) FROM test_table_caching_1", ())
+            .await
+            .unwrap();
+
+        pool.cache("SELECT COUNT(1) FROM test_table_caching_2", ())
+            .await
+            .unwrap();
+
+        match strategy {
+            CachingStrategy::None => (),
+            CachingStrategy::Memory(_) => assert_eq!(count_memory_query_cache_rows(), 3),
+            _ => assert_eq!(count_query_cache_rows(pool).await, 3),
+        };
+
+        pool.execute(
+            r#"INSERT INTO test_table_caching_1 VALUES ('rho'), ('sigma')"#,
+            (),
+        )
+        .await
+        .unwrap();
+
+        match strategy {
+            CachingStrategy::None => (),
+            CachingStrategy::Memory(_) => assert_eq!(count_memory_query_cache_rows(), 1),
+            CachingStrategy::Truncate | CachingStrategy::Trigger => {
+                assert_eq!(count_query_cache_rows(pool).await, 1)
+            }
+            CachingStrategy::TruncateAll => assert_eq!(count_query_cache_rows(pool).await, 0),
+        };
+
+        let rows = pool
+            .cache("SELECT * from test_table_caching_1", ())
+            .await
+            .unwrap();
+
+        match strategy {
+            CachingStrategy::None => (),
+            CachingStrategy::Memory(_) => assert_eq!(count_memory_query_cache_rows(), 2),
+            CachingStrategy::Truncate | CachingStrategy::Trigger => {
+                assert_eq!(count_query_cache_rows(pool).await, 2)
+            }
+            CachingStrategy::TruncateAll => assert_eq!(count_query_cache_rows(pool).await, 1),
+        };
+        assert_eq!(
+            *rows.deref(),
+            vec![
+                row! {
+                    "value" => "alpha",
+                },
+                row! {
+                    "value" => "beta",
+                },
+                row! {
+                    "value" => "gamma",
+                },
+                row! {
+                    "value" => "delta",
+                },
+                row! {
+                    "value" => "rho",
+                },
+                row! {
+                    "value" => "sigma",
+                },
+            ]
+        );
+
+        let rows = pool
+            .cache(
+                "SELECT * FROM test_table_caching_1 t1, test_table_caching_2 t2 \
+                 WHERE t1.value = t2.value",
+                (),
+            )
+            .await
+            .unwrap();
+        match strategy {
+            CachingStrategy::None => (),
+            CachingStrategy::Memory(_) => assert_eq!(count_memory_query_cache_rows(), 3),
+            CachingStrategy::Truncate | CachingStrategy::Trigger => {
+                assert_eq!(count_query_cache_rows(pool).await, 3)
+            }
+            CachingStrategy::TruncateAll => assert_eq!(count_query_cache_rows(pool).await, 2),
+        };
+        assert_eq!(rows.len(), 0);
+
+        let rows = pool
+            .cache(
+                "SELECT * FROM test_table_caching_1 t1, test_table_caching_2 t2 \
+                 WHERE t1.value = t2.value",
+                (),
+            )
+            .await
+            .unwrap();
+        match strategy {
+            CachingStrategy::None => (),
+            CachingStrategy::Memory(_) => assert_eq!(count_memory_query_cache_rows(), 3),
+            CachingStrategy::Truncate | CachingStrategy::Trigger => {
+                assert_eq!(count_query_cache_rows(pool).await, 3)
+            }
+            CachingStrategy::TruncateAll => assert_eq!(count_query_cache_rows(pool).await, 2),
+        };
+        assert_eq!(rows.len(), 0);
+        */
+
+        // Cleanup:
+        pool.drop_table("test_table_caching_1").await.unwrap();
+        pool.drop_table("test_table_caching_2").await.unwrap();
     }
 
     #[allow(unused)]
