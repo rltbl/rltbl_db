@@ -694,42 +694,42 @@ impl<T: Into<Value> + Clone> IntoValue for T {
 
 /// Any type that implements this trait can be converted into an [Iterator] of [Value]s.
 pub trait IntoValues {
-    fn into_params(self) -> Result<impl Iterator<Item = Value>, Error>;
+    fn into_values(self) -> Result<impl Iterator<Item = Value>, Error>;
 }
 
 /// Implements [IntoValues] for an empty tuple.
 impl IntoValues for () {
-    fn into_params(self) -> Result<impl Iterator<Item = Value>, Error> {
+    fn into_values(self) -> Result<impl Iterator<Item = Value>, Error> {
         Ok(vec![].into_iter())
     }
 }
 
 impl<T: IntoValue, const N: usize> IntoValues for [T; N] {
-    fn into_params(self) -> Result<impl Iterator<Item = Value>, Error> {
+    fn into_values(self) -> Result<impl Iterator<Item = Value>, Error> {
         Ok(self.into_iter().map(|value| value.into_value()))
     }
 }
 
 impl<T: IntoValue + Clone, const N: usize> IntoValues for &[T; N] {
-    fn into_params(self) -> Result<impl Iterator<Item = Value>, Error> {
+    fn into_values(self) -> Result<impl Iterator<Item = Value>, Error> {
         Ok(self.clone().into_iter().map(|value| value.into_value()))
     }
 }
 
 impl<T: IntoValue> IntoValues for Vec<T> {
-    fn into_params(self) -> Result<impl Iterator<Item = Value>, Error> {
+    fn into_values(self) -> Result<impl Iterator<Item = Value>, Error> {
         Ok(self.into_iter().map(|value| value.into_value()))
     }
 }
 
 impl<T: IntoValue> IntoValues for &Vec<T> {
-    fn into_params(self) -> Result<impl Iterator<Item = Value>, Error> {
+    fn into_values(self) -> Result<impl Iterator<Item = Value>, Error> {
         Ok(self.clone().into_iter().map(|value| value.into_value()))
     }
 }
 
 impl IntoValues for &[Value] {
-    fn into_params(self) -> Result<impl Iterator<Item = Value>, Error> {
+    fn into_values(self) -> Result<impl Iterator<Item = Value>, Error> {
         Ok(self.into_iter().map(|value| value.clone().into_value()))
     }
 }

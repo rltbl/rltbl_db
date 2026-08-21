@@ -32,7 +32,7 @@ impl AnyTransaction {
     /// Query the database.
     pub async fn query(&self, sql: &str, params: impl IntoValues) -> Result<Rows, Error> {
         // TODO: track modified tables
-        let params = params.into_params()?.map(|val| val).collect::<Vec<_>>();
+        let params = params.into_values()?.map(|val| val).collect::<Vec<_>>();
         self.tx.query(sql, &params).await
     }
 

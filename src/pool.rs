@@ -92,7 +92,7 @@ impl AnyPool {
 
     /// [Query::execute()] for [AnyPool]
     pub async fn execute(&self, sql: &str, params: impl IntoValues) -> Result<(), Error> {
-        let params = params.into_params()?.map(|val| val).collect::<Vec<_>>();
+        let params = params.into_values()?.map(|val| val).collect::<Vec<_>>();
         self.pool.execute(sql, &params[..]).await
         // TODO: handle cache
     }
@@ -106,7 +106,7 @@ impl AnyPool {
 
     /// [Query::query()]
     pub async fn query(&self, sql: &str, params: impl IntoValues) -> Result<Rows, Error> {
-        let params = params.into_params()?.map(|val| val).collect::<Vec<_>>();
+        let params = params.into_values()?.map(|val| val).collect::<Vec<_>>();
         self.pool.query(sql, &params).await
         // TODO: handle cache
     }
