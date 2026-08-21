@@ -6,7 +6,6 @@ use crate::{Error, Syntax, Value, ValueType, values};
 /// that can be bound to a SQLite query
 pub static MAX_PARAMS_SQLITE: usize = 32766;
 
-// TODO: It would be more efficient to use an enum for this.
 /// The identifying name of [this syntax](SqliteSyntax).
 pub static SQLITE_SYNTAX_NAME: &str = "sqlite";
 

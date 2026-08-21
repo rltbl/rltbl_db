@@ -40,12 +40,6 @@ use crate::Error;
 // A useful alias:
 pub type JsonValue = serde_json::Value;
 
-// MC: I noticed that there is nothing corresponding to DbParams in this repository. In
-// rltbl_db the main convenience of DbParams was (if I remember right) to be able to easily
-// represent the case of no parameters. If I remember right, there were compilation issues
-// when trying to handle this without a wrapper struct, but I could be wrong. Have you tested
-// that case, or is the state of the code still too preliminary to think about this?
-
 /// The type of a [Value], including the name of the type according to the underlying database,
 /// as a [String].
 pub enum ValueType {

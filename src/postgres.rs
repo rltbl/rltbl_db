@@ -8,7 +8,6 @@ use crate::{Error, Syntax, Value, ValueType, values};
 /// parameters to just under half that number.
 pub static MAX_PARAMS_POSTGRES: usize = 32765;
 
-// TODO: It would be more efficient to use an enum for this.
 /// The identifying name of [this syntax](PostgresSyntax).
 pub static POSTGRES_SYNTAX_NAME: &str = "postgres";
 

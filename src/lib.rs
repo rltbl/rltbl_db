@@ -181,6 +181,12 @@ pub mod pool;
 // Functions shared by all database types
 pub mod shared;
 
+// Caching support:
+pub mod cache;
+
+// Unit tests:
+pub mod unit_tests;
+
 ///////////////////////////////////////////////
 // Driver-specific implementations.
 ///////////////////////////////////////////////
@@ -229,7 +235,7 @@ macro_rules! row {
     };
 }
 
-// TODO: Remove everything below later.
+// TODO: Remove everything below right before merging this PR.
 ///////////////////////////// OLD CODE /////////////////////////////////////////////////////////////
 
 pub mod z_old_any;

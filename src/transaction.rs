@@ -21,7 +21,7 @@ pub struct AnyTransaction {
 }
 
 impl AnyTransaction {
-    // TODO: Is "begin()" really a good name for this? That implies that something actually
+    // MC: Is "begin()" really a good name for this? That implies that something actually
     // happens in the database as a result of calling this function, but that is not true.
     // Why not just implement AnyTransaction::from() instead?
     /// Wraps a transaction type into an [AnyTransaction].
@@ -36,7 +36,6 @@ impl AnyTransaction {
     pub async fn query(
         &self,
         sql: &str,
-        // TODO: I think this should be concrete (and an iterator).
         params: impl IntoIterator<Item = &Value>,
     ) -> Result<Rows, Error> {
         // TODO: track modified tables

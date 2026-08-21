@@ -35,7 +35,8 @@ pub enum Error {
     // It's the result of a call like: i16::try_from(1_i16) which in principle should never fail.
     // See https://stackoverflow.com/questions/67830696/
     //             what-is-the-point-of-an-infallible-result-over-just-returning-the-ok-branch
-    // for an explanation of the rationale behind Infallible.
+    // for an explanation of the rationale behind Infallible. Essentially it's a convenience
+    // to allow for treating generics consistently.
     /// An error that occurred (impossibly?) as the result of an [std::convert::Infallible]
     /// operation.
     InfallibleError(std::convert::Infallible),

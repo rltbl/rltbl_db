@@ -7,9 +7,6 @@
 use crate::{Error, Value, ValueType};
 
 pub trait Syntax: std::fmt::Debug {
-    // TODO: Do we really need this? Since SqliteSyntax and PostgresSyntax are unit structs,
-    // can't we just match on those? I guess we will need to use dyn Syntax ... not sure if that
-    // is easier or more efficient, though. Maybe not. Another option is an enum?
     /// Returns the name for this syntax.
     fn name(&self) -> &str;
 
