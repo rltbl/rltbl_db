@@ -92,6 +92,11 @@ impl AnyPool {
 
     /// [Query::execute()] for [AnyPool]
     pub async fn execute(&self, sql: &str, params: impl IntoValues) -> Result<(), Error> {
+        // MC: This is worse than the version of this code on `rewrite-api`. At least there
+        // we only collect the references into a vector. Here we are collecting the Values
+        // themselves.
+        // It might be possible to implement IntoValues so that it yields an iterator of
+        // references.
         let params = params.into_values()?.map(|val| val).collect::<Vec<_>>();
         self.pool.execute(sql, &params[..]).await
         // TODO: handle cache
@@ -106,6 +111,11 @@ impl AnyPool {
 
     /// [Query::query()]
     pub async fn query(&self, sql: &str, params: impl IntoValues) -> Result<Rows, Error> {
+        // MC: This is worse than the version of this code on `rewrite-api`. At least there
+        // we only collect the references into a vector. Here we are collecting the Values
+        // themselves.
+        // It might be possible to implement IntoValues so that it yields an iterator of
+        // references.
         let params = params.into_values()?.map(|val| val).collect::<Vec<_>>();
         self.pool.query(sql, &params).await
         // TODO: handle cache
