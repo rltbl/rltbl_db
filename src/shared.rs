@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use crate::{Error, Query, Row, Rows, Value};
+use crate::{AnyPool, Error, Row, Rows, Value};
 
 /// Ways in which to edit a table.
 #[allow(unused)]
@@ -133,12 +133,12 @@ ON CONFLICT ({constraint_clause}) DO UPDATE SET {set_clause}{returning_clause}"#
 /// than max_params are required, multiple SQL statements will be generated.
 #[allow(unused)]
 pub(crate) async fn edit(
-    pool: &(impl Query + Sync),
+    pool: &AnyPool,
     edit_type: &EditType,
     max_params: &usize,
     table: &str,
     columns: &[&str],
-    rows: &[&Row],
+    rows: impl IntoIterator<Item = &Row>,
     with_returning: bool,
     returning: &[&str],
 ) -> Result<Rows, Error> {
@@ -257,15 +257,14 @@ pub(crate) async fn edit(
             ),
         };
         // TODO: Use the "no_cache_clean" version of query().
-        let params_slice = &params_to_be_bound.iter().map(|val| val).collect::<Vec<_>>()[..];
-        let rows = pool.query(&sql, &params_slice).await?;
+        let rows = pool.query(&sql, &params_to_be_bound[..]).await?;
         lines_to_bind.clear();
         params_to_be_bound.clear();
         *param_idx = 0;
         Ok(rows)
     };
 
-    for row in rows.iter() {
+    for row in rows {
         // If we have reached the limit on the number of bound parameters, edit the rows that
         // we have processed so far and then reset all of the counters and collections:
         if param_idx + columns.len() > *max_params {
@@ -336,7 +335,7 @@ pub(crate) async fn edit(
 /* TODO:
 /// Read data from the given file and insert it to the given table in the database.
 pub async fn batch_insert(
-    pool: &(impl Query + Sync),
+    pool: &AnyPool,
     table: &str,
     columns: &IndexMap<String, Column>,
     filename: &str,

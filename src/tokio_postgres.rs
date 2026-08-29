@@ -11,11 +11,7 @@ use deadpool_postgres::{
 };
 use rust_decimal::Decimal;
 
-use crate::{
-    Error, Pool, Query, Row, Rows, Syntax, Transaction, Value,
-    postgres::{MAX_PARAMS_POSTGRES, PostgresSyntax},
-    shared::{EditType, edit},
-};
+use crate::{Error, Pool, Query, Row, Rows, Syntax, Transaction, Value, postgres::PostgresSyntax};
 
 /// Extracts the value at the given index from the given [PgRow].
 fn extract_value(row: &PgRow, idx: usize) -> Result<Value, Error> {
@@ -139,7 +135,7 @@ impl Query for PostgresPool {
     }
 
     /// Implements [Query::query()] for [PostgresPool]
-    async fn query(&self, sql: &str, params: &[&Value]) -> Result<Rows, Error> {
+    async fn query(&self, sql: &str, params: &[Value]) -> Result<Rows, Error> {
         let client = self.pool.get().await?;
 
         // The expected types of all of the parameters as reported by the database via prepare():
@@ -269,117 +265,6 @@ impl Query for PostgresPool {
         Ok(Rows { rows: db_rows })
     }
 
-    /// Implements [Query::insert()] for [PostgresPool]
-    async fn insert(&self, table: &str, columns: &[&str], rows: &[&Row]) -> Result<(), Error> {
-        edit(
-            self,
-            &EditType::Insert,
-            &MAX_PARAMS_POSTGRES,
-            table,
-            columns,
-            rows,
-            false,
-            &[],
-        )
-        .await?;
-        Ok(())
-    }
-
-    /// Implements [Query::insert_returning()] for [PostgresPool]
-    async fn insert_returning(
-        &self,
-        table: &str,
-        columns: &[&str],
-        rows: &[&Row],
-        returning: &[&str],
-    ) -> Result<Rows, Error> {
-        edit(
-            self,
-            &EditType::Insert,
-            &MAX_PARAMS_POSTGRES,
-            table,
-            columns,
-            rows,
-            true,
-            returning,
-        )
-        .await
-    }
-
-    /// Implements [Query::update()] for [PostgresPool].
-    async fn update(&self, table: &str, columns: &[&str], rows: &[&Row]) -> Result<(), Error> {
-        edit(
-            self,
-            &EditType::Update,
-            &MAX_PARAMS_POSTGRES,
-            table,
-            columns,
-            rows,
-            false,
-            &[],
-        )
-        .await?;
-        Ok(())
-    }
-
-    /// Implements [Query::update_returning()] for [PostgresPool].
-    async fn update_returning(
-        &self,
-        table: &str,
-        columns: &[&str],
-        rows: &[&Row],
-        returning: &[&str],
-    ) -> Result<Rows, Error> {
-        edit(
-            self,
-            &EditType::Update,
-            &MAX_PARAMS_POSTGRES,
-            table,
-            columns,
-            rows,
-            true,
-            returning,
-        )
-        .await
-    }
-
-    /// Implements [Query::upsert()] for [PostgresPool].
-    async fn upsert(&self, table: &str, columns: &[&str], rows: &[&Row]) -> Result<(), Error> {
-        edit(
-            self,
-            &EditType::Upsert,
-            &MAX_PARAMS_POSTGRES,
-            table,
-            columns,
-            rows,
-            false,
-            &[],
-        )
-        .await?;
-        Ok(())
-    }
-
-    /// Implements [Query::upsert_returning()] for [PostgresPool]
-    async fn upsert_returning(
-        &self,
-        table: &str,
-        columns: &[&str],
-        rows: &[&Row],
-        returning: &[&str],
-    ) -> Result<Rows, Error> {
-        edit(
-            self,
-            &EditType::Upsert,
-            &MAX_PARAMS_POSTGRES,
-            table,
-            columns,
-            rows,
-            true,
-            returning,
-        )
-        .await
-    }
-
     /// Implements [Query::drop_table()] for [PostgresPool]
     async fn drop_table(&self, table: &str) -> Result<(), Error> {
         // TODO: Add this.
@@ -413,15 +298,15 @@ mod tests {
         let pool: Box<dyn Pool> = Box::new(pool);
         let pool = AnyPool::from(pool);
 
-        let _rows = pool.query("DROP TABLE IF EXISTS foo CASCADE", &[]).await?;
+        let _rows = pool.query("DROP TABLE IF EXISTS foo CASCADE", ()).await?;
         let _rows = pool
-            .query("CREATE TABLE foo (bar BIGINT, gar TEXT)", &[])
+            .query("CREATE TABLE foo (bar BIGINT, gar TEXT)", ())
             .await?;
         let sql = "INSERT INTO foo VALUES ($1, $2)";
         let values = vec![Value::from(1_i64), Value::from("foo")];
         let _values = values![1_i64, "foo"];
         let _rows = pool.query(sql, &values).await?;
-        let _rows = pool.query("DROP TABLE foo CASCADE", &[]).await?;
+        let _rows = pool.query("DROP TABLE foo CASCADE", ()).await?;
 
         Ok(())
     }

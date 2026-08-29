@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 
-use crate::{Value, error::Error, query::Query, row::Rows};
+use crate::{error::Error, query::Query, row::Rows, value::IntoValues};
 
 /// An asynchronous trait for using database transactions
 #[async_trait]
@@ -33,14 +33,11 @@ impl AnyTransaction {
     }
 
     /// Query the database.
-    pub async fn query(
-        &self,
-        sql: &str,
-        params: impl IntoIterator<Item = &Value>,
-    ) -> Result<Rows, Error> {
+    pub async fn query(&self, sql: &str, values: impl IntoValues) -> Result<Rows, Error> {
         // TODO: track modified tables
-        let refs: Vec<&Value> = params.into_iter().collect();
-        self.tx.query(sql, &refs).await
+        let values = values.into_values()?.collect::<Vec<_>>();
+        self.tx.query(sql, &values).await
+        // TODO: handle cache
     }
 
     // TODO: execute

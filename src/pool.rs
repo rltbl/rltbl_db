@@ -12,6 +12,10 @@ use crate::{
         CachingStrategy, MemoryQueryCacheKey, MemoryQueryCacheValue, QUERY_CACHE_TABLE,
         TABLE_CACHE_TABLE,
     },
+    postgres,
+    shared::{EditType, edit},
+    sqlite,
+    value::IntoValues,
 };
 
 /// A trait for implementing a database connection pool.
@@ -100,13 +104,9 @@ impl AnyPool {
     }
 
     /// [Query::execute()] for [AnyPool]
-    pub async fn execute(
-        &self,
-        sql: &str,
-        params: impl IntoIterator<Item = &Value>,
-    ) -> Result<(), Error> {
-        let refs: Vec<&Value> = params.into_iter().collect();
-        self.pool.execute(sql, &refs).await
+    pub async fn execute(&self, sql: &str, values: impl IntoValues) -> Result<(), Error> {
+        let values = values.into_values()?.collect::<Vec<_>>();
+        self.pool.execute(sql, &values).await
         // TODO: handle cache
     }
 
@@ -118,59 +118,43 @@ impl AnyPool {
     }
 
     /// [Query::query()]
-    pub async fn query(
-        &self,
-        sql: &str,
-        params: impl IntoIterator<Item = &Value>,
-    ) -> Result<Rows, Error> {
-        // MC: By collecting the iterator into a Vec here, don't we nullify much of the
-        // advantagge of having an iterator in the first place? How is this better than
-        // simply accepting a &[&Row] argument? Is there some rust feature that I'm unaware of
-        // that makes this better? Not that I can think of an alternative. The trouble is,
-        // ultimately, that query() and execute() are trait methods and we want those to have
-        // concrete arguments for independent reasons.
-        let refs: Vec<&Value> = params.into_iter().collect();
-        self.pool.query(sql, &refs).await
+    pub async fn query(&self, sql: &str, values: impl IntoValues) -> Result<Rows, Error> {
+        let values = values.into_values()?.collect::<Vec<_>>();
+        self.pool.query(sql, &values).await
         // TODO: handle cache
     }
 
-    /// [Query::insert()]
+    /// Insert rows into the given columns of the given table. If an input row does not have a
+    /// key corresponding to one of the given columns, use NULL as the value of that column when
+    /// inserting the row to the table.
     pub async fn insert(
         &self,
         table: &str,
         columns: &[&str],
         rows: impl IntoIterator<Item = &Row>,
     ) -> Result<(), Error> {
-        // MC: In lib.rs, we promised users that they wouldn't have to implement many new
-        // methods when they are adding their own drivers. However, with the current design,
-        // despite the code in shared.rs being shared by all drivers, we still have to include
-        // a concrete call to edit() within the code for each concrete driver, otherwise rust's
-        // compiler complains that the size of the pool is not known at compile time. That
-        // means users will have to define all of their own insert_*(), update_*() and
-        // upsert_*() methods, even though all that they need to do is to call edit() as
-        // follows (and likewise for insert(), update(), and the _returning() variants of each):
-        //
-        // async fn upsert(
-        //     &self, table: &str, columns: &[&str], rows: &[&Row]
-        // ) -> Result<(), Error> {
-        // edit(
-        //     self,
-        //     &EditType::Upsert,
-        //     &MAX_PARAMS_POSTGRES,
-        //     table,
-        //     columns,
-        //     rows,
-        //     false,
-        //     &[],
-        // )
-        // .await?;
-        // Ok(())
-
-        let refs: Vec<&Row> = rows.into_iter().collect();
-        self.pool.insert(table, columns, &refs).await
+        let max_params = match self.syntax().name() {
+            "sqlite" => sqlite::MAX_PARAMS_SQLITE,
+            "postgres" => postgres::MAX_PARAMS_POSTGRES,
+            _ => panic!(),
+        };
+        edit(
+            self,
+            &EditType::Insert,
+            &max_params,
+            table,
+            columns,
+            rows,
+            true,
+            &[],
+        )
+        .await?;
+        Ok(())
     }
 
-    /// [Query::insert_returning()]
+    /// Like [Query::insert()], but in addition this function also returns the data that was
+    /// inserted into the columns included in `returning`, or all of the inserted data if
+    /// `returning` is an empty list.
     pub async fn insert_returning(
         &self,
         table: &str,
@@ -178,24 +162,56 @@ impl AnyPool {
         rows: impl IntoIterator<Item = &Row>,
         returning: &[&str],
     ) -> Result<Rows, Error> {
-        let refs: Vec<&Row> = rows.into_iter().collect();
-        self.pool
-            .insert_returning(table, columns, &refs, returning)
-            .await
+        let max_params = match self.syntax().name() {
+            "sqlite" => sqlite::MAX_PARAMS_SQLITE,
+            "postgres" => postgres::MAX_PARAMS_POSTGRES,
+            _ => panic!(),
+        };
+        edit(
+            self,
+            &EditType::Insert,
+            &max_params,
+            table,
+            columns,
+            rows,
+            true,
+            returning,
+        )
+        .await
     }
 
-    /// [Query::update()]
+    /// Update the given columns of the given table using the given rows. The table should have a
+    /// primary key and any columns that are part of the primary key should be present within each
+    /// input row. The primary key column values will be used as a way of identifying the rows to
+    /// update, while the other columns in the row will be updated to the given new values.
     pub async fn update(
         &self,
         table: &str,
         columns: &[&str],
         rows: impl IntoIterator<Item = &Row>,
     ) -> Result<(), Error> {
-        let refs: Vec<&Row> = rows.into_iter().collect();
-        self.pool.update(table, columns, &refs).await
+        let max_params = match self.syntax().name() {
+            "sqlite" => sqlite::MAX_PARAMS_SQLITE,
+            "postgres" => postgres::MAX_PARAMS_POSTGRES,
+            _ => panic!(),
+        };
+        edit(
+            self,
+            &EditType::Update,
+            &max_params,
+            table,
+            columns,
+            rows,
+            true,
+            &[],
+        )
+        .await?;
+        Ok(())
     }
 
-    /// [Query::update_returning()]
+    /// Like [Query::update()], but in addition this function also returns the data that was
+    /// updated for the columns included in `returning`, or all of the updated data if
+    /// `returning` is an empty list.
     pub async fn update_returning(
         &self,
         table: &str,
@@ -203,24 +219,54 @@ impl AnyPool {
         rows: impl IntoIterator<Item = &Row>,
         returning: &[&str],
     ) -> Result<Rows, Error> {
-        let refs: Vec<&Row> = rows.into_iter().collect();
-        self.pool
-            .update_returning(table, columns, &refs, returning)
-            .await
+        let max_params = match self.syntax().name() {
+            "sqlite" => sqlite::MAX_PARAMS_SQLITE,
+            "postgres" => postgres::MAX_PARAMS_POSTGRES,
+            _ => panic!(),
+        };
+        edit(
+            self,
+            &EditType::Update,
+            &max_params,
+            table,
+            columns,
+            rows,
+            true,
+            returning,
+        )
+        .await
     }
 
-    /// [Query::upsert()]
+    /// Attempt to insert the given rows to the given table, similarly to [Query::insert()].
+    /// In case there is a conflict, update the table instead, similarly to [Query::update()].
     pub async fn upsert(
         &self,
         table: &str,
         columns: &[&str],
         rows: impl IntoIterator<Item = &Row>,
     ) -> Result<(), Error> {
-        let refs: Vec<&Row> = rows.into_iter().collect();
-        self.pool.upsert(table, columns, &refs).await
+        let max_params = match self.syntax().name() {
+            "sqlite" => sqlite::MAX_PARAMS_SQLITE,
+            "postgres" => postgres::MAX_PARAMS_POSTGRES,
+            _ => panic!(),
+        };
+        edit(
+            self,
+            &EditType::Upsert,
+            &max_params,
+            table,
+            columns,
+            rows,
+            true,
+            &[],
+        )
+        .await?;
+        Ok(())
     }
 
-    /// [Query::upsert_returning()]
+    /// Like [Query::upsert()], but in addition this function also returns the data that was
+    /// upserted for the columns included in `returning`, or all of the upserted data if
+    /// `returning` is an empty list.
     pub async fn upsert_returning(
         &self,
         table: &str,
@@ -228,10 +274,22 @@ impl AnyPool {
         rows: impl IntoIterator<Item = &Row>,
         returning: &[&str],
     ) -> Result<Rows, Error> {
-        let refs: Vec<&Row> = rows.into_iter().collect();
-        self.pool
-            .upsert_returning(table, columns, &refs, returning)
-            .await
+        let max_params = match self.syntax().name() {
+            "sqlite" => sqlite::MAX_PARAMS_SQLITE,
+            "postgres" => postgres::MAX_PARAMS_POSTGRES,
+            _ => panic!(),
+        };
+        edit(
+            self,
+            &EditType::Upsert,
+            &max_params,
+            table,
+            columns,
+            rows,
+            true,
+            returning,
+        )
+        .await
     }
 
     #[allow(unused)]
@@ -321,7 +379,7 @@ impl AnyPool {
             CachingStrategy::Memory(_) => Ok(self.query_cache.keys().len() as u64),
             _ => {
                 let rows = self
-                    .query(&format!("SELECT COUNT(1) from {QUERY_CACHE_TABLE}"), &[])
+                    .query(&format!("SELECT COUNT(1) from {QUERY_CACHE_TABLE}"), ())
                     .await
                     .unwrap();
                 let value: u64 = rows.try_into_value::<u64>()?;
@@ -337,7 +395,7 @@ impl AnyPool {
             CachingStrategy::Memory(_) => Ok(self.table_cache.keys().len() as u64),
             _ => {
                 let rows = self
-                    .query(&format!("SELECT COUNT(1) from {TABLE_CACHE_TABLE}"), &[])
+                    .query(&format!("SELECT COUNT(1) from {TABLE_CACHE_TABLE}"), ())
                     .await
                     .unwrap();
                 let value: u64 = rows.try_into_value::<u64>()?;

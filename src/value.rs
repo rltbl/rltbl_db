@@ -40,6 +40,10 @@ use crate::Error;
 // A useful alias:
 pub type JsonValue = serde_json::Value;
 
+///////////////////////////////////////////////////////////////////////////////
+// Value and ValueType
+///////////////////////////////////////////////////////////////////////////////
+
 /// The type of a [Value], including the name of the type according to the underlying database,
 /// as a [String].
 pub enum ValueType {
@@ -666,12 +670,6 @@ impl TryFrom<&Value> for Decimal {
     }
 }
 
-// TODO: The purpose of the code below is to enable simply passing argument lists
-// such as: &["foo", 1, 3.2] to execute() and query().
-// The code below does the job, but because of the way that Query is defined, we must make the
-// iterators concrete before calling query() or execute(), which is inefficient. See the
-// branch rewrite-api-more-tentative-part for code that uses the boilerplate below.
-
 ///////////////////////////////////////////////////////////////////////////////
 // IntoValue
 ///////////////////////////////////////////////////////////////////////////////
@@ -731,53 +729,5 @@ impl<T: IntoValue> IntoValues for &Vec<T> {
 impl IntoValues for &[Value] {
     fn into_values(self) -> Result<impl Iterator<Item = Value>, Error> {
         Ok(self.into_iter().map(|value| value.clone().into_value()))
-    }
-}
-
-/////////////////////////
-// Alternatives using refs. These actually compile, but they don't work when you try to use
-// them, e.g.,
-// pool.execute(
-//     &format!("INSERT INTO test_table_text VALUES ({pp}1)"),
-//     &[&"foo"],
-// ),
-// because, ultimately, we would need to create a Value from a &str and return a reference to it.
-// That might work in principle if we did not need to allocate more data. But to create a Value
-// from a &str requires creating new data (a new String to wrap as Value::Text()) on the heap,
-// inside a function, and then returning a reference to it, which is impossible.
-/////////////////////////
-
-pub trait IntoValueRef {
-    fn into_value_ref<'a>(&'a self) -> &'a Value;
-}
-
-impl<T: for<'a> Into<&'a Value>> IntoValueRef for T
-where
-    for<'b> &'b Value: From<&'b T>,
-{
-    fn into_value_ref<'a>(&'a self) -> &'a Value {
-        self.into()
-    }
-}
-
-pub trait IntoValueRefs {
-    fn into_value_refs<'a>(&'a self) -> Result<impl Iterator<Item = &'a Value>, Error>;
-}
-
-impl IntoValueRefs for () {
-    fn into_value_refs<'a>(&'a self) -> Result<impl Iterator<Item = &'a Value>, Error> {
-        Ok(vec![].into_iter())
-    }
-}
-
-impl<T: IntoValueRef, const N: usize> IntoValueRefs for [T; N] {
-    fn into_value_refs<'a>(&'a self) -> Result<impl Iterator<Item = &'a Value>, Error> {
-        Ok(self.into_iter().map(|value| value.into_value_ref()))
-    }
-}
-
-impl<T: IntoValueRef, const N: usize> IntoValueRefs for &[T; N] {
-    fn into_value_refs<'a>(&'a self) -> Result<impl Iterator<Item = &'a Value>, Error> {
-        Ok(self.into_iter().map(|value| value.into_value_ref()))
     }
 }

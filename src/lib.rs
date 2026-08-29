@@ -26,18 +26,18 @@
 //!     let pool = AnyPool::connect(url).await?;
 //!
 //!     // Get one value.
-//!     let value: i64 = pool.query("SELECT 1", []).await?.try_into_value()?;
+//!     let value: i64 = pool.query("SELECT 1", ()).await?.try_into_value()?;
 //!     assert_eq!(value, 1);
 //!
 //!     // Execute a statement.
-//!     pool.execute("CREATE TABLE foo ( bar INT )", []).await?;
+//!     pool.execute("CREATE TABLE foo ( bar INT )", ()).await?;
 //!
 //!     // Insert one row.
 //!     let row = row!{ "bar" => 2_i64 };
 //!     pool.insert("foo", &["bar"], &[row.clone()]).await?;
 //!
 //!     // Retrieve the inserted row.
-//!     let result = pool.query("SELECT bar FROM foo", []).await?.row()?;
+//!     let result = pool.query("SELECT bar FROM foo", ()).await?.row()?;
 //!     assert_eq!(result, row);
 //!
 //!     // Query with parameters.

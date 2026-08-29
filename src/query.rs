@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use indexmap::IndexMap;
 
-use crate::{Error, Row, Rows, Syntax, Value};
+use crate::{Error, Rows, Syntax, Value};
 
 // JO: The Query trait provides the main database methods,
 // which are shared by both Pool and Transaction.
@@ -22,10 +22,8 @@ pub trait Query: std::fmt::Debug + Sync {
     async fn columns(&self, table: &str) -> Result<IndexMap<String, String>, Error> {
         let mut columns = IndexMap::new();
         let (sql, params) = self.syntax().columns_sql(table);
-        // TODO: It's annoying that we have to do this first:
-        let params = &params.iter().map(|val| val).collect::<Vec<_>>()[..];
         // TODO: Use the "no_cache_clean" version instead here:
-        let rows = self.query(&sql, params).await?;
+        let rows = self.query(&sql, &params).await?;
         for row in rows.iter() {
             match (
                 row.get("column_name")
@@ -51,13 +49,12 @@ pub trait Query: std::fmt::Debug + Sync {
         }
     }
 
+    // TODO: Possibly combine this with columns?
     /// Retrieve the primary key column names for a given table.
     async fn primary_keys(&self, table: &str) -> Result<Vec<String>, Error> {
         let (sql, params) = self.syntax().primary_keys_sql(table);
-        // TODO: It's annoying that we have to do this first:
-        let params = &params.iter().map(|val| val).collect::<Vec<_>>()[..];
-        // TODO: Use the "no_cache_clean" version of query().
-        let rows = self.query(&sql, params).await?;
+        // TODO: Use the "no_cache_clean" version instead here:
+        let rows = self.query(&sql, &params).await?;
         rows.rows
             .iter()
             .map(|row| {
@@ -73,7 +70,7 @@ pub trait Query: std::fmt::Debug + Sync {
     }
 
     /// Execute a query without returning any values.
-    async fn execute(&self, sql: &str, params: &[&Value]) -> Result<(), Error> {
+    async fn execute(&self, sql: &str, params: &[Value]) -> Result<(), Error> {
         self.query(sql, params).await?;
         Ok(())
     }
@@ -82,59 +79,11 @@ pub trait Query: std::fmt::Debug + Sync {
     async fn execute_batch(&self, sql: &str) -> Result<(), Error>;
 
     /// Execute a query returning a collection of [Rows].
-    async fn query(&self, _sql: &str, _params: &[&Value]) -> Result<Rows, Error> {
+    async fn query(&self, _sql: &str, _params: &[Value]) -> Result<Rows, Error> {
         // MC: Why do we need this? Every driver is going to require its own implementation of
         // query().
         todo!("default implementation of Query::query")
     }
-
-    /// Insert rows into the given columns of the given table. If an input row does not have a
-    /// key corresponding to one of the given columns, use NULL as the value of that column when
-    /// inserting the row to the table.
-    async fn insert(&self, table: &str, columns: &[&str], rows: &[&Row]) -> Result<(), Error>;
-
-    /// Like [Query::insert()], but in addition this function also returns the data that was
-    /// inserted into the columns included in `returning`, or all of the inserted data if
-    /// `returning` is an empty list.
-    async fn insert_returning(
-        &self,
-        table: &str,
-        columns: &[&str],
-        rows: &[&Row],
-        returning: &[&str],
-    ) -> Result<Rows, Error>;
-
-    /// Update the given columns of the given table using the given rows. The table should have a
-    /// primary key and any columns that are part of the primary key should be present within each
-    /// input row. The primary key column values will be used as a way of identifying the rows to
-    /// update, while the other columns in the row will be updated to the given new values.
-    async fn update(&self, table: &str, columns: &[&str], rows: &[&Row]) -> Result<(), Error>;
-
-    /// Like [Query::update()], but in addition this function also returns the data that was
-    /// updated for the columns included in `returning`, or all of the updated data if
-    /// `returning` is an empty list.
-    async fn update_returning(
-        &self,
-        table: &str,
-        columns: &[&str],
-        rows: &[&Row],
-        returning: &[&str],
-    ) -> Result<Rows, Error>;
-
-    /// Attempt to insert the given rows to the given table, similarly to [Query::insert()].
-    /// In case there is a conflict, update the table instead, similarly to [Query::update()].
-    async fn upsert(&self, table: &str, columns: &[&str], rows: &[&Row]) -> Result<(), Error>;
-
-    /// Like [Query::upsert()], but in addition this function also returns the data that was
-    /// upserted for the columns included in `returning`, or all of the upserted data if
-    /// `returning` is an empty list.
-    async fn upsert_returning(
-        &self,
-        table: &str,
-        columns: &[&str],
-        rows: &[&Row],
-        returning: &[&str],
-    ) -> Result<Rows, Error>;
 
     /// Drop the given table from the database. Note that for PostgreSQL (see
     /// <https://www.postgresql.org/docs/current/sql-droptable.html>), if the dropped table,

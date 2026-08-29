@@ -12,11 +12,7 @@ use deadpool_sqlite::{
 use indexmap::indexmap;
 use std::str::from_utf8;
 
-use crate::{
-    Error, Pool, Query, Row, Rows, Syntax, Transaction, Value,
-    shared::{EditType, edit},
-    sqlite::{MAX_PARAMS_SQLITE, SqliteSyntax},
-};
+use crate::{Error, Pool, Query, Row, Rows, Syntax, Transaction, Value, sqlite::SqliteSyntax};
 
 /// Uses the rusqlite driver to directly query a database using the given prepared [Statement]
 /// and parameters.
@@ -185,7 +181,7 @@ impl Query for RusqlitePool {
     }
 
     /// Implements [Query::query()] for SQLite.
-    async fn query(&self, sql: &str, params: &[&Value]) -> Result<Rows, Error> {
+    async fn query(&self, sql: &str, params: &[Value]) -> Result<Rows, Error> {
         let conn = self.pool.get().await?;
         let sql_string = sql.to_string();
         // TODO: All of this cloning is annoying and probably unnecessary.
@@ -213,117 +209,6 @@ impl Query for RusqlitePool {
             Ok(Rows { rows })
         })
         .await?
-    }
-
-    /// Implements [Query::insert()] for SQLite.
-    async fn insert(&self, table: &str, columns: &[&str], rows: &[&Row]) -> Result<(), Error> {
-        edit(
-            self,
-            &EditType::Insert,
-            &MAX_PARAMS_SQLITE,
-            table,
-            columns,
-            rows,
-            false,
-            &[],
-        )
-        .await?;
-        Ok(())
-    }
-
-    /// Implements [Query::insert_returning()] for SQLite.
-    async fn insert_returning(
-        &self,
-        table: &str,
-        columns: &[&str],
-        rows: &[&Row],
-        returning: &[&str],
-    ) -> Result<Rows, Error> {
-        edit(
-            self,
-            &EditType::Insert,
-            &MAX_PARAMS_SQLITE,
-            table,
-            columns,
-            rows,
-            true,
-            returning,
-        )
-        .await
-    }
-
-    /// Implements [Query::update()] for SQLite.
-    async fn update(&self, table: &str, columns: &[&str], rows: &[&Row]) -> Result<(), Error> {
-        edit(
-            self,
-            &EditType::Update,
-            &MAX_PARAMS_SQLITE,
-            table,
-            columns,
-            rows,
-            false,
-            &[],
-        )
-        .await?;
-        Ok(())
-    }
-
-    /// Implements [Query::update_returning()] for SQLite.
-    async fn update_returning(
-        &self,
-        table: &str,
-        columns: &[&str],
-        rows: &[&Row],
-        returning: &[&str],
-    ) -> Result<Rows, Error> {
-        edit(
-            self,
-            &EditType::Update,
-            &MAX_PARAMS_SQLITE,
-            table,
-            columns,
-            rows,
-            true,
-            returning,
-        )
-        .await
-    }
-
-    /// Implements [Query::upsert()] for SQLite.
-    async fn upsert(&self, table: &str, columns: &[&str], rows: &[&Row]) -> Result<(), Error> {
-        edit(
-            self,
-            &EditType::Upsert,
-            &MAX_PARAMS_SQLITE,
-            table,
-            columns,
-            rows,
-            false,
-            &[],
-        )
-        .await?;
-        Ok(())
-    }
-
-    /// Implements [Query::upsert_returning()] for SQLite.
-    async fn upsert_returning(
-        &self,
-        table: &str,
-        columns: &[&str],
-        rows: &[&Row],
-        returning: &[&str],
-    ) -> Result<Rows, Error> {
-        edit(
-            self,
-            &EditType::Upsert,
-            &MAX_PARAMS_SQLITE,
-            table,
-            columns,
-            rows,
-            true,
-            returning,
-        )
-        .await
     }
 
     /// Implements [Query::drop_table()] for SQLite.
@@ -408,7 +293,7 @@ impl Query for RusqliteTransaction {
     }
 
     /// Implements [Query::query()] for [RusqliteTransaction]
-    async fn query(&self, sql: &str, params: &[&Value]) -> Result<Rows, Error> {
+    async fn query(&self, sql: &str, params: &[Value]) -> Result<Rows, Error> {
         match &self.conn {
             Some(conn) => {
                 let sql_string = sql.to_string();
@@ -442,54 +327,6 @@ impl Query for RusqliteTransaction {
                 "transaction already complete"
             ))),
         }
-    }
-
-    /// Implements [Query::insert()] for [RusqliteTransaction]
-    async fn insert(&self, _table: &str, _columns: &[&str], _rows: &[&Row]) -> Result<(), Error> {
-        todo!()
-    }
-
-    /// Implements [Query::insert_returning()] for [RusqliteTransaction]
-    async fn insert_returning(
-        &self,
-        _table: &str,
-        _columns: &[&str],
-        _rows: &[&Row],
-        _returning: &[&str],
-    ) -> Result<Rows, Error> {
-        todo!()
-    }
-
-    /// Implements [Query::update()] for [RusqliteTransaction]
-    async fn update(&self, _table: &str, _columns: &[&str], _rows: &[&Row]) -> Result<(), Error> {
-        todo!()
-    }
-
-    /// Implements [Query::update_returning()] for [RusqliteTransaction]
-    async fn update_returning(
-        &self,
-        _table: &str,
-        _columns: &[&str],
-        _rows: &[&Row],
-        _returning: &[&str],
-    ) -> Result<Rows, Error> {
-        todo!()
-    }
-
-    /// Implements [Query::upsert()] for [RusqliteTransaction]
-    async fn upsert(&self, _table: &str, _columns: &[&str], _rows: &[&Row]) -> Result<(), Error> {
-        todo!()
-    }
-
-    /// Implements [Query::upsert_returning()] for [RusqliteTransaction]
-    async fn upsert_returning(
-        &self,
-        _table: &str,
-        _columns: &[&str],
-        _rows: &[&Row],
-        _returning: &[&str],
-    ) -> Result<Rows, Error> {
-        todo!()
     }
 
     /// Implements [Query::drop_table()] for [RusqliteTransaction]
