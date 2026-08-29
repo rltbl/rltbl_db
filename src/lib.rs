@@ -168,10 +168,13 @@ pub mod value;
 pub mod syntax;
 
 // Built-in Syntax trait implementations
-/// SQLite [Syntax] implementaion.
+/// SQLite [Syntax] implementation.
 pub mod sqlite;
-/// Postgres [Syntax] implementaion.
+/// Postgres [Syntax] implementation.
 pub mod postgres;
+
+/// Utilities for parsing (generic) SQL expressions
+pub mod sql_parse;
 
 /// The [Query] trait
 pub mod query;

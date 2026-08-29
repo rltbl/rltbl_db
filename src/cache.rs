@@ -2,7 +2,7 @@
 
 use std::{fmt::Display, str::FromStr};
 
-use crate::{Error, Row};
+use crate::{AnyPool, Error, Row};
 
 /// The name of the database's query cache table.
 pub static QUERY_CACHE_TABLE: &str = "rltbl_db_query_cache";
@@ -89,4 +89,50 @@ pub struct MemoryQueryCacheKey {
 pub struct MemoryQueryCacheValue {
     pub content: Vec<Row>,
     pub last_verified: u128,
+}
+
+////////////////////////
+// Database cache code
+////////////////////////
+
+/// Ensure that the query cache table and the table cache table exist (see
+/// [QUERY_CACHE_TABLE] and [TABLE_CACHE_TABLE]).
+pub async fn ensure_cache_tables_exist(_pool: &AnyPool) -> Result<(), Error> {
+    // if !exists_in_meta_cache(QUERY_CACHE_TABLE)? || !exists_in_meta_cache(TABLE_CACHE_TABLE)? {
+    // for special_table in [QUERY_CACHE_TABLE, TABLE_CACHE_TABLE] {
+    //     let sql = match special_table {
+    //         table if table == QUERY_CACHE_TABLE => pool.kind().create_query_cache_table_sql(),
+    //         table if table == TABLE_CACHE_TABLE => pool.kind().create_table_cache_table_sql(),
+    //         _ => unreachable!(),
+    //     };
+    //     match pool.execute_no_cache_clean(&sql, ()).await {
+    //         Ok(_) => (),
+    //         Err(_) => {
+    //             // Since we are not using transactions, a race condition could occur in
+    //             // which two or more threads are trying to create the cache at the same
+    //             // time, triggering a primary key violation in the metadata table. So if
+    //             // there is an error creating the cache table we just check that it exists
+    //             // and if it does we assume that all is ok.
+    //             match pool.table_exists(special_table).await? {
+    //                 false => {
+    //                     return Err(Error::DatabaseError(format!(
+    //                         "The cache table '{special_table}' could not be created"
+    //                     )));
+    //                 }
+    //                 true => (),
+    //             }
+    //         }
+    //     };
+    //     let mut cache = get_meta_cache()?;
+    //     cache.insert(special_table.to_string());
+    // }
+    // }
+    todo!()
+}
+
+/// Uses the current caching strategy to clear the query cache for any of the given tables
+/// that (a) are views and (b) have source tables that have been modified more recently than
+/// the view. This function works both with database and memory cache strategies.
+pub async fn update_cached_views(_pool: &AnyPool, _tables: &[&str]) -> Result<(), Error> {
+    todo!()
 }

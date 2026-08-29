@@ -10,10 +10,11 @@ use crate::{
     AnyTransaction, Error, Query, Row, Rows, Syntax, Transaction, Value,
     cache::{
         CachingStrategy, MemoryQueryCacheKey, MemoryQueryCacheValue, QUERY_CACHE_TABLE,
-        TABLE_CACHE_TABLE,
+        TABLE_CACHE_TABLE, ensure_cache_tables_exist, update_cached_views,
     },
     postgres,
     shared::{EditType, edit},
+    sql_parse::get_accessed_tables,
     sqlite,
     value::IntoValues,
 };
@@ -305,22 +306,14 @@ impl AnyPool {
 
     ////////////// Caching ///////////////
     /// TODO: Add docstring.
-    pub async fn cache(
-        &self,
-        sql: &str,
-        params: impl IntoIterator<Item = &Value>,
-    ) -> Result<Rows, Error> {
+    pub async fn cache(&self, sql: &str, values: impl IntoValues) -> Result<Rows, Error> {
         match self.get_caching_strategy() {
-            CachingStrategy::None => self.cache_tables(&[], sql, params).await,
+            CachingStrategy::None => self.cache_tables(&[], sql, values).await,
             _ => {
-                // TODO: The following line is only to get this to compile. We need to
-                // implement get_accessed_tables() and uncomment the line below it.
-                let tables_read: std::collections::BTreeSet<String> =
-                    std::collections::BTreeSet::new();
-                // let tables_read = get_accessed_tables(sql)?;
+                let tables_read = get_accessed_tables(sql)?;
                 let tables_read: Vec<_> = tables_read.iter().map(|s| s.as_str()).collect();
                 match tables_read.is_empty() {
-                    false => self.cache_tables(&tables_read, sql, params).await,
+                    false => self.cache_tables(&tables_read, sql, values).await,
                     true => Err(Error::InputError(format!(
                         "No tables are read from in SQL: {sql}"
                     ))),
@@ -333,16 +326,32 @@ impl AnyPool {
     /// must correspond to the tables queried from in the given SQL command(s).
     async fn cache_tables(
         &self,
-        _tables: &[&str],
-        _sql: &str,
-        _params: impl IntoIterator<Item = &Value>,
+        tables: &[&str],
+        sql: &str,
+        values: impl IntoValues,
     ) -> Result<Rows, Error> {
+        let db_cache = async |_tables: &[&str],
+                              _sql: &str,
+                              _values: &[Value]|
+               -> Result<Rows, Error> { todo!() };
+        let _mem_cache = async |_tables: &[&str],
+                                _sql: &str,
+                                _values: &[Value],
+                                _cache_size: usize|
+               -> Result<Rows, Error> { todo!() };
+
         match self.get_caching_strategy() {
             CachingStrategy::None => {
-                todo!()
+                // TODO: Use the "no_cache_clean" version of query()
+                let rows = self.query(sql, values).await?;
+                Ok(rows)
             }
             CachingStrategy::TruncateAll | CachingStrategy::Truncate => {
-                todo!()
+                let values = values.into_values()?.collect::<Vec<_>>();
+                ensure_cache_tables_exist(self).await?;
+                update_cached_views(self, tables).await?;
+                let rows = db_cache(tables, sql, &values).await?;
+                Ok(rows)
             }
             CachingStrategy::Trigger => {
                 todo!()
