@@ -5,7 +5,9 @@ use std::{
     collections::{HashMap, HashSet},
     fmt::Display,
     str::FromStr,
-    sync::Arc,
+    sync::{Arc, Mutex, MutexGuard},
+    thread,
+    time::Duration,
 };
 
 use crate::{AnyPool, Error, Row};
@@ -18,6 +20,10 @@ pub static TABLE_CACHE_TABLE: &str = "rltbl_db_table_cache";
 
 /// Default size for the in-memory query cache
 pub static DEFAULT_MEMORY_QUERY_CACHE_SIZE: usize = 1000;
+
+// Maximum number of times to try to retrieve an in-memory cache (retrieval will fail when the
+// cache is locked by another thread).
+static MAX_RETRIEVAL_ATTEMPTS: usize = 20;
 
 /// Strategy to use when caching query results
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -102,21 +108,46 @@ pub struct MemoryQueryCacheValue {
 ////////////////////////
 #[derive(Debug, Default)]
 pub struct MetaCache {
-    cache: Arc<HashSet<String>>,
+    cache: Mutex<HashSet<String>>,
 }
 
 impl MetaCache {
     /// TODO: Add docstring.
-    pub fn exists(&self, object: &str) -> bool {
-        match self.cache.get(object) {
-            Some(_) => true,
-            None => false,
+    pub fn get_cache<'a>(&'a self) -> Result<MutexGuard<'a, HashSet<String>>, Error> {
+        let mut remaining_attempts = MAX_RETRIEVAL_ATTEMPTS;
+        let mut meta_cache = self.cache.try_lock();
+        while let Err(err) = meta_cache {
+            meta_cache = self.cache.try_lock();
+            if let Ok(_) = meta_cache {
+                break;
+            }
+            remaining_attempts -= 1;
+            if remaining_attempts == 0 {
+                return Err(Error::ConnectError(format!(
+                    "Error locking cache: {err} (retried {MAX_RETRIEVAL_ATTEMPTS} times)"
+                )));
+            } else {
+                thread::sleep(Duration::from_millis(5));
+            }
+        }
+        let meta_cache = meta_cache.unwrap();
+        Ok(meta_cache)
+    }
+
+    /// TODO: Add docstring.
+    pub fn exists(&self, object: &str) -> Result<bool, Error> {
+        let cache = self.get_cache()?;
+        match cache.get(object) {
+            Some(_) => Ok(true),
+            None => Ok(false),
         }
     }
 
     /// TODO: Add docstring.
-    pub fn insert(&mut self, object: &str) {
-        self.cache.insert(object.to_string());
+    pub fn insert(&self, object: &str) -> Result<(), Error> {
+        let mut cache = self.get_cache()?;
+        cache.insert(object.to_string());
+        Ok(())
     }
 }
 
@@ -144,12 +175,14 @@ impl MemoryTableCache {
 
 /// Ensure that the query cache table and the table cache table exist (see
 /// [QUERY_CACHE_TABLE] and [TABLE_CACHE_TABLE]).
-pub async fn ensure_cache_tables_exist(pool: &mut AnyPool) -> Result<(), Error> {
-    if !pool.meta_cache.exists(QUERY_CACHE_TABLE) {
+pub async fn ensure_cache_tables_exist(pool: &AnyPool) -> Result<(), Error> {
+    if !pool.meta_cache.exists(QUERY_CACHE_TABLE)? {
         pool.create_query_cache_table().await?;
+        pool.meta_cache.insert(QUERY_CACHE_TABLE)?;
     }
-    if !pool.meta_cache.exists(TABLE_CACHE_TABLE) {
+    if !pool.meta_cache.exists(TABLE_CACHE_TABLE)? {
         pool.create_table_cache_table().await?;
+        pool.meta_cache.insert(TABLE_CACHE_TABLE)?;
     }
     Ok(())
 }

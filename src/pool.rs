@@ -304,7 +304,7 @@ impl AnyPool {
 
     ////////////// Caching ///////////////
     /// TODO: Add docstring.
-    pub async fn cache(&mut self, sql: &str, values: impl IntoValues) -> Result<Rows, Error> {
+    pub async fn cache(&self, sql: &str, values: impl IntoValues) -> Result<Rows, Error> {
         match self.get_caching_strategy() {
             CachingStrategy::None => self.cache_tables(&[], sql, values).await,
             _ => {
@@ -323,7 +323,7 @@ impl AnyPool {
     /// Similar to [Query::cache()]. This version accepts an explicit list of tables, which
     /// must correspond to the tables queried from in the given SQL command(s).
     async fn cache_tables(
-        &mut self,
+        &self,
         tables: &[&str],
         sql: &str,
         values: impl IntoValues,
