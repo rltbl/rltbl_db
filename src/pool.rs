@@ -1,15 +1,14 @@
 //! The Pool Trait, for implementing a database connection pool
 
-use std::{iter::IntoIterator, sync::Arc};
+use std::iter::IntoIterator;
 
 use async_trait::async_trait;
 use indexmap::IndexMap;
-use std::collections::HashMap;
 
 use crate::{
     AnyTransaction, Error, Query, Row, Rows, Syntax, Transaction, Value,
     cache::{
-        CachingStrategy, MemoryQueryCacheKey, MemoryQueryCacheValue, QUERY_CACHE_TABLE,
+        CachingStrategy, MemoryQueryCache, MemoryTableCache, MetaCache, QUERY_CACHE_TABLE,
         TABLE_CACHE_TABLE, ensure_cache_tables_exist, update_cached_views,
     },
     postgres,
@@ -36,10 +35,9 @@ pub struct AnyPool {
     /// the cache will be maintained in accordance with the given [CachingStrategy].
     /// For further information, see [Query::set_cache_aware_query()].
     cache_aware_query: bool,
-    #[allow(unused)]
-    meta_cache: Arc<Vec<String>>,
-    query_cache: Arc<IndexMap<MemoryQueryCacheKey, MemoryQueryCacheValue>>,
-    table_cache: Arc<HashMap<String, u128>>,
+    pub meta_cache: MetaCache,
+    pub memory_query_cache: MemoryQueryCache,
+    pub memory_table_cache: MemoryTableCache,
 }
 
 // Note: This is dyn compatible ONLY if every impl Query uses #[async_trait].
@@ -74,9 +72,9 @@ impl From<Box<dyn Pool>> for AnyPool {
             pool,
             caching_strategy: CachingStrategy::None,
             cache_aware_query: false,
-            meta_cache: Arc::new(Vec::default()),
-            query_cache: Arc::new(IndexMap::default()),
-            table_cache: Arc::new(HashMap::default()),
+            meta_cache: MetaCache::default(),
+            memory_query_cache: MemoryQueryCache::default(),
+            memory_table_cache: MemoryTableCache::default(),
         }
     }
 }
@@ -306,7 +304,7 @@ impl AnyPool {
 
     ////////////// Caching ///////////////
     /// TODO: Add docstring.
-    pub async fn cache(&self, sql: &str, values: impl IntoValues) -> Result<Rows, Error> {
+    pub async fn cache(&mut self, sql: &str, values: impl IntoValues) -> Result<Rows, Error> {
         match self.get_caching_strategy() {
             CachingStrategy::None => self.cache_tables(&[], sql, values).await,
             _ => {
@@ -325,7 +323,7 @@ impl AnyPool {
     /// Similar to [Query::cache()]. This version accepts an explicit list of tables, which
     /// must correspond to the tables queried from in the given SQL command(s).
     async fn cache_tables(
-        &self,
+        &mut self,
         tables: &[&str],
         sql: &str,
         values: impl IntoValues,
@@ -381,11 +379,46 @@ impl AnyPool {
         self.cache_aware_query
     }
 
+    /// Create the query cache table in the database.
+    pub async fn create_query_cache_table(&self) -> Result<(), Error> {
+        let get_epoch_now = self.syntax().get_epoch_time_sql();
+        let _sql = format!(
+            r#"CREATE TABLE IF NOT EXISTS "{QUERY_CACHE_TABLE}" (
+                  "statement" TEXT,
+                  "parameters" TEXT,
+                  "tables" TEXT,
+                  "value" TEXT,
+                  "last_verified" BIGINT DEFAULT ({get_epoch_now}),
+                  PRIMARY KEY ("statement", "parameters")
+              )"#
+        );
+        if 1 == 1 {
+            todo!()
+        }
+        Ok(())
+    }
+
+    /// Create the table cache table in the database.
+    pub async fn create_table_cache_table(&self) -> Result<(), Error> {
+        let get_epoch_now = self.syntax().get_epoch_time_sql();
+        let _sql = format!(
+            r#"CREATE TABLE IF NOT EXISTS "{TABLE_CACHE_TABLE}" (
+                  "table" TEXT PRIMARY KEY,
+                  "last_modified" BIGINT DEFAULT ({get_epoch_now})
+                )"#
+        );
+        if 1 == 1 {
+            todo!()
+        }
+        Ok(())
+    }
+
+    // TODO: Move these methdos to QueryCache and TableCache:
     /// TODO: Add docstring.
     pub async fn query_cache_len(&self) -> Result<u64, Error> {
         match self.caching_strategy {
             CachingStrategy::None => Ok(0),
-            CachingStrategy::Memory(_) => Ok(self.query_cache.keys().len() as u64),
+            CachingStrategy::Memory(_) => Ok(self.memory_query_cache.cache.keys().len() as u64),
             _ => {
                 let rows = self
                     .query(&format!("SELECT COUNT(1) from {QUERY_CACHE_TABLE}"), ())
@@ -401,7 +434,7 @@ impl AnyPool {
     pub async fn table_cache_len(&self) -> Result<u64, Error> {
         match self.caching_strategy {
             CachingStrategy::None => Ok(0),
-            CachingStrategy::Memory(_) => Ok(self.table_cache.keys().len() as u64),
+            CachingStrategy::Memory(_) => Ok(self.memory_table_cache.cache.keys().len() as u64),
             _ => {
                 let rows = self
                     .query(&format!("SELECT COUNT(1) from {TABLE_CACHE_TABLE}"), ())

@@ -1,6 +1,12 @@
 //! Caching
 
-use std::{fmt::Display, str::FromStr};
+use indexmap::IndexMap;
+use std::{
+    collections::{HashMap, HashSet},
+    fmt::Display,
+    str::FromStr,
+    sync::Arc,
+};
 
 use crate::{AnyPool, Error, Row};
 
@@ -92,42 +98,60 @@ pub struct MemoryQueryCacheValue {
 }
 
 ////////////////////////
+// The meta-cache
+////////////////////////
+#[derive(Debug, Default)]
+pub struct MetaCache {
+    cache: Arc<HashSet<String>>,
+}
+
+impl MetaCache {
+    /// TODO: Add docstring.
+    pub fn exists(&self, object: &str) -> bool {
+        match self.cache.get(object) {
+            Some(_) => true,
+            None => false,
+        }
+    }
+
+    /// TODO: Add docstring.
+    pub fn insert(&mut self, object: &str) {
+        self.cache.insert(object.to_string());
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct MemoryQueryCache {
+    pub cache: Arc<IndexMap<MemoryQueryCacheKey, MemoryQueryCacheValue>>,
+}
+
+impl MemoryQueryCache {
+    // TODO: ...
+}
+
+#[derive(Debug, Default)]
+pub struct MemoryTableCache {
+    pub cache: Arc<HashMap<String, u128>>,
+}
+
+impl MemoryTableCache {
+    // TODO: ...
+}
+
+////////////////////////
 // Database cache code
 ////////////////////////
 
 /// Ensure that the query cache table and the table cache table exist (see
 /// [QUERY_CACHE_TABLE] and [TABLE_CACHE_TABLE]).
-pub async fn ensure_cache_tables_exist(_pool: &AnyPool) -> Result<(), Error> {
-    // if !exists_in_meta_cache(QUERY_CACHE_TABLE)? || !exists_in_meta_cache(TABLE_CACHE_TABLE)? {
-    // for special_table in [QUERY_CACHE_TABLE, TABLE_CACHE_TABLE] {
-    //     let sql = match special_table {
-    //         table if table == QUERY_CACHE_TABLE => pool.kind().create_query_cache_table_sql(),
-    //         table if table == TABLE_CACHE_TABLE => pool.kind().create_table_cache_table_sql(),
-    //         _ => unreachable!(),
-    //     };
-    //     match pool.execute_no_cache_clean(&sql, ()).await {
-    //         Ok(_) => (),
-    //         Err(_) => {
-    //             // Since we are not using transactions, a race condition could occur in
-    //             // which two or more threads are trying to create the cache at the same
-    //             // time, triggering a primary key violation in the metadata table. So if
-    //             // there is an error creating the cache table we just check that it exists
-    //             // and if it does we assume that all is ok.
-    //             match pool.table_exists(special_table).await? {
-    //                 false => {
-    //                     return Err(Error::DatabaseError(format!(
-    //                         "The cache table '{special_table}' could not be created"
-    //                     )));
-    //                 }
-    //                 true => (),
-    //             }
-    //         }
-    //     };
-    //     let mut cache = get_meta_cache()?;
-    //     cache.insert(special_table.to_string());
-    // }
-    // }
-    todo!()
+pub async fn ensure_cache_tables_exist(pool: &mut AnyPool) -> Result<(), Error> {
+    if !pool.meta_cache.exists(QUERY_CACHE_TABLE) {
+        pool.create_query_cache_table().await?;
+    }
+    if !pool.meta_cache.exists(TABLE_CACHE_TABLE) {
+        pool.create_table_cache_table().await?;
+    }
+    Ok(())
 }
 
 /// Uses the current caching strategy to clear the query cache for any of the given tables

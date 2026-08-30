@@ -33,6 +33,10 @@ pub trait Syntax: std::fmt::Debug {
     /// key columns of the given table.
     fn primary_keys_sql(&self, table: &str) -> (String, [Value; 1]);
 
+    fn get_epoch_time_sql(&self) -> &str {
+        "todo!"
+    }
+
     /// Get the prefix to use for parameters to queries that need to be bound.
     fn param_prefix(&self) -> &str;
 
