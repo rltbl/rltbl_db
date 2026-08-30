@@ -39,12 +39,13 @@
 //! JO: Yes, eventually.
 
 use indexmap::IndexMap;
+use serde::{Deserialize, Serialize};
 use std::ops::{Deref, DerefMut};
 
 use crate::{Error, Value};
 
 /// Represents a database row.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Row {
     /// A map from column names to column values.
     pub map: IndexMap<String, Value>,

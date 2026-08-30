@@ -129,8 +129,6 @@ impl Query for PostgresPool {
     async fn execute_batch(&self, sql: &str) -> Result<(), Error> {
         let client = self.pool.get().await?;
         client.batch_execute(sql).await?;
-
-        // TODO: Handle cache
         Ok(())
     }
 
@@ -270,12 +268,8 @@ impl Query for PostgresPool {
         // TODO: Add this.
         // let table = validate_table_name(table)?;
 
-        // TODO: Use the "no_cache_clean" version instead.
         self.execute(&format!(r#"DROP TABLE IF EXISTS "{table}" CASCADE"#), &[])
             .await?;
-
-        // TODO: Delete dirty entries from the cache in accordance with our caching strategy:
-        // clear_cache_for_dropped_tables(&self.pool(), &[&table]).await?;
         Ok(())
     }
 }

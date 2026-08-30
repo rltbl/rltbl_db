@@ -77,4 +77,123 @@ impl Syntax for PostgresSyntax {
     fn param_prefix(&self) -> &str {
         "$"
     }
+
+    /// TODO: Add docstring here.
+    fn get_epoch_time_sql(&self) -> &str {
+        "extract(epoch from now())"
+    }
+
+    /// TODO: Add docstring.
+    fn which_are_tables_sql(&self, objects: &[&str]) -> (String, Vec<Value>) {
+        let prefix = self.param_prefix().to_string();
+        let mut placeholders = vec![];
+        let mut parameters = vec![];
+        for (i, object) in objects.iter().enumerate() {
+            let i = i + 1;
+            placeholders.push(format!("{prefix}{i}"));
+            parameters.push(Value::from(object.to_string()));
+        }
+        let placeholders = placeholders.join(",");
+        (
+            format!(
+                r#"SELECT "table_name"
+                   FROM "information_schema"."tables"
+                   WHERE "table_type" LIKE '%TABLE'
+                   AND "table_name" IN ({placeholders})
+                   AND "table_schema" IN (
+                     SELECT REGEXP_SPLIT_TO_TABLE("setting", ', ')
+                     FROM "pg_settings"
+                     WHERE "name" = 'search_path'
+                   )"#
+            ),
+            parameters.clone(),
+        )
+    }
+
+    /// TODO: Add docstring.
+    fn which_are_views_sql(&self, objects: &[&str]) -> (String, Vec<Value>) {
+        let prefix = self.param_prefix().to_string();
+        let mut placeholders = vec![];
+        let mut parameters = vec![];
+        for (i, object) in objects.iter().enumerate() {
+            let i = i + 1;
+            placeholders.push(format!("{prefix}{i}"));
+            parameters.push(Value::from(object.to_string()));
+        }
+        let placeholders = placeholders.join(",");
+        (
+            format!(
+                r#"SELECT "table_name" AS "view_name"
+                   FROM "information_schema"."tables"
+                   WHERE "table_type" LIKE '%VIEW'
+                   AND "table_name" IN ({placeholders})
+                   AND "table_schema" IN (
+                     SELECT REGEXP_SPLIT_TO_TABLE("setting", ', ')
+                     FROM "pg_settings"
+                     WHERE "name" = 'search_path'
+                   )"#
+            ),
+            parameters.clone(),
+        )
+    }
+
+    /// Implements [Kind::view_sql_sql()] for PostgreSQLKind.
+    fn view_sql_sql(&self, view: &str) -> (String, [Value; 1]) {
+        (
+            format!(
+                r#"SELECT 'CREATE VIEW "{view}" AS '||"definition" AS "sql"
+                   FROM "pg_views"
+                   WHERE "viewname" = $1
+                   AND "schemaname" IN (
+                     SELECT REGEXP_SPLIT_TO_TABLE("setting", ', ')
+                     FROM "pg_settings"
+                     WHERE "name" = 'search_path'
+                   )"#
+            ),
+            values![view],
+        )
+    }
+
+    /// TODO: Add docstring.
+    fn wrap_trigger_content(
+        &self,
+        table: &str,
+        trigger_basename: &str,
+        trigger_content: &str,
+    ) -> Result<Vec<String>, Error> {
+        let function_name = format!("clean_{trigger_basename}");
+        let ddl = vec![
+            format!(
+                r#"CREATE OR REPLACE FUNCTION "{function_name}"()
+                   RETURNS TRIGGER
+                   LANGUAGE PLPGSQL
+                   AS
+                   $$
+                   BEGIN
+                       {trigger_content}
+                       RETURN NEW;
+                   END;
+                   $$"#
+            ),
+            format!(r#"DROP TRIGGER IF EXISTS "{trigger_basename}_after_insert" ON "{table}""#),
+            format!(
+                r#"CREATE TRIGGER "{trigger_basename}_after_insert"
+                   AFTER INSERT ON "{table}"
+                   EXECUTE FUNCTION "{function_name}"()"#
+            ),
+            format!(r#"DROP TRIGGER IF EXISTS "{trigger_basename}_after_update" ON "{table}""#),
+            format!(
+                r#"CREATE TRIGGER "{trigger_basename}_after_update"
+                   AFTER UPDATE ON "{table}"
+                   EXECUTE FUNCTION "{function_name}"()"#
+            ),
+            format!(r#"DROP TRIGGER IF EXISTS "{trigger_basename}_after_delete" ON "{table}""#),
+            format!(
+                r#"CREATE TRIGGER "{trigger_basename}_after_delete"
+                   AFTER DELETE ON "{table}"
+                   EXECUTE FUNCTION "{function_name}"()"#
+            ),
+        ];
+        Ok(ddl)
+    }
 }

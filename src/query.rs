@@ -22,7 +22,6 @@ pub trait Query: std::fmt::Debug + Sync {
     async fn columns(&self, table: &str) -> Result<IndexMap<String, String>, Error> {
         let mut columns = IndexMap::new();
         let (sql, params) = self.syntax().columns_sql(table);
-        // TODO: Use the "no_cache_clean" version instead here:
         let rows = self.query(&sql, &params).await?;
         for row in rows.iter() {
             match (
@@ -53,7 +52,6 @@ pub trait Query: std::fmt::Debug + Sync {
     /// Retrieve the primary key column names for a given table.
     async fn primary_keys(&self, table: &str) -> Result<Vec<String>, Error> {
         let (sql, params) = self.syntax().primary_keys_sql(table);
-        // TODO: Use the "no_cache_clean" version instead here:
         let rows = self.query(&sql, &params).await?;
         rows.rows
             .iter()
@@ -79,11 +77,7 @@ pub trait Query: std::fmt::Debug + Sync {
     async fn execute_batch(&self, sql: &str) -> Result<(), Error>;
 
     /// Execute a query returning a collection of [Rows].
-    async fn query(&self, _sql: &str, _params: &[Value]) -> Result<Rows, Error> {
-        // MC: Why do we need this? Every driver is going to require its own implementation of
-        // query().
-        todo!("default implementation of Query::query")
-    }
+    async fn query(&self, sql: &str, params: &[Value]) -> Result<Rows, Error>;
 
     /// Drop the given table from the database. Note that for PostgreSQL (see
     /// <https://www.postgresql.org/docs/current/sql-droptable.html>), if the dropped table,

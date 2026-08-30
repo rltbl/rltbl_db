@@ -30,6 +30,7 @@
 //! the serlialization is trivial. We represent complex cases as JSON using `serde_json`.
 
 use rust_decimal::Decimal;
+use serde::{Deserialize, Serialize};
 use std::{
     fmt::Display,
     hash::{Hash, Hasher},
@@ -64,7 +65,7 @@ pub enum ValueType {
 // bool, i8, i16, i32, i64, u8, u16, u32, u64, f32, f64, str -> String, char -> String
 // In addition to these: Null, Json, and Other.
 // Eventually we want to try Timestamp.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum Value {
     Null,

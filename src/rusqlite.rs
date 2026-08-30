@@ -174,7 +174,6 @@ impl Query for RusqlitePool {
             Ok(_) => {
                 // We need to drop conn here to ensure that any changes to the db are persisted.
                 drop(conn);
-                // TODO: handle cache
                 Ok(())
             }
         }
@@ -216,13 +215,10 @@ impl Query for RusqlitePool {
         // TODO: Add this function:
         // let table = validate_table_name(table)?;
 
-        // TODO: Use the "no_cache_clean" version instead:
         // Drop the table:
         self.execute(&format!(r#"DROP TABLE IF EXISTS "{table}""#), &[])
             .await?;
 
-        // TODO: Delete dirty entries from the cache in accordance with our caching strategy:
-        // clear_cache_for_dropped_tables(&self.pool(), &[&table]).await?;
         Ok(())
     }
 }

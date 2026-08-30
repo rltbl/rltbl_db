@@ -5,12 +5,12 @@ use std::{
     collections::{HashMap, HashSet},
     fmt::Display,
     str::FromStr,
-    sync::{Arc, Mutex, MutexGuard},
+    sync::{Mutex, MutexGuard},
     thread,
     time::Duration,
 };
 
-use crate::{AnyPool, Error, Row};
+use crate::{Error, Row};
 
 /// The name of the database's query cache table.
 pub static QUERY_CACHE_TABLE: &str = "rltbl_db_query_cache";
@@ -149,47 +149,105 @@ impl MetaCache {
         cache.insert(object.to_string());
         Ok(())
     }
+
+    /// Clear the meta cache.
+    pub fn clear(&self) -> Result<(), Error> {
+        let mut cache = self.get_cache()?;
+        cache.clear();
+        Ok(())
+    }
 }
 
 #[derive(Debug, Default)]
 pub struct MemoryQueryCache {
-    pub cache: Arc<IndexMap<MemoryQueryCacheKey, MemoryQueryCacheValue>>,
+    pub cache: Mutex<IndexMap<MemoryQueryCacheKey, MemoryQueryCacheValue>>,
 }
 
 impl MemoryQueryCache {
-    // TODO: ...
+    /// TODO: Add docstring.
+    pub fn get_cache<'a>(
+        &'a self,
+    ) -> Result<MutexGuard<'a, IndexMap<MemoryQueryCacheKey, MemoryQueryCacheValue>>, Error> {
+        let mut remaining_attempts = MAX_RETRIEVAL_ATTEMPTS;
+        let mut memory_cache = self.cache.try_lock();
+        while let Err(err) = memory_cache {
+            memory_cache = self.cache.try_lock();
+            if let Ok(_) = memory_cache {
+                break;
+            }
+            remaining_attempts -= 1;
+            if remaining_attempts == 0 {
+                return Err(Error::ConnectError(format!(
+                    "Error locking cache: {err} (retried {MAX_RETRIEVAL_ATTEMPTS} times)"
+                )));
+            } else {
+                thread::sleep(Duration::from_millis(5));
+            }
+        }
+        let memory_cache = memory_cache.unwrap();
+        Ok(memory_cache)
+    }
+
+    /// Clear the memory query cache.
+    pub fn clear(&self, tables: &[&str]) -> Result<(), Error> {
+        let mut cache = self.get_cache()?;
+        if tables.is_empty() {
+            cache.clear();
+        }
+        let keys = cache
+            .keys()
+            .map(|k| k)
+            .cloned()
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        for table in tables {
+            for key in keys.iter() {
+                if key.tables.contains(table) {
+                    cache.shift_remove(key);
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Default)]
 pub struct MemoryTableCache {
-    pub cache: Arc<HashMap<String, u128>>,
+    pub cache: Mutex<HashMap<String, u128>>,
 }
 
 impl MemoryTableCache {
-    // TODO: ...
-}
-
-////////////////////////
-// Database cache code
-////////////////////////
-
-/// Ensure that the query cache table and the table cache table exist (see
-/// [QUERY_CACHE_TABLE] and [TABLE_CACHE_TABLE]).
-pub async fn ensure_cache_tables_exist(pool: &AnyPool) -> Result<(), Error> {
-    if !pool.meta_cache.exists(QUERY_CACHE_TABLE)? {
-        pool.create_query_cache_table().await?;
-        pool.meta_cache.insert(QUERY_CACHE_TABLE)?;
+    pub fn get_cache<'a>(&'a self) -> Result<MutexGuard<'a, HashMap<String, u128>>, Error> {
+        let mut remaining_attempts = MAX_RETRIEVAL_ATTEMPTS;
+        let mut memory_cache = self.cache.try_lock();
+        while let Err(err) = memory_cache {
+            memory_cache = self.cache.try_lock();
+            if let Ok(_) = memory_cache {
+                break;
+            }
+            remaining_attempts -= 1;
+            if remaining_attempts == 0 {
+                return Err(Error::ConnectError(format!(
+                    "Error locking cache: {err} (retried {MAX_RETRIEVAL_ATTEMPTS} times)"
+                )));
+            } else {
+                thread::sleep(Duration::from_millis(5));
+            }
+        }
+        let memory_cache = memory_cache.unwrap();
+        Ok(memory_cache)
     }
-    if !pool.meta_cache.exists(TABLE_CACHE_TABLE)? {
-        pool.create_table_cache_table().await?;
-        pool.meta_cache.insert(TABLE_CACHE_TABLE)?;
-    }
-    Ok(())
-}
 
-/// Uses the current caching strategy to clear the query cache for any of the given tables
-/// that (a) are views and (b) have source tables that have been modified more recently than
-/// the view. This function works both with database and memory cache strategies.
-pub async fn update_cached_views(_pool: &AnyPool, _tables: &[&str]) -> Result<(), Error> {
-    todo!()
+    /// Clear the memory table cache.
+    pub fn clear(&self, tables: &[&str]) -> Result<(), Error> {
+        let mut cache = self.get_cache()?;
+        if tables.is_empty() {
+            cache.clear();
+        }
+        for table in tables {
+            cache.remove(&table.to_string());
+        }
+        Ok(())
+    }
 }

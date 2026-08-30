@@ -1362,9 +1362,11 @@ mod tests {
             let mut pool = AnyPool::connect(":memory:").await.unwrap();
             for caching_strategy in &all_strategies {
                 table_caching(&mut pool, &caching_strategy).await;
+                pool.clear_meta_cache().unwrap();
             }
             for strategy in &all_strategies {
                 view_caching(&mut pool, strategy).await;
+                pool.clear_meta_cache().unwrap();
             }
         }
         #[cfg(feature = "tokio-postgres")]
@@ -1372,9 +1374,11 @@ mod tests {
             let mut pool = AnyPool::connect("postgresql:///rltbl_db").await.unwrap();
             for caching_strategy in &all_strategies {
                 table_caching(&mut pool, &caching_strategy).await;
+                pool.clear_meta_cache().unwrap();
             }
             for strategy in &all_strategies {
                 view_caching(&mut pool, strategy).await;
+                pool.clear_meta_cache().unwrap();
             }
         }
         // TODO:
@@ -1383,9 +1387,11 @@ mod tests {
         //     let mut pool = AnyPool::connect(":memory:").await.unwrap();
         //     for caching_strategy in &all_strategies {
         //         table_caching(&mut pool, &caching_strategy).await;
+        //         pool.clear_meta_cache()?;
         //     }
         //     for strategy in &all_strategies {
         //         view_caching(&mut pool, strategy).await;
+        //         pool.clear_meta_cache()?;
         //     }
         // }
     }
@@ -1429,13 +1435,12 @@ mod tests {
         .await
         .unwrap();
 
-        // TODO: Progressively uncomment the rest of this:
         let rows = pool
             .cache("SELECT * from test_table_caching_1", ())
             .await
             .unwrap();
 
-        assert_eq!(pool.query_cache_len().await.unwrap(), 1);
+        assert_eq!(pool.query_cache_size().await.unwrap(), 1);
         assert_eq!(
             rows.rows,
             vec![
@@ -1448,7 +1453,6 @@ mod tests {
             ]
         );
 
-        /*
         let rows = pool
             .cache("SELECT * from test_table_caching_1", ())
             .await
@@ -1456,11 +1460,11 @@ mod tests {
 
         match strategy {
             CachingStrategy::None => (),
-            CachingStrategy::Memory(_) => assert_eq!(count_memory_query_cache_rows(), 1),
-            _ => assert_eq!(count_query_cache_rows(pool).await, 1),
+            CachingStrategy::Memory(_) => assert_eq!(pool.query_cache_size().await.unwrap(), 1),
+            _ => assert_eq!(pool.query_cache_size().await.unwrap(), 1),
         };
         assert_eq!(
-            *rows.deref(),
+            rows.rows,
             vec![
                 row! {
                     "value" => "alpha",
@@ -1488,8 +1492,8 @@ mod tests {
 
         match strategy {
             CachingStrategy::None => (),
-            CachingStrategy::Memory(_) => assert_eq!(count_memory_query_cache_rows(), 0),
-            _ => assert_eq!(count_query_cache_rows(pool).await, 0),
+            CachingStrategy::Memory(_) => assert_eq!(pool.query_cache_size().await.unwrap(), 0),
+            _ => assert_eq!(pool.query_cache_size().await.unwrap(), 0),
         };
 
         let rows = pool
@@ -1499,11 +1503,11 @@ mod tests {
 
         match strategy {
             CachingStrategy::None => (),
-            CachingStrategy::Memory(_) => assert_eq!(count_memory_query_cache_rows(), 1),
-            _ => assert_eq!(count_query_cache_rows(pool).await, 1),
+            CachingStrategy::Memory(_) => assert_eq!(pool.query_cache_size().await.unwrap(), 1),
+            _ => assert_eq!(pool.query_cache_size().await.unwrap(), 1),
         };
         assert_eq!(
-            *rows.deref(),
+            rows.rows,
             vec![
                 row! {
                     "value" => "alpha",
@@ -1526,7 +1530,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            *rows.deref(),
+            rows.rows,
             vec![
                 row! {
                     "value" => "alpha",
@@ -1553,8 +1557,8 @@ mod tests {
 
         match strategy {
             CachingStrategy::None => (),
-            CachingStrategy::Memory(_) => assert_eq!(count_memory_query_cache_rows(), 3),
-            _ => assert_eq!(count_query_cache_rows(pool).await, 3),
+            CachingStrategy::Memory(_) => assert_eq!(pool.query_cache_size().await.unwrap(), 3),
+            _ => assert_eq!(pool.query_cache_size().await.unwrap(), 3),
         };
 
         pool.execute(
@@ -1566,11 +1570,11 @@ mod tests {
 
         match strategy {
             CachingStrategy::None => (),
-            CachingStrategy::Memory(_) => assert_eq!(count_memory_query_cache_rows(), 1),
+            CachingStrategy::Memory(_) => assert_eq!(pool.query_cache_size().await.unwrap(), 1),
             CachingStrategy::Truncate | CachingStrategy::Trigger => {
-                assert_eq!(count_query_cache_rows(pool).await, 1)
+                assert_eq!(pool.query_cache_size().await.unwrap(), 1)
             }
-            CachingStrategy::TruncateAll => assert_eq!(count_query_cache_rows(pool).await, 0),
+            CachingStrategy::TruncateAll => assert_eq!(pool.query_cache_size().await.unwrap(), 0),
         };
 
         let rows = pool
@@ -1580,14 +1584,14 @@ mod tests {
 
         match strategy {
             CachingStrategy::None => (),
-            CachingStrategy::Memory(_) => assert_eq!(count_memory_query_cache_rows(), 2),
+            CachingStrategy::Memory(_) => assert_eq!(pool.query_cache_size().await.unwrap(), 2),
             CachingStrategy::Truncate | CachingStrategy::Trigger => {
-                assert_eq!(count_query_cache_rows(pool).await, 2)
+                assert_eq!(pool.query_cache_size().await.unwrap(), 2)
             }
-            CachingStrategy::TruncateAll => assert_eq!(count_query_cache_rows(pool).await, 1),
+            CachingStrategy::TruncateAll => assert_eq!(pool.query_cache_size().await.unwrap(), 1),
         };
         assert_eq!(
-            *rows.deref(),
+            rows.rows,
             vec![
                 row! {
                     "value" => "alpha",
@@ -1620,11 +1624,11 @@ mod tests {
             .unwrap();
         match strategy {
             CachingStrategy::None => (),
-            CachingStrategy::Memory(_) => assert_eq!(count_memory_query_cache_rows(), 3),
+            CachingStrategy::Memory(_) => assert_eq!(pool.query_cache_size().await.unwrap(), 3),
             CachingStrategy::Truncate | CachingStrategy::Trigger => {
-                assert_eq!(count_query_cache_rows(pool).await, 3)
+                assert_eq!(pool.query_cache_size().await.unwrap(), 3)
             }
-            CachingStrategy::TruncateAll => assert_eq!(count_query_cache_rows(pool).await, 2),
+            CachingStrategy::TruncateAll => assert_eq!(pool.query_cache_size().await.unwrap(), 2),
         };
         assert_eq!(rows.len(), 0);
 
@@ -1638,14 +1642,13 @@ mod tests {
             .unwrap();
         match strategy {
             CachingStrategy::None => (),
-            CachingStrategy::Memory(_) => assert_eq!(count_memory_query_cache_rows(), 3),
+            CachingStrategy::Memory(_) => assert_eq!(pool.query_cache_size().await.unwrap(), 3),
             CachingStrategy::Truncate | CachingStrategy::Trigger => {
-                assert_eq!(count_query_cache_rows(pool).await, 3)
+                assert_eq!(pool.query_cache_size().await.unwrap(), 3)
             }
-            CachingStrategy::TruncateAll => assert_eq!(count_query_cache_rows(pool).await, 2),
+            CachingStrategy::TruncateAll => assert_eq!(pool.query_cache_size().await.unwrap(), 2),
         };
         assert_eq!(rows.len(), 0);
-        */
 
         // Cleanup:
         pool.drop_table("test_table_caching_1").await.unwrap();

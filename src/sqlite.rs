@@ -55,4 +55,95 @@ impl Syntax for SqliteSyntax {
     fn param_prefix(&self) -> &str {
         "?"
     }
+
+    /// TODO: Add docstring here.
+    fn get_epoch_time_sql(&self) -> &str {
+        "strftime('%s', 'now')"
+    }
+
+    /// TODO: Add docstring
+    fn which_are_tables_sql(&self, objects: &[&str]) -> (String, Vec<Value>) {
+        let prefix = self.param_prefix().to_string();
+        let mut placeholders = vec![];
+        let mut parameters = vec![];
+        for (i, object) in objects.iter().enumerate() {
+            let i = i + 1;
+            placeholders.push(format!("{prefix}{i}"));
+            parameters.push(Value::from(object.to_string()));
+        }
+        let placeholders = placeholders.join(",");
+        (
+            format!(
+                r#"SELECT "name" AS "table_name" FROM "sqlite_master"
+                   WHERE "type" = 'table' AND "name" IN ({placeholders})"#,
+            ),
+            parameters.clone(),
+        )
+    }
+
+    /// TODO: Add docstring
+    fn which_are_views_sql(&self, objects: &[&str]) -> (String, Vec<Value>) {
+        let prefix = self.param_prefix().to_string();
+        let mut placeholders = vec![];
+        let mut parameters = vec![];
+        for (i, object) in objects.iter().enumerate() {
+            let i = i + 1;
+            placeholders.push(format!("{prefix}{i}"));
+            parameters.push(Value::from(object.to_string()));
+        }
+        let placeholders = placeholders.join(",");
+        (
+            format!(
+                r#"SELECT "name" AS "view_name" FROM "sqlite_master"
+                   WHERE "type" = 'view' AND "name" IN ({placeholders})"#,
+            ),
+            parameters.clone(),
+        )
+    }
+
+    /// Implements [DbKind::view_sql_sql()] for SQLiteKind.
+    fn view_sql_sql(&self, view: &str) -> (String, [Value; 1]) {
+        (
+            r#"SELECT "sql" FROM "sqlite_master"
+               WHERE "type" = 'view' AND "name" = ?1"#
+                .to_string(),
+            values![view],
+        )
+    }
+
+    /// TODO: Add docstring.
+    fn wrap_trigger_content(
+        &self,
+        table: &str,
+        trigger_basename: &str,
+        trigger_content: &str,
+    ) -> Result<Vec<String>, Error> {
+        let ddl = vec![
+            format!(r#"DROP TRIGGER IF EXISTS "{trigger_basename}_after_insert""#),
+            format!(
+                r#"CREATE TRIGGER "{trigger_basename}_after_insert"
+                   AFTER INSERT ON "{table}"
+                   BEGIN
+                     {trigger_content}
+                   END"#
+            ),
+            format!(r#"DROP TRIGGER IF EXISTS "{trigger_basename}_after_update""#),
+            format!(
+                r#"CREATE TRIGGER "{trigger_basename}_after_update"
+                   AFTER UPDATE ON "{table}"
+                   BEGIN
+                     {trigger_content}
+                   END"#
+            ),
+            format!(r#"DROP TRIGGER IF EXISTS "{trigger_basename}_after_delete""#),
+            format!(
+                r#"CREATE TRIGGER "{trigger_basename}_after_delete"
+                   AFTER DELETE ON "{table}"
+                   BEGIN
+                     {trigger_content}
+                   END"#
+            ),
+        ];
+        Ok(ddl)
+    }
 }
