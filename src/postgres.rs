@@ -137,7 +137,6 @@ impl Syntax for PostgresSyntax {
         )
     }
 
-    /// Implements [Kind::view_sql_sql()] for PostgreSQLKind.
     fn view_sql_sql(&self, view: &str) -> (String, [Value; 1]) {
         (
             format!(

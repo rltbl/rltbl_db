@@ -2449,7 +2449,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn test_json_values() {
         #[cfg(feature = "rusqlite")]
         json_values(":memory:").await;
@@ -2520,7 +2519,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn test_db_type() {
         #[cfg(feature = "rusqlite")]
         db_type(":memory:").await;
@@ -2649,7 +2647,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn test_import() {
         #[cfg(feature = "rusqlite")]
         import(":memory:").await;

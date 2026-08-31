@@ -1,12 +1,12 @@
 //! Database rows.
 //!
-//! We represent a database [Row] as an [IndexMap] from the column name as a [String] to the
+//! We represent a database [Row] as an `IndexMap` from the column name as a [String] to the
 //! [Value] in that column. The `IndexMap` preserves the order of columns, allowing us to
 //! iterate over them in the same order we see the columns in the table.
 //!
 //! We represent [Rows] as a vector of `Row`s.
 //!
-//! We also provide an alias, [StringRow], for `IndexMap<String, String>`, which represents
+//! We also provide an alias, `StringRow`, for `IndexMap<String, String>`, which represents
 //! the row with its column values converted into strings.
 //!
 //! For both `Row` and `Rows` we provide a number of convenience methods, including for

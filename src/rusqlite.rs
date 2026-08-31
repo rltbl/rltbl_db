@@ -12,7 +12,10 @@ use deadpool_sqlite::{
 use indexmap::indexmap;
 use std::str::from_utf8;
 
-use crate::{Error, Pool, Query, Row, Rows, Syntax, Transaction, Value, sqlite::SqliteSyntax};
+use crate::{
+    Error, Pool, Query, Row, Rows, Syntax, Transaction, Value, sql_parse::validate_table_name,
+    sqlite::SqliteSyntax,
+};
 
 /// Uses the rusqlite driver to directly query a database using the given prepared [Statement]
 /// and parameters.
@@ -212,13 +215,21 @@ impl Query for RusqlitePool {
 
     /// Implements [Query::drop_table()] for SQLite.
     async fn drop_table(&self, table: &str) -> Result<(), Error> {
-        // TODO: Add this function:
-        // let table = validate_table_name(table)?;
+        let table = validate_table_name(table)?;
 
         // Drop the table:
         self.execute(&format!(r#"DROP TABLE IF EXISTS "{table}""#), &[])
             .await?;
 
+        Ok(())
+    }
+
+    async fn drop_view(&self, view: &str) -> Result<(), Error> {
+        let view = validate_table_name(view)?;
+
+        // Drop the view:
+        self.execute(&format!(r#"DROP VIEW IF EXISTS "{view}""#), &[])
+            .await?;
         Ok(())
     }
 }
@@ -327,6 +338,10 @@ impl Query for RusqliteTransaction {
 
     /// Implements [Query::drop_table()] for [RusqliteTransaction]
     async fn drop_table(&self, _table: &str) -> Result<(), Error> {
+        todo!()
+    }
+
+    async fn drop_view(&self, _view: &str) -> Result<(), Error> {
         todo!()
     }
 }

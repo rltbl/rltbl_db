@@ -101,7 +101,6 @@ impl Syntax for SqliteSyntax {
         )
     }
 
-    /// Implements [DbKind::view_sql_sql()] for SQLiteKind.
     fn view_sql_sql(&self, view: &str) -> (String, [Value; 1]) {
         (
             r#"SELECT "sql" FROM "sqlite_master"

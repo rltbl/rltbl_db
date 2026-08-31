@@ -11,7 +11,10 @@ use deadpool_postgres::{
 };
 use rust_decimal::Decimal;
 
-use crate::{Error, Pool, Query, Row, Rows, Syntax, Transaction, Value, postgres::PostgresSyntax};
+use crate::{
+    Error, Pool, Query, Row, Rows, Syntax, Transaction, Value, postgres::PostgresSyntax,
+    sql_parse::validate_table_name,
+};
 
 /// Extracts the value at the given index from the given [PgRow].
 fn extract_value(row: &PgRow, idx: usize) -> Result<Value, Error> {
@@ -263,12 +266,19 @@ impl Query for PostgresPool {
         Ok(Rows { rows: db_rows })
     }
 
-    /// Implements [Query::drop_table()] for [PostgresPool]
     async fn drop_table(&self, table: &str) -> Result<(), Error> {
-        // TODO: Add this.
-        // let table = validate_table_name(table)?;
+        let table = validate_table_name(table)?;
 
         self.execute(&format!(r#"DROP TABLE IF EXISTS "{table}" CASCADE"#), &[])
+            .await?;
+        Ok(())
+    }
+
+    async fn drop_view(&self, view: &str) -> Result<(), Error> {
+        let view = validate_table_name(view)?;
+
+        // Drop the view:
+        self.execute(&format!(r#"DROP VIEW IF EXISTS "{view}" CASCADE"#), &[])
             .await?;
         Ok(())
     }

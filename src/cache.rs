@@ -103,9 +103,7 @@ pub struct MemoryQueryCacheValue {
     pub last_verified: u128,
 }
 
-////////////////////////
-// The meta-cache
-////////////////////////
+/// The meta-cache: A set of the names of things that are known to exist.
 #[derive(Debug, Default)]
 pub struct MetaCache {
     cache: Mutex<HashSet<String>>,
@@ -158,6 +156,7 @@ impl MetaCache {
     }
 }
 
+/// The in-memory query cache.
 #[derive(Debug, Default)]
 pub struct MemoryQueryCache {
     pub cache: Mutex<IndexMap<MemoryQueryCacheKey, MemoryQueryCacheValue>>,
@@ -212,6 +211,7 @@ impl MemoryQueryCache {
     }
 }
 
+/// The in-memory table cache.
 #[derive(Debug, Default)]
 pub struct MemoryTableCache {
     pub cache: Mutex<HashMap<String, u128>>,

@@ -18,7 +18,7 @@ use crate::{
     shared::{
         EditType, generate_insert_statement, generate_update_statement, generate_upsert_statement,
     },
-    sql_parse::{self, get_accessed_tables},
+    sql_parse::{self, get_accessed_tables, validate_table_name},
     sqlite,
     value::IntoValues,
     values,
@@ -41,9 +41,9 @@ pub struct AnyPool {
     /// the cache will be maintained in accordance with the given [CachingStrategy].
     /// For further information, see [Query::set_cache_aware_query()].
     cache_aware_query: bool,
-    pub meta_cache: MetaCache,
-    pub memory_query_cache: MemoryQueryCache,
-    pub memory_table_cache: MemoryTableCache,
+    meta_cache: MetaCache,
+    memory_query_cache: MemoryQueryCache,
+    memory_table_cache: MemoryTableCache,
 }
 
 // Note: This is dyn compatible ONLY if every impl Query uses #[async_trait].
@@ -92,23 +92,23 @@ impl AnyPool {
         Ok(AnyPool::from(pool))
     }
 
-    /// [Query::syntax()] for [AnyPool]
+    /// syntax() for [AnyPool]
     pub fn syntax(&self) -> &dyn Syntax {
         self.pool.syntax()
     }
 
-    /// [Query::columns()] for [AnyPool]
+    /// columns() for [AnyPool]
     pub async fn columns(&self, table: &str) -> Result<IndexMap<String, String>, Error> {
         self.pool.columns(table).await
     }
 
     // TODO: Combine this with columns() if possible
-    /// [Query::primary_keys()] for [AnyPool]
+    /// primary_keys() for [AnyPool]
     pub async fn primary_keys(&self, table: &str) -> Result<Vec<String>, Error> {
         self.pool.primary_keys(table).await
     }
 
-    /// [Query::execute()] for [AnyPool]
+    /// execute() for [AnyPool]
     pub async fn execute(&self, sql: &str, values: impl IntoValues) -> Result<(), Error> {
         let values = values.into_values()?.collect::<Vec<_>>();
         self.query(sql, values).await?;
@@ -166,7 +166,7 @@ impl AnyPool {
         Ok(())
     }
 
-    /// Like [Query::insert()], but in addition this function also returns the data that was
+    /// Like insert(), but in addition this function also returns the data that was
     /// inserted into the columns included in `returning`, or all of the inserted data if
     /// `returning` is an empty list.
     pub async fn insert_returning(
@@ -221,7 +221,7 @@ impl AnyPool {
         Ok(())
     }
 
-    /// Like [Query::update()], but in addition this function also returns the data that was
+    /// Like update(), but in addition this function also returns the data that was
     /// updated for the columns included in `returning`, or all of the updated data if
     /// `returning` is an empty list.
     pub async fn update_returning(
@@ -248,8 +248,8 @@ impl AnyPool {
         .await
     }
 
-    /// Attempt to insert the given rows to the given table, similarly to [Query::insert()].
-    /// In case there is a conflict, update the table instead, similarly to [Query::update()].
+    /// Attempt to insert the given rows to the given table, similarly to insert().
+    /// In case there is a conflict, update the table instead, similarly to update().
     pub async fn upsert(
         &self,
         table: &str,
@@ -274,7 +274,7 @@ impl AnyPool {
         Ok(())
     }
 
-    /// Like [Query::upsert()], but in addition this function also returns the data that was
+    /// Like upsert(), but in addition this function also returns the data that was
     /// upserted for the columns included in `returning`, or all of the upserted data if
     /// `returning` is an empty list.
     pub async fn upsert_returning(
@@ -307,10 +307,16 @@ impl AnyPool {
     }
 
     #[allow(unused)]
-    /// [Query::drop_table()]
+    /// drop_table()
     pub async fn drop_table(&self, table: &str) -> Result<(), Error> {
         self.pool.drop_table(table).await?;
         self.clear_cache_for_dropped_tables(&[&table]).await?;
+        Ok(())
+    }
+
+    pub async fn drop_view(&self, view: &str) -> Result<(), Error> {
+        self.pool.drop_view(view).await?;
+        self.clear_cache_for_dropped_tables(&[&view]).await?;
         Ok(())
     }
 
@@ -319,7 +325,6 @@ impl AnyPool {
         Ok(AnyTransaction::begin(self.pool.transaction().await?))
     }
 
-    ////////////// Caching ///////////////
     /// TODO: Add docstring.
     pub async fn cache(&self, sql: &str, values: impl IntoValues) -> Result<Rows, Error> {
         match self.get_caching_strategy() {
@@ -337,27 +342,28 @@ impl AnyPool {
         }
     }
 
+    /// TODO: Add docstring.
     pub fn set_caching_strategy(&mut self, strategy: &CachingStrategy) {
         self.caching_strategy = *strategy;
     }
 
-    /// Implements [Query::get_caching_strategy()]
+    /// Implements
     pub fn get_caching_strategy(&self) -> CachingStrategy {
         self.caching_strategy
     }
 
-    /// Implements [Query::set_cache_aware_query()]
+    /// Implements
     pub fn set_cache_aware_query(&mut self, value: bool) {
         self.cache_aware_query = value;
     }
 
-    /// Implements [Query::get_cache_aware_query()]
+    /// Implements
     pub fn get_cache_aware_query(&self) -> bool {
         self.cache_aware_query
     }
 
     /// TODO: Add docstring.
-    pub async fn query_cache_size(&self) -> Result<u64, Error> {
+    pub async fn count_query_cache_rows(&self) -> Result<u64, Error> {
         match self.caching_strategy {
             CachingStrategy::None => Ok(0),
             CachingStrategy::Memory(_) => {
@@ -375,7 +381,7 @@ impl AnyPool {
     }
 
     /// TODO: Add docstring.
-    pub async fn table_cache_size(&self) -> Result<u64, Error> {
+    pub async fn count_table_cache_rows(&self) -> Result<u64, Error> {
         match self.caching_strategy {
             CachingStrategy::None => Ok(0),
             CachingStrategy::Memory(_) => {
@@ -399,7 +405,9 @@ impl AnyPool {
         Ok(())
     }
 
-    /// Similar to [Query::cache()]. This version accepts an explicit list of tables, which
+    ////////// Private functions //////////
+
+    /// Similar to cache(). This version accepts an explicit list of tables, which
     /// must correspond to the tables queried from in the given SQL command(s).
     async fn cache_tables(
         &self,
@@ -407,154 +415,6 @@ impl AnyPool {
         sql: &str,
         params: impl IntoValues,
     ) -> Result<Rows, Error> {
-        let db_cache =
-            async |tables: &[&str], sql: &str, params: &[Value]| -> Result<Rows, Error> {
-                // Look in the cache to see if there is an entry corresponding to the given SQL
-                // string for the given tables and parameters. If so, return the data from the
-                // cache, otherwise execute the given SQL statement on the actualy specified
-                // tables.
-                let prefix = self.syntax().param_prefix().to_string();
-                let cache_sql = format!(
-                    r#"SELECT {prefix}1||rtrim(ltrim("value", '['), ']')||{prefix}2 AS "value"
-                       FROM "{QUERY_CACHE_TABLE}"
-                       WHERE "tables" = {prefix}3
-                       AND "statement" = {prefix}4
-                       AND "parameters" = {prefix}5
-                       LIMIT 1"#,
-                );
-                let tables_param = format!(
-                    "[{}]",
-                    tables
-                        .iter()
-                        .map(|table| format!("\"{table}\""))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                );
-                let params_param = {
-                    format!(
-                        "[{}]",
-                        params
-                            .iter()
-                            .map(|v| v.to_string())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    )
-                };
-                let cache_params = values!["[", "]", &*tables_param, sql, &*params_param];
-
-                let strings = {
-                    let rows = self.pool.query(&cache_sql, &cache_params).await?;
-                    let strings = rows
-                        .iter()
-                        .map(|row| match row.values().nth(0) {
-                            Some(value) => Ok(value.into()),
-                            None => Err(Error::DataError("Empty row".to_owned())),
-                        })
-                        .collect::<Vec<_>>();
-                    let strings: Result<Vec<String>, Error> = strings.into_iter().collect();
-                    strings?
-                };
-                match strings.first() {
-                    Some(values) => {
-                        let db_rows: Vec<Row> = serde_json::from_str(values).map_err(|err| {
-                            Error::DataError(format!("Error serializing values '{values}': {err}"))
-                        })?;
-                        // Only views need to be verified every time they are accessed. Tables
-                        // do not because they do not have any dependencies.
-                        if self.which_are_views(tables).await?.len() > 0 {
-                            self.update_last_verified(tables, sql, &params).await?;
-                        }
-
-                        Ok(Rows { rows: db_rows })
-                    }
-                    None => {
-                        let db_rows = self.pool.query(sql, params).await?;
-                        let rows_as_string = {
-                            let mut rows_as_string = vec![];
-                            for db_row in db_rows.iter() {
-                                let db_row = serde_json::to_string(db_row).map_err(|err| {
-                                    Error::DataError(format!("Invalid data ({err}): {db_row:?}"))
-                                })?;
-                                rows_as_string.push(db_row);
-                            }
-                            format!("[{}]", rows_as_string.join(", "))
-                        };
-                        let insert_sql = format!(
-                            r#"INSERT INTO "{QUERY_CACHE_TABLE}"
-                           ("tables", "statement", "parameters", "value")
-                           VALUES ({prefix}1, {prefix}2, {prefix}3, {prefix}4)"#,
-                            prefix = self.syntax().param_prefix(),
-                        );
-                        let insert_params =
-                            values![&*tables_param, sql, &*params_param, &*rows_as_string];
-                        self.pool.execute(&insert_sql, &insert_params).await?;
-                        Ok(db_rows)
-                    }
-                }
-            };
-
-        let mem_cache = async |tables: &[&str],
-                               sql: &str,
-                               values: &[Value],
-                               cache_size: usize|
-               -> Result<Rows, Error> {
-            let mem_key = MemoryQueryCacheKey {
-                tables: format!(
-                    "[{}]",
-                    tables
-                        .iter()
-                        .map(|table| format!("\"{table}\""))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
-                statement: sql.to_string(),
-                parameters: format!("{values:?}"),
-            };
-            let cached_rows = {
-                let cache = self.memory_query_cache.get_cache()?;
-                match cache.get(&mem_key) {
-                    Some(mem_value) => Some(mem_value.content.to_vec()),
-                    None => None,
-                }
-            };
-            match cached_rows {
-                Some(db_rows) => {
-                    // Only views need to be verified every time they are accessed. Tables
-                    // do not because they do not have any dependencies.
-                    if self.which_are_views(tables).await?.len() > 0 {
-                        self.update_last_verified(tables, sql, &values).await?;
-                    }
-                    Ok(Rows { rows: db_rows })
-                }
-                None => {
-                    let db_rows = self.pool.query(sql, values).await?;
-                    let mut cache = self.memory_query_cache.get_cache()?;
-                    // If the number of entries exceeds the allowed cache size, remove the oldest
-                    // keys first.
-                    // TODO: We may want to do something smarter here. E.g., we could record the
-                    // length of time a query takes and/or the number of times it was requested
-                    // in order to determine which entries to delete (and/or the size of the
-                    // result).
-                    while cache.len() > cache_size {
-                        cache.shift_remove_index(0);
-                    }
-                    cache.insert(
-                        mem_key,
-                        MemoryQueryCacheValue {
-                            content: db_rows.to_vec(),
-                            last_verified: SystemTime::now()
-                                .duration_since(UNIX_EPOCH)
-                                .map_err(|err| {
-                                    Error::DataError(format!("Error getting epoch time: {err}"))
-                                })?
-                                .as_millis(),
-                        },
-                    );
-                    Ok(db_rows)
-                }
-            }
-        };
-
         let params = params.into_values()?.collect::<Vec<_>>();
         match self.get_caching_strategy() {
             CachingStrategy::None => {
@@ -564,7 +424,7 @@ impl AnyPool {
             CachingStrategy::TruncateAll | CachingStrategy::Truncate => {
                 self.ensure_cache_tables_exist().await?;
                 self.update_cached_views(tables).await?;
-                let rows = db_cache(tables, sql, &params).await?;
+                let rows = self.db_cache(tables, sql, &params).await?;
                 Ok(rows)
             }
             CachingStrategy::Trigger => {
@@ -585,13 +445,161 @@ impl AnyPool {
                 for view in &views {
                     self.ensure_caching_triggers_exist_for_view(view).await?;
                 }
-                let rows = db_cache(&tables, sql, &params).await?;
+                let rows = self.db_cache(&tables, sql, &params).await?;
                 Ok(rows)
             }
             CachingStrategy::Memory(cache_size) => {
                 self.update_cached_views(tables).await?;
-                let rows = mem_cache(tables, sql, &params, cache_size).await?;
+                let rows = self.mem_cache(tables, sql, &params, cache_size).await?;
                 Ok(rows)
+            }
+        }
+    }
+
+    async fn db_cache(&self, tables: &[&str], sql: &str, params: &[Value]) -> Result<Rows, Error> {
+        // Look in the cache to see if there is an entry corresponding to the given SQL
+        // string for the given tables and parameters. If so, return the data from the
+        // cache, otherwise execute the given SQL statement on the actualy specified
+        // tables.
+        let prefix = self.syntax().param_prefix().to_string();
+        let cache_sql = format!(
+            r#"SELECT {prefix}1||rtrim(ltrim("value", '['), ']')||{prefix}2 AS "value"
+               FROM "{QUERY_CACHE_TABLE}"
+               WHERE "tables" = {prefix}3
+               AND "statement" = {prefix}4
+               AND "parameters" = {prefix}5
+               LIMIT 1"#,
+        );
+        let tables_param = format!(
+            "[{}]",
+            tables
+                .iter()
+                .map(|table| format!("\"{table}\""))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        let params_param = {
+            format!(
+                "[{}]",
+                params
+                    .iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        };
+        let cache_params = values!["[", "]", &*tables_param, sql, &*params_param];
+
+        let strings = {
+            let rows = self.pool.query(&cache_sql, &cache_params).await?;
+            let strings = rows
+                .iter()
+                .map(|row| match row.values().nth(0) {
+                    Some(value) => Ok(value.into()),
+                    None => Err(Error::DataError("Empty row".to_owned())),
+                })
+                .collect::<Vec<_>>();
+            let strings: Result<Vec<String>, Error> = strings.into_iter().collect();
+            strings?
+        };
+        match strings.first() {
+            Some(values) => {
+                let db_rows: Vec<Row> = serde_json::from_str(values).map_err(|err| {
+                    Error::DataError(format!("Error serializing values '{values}': {err}"))
+                })?;
+                // Only views need to be verified every time they are accessed. Tables
+                // do not because they do not have any dependencies.
+                if self.which_are_views(tables).await?.len() > 0 {
+                    self.update_last_verified(tables, sql, &params).await?;
+                }
+
+                Ok(Rows { rows: db_rows })
+            }
+            None => {
+                let db_rows = self.pool.query(sql, params).await?;
+                let rows_as_string = {
+                    let mut rows_as_string = vec![];
+                    for db_row in db_rows.iter() {
+                        let db_row = serde_json::to_string(db_row).map_err(|err| {
+                            Error::DataError(format!("Invalid data ({err}): {db_row:?}"))
+                        })?;
+                        rows_as_string.push(db_row);
+                    }
+                    format!("[{}]", rows_as_string.join(", "))
+                };
+                let insert_sql = format!(
+                    r#"INSERT INTO "{QUERY_CACHE_TABLE}"
+                           ("tables", "statement", "parameters", "value")
+                           VALUES ({prefix}1, {prefix}2, {prefix}3, {prefix}4)"#,
+                    prefix = self.syntax().param_prefix(),
+                );
+                let insert_params = values![&*tables_param, sql, &*params_param, &*rows_as_string];
+                self.pool.execute(&insert_sql, &insert_params).await?;
+                Ok(db_rows)
+            }
+        }
+    }
+
+    async fn mem_cache(
+        &self,
+        tables: &[&str],
+        sql: &str,
+        values: &[Value],
+        cache_size: usize,
+    ) -> Result<Rows, Error> {
+        let mem_key = MemoryQueryCacheKey {
+            tables: format!(
+                "[{}]",
+                tables
+                    .iter()
+                    .map(|table| format!("\"{table}\""))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            statement: sql.to_string(),
+            parameters: format!("{values:?}"),
+        };
+        let cached_rows = {
+            let cache = self.memory_query_cache.get_cache()?;
+            match cache.get(&mem_key) {
+                Some(mem_value) => Some(mem_value.content.to_vec()),
+                None => None,
+            }
+        };
+        match cached_rows {
+            Some(db_rows) => {
+                // Only views need to be verified every time they are accessed. Tables
+                // do not because they do not have any dependencies.
+                if self.which_are_views(tables).await?.len() > 0 {
+                    self.update_last_verified(tables, sql, &values).await?;
+                }
+                Ok(Rows { rows: db_rows })
+            }
+            None => {
+                let db_rows = self.pool.query(sql, values).await?;
+                let mut cache = self.memory_query_cache.get_cache()?;
+                // If the number of entries exceeds the allowed cache size, remove the oldest
+                // keys first.
+                // TODO: We may want to do something smarter here. E.g., we could record the
+                // length of time a query takes and/or the number of times it was requested
+                // in order to determine which entries to delete (and/or the size of the
+                // result).
+                while cache.len() > cache_size {
+                    cache.shift_remove_index(0);
+                }
+                cache.insert(
+                    mem_key,
+                    MemoryQueryCacheValue {
+                        content: db_rows.to_vec(),
+                        last_verified: SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .map_err(|err| {
+                                Error::DataError(format!("Error getting epoch time: {err}"))
+                            })?
+                            .as_millis(),
+                    },
+                );
+                Ok(db_rows)
             }
         }
     }
@@ -784,9 +792,9 @@ impl AnyPool {
         with_returning: bool,
         returning: &[&str],
     ) -> Result<Rows, Error> {
-        // TODO: Begin by verifying that the given table name is valid, which has the side-effect of
+        // Begin by verifying that the given table name is valid, which has the side-effect of
         // removing any enclosing double-quotes:
-        // let table = validate_table_name(table)?;
+        let table = validate_table_name(table)?;
 
         // This is very unlikely but we check anyway to be sure:
         if columns.len() > *max_params {
@@ -1078,7 +1086,7 @@ impl AnyPool {
     */
 
     /// Ensure that caching triggers exist for the given table. Note that this function calls
-    /// [ensure_cache_tables_exist()] implicitly.
+    /// ensure_cache_tables_exist() implicitly.
     pub async fn ensure_caching_triggers_exist_for_table(&self, table: &str) -> Result<(), Error> {
         let table_triggers_name = format!("{table}_triggers");
         if !self.meta_cache.exists(&table_triggers_name)? {
@@ -1105,7 +1113,7 @@ impl AnyPool {
     }
 
     /// Ensure that caching triggers exist for the source tables of the given view. Note that
-    /// this function calls [ensure_cache_tables_exist()] implicitly.
+    /// this function calls ensure_cache_tables_exist() implicitly.
     pub async fn ensure_caching_triggers_exist_for_view(&self, view: &str) -> Result<(), Error> {
         let view_triggers_name = format!("{view}_triggers");
         if self.meta_cache.exists(&view_triggers_name)? {

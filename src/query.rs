@@ -84,4 +84,7 @@ pub trait Query: std::fmt::Debug + Sync {
     /// say table1, appears in a foreign key constraint for another table, say table2, then
     /// table2's foreign constraint will be removed, but table2 will not be dropped.
     async fn drop_table(&self, table: &str) -> Result<(), Error>;
+
+    /// Drop the given view from the database.
+    async fn drop_view(&self, view: &str) -> Result<(), Error>;
 }

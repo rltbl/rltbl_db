@@ -1548,7 +1548,6 @@ mod tests {
     use std::collections::HashMap;
 
     #[test]
-    #[ignore]
     fn test_min_typing() {
         let column_values = vec![
             // Column A:
@@ -1826,7 +1825,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_coerce() {
         let input_row_1 = z_old_db_row! {
             "foo" => DbValue::SmallInteger(1),
@@ -1888,7 +1886,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_from_str() {
         let foo = DbType::default().min_type("True").unwrap();
         assert_eq!(foo, DbType::Boolean("".to_string()));
@@ -1901,7 +1898,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_json() {
         // Test is_json(), as_json() methods:
         let db_val = DbValue::Json(json!([]));

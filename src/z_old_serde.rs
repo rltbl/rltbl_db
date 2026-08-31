@@ -1272,7 +1272,6 @@ mod tests {
     use serde::Deserialize;
 
     #[test]
-    #[ignore]
     fn test_serde_default() {
         #[derive(Deserialize, Serialize, PartialEq, Debug, Clone, Default)]
         #[serde(default)]
@@ -1293,7 +1292,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_serde() {
         #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
         struct UnitStruct;

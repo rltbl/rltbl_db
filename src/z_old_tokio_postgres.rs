@@ -888,7 +888,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn test_other_types() {
         let pool = TokioPostgresPool::connect("postgresql:///rltbl_db")
             .await
@@ -1463,7 +1462,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn test_jsonb() {
         let pool = TokioPostgresPool::connect("postgresql:///rltbl_db")
             .await
