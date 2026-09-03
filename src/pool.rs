@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use indexmap::IndexMap;
 use std::{
     collections::HashSet,
+    fmt::Display,
     iter::IntoIterator,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -15,14 +16,38 @@ use crate::{
         MemoryTableCache, MetaCache, QUERY_CACHE_TABLE, TABLE_CACHE_TABLE,
     },
     postgres,
-    shared::{
-        EditType, generate_insert_statement, generate_update_statement, generate_upsert_statement,
-    },
     sql_parse::{self, get_accessed_tables, validate_table_name},
     sqlite,
     value::IntoValues,
     values,
 };
+
+// Note: This is dyn compatible ONLY if every impl Query uses #[async_trait].
+/// Create a database connection pool associated with the given URL.
+pub async fn connect(url: &str) -> Result<Box<dyn Pool>, Error> {
+    // TODO: Add libsql support.
+    if url.starts_with("postgresql://") {
+        #[cfg(feature = "tokio-postgres")]
+        {
+            let pool = crate::tokio_postgres::PostgresPool::connect(url).await?;
+            Ok(Box::new(pool))
+        }
+        #[cfg(not(feature = "tokio-postgres"))]
+        {
+            Err(Error::ConnectError(format!("Unsupported URL: '{url}'")))
+        }
+    } else {
+        #[cfg(feature = "rusqlite")]
+        {
+            let pool = crate::rusqlite::RusqlitePool::connect(url).await?;
+            Ok(Box::new(pool))
+        }
+        #[cfg(not(feature = "rusqlite"))]
+        {
+            Err(Error::ConnectError(format!("Unsupported URL: '{url}'")))
+        }
+    }
+}
 
 /// A trait for implementing a database connection pool.
 #[async_trait]
@@ -46,28 +71,22 @@ pub struct AnyPool {
     memory_table_cache: MemoryTableCache,
 }
 
-// Note: This is dyn compatible ONLY if every impl Query uses #[async_trait].
-pub async fn connect(url: &str) -> Result<Box<dyn Pool>, Error> {
-    // TODO: Add libsql support.
-    if url.starts_with("postgresql://") {
-        #[cfg(feature = "tokio-postgres")]
-        {
-            let pool = crate::tokio_postgres::PostgresPool::connect(url).await?;
-            Ok(Box::new(pool))
-        }
-        #[cfg(not(feature = "tokio-postgres"))]
-        {
-            Err(Error::ConnectError(format!("Unsupported URL: '{url}'")))
-        }
-    } else {
-        #[cfg(feature = "rusqlite")]
-        {
-            let pool = crate::rusqlite::RusqlitePool::connect(url).await?;
-            Ok(Box::new(pool))
-        }
-        #[cfg(not(feature = "rusqlite"))]
-        {
-            Err(Error::ConnectError(format!("Unsupported URL: '{url}'")))
+/// Ways in which to edit a table.
+#[allow(unused)]
+#[derive(PartialEq, Eq)]
+enum EditType {
+    Insert,
+    Update,
+    #[allow(unused)]
+    Upsert,
+}
+
+impl Display for EditType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EditType::Update => write!(f, "UPDATE"),
+            EditType::Insert => write!(f, "INSERT"),
+            EditType::Upsert => write!(f, "UPSERT"),
         }
     }
 }
@@ -936,8 +955,8 @@ impl AnyPool {
                     "Column '{column}' does not exist in table '{table}'"
                 )))?;
                 param_idx += 1;
-                // In the CTE we generate for UPDATE statements, tokio-postgres can't infer the types
-                // of the VALUES, so we explicitly cast them.
+                // In the CTE we generate for UPDATE statements, tokio-postgres can't infer the
+                // types of the VALUES, so we explicitly cast them.
                 if *edit_type == EditType::Update
                     && self.syntax().name() == "postgres"
                 // We only need to cast the first value row. The rest are inferred by Postgres:
@@ -1499,4 +1518,111 @@ impl AnyPool {
             false => Ok(0),
         }
     }
+}
+
+// Private helper functions:
+
+/// Generate a SQL UPDATE statement for the given table and columns using the given clauses
+/// and the given value lines.
+#[allow(unused)]
+fn generate_update_statement(
+    table: &str,
+    columns: &[&str],
+    primary_keys: &[&str],
+    returning_clause: &str,
+    value_lines: &[&str],
+) -> String {
+    // Quote the column names to avoid potential clashes with database keywords:
+    let quoted_columns = columns
+        .iter()
+        .map(|c| format!(r#""{c}""#))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let set_clause = columns
+        .iter()
+        .filter(|column| !primary_keys.contains(&column))
+        .map(|column| format!(r#""{column}" = "source"."{column}""#))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let where_clause = primary_keys
+        .iter()
+        .map(|pk| format!(r#""{table}"."{pk}" = "source"."{pk}""#,))
+        .collect::<Vec<_>>()
+        .join(" AND ");
+
+    format!(
+        r#"WITH "source" ({quoted_columns}) AS (
+             VALUES
+             {}
+           )
+           UPDATE "{table}"
+           SET {set_clause}
+           FROM "source"
+           WHERE {where_clause}{returning_clause}"#,
+        value_lines.join(",\n")
+    )
+}
+
+/// Generate a SQL INSERT statement for the given table and columns using the given clauses
+/// and the given value lines.
+#[allow(unused)]
+fn generate_insert_statement(
+    table: &str,
+    columns: &[&str],
+    returning_clause: &str,
+    value_lines: &[&str],
+) -> String {
+    // Quote the column names to avoid potential clashes with database keywords:
+    let quoted_columns = columns
+        .iter()
+        .map(|c| format!(r#""{c}""#))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    format!(
+        r#"INSERT INTO "{table}" ({quoted_columns})
+           VALUES
+           {}{returning_clause}"#,
+        value_lines.join(",\n")
+    )
+}
+
+/// Generate SQL statement of the form:
+/// INSERT INTO <table> VALUES <tuples> ON CONFLICT (<primary key constraint>) DO UPDATE ...
+#[allow(unused)]
+fn generate_upsert_statement(
+    table: &str,
+    columns: &[&str],
+    primary_keys: &[&str],
+    returning_clause: &str,
+    value_lines: &[&str],
+) -> String {
+    let quoted_columns = columns
+        .iter()
+        .map(|c| format!(r#""{c}""#))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let constraint_clause = primary_keys
+        .iter()
+        .map(|pk| format!(r#""{pk}""#))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let set_clause = columns
+        .iter()
+        .filter(|column| !primary_keys.contains(&column))
+        .map(|column| format!(r#""{column}" = "excluded"."{column}""#))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    format!(
+        r#"INSERT INTO "{table}" ({quoted_columns})
+           VALUES
+           {}
+           ON CONFLICT ({constraint_clause}) DO UPDATE SET {set_clause}{returning_clause}"#,
+        value_lines.join(",\n"),
+    )
 }

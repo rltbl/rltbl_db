@@ -188,9 +188,6 @@ pub mod transaction;
 /// Caching support
 pub mod cache;
 
-/// Concrete functions shared by all database driver implementations.
-pub mod shared;
-
 /// Unit tests:
 pub mod unit_tests;
 
