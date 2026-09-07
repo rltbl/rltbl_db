@@ -31,6 +31,7 @@
 
 use rust_decimal::{Decimal, dec};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::{
     cmp::Ordering,
     fmt::Display,
@@ -694,32 +695,31 @@ impl From<&JsonValue> for Value {
     }
 }
 
-// TODO: Not sure if the Intos are needed in addition to the Froms.
-// impl Into<JsonValue> for Value {
-//     fn into(self) -> JsonValue {
-//         match self {
-//             Value::Null => JsonValue::Null,
-//             Value::Boolean(value) => JsonValue::Bool(value),
-//             Value::SmallInteger(value) => JsonValue::Number(value.into()),
-//             Value::Integer(value) => JsonValue::Number(value.into()),
-//             Value::BigInteger(value) => JsonValue::Number(value.into()),
-//             Value::Real(value) => json!(value),
-//             Value::BigReal(value) => json!(value),
-//             Value::Numeric(value) => json!(value),
-//             Value::Text(value) => JsonValue::String(value),
-//             Value::Json(value) => value,
-//             Value::Other(_, _, _) => JsonValue::String(format!("{self:?}")),
-//         }
-//     }
-// }
+impl Into<JsonValue> for Value {
+    fn into(self) -> JsonValue {
+        match self {
+            Value::Null => JsonValue::Null,
+            Value::Boolean(value) => JsonValue::Bool(value),
+            Value::SmallInteger(value) => JsonValue::Number(value.into()),
+            Value::Integer(value) => JsonValue::Number(value.into()),
+            Value::BigInteger(value) => JsonValue::Number(value.into()),
+            Value::Real(value) => json!(value),
+            Value::BigReal(value) => json!(value),
+            Value::Numeric(value) => json!(value),
+            Value::Text(value) => JsonValue::String(value),
+            Value::Json(value) => value,
+            Value::Other(_, _, _) => JsonValue::String(format!("{self:?}")),
+        }
+    }
+}
 
-// impl Into<JsonValue> for &Value {
-//     fn into(self) -> JsonValue {
-//         self.clone().into()
-//     }
-// }
+impl Into<JsonValue> for &Value {
+    fn into(self) -> JsonValue {
+        self.clone().into()
+    }
+}
 
-// Other primitive type conversions.
+// Primitive type conversions.
 
 // TODO: Add more for all of the remaining rust primitive types, including isize and usize
 

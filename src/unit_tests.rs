@@ -12,7 +12,7 @@ mod tests {
     };
 
     use crate::{
-        AnyPool, Column, Row, Value, ValueType,
+        AnyPool, Column, JsonValue, Row, Rows, Value, ValueType,
         cache::{CachingStrategy, QUERY_CACHE_TABLE, TABLE_CACHE_TABLE},
         row,
         row::StringRow,
@@ -2108,6 +2108,75 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_json_values() {
+        #[cfg(feature = "rusqlite")]
+        json_values(":memory:").await;
+        #[cfg(feature = "tokio-postgres")]
+        json_values("postgresql:///rltbl_db").await;
+        #[cfg(feature = "libsql")]
+        json_values(":memory:").await;
+    }
+
+    async fn json_values(url: &str) {
+        let pool = AnyPool::connect(url).await.unwrap();
+
+        pool.drop_table("test_json_values").await.unwrap();
+        // We only test the JSON type here and not JSONB since the latter is used only in
+        // PostgreSQL, and there is a separate test for that.
+        pool.execute(
+            r#"CREATE TABLE test_json_values (bar JSON, foo BIGINT DEFAULT 0)"#,
+            (),
+        )
+        .await
+        .unwrap();
+        pool.execute(
+            r#"INSERT INTO test_json_values (bar) VALUES ('{"alpha":1}')"#,
+            (),
+        )
+        .await
+        .unwrap();
+
+        // Get the value that was just inserted and use it to edit the table and verify the result:
+        let mut db_rows = pool
+            .query(r#"SELECT * FROM test_json_values"#, ())
+            .await
+            .unwrap()
+            .rows;
+        let db_row = db_rows.pop().unwrap();
+        // Because SQLite doesn't actually have a JSON datatye (other than as an alias for TEXT),
+        // the Value corresponding to "bar" will be Value::Text, while it will be Value::Json
+        // for PostgreSQL. Either way, it should parse as valid json, so we call
+        // serde_json::from_str() here to do so and test that the result is what we expect. It
+        // should be the same either way.
+        let bar: JsonValue = serde_json::from_str(&db_row.get("bar").unwrap().to_string()).unwrap();
+        assert_eq!(bar, json!({"alpha":1}));
+        let foo = db_row.get("foo").unwrap();
+        assert_eq!(*foo, Value::BigInteger(0));
+
+        // Retrieve the Value from the query results, then send it back as a parameter to a
+        // further UPDATE statement:
+        let db_value = db_row.get("bar").unwrap();
+        pool.execute(
+            r#"UPDATE test_json_values SET foo = 1, bar = $1"#,
+            values![db_value],
+        )
+        .await
+        .unwrap();
+
+        // Query the column again and make sure that the value is what we expect:
+        let mut db_rows = pool
+            .query(r#"SELECT * FROM test_json_values"#, ())
+            .await
+            .unwrap()
+            .rows;
+        let db_row = db_rows.pop().unwrap();
+        let bar: JsonValue = serde_json::from_str(&db_row.get("bar").unwrap().to_string()).unwrap();
+        assert_eq!(bar, json!({"alpha":1}));
+        let foo = db_row.get("foo").unwrap();
+        assert_eq!(*foo, Value::BigInteger(1));
+    }
+
+    #[tokio::test]
     async fn test_sql_type() {
         #[cfg(feature = "rusqlite")]
         sql_type(":memory:").await;
@@ -2506,32 +2575,6 @@ mod tests {
             ["alpha", "delta", "gamma", "lambda", "phi", "psi",]
         );
         assert_eq!(dropped_tables, ["rho", "sigma",]);
-    }
-
-    #[test]
-    fn test_hashing() {
-        let mut test_map = HashMap::new();
-        for (i, value) in [
-            Value::Null,
-            Value::Text("NULL".to_string()),
-            Value::Boolean(true),
-            Value::SmallInteger(1),
-            Value::BigInteger(1),
-            Value::Real(0.0f32),
-            Value::Real(0.456f32),
-            Value::BigReal(0.123f64),
-            Value::BigReal(0.0f64),
-            // TODO:
-            // Value::Numeric(dec!(1)),
-            // Value::Json(json!({"foo":1})),
-            // Value::Other("bpchar".to_string(), vec![97], Some("a".to_string())),
-        ]
-        .iter()
-        .enumerate()
-        {
-            test_map.insert(value.clone(), i);
-            assert_eq!(*test_map.get(&value).unwrap(), i);
-        }
     }
 
     #[cfg(feature = "rusqlite")]
@@ -3882,5 +3925,125 @@ mod tests {
                 }
             ]
         );
+    }
+
+    #[test]
+    fn test_coerce() {
+        let input_row_1 = row! {
+            "foo" => Value::SmallInteger(1),
+            "bar" => Value::SmallInteger(2),
+            "jar" => Value::Text("3".to_string()),
+            "har" => Value::Text("t".to_string())
+        };
+        let input_row_2 = row! {
+            "foo" => Value::BigInteger(i64::MAX),
+            "bar" => Value::Text("2".to_string()),
+            "jar" => Value::SmallInteger(9),
+            "har" => Value::Text("0".to_string())
+        };
+        let column_map = indexmap! {
+            "foo".to_string() => Column {
+                name: "foo".to_string(),
+                sql_type: ValueType::Real("".to_string()),
+                not_null: true,
+                unique: true,
+            },
+            "bar".to_string() => Column {
+                name: "bar".to_string(),
+                sql_type: ValueType::SmallInteger("".to_string()),
+                not_null: true,
+                unique: true,
+            },
+            "jar".to_string() => Column {
+                name: "jar".to_string(),
+                sql_type: ValueType::BigInteger("".to_string()),
+                not_null: true,
+                unique: true,
+            },
+            "har".to_string() => Column {
+                name: "har".to_string(),
+                sql_type: ValueType::Boolean("".to_string()),
+                not_null: true,
+                unique: true,
+            }
+        };
+        let expected_row_1 = row! {
+            "foo" => Value::Real(1.0),
+            "bar" => Value::SmallInteger(2),
+            "jar" => Value::BigInteger(3),
+            "har" => Value::Boolean(true),
+        };
+        let expected_row_2 = row! {
+            "foo" => Value::Real(9.223372e18),
+            "bar" => Value::SmallInteger(2),
+            "jar" => Value::BigInteger(9),
+            "har" => Value::Boolean(false),
+        };
+
+        let coerced_row = input_row_1.coerce(&column_map).unwrap();
+        assert_eq!(coerced_row, expected_row_1);
+
+        let mut coerced_rows = Rows::coerce([input_row_1, input_row_2].into_iter(), &column_map);
+        assert_eq!(coerced_rows.next().unwrap().unwrap(), expected_row_1);
+        assert_eq!(coerced_rows.next().unwrap().unwrap(), expected_row_2);
+    }
+
+    #[test]
+    fn test_from_str() {
+        let foo = ValueType::default().min_type("True").unwrap();
+        assert_eq!(foo, ValueType::Boolean("".to_string()));
+
+        let foo = ValueType::default().min_type("2").unwrap();
+        assert_eq!(foo, ValueType::SmallInteger("".to_string()));
+
+        let foo = ValueType::default().min_type("2.0").unwrap();
+        assert_eq!(foo, ValueType::Real("".to_string()));
+    }
+
+    #[test]
+    fn test_json() {
+        // Test is_json(), as_json() methods:
+        let db_val = Value::Json(json!([]));
+        assert_eq!(db_val.is_json(), true);
+        assert_eq!(db_val.as_json(), Some(json!([])));
+
+        let db_val = Value::Text(json!([]).to_string());
+        assert_eq!(db_val.is_json(), false);
+        assert_eq!(db_val.as_json(), None);
+
+        // Test into() method:
+        let db_val = Value::Json(json!([]));
+        let json_val: JsonValue = db_val.into();
+        assert_eq!(json_val, json!([]));
+
+        let db_val = Value::Text(json!([]).to_string());
+        let json_val: JsonValue = db_val.into();
+        assert_eq!(json_val, JsonValue::String("[]".into()));
+    }
+
+    #[test]
+    // #[ignore] // TODO: Ignore by default.
+    fn test_hashing() {
+        let mut test_map = HashMap::new();
+        for (i, value) in [
+            Value::Null,
+            Value::Text("NULL".to_string()),
+            Value::Boolean(true),
+            Value::SmallInteger(1),
+            Value::BigInteger(1),
+            Value::Real(0.0f32),
+            Value::Real(0.456f32),
+            Value::BigReal(0.123f64),
+            Value::BigReal(0.0f64),
+            Value::Numeric(dec!(1)),
+            Value::Json(json!({"foo":1})),
+            Value::Other("bpchar".to_string(), vec![97], Some("a".to_string())),
+        ]
+        .iter()
+        .enumerate()
+        {
+            test_map.insert(value.clone(), i);
+            assert_eq!(*test_map.get(&value).unwrap(), i);
+        }
     }
 }

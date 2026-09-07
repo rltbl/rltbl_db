@@ -42,7 +42,7 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use std::ops::{Deref, DerefMut};
 
-use crate::{Error, Value};
+use crate::{Column, Error, Value};
 
 /// Represents a database row.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -57,6 +57,26 @@ impl Row {
         Row {
             map: IndexMap::new(),
         }
+    }
+
+    /// Coerce this row into a row whose columns have the types specified in the given
+    /// column_map.
+    pub fn coerce(&self, column_map: &IndexMap<String, Column>) -> Result<Row, Error> {
+        // For each Value in db_row, get the corresponding Column from the column_map.
+        // Then use the db_type to parse the string representation of the value into the
+        // correct type and place the converted Value into a new row that will be returned.
+        let mut coerced = Row::new();
+        for (column_name, db_value) in self.iter() {
+            let column_type = &column_map
+                .get(column_name)
+                .ok_or(Error::InputError(format!(
+                    "Column '{column_name}' not in column map."
+                )))?
+                .sql_type;
+            let converted = column_type.parse_str(&db_value.to_string())?;
+            coerced.insert(column_name.to_string(), converted);
+        }
+        Ok(coerced)
     }
 
     // Returns the first value of the first column of this row.
@@ -169,6 +189,18 @@ impl Rows {
             0 => Err(Error::DataError("No rows returned".to_string())),
             _ => Ok(self.rows.remove(0)),
         }
+    }
+
+    /// Coerce these rows into rows whose columns have the types specified in the given
+    /// column_map.
+    pub fn coerce<I>(
+        db_rows: I,
+        column_map: &IndexMap<String, Column>,
+    ) -> impl Iterator<Item = Result<Row, Error>>
+    where
+        I: Iterator<Item = Row>,
+    {
+        db_rows.map(|row| row.coerce(column_map))
     }
 
     /// Returns the first value from the first of these rows.

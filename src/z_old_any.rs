@@ -2449,6 +2449,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_json_values() {
         #[cfg(feature = "rusqlite")]
         json_values(":memory:").await;
