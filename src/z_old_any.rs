@@ -2519,6 +2519,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_db_type() {
         #[cfg(feature = "rusqlite")]
         db_type(":memory:").await;

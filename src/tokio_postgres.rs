@@ -1,18 +1,19 @@
 //! Driver using deadpool-postgres (tokio-postgres).
 
 use async_trait::async_trait;
+use bytes::{BufMut, BytesMut};
 use deadpool_postgres::{
     Config, Runtime,
     tokio_postgres::{
         NoTls,
         row::Row as PgRow,
-        types::{ToSql, Type},
+        types::{FromSql, IsNull, ToSql, Type, to_sql_checked},
     },
 };
 use rust_decimal::Decimal;
 
 use crate::{
-    Error, Pool, Query, Row, Rows, Syntax, Transaction, Value, postgres::PostgresSyntax,
+    Error, JsonValue, Pool, Query, Row, Rows, Syntax, Transaction, Value, postgres::PostgresSyntax,
     sql_parse::validate_table_name,
 };
 
@@ -66,28 +67,28 @@ fn extract_value(row: &PgRow, idx: usize) -> Result<Value, Error> {
             }
             None => Ok(Value::Null),
         },
-        // &Type::JSON | &Type::JSONB => {
-        //     let value = row
-        //         .try_get::<usize, JsonValue>(idx)?;
-        //     Ok(Value::Json(value))
-        // }
-        // other => {
-        //     let value: Result<GenericTypeValue, Error> = row.try_get(idx);
-        //     match value {
-        //         Ok(value) => match value.bytes {
-        //             Some(bytes) => {
-        //                 let string_opt = match std::str::from_utf8(&bytes) {
-        //                     Ok(string) => Some(string.to_string()),
-        //                     Err(_err) => None,
-        //                 };
-        //                 Ok(Value::Other(other.to_string(), bytes, string_opt))
-        //             }
-        //             None => Ok(Value::Null),
-        //         },
-        //         Err(_) => Ok(Value::Null),
-        //     }
-        // }
-        other => panic!("Unsupported type: {other}"),
+        &Type::JSON | &Type::JSONB => {
+            let value = row.try_get::<usize, JsonValue>(idx)?;
+            Ok(Value::Json(value))
+        }
+        other => {
+            let value: Result<GenericValueType, Error> = row
+                .try_get(idx)
+                .map_err(|err| Error::DatatypeError(err.to_string()));
+            match value {
+                Ok(value) => match value.bytes {
+                    Some(bytes) => {
+                        let string_opt = match std::str::from_utf8(&bytes) {
+                            Ok(string) => Some(string.to_string()),
+                            Err(_err) => None,
+                        };
+                        Ok(Value::Other(other.to_string(), bytes, string_opt))
+                    }
+                    None => Ok(Value::Null),
+                },
+                Err(_) => Ok(Value::Null),
+            }
+        }
     }
 }
 
@@ -119,6 +120,56 @@ impl PostgresPool {
             ))),
         }
     }
+}
+
+/// Represents a PostgreSQL datatype that is not explicitly handled in extract_value() and query().
+#[derive(Clone, Debug)]
+pub struct GenericValueType {
+    // Raw representation of the value.
+    bytes: Option<Vec<u8>>,
+}
+
+impl FromSql<'_> for GenericValueType {
+    fn from_sql(
+        _ty: &Type,
+        raw: &[u8],
+    ) -> Result<GenericValueType, Box<dyn std::error::Error + Sync + Send>> {
+        Ok(GenericValueType {
+            bytes: Some(raw.to_owned()),
+        })
+    }
+
+    fn accepts(_ty: &Type) -> bool {
+        true
+    }
+}
+
+impl ToSql for GenericValueType {
+    fn to_sql(
+        &self,
+        _ty: &Type,
+        out: &mut BytesMut,
+    ) -> Result<IsNull, Box<dyn std::error::Error + Sync + Send>>
+    where
+        Self: Sized,
+    {
+        match &self.bytes {
+            Some(val) => {
+                out.put(&**val);
+                Ok(IsNull::No)
+            }
+            None => Ok(IsNull::Yes),
+        }
+    }
+
+    fn accepts(_ty: &Type) -> bool
+    where
+        Self: Sized,
+    {
+        true
+    }
+
+    to_sql_checked!();
 }
 
 #[async_trait]
@@ -206,35 +257,26 @@ impl Query for PostgresPool {
                         _ => return Err(Error::InputError(gen_err(&param, "BOOL"))),
                     };
                 }
-                // &Type::JSON | &Type::JSONB => match param {
-                //     Value::Null => paramses.push(Box::new(None::<JsonValue>)),
-                //     Value::Json(value) => paramses.push(Box::new(value.clone())),
-                //     _ => {
-                //         return Err(Error::InputError(gen_err(
-                //             &param,
-                //             &pg_type.to_string(),
-                //         )));
-                //     }
-                // },
-                // other => {
-                //     match param {
-                //         Value::Null => {
-                //             paramses.push(Box::new(GenericTypeValue { bytes: None }))
-                //         }
-                //         Value::Other(_cname, bytes, _string_opt) => {
-                //             paramses.push(Box::new(GenericTypeValue {
-                //                 bytes: Some(bytes.clone()),
-                //             }))
-                //         }
-                //         _ => {
-                //             return Err(Error::InputError(gen_err(
-                //                 &param,
-                //                 &other.to_string(),
-                //             )));
-                //         }
-                //     };
-                // }
-                other => panic!("Unsupported type: {other}"),
+                &Type::JSON | &Type::JSONB => match param {
+                    Value::Null => paramses.push(Box::new(None::<JsonValue>)),
+                    Value::Json(value) => paramses.push(Box::new(value.clone())),
+                    _ => {
+                        return Err(Error::InputError(gen_err(&param, &pg_type.to_string())));
+                    }
+                },
+                other => {
+                    match param {
+                        Value::Null => paramses.push(Box::new(GenericValueType { bytes: None })),
+                        Value::Other(_cname, bytes, _string_opt) => {
+                            paramses.push(Box::new(GenericValueType {
+                                bytes: Some(bytes.clone()),
+                            }))
+                        }
+                        _ => {
+                            return Err(Error::InputError(gen_err(&param, &other.to_string())));
+                        }
+                    };
+                }
             };
         }
 

@@ -13,11 +13,12 @@ use deadpool_sqlite::{
 };
 use indexmap::indexmap;
 use regex::Regex;
+use rust_decimal::Decimal;
 use std::{str::from_utf8, sync::Arc};
 
 use crate::{
-    Error, Pool, Query, Row, Rows, Syntax, Transaction, Value, sql_parse::validate_table_name,
-    sqlite::SqliteSyntax,
+    Error, JsonValue, Pool, Query, Row, Rows, Syntax, Transaction, Value,
+    sql_parse::validate_table_name, sqlite::SqliteSyntax,
 };
 
 /// Uses the rusqlite driver to directly query a database using the given prepared [Statement]
@@ -58,19 +59,20 @@ fn query_prepared(stmt: &mut Statement<'_>, params: &[Value]) -> Result<Vec<Row>
             }
             Value::Null => {
                 stmt.raw_bind_parameter(i + 1, &Null)?;
-            } // Value::Json(value) => {
-              //     let value = match value {
-              //         JsonValue::String(value) => value.to_string(),
-              //         _ => value.to_string(),
-              //     };
-              //     stmt.raw_bind_parameter(i + 1, value)?;
-              // }
-              // Value::Other(type_name, bytes, string_opt) => {
-              //     return Err(Error::InputError(format!(
-              //         "Not supported for SQLite: \
-              //                  Value::Other({type_name}, {bytes:?}, {string_opt:?})"
-              //     )));
-              // }
+            }
+            Value::Json(value) => {
+                let value = match value {
+                    JsonValue::String(value) => value.to_string(),
+                    _ => value.to_string(),
+                };
+                stmt.raw_bind_parameter(i + 1, value)?;
+            }
+            Value::Other(type_name, bytes, string_opt) => {
+                return Err(Error::InputError(format!(
+                    "Not supported for SQLite: \
+                             Value::Other({type_name}, {bytes:?}, {string_opt:?})"
+                )));
+            }
         };
     }
 
@@ -114,11 +116,11 @@ fn query_prepared(stmt: &mut Statement<'_>, params: &[Value]) -> Result<Vec<Row>
                     },
                     ValueRef::Real(value) => Value::BigReal(value),
                     ValueRef::Text(value) | ValueRef::Blob(value) => match column_type {
-                        // Some(ctype) if ctype.to_lowercase() == "numeric" => {
-                        //     let value = from_utf8(value).unwrap_or_default();
-                        //     let value = value.parse::<Decimal>().unwrap();
-                        //     Value::Numeric(value)
-                        // }
+                        Some(ctype) if ctype.to_lowercase() == "numeric" => {
+                            let value = from_utf8(value).unwrap_or_default();
+                            let value = value.parse::<Decimal>().unwrap();
+                            Value::Numeric(value)
+                        }
                         _ => {
                             let value = from_utf8(value).unwrap_or_default();
                             Value::Text(value.to_string())

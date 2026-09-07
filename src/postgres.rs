@@ -22,11 +22,26 @@ impl Syntax for PostgresSyntax {
 
     /// Implements [Syntax::sql_type()] for [PostgresSyntax]
     fn sql_type(&self, name: &str) -> Result<ValueType, Error> {
-        match name.to_uppercase().as_str() {
-            "TEXT" => Ok(ValueType::Text(name.to_string())),
-            // TODO: Add more.
-            _ => Err(Error::DatatypeError(format!(
-                "Unrecoganized type name: {name}"
+        let name = name.to_uppercase();
+        match name.as_str() {
+            "BOOL" | "BOOLEAN" => Ok(ValueType::Boolean(name.to_string())),
+            "SMALLINT" | "INT2" | "SMALLSERIAL" => Ok(ValueType::SmallInteger(name.to_string())),
+            "INTEGER" | "INT4" | "SERIAL" => Ok(ValueType::Integer(name.to_string())),
+            "BIGINT" | "INT8" | "BIGSERIAL" => Ok(ValueType::BigInteger(name.to_string())),
+            "DECIMAL" | "NUMERIC" => Ok(ValueType::Numeric(name.to_string())),
+            "REAL" | "FLOAT" | "FLOAT4" => Ok(ValueType::Real(name.to_string())),
+            "DOUBLE PRECISION" | "FLOAT8" => Ok(ValueType::BigReal(name.to_string())),
+            "TEXT" | "BPCHAR" => Ok(ValueType::Text(name.to_string())),
+            other if other.starts_with("DECIMAL") => Ok(ValueType::Numeric(name.to_string())),
+            other
+                if ["CHARACTER", "VARCHAR", "CHAR", "BPCHAR"]
+                    .iter()
+                    .any(|other_type| other.starts_with(other_type)) =>
+            {
+                Ok(ValueType::Text(name.to_string()))
+            }
+            other => Err(Error::InputError(format!(
+                "Invalid or unsupported PostgreSQL type: {other}"
             ))),
         }
     }

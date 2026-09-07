@@ -1,3 +1,8 @@
+use indexmap::{IndexMap, IndexSet};
+use std::{cmp::Ordering, collections::HashSet, iter::zip};
+
+use crate::{Error, Row, Value, ValueType};
+
 // MC: We had DbType::Null in the old API. Was it unused? (I think it might have been
 // - I don't recall actually using it anywhere - but I'm not sure.)
 // JO: I think we want to distinguish between the type of a value (which might be NULL)
@@ -6,9 +11,14 @@
 // MC: Ok that's clear. I'm keeping the enum for now but I'll also keep these comments around
 // until it's time to merge the PR, in case we want to revisit this before then.
 
+// TODO: Not using this for now as I'm not quite sure what the best way to divide up the
+// methods between ValueType and ColumnType is. I'm also still skeptical about having both as
+// they are easy to confuse with one another.
+
 /// The type of a [Value](crate::Value), including the name of the type according to the
 /// underlying database. Note that this type is similar to [ValueType](crate::ValueType),
 /// but excludes NULL, which is not a valid type for a column.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ColumnType {
     Boolean(String),
     BigInteger(String),
@@ -18,9 +28,166 @@ pub enum ColumnType {
 
 /// TODO: Add docstring.
 #[allow(dead_code)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Column {
-    name: String,
-    sql_type: ColumnType,
-    not_null: bool,
-    unique: bool,
+    pub name: String,
+    // TODO: We will probably want to use ColumnType instead of ValueType here:
+    pub sql_type: ValueType,
+    pub not_null: bool,
+    pub unique: bool,
+}
+
+impl PartialOrd for Column {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match self.sql_type.partial_cmp(&other.sql_type) {
+            None => None,
+            Some(Ordering::Equal) => {
+                if self.not_null != other.not_null {
+                    if self.not_null {
+                        Some(Ordering::Less)
+                    } else {
+                        Some(Ordering::Greater)
+                    }
+                } else if self.unique != other.unique {
+                    if self.unique {
+                        Some(Ordering::Less)
+                    } else {
+                        Some(Ordering::Greater)
+                    }
+                } else {
+                    Some(Ordering::Equal)
+                }
+            }
+            Some(ordering) => Some(ordering),
+        }
+    }
+}
+
+impl Column {
+    /// Return a blank database column of the minumum type.
+    pub fn new() -> Self {
+        Column {
+            name: "".to_string(),
+            // This should never fail unless there are actually no ValueType variants defined:
+            sql_type: ValueType::sorted().next().expect("No types defined"),
+            not_null: true,
+            unique: true,
+        }
+    }
+
+    /// Return the minimum column required to contain the given database values.
+    pub fn min_column<I>(&mut self, values: I) -> Result<Column, Error>
+    where
+        I: Iterator<Item = Value>,
+    {
+        self.min_column_from_strings(values.map(|value| value.to_string()))
+    }
+
+    /// Return the minimum column required to contain the given string values.
+    pub fn min_column_from_strings<I>(&mut self, values: I) -> Result<Column, Error>
+    where
+        I: Iterator<Item = String>,
+    {
+        // Iterate over the given values and determine the most specific type that is compatible
+        // with them all:
+        let mut values_seen = HashSet::new();
+        let mut types_seen = HashSet::new();
+        for value in values {
+            // First check whether this is a null value or a duplicate:
+            if value == "" {
+                if self.not_null {
+                    self.not_null = false;
+                }
+                continue;
+            } else if values_seen.contains(&value) {
+                if self.unique {
+                    self.unique = false;
+                }
+                continue;
+            }
+
+            // Get the most specific type for this value and adjust the overall column type
+            // accordingly.
+            let sql_type = self.sql_type.min_type(&value)?;
+            self.sql_type = sql_type.clone();
+
+            // Add to the sets of values and types seen:
+            types_seen.insert(sql_type);
+            values_seen.insert(value);
+        }
+
+        Ok(self.clone())
+    }
+
+    /// Return the minimum column types corresponding to the given vectors of column values.
+    pub fn min_columns_from_column_values<I>(column_values: I) -> Result<Vec<Column>, Error>
+    where
+        I: Iterator<Item = Vec<Value>>,
+    {
+        column_values
+            .map(|values| Column::new().min_column(values.into_iter()))
+            .collect::<Result<Vec<Column>, _>>()
+    }
+
+    /// Return the minimum columns needed to contain the given vectors of database values.
+    pub fn min_columns_from_anonymous_rows<I>(rows: I) -> Result<Vec<Column>, Error>
+    where
+        I: Iterator<Item = Vec<Value>>,
+    {
+        let mut column_data = IndexMap::new();
+        let mut not_unique = vec![];
+        rows.for_each(|row| {
+            for i in 0..row.len() {
+                match column_data.get_mut(&i) {
+                    None => {
+                        let mut data = HashSet::new();
+                        data.insert(row[i].clone());
+                        column_data.insert(i, data);
+                    }
+                    Some(data) => {
+                        if !data.insert(row[i].clone()) {
+                            not_unique.push(i);
+                        }
+                    }
+                };
+            }
+        });
+
+        let mut db_columns = vec![];
+        for (index, data) in column_data.into_iter() {
+            let mut column = Column::new().min_column(data.into_iter())?;
+            if not_unique.contains(&index) {
+                column.unique = false;
+            }
+            db_columns.push(column)
+        }
+
+        Ok(db_columns)
+    }
+
+    /// Return the minimum columns needed to contain the given database rows.
+    pub fn min_row_from_db_rows<I>(db_rows: I) -> Result<IndexMap<String, Column>, Error>
+    where
+        I: Iterator<Item = Row>,
+    {
+        let mut keys = IndexSet::new();
+        let columns = Column::min_columns_from_anonymous_rows(db_rows.map(|row| {
+            row.into_iter()
+                .map(|(key, val)| {
+                    // Use the values, saving the keys for later:
+                    keys.insert(key.to_string());
+                    val
+                })
+                .collect::<Vec<_>>()
+        }))?;
+
+        // Zip everything up into an IndexMap and return it:
+        Ok(zip(keys, columns)
+            .map(|(key, mut column)| {
+                // Don't forget to copy the column name:
+                column.name = key.to_string();
+                (key, column)
+            })
+            .collect::<IndexMap<_, _>>())
+    }
 }

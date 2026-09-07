@@ -20,10 +20,25 @@ impl Syntax for SqliteSyntax {
 
     /// Implements [Syntax::sql_type()] for SQLite.
     fn sql_type(&self, name: &str) -> Result<ValueType, Error> {
-        match name.to_uppercase().as_str() {
-            "TEXT" => Ok(ValueType::Text(name.to_string())),
-            _ => Err(Error::DatatypeError(format!(
-                "Unrecoganized type name: {name}"
+        let name = name.to_uppercase();
+        match name.as_str() {
+            "INTEGER" | "INT" | "TINYINT" | "SMALLINT" | "MEDIUMINT" | "BIGINT" | "INT2"
+            | "INT4" | "INT8" | "BOOLEAN" | "BOOL" => Ok(ValueType::BigInteger(name.to_string())),
+            "REAL" | "DOUBLE PRECISION" | "DOUBLE" | "FLOAT" => {
+                Ok(ValueType::BigReal(name.to_string()))
+            }
+            "NUMERIC" => Ok(ValueType::Numeric(name.to_string())),
+            "TEXT" | "clob" => Ok(ValueType::Text(name.to_string())),
+            other if other.starts_with("DECIMAL") => Ok(ValueType::Numeric(name.to_string())),
+            other
+                if ["CHARACTER", "VARCHAR", "NCHAR", "NVARCHAR"]
+                    .iter()
+                    .any(|other_type| other.starts_with(other_type)) =>
+            {
+                Ok(ValueType::Text(name.to_string()))
+            }
+            other => Err(Error::InputError(format!(
+                "Invalid or unsupported SQLite type: {other}"
             ))),
         }
     }

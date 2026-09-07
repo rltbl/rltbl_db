@@ -16,9 +16,14 @@ pub trait Syntax: std::fmt::Debug {
 
     /// Get a SQL ValueType by its name in this SQL syntax.
     fn sql_type(&self, name: &str) -> Result<ValueType, Error> {
-        match name.to_uppercase().as_str() {
-            "TEXT" => Ok(ValueType::Text(name.to_string())),
-            // TODO: Add more?
+        let name = name.to_uppercase();
+        match name.as_str() {
+            "TEXT" => Ok(ValueType::Text("TEXT".to_string())),
+            "SMALLINT" => Ok(ValueType::SmallInteger("SMALLINT".to_string())),
+            "INT" | "INTEGER" => Ok(ValueType::Integer("INT".to_string())),
+            "BIGINT" => Ok(ValueType::BigInteger("BIGINT".to_string())),
+            "FLOAT" | "REAL" => Ok(ValueType::Real("REAL".to_string())),
+            "DOUBLE" | "DOUBLE PRECISION" => Ok(ValueType::BigReal("DOUBLE".to_string())),
             _ => Err(Error::DatatypeError(format!(
                 "Unrecoganized type name: {name}"
             ))),

@@ -1,8 +1,9 @@
 #[cfg(test)]
 mod tests {
-    use indexmap::IndexMap;
+    use indexmap::{IndexMap, indexmap};
     use rand::{SeedableRng, distr::Distribution, distr::Uniform, rngs::StdRng};
     use rust_decimal::dec;
+    use serde_json::json;
     use std::{
         collections::{BTreeMap, HashMap},
         str::FromStr,
@@ -11,7 +12,7 @@ mod tests {
     };
 
     use crate::{
-        AnyPool, Row, Value,
+        AnyPool, Column, Row, Value, ValueType,
         cache::{CachingStrategy, QUERY_CACHE_TABLE, TABLE_CACHE_TABLE},
         row,
         row::StringRow,
@@ -2107,6 +2108,98 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_sql_type() {
+        #[cfg(feature = "rusqlite")]
+        sql_type(":memory:").await;
+        #[cfg(feature = "tokio-postgres")]
+        sql_type("postgresql:///rltbl_db").await;
+        #[cfg(feature = "libsql")]
+        {
+            // sql_type(":memory:").await;
+        }
+    }
+
+    async fn sql_type(url: &str) {
+        let pool = AnyPool::connect(url).await.unwrap();
+        let syntax = pool.syntax();
+        pool.drop_table("test_sql_type").await.unwrap();
+        pool.execute(
+            r#"CREATE TABLE test_sql_type (
+                   alpha TEXT,
+                   beta BIGINT,
+                   gamma SMALLINT,
+                   delta DOUBLE PRECISION
+               )"#,
+            (),
+        )
+        .await
+        .unwrap();
+
+        let columns = pool.columns("test_sql_type").await.unwrap();
+
+        let alpha_type = {
+            let alpha_type = columns.get("alpha").unwrap();
+            syntax.sql_type(alpha_type).unwrap()
+        };
+        assert_eq!(alpha_type, ValueType::Text("text".to_string()));
+
+        let beta_type = {
+            let beta_type = columns.get("beta").unwrap();
+            syntax.sql_type(beta_type).unwrap()
+        };
+        assert_eq!(beta_type, ValueType::BigInteger("bigint".to_string()));
+
+        let gamma_type = {
+            let gamma_type = columns.get("gamma").unwrap();
+            syntax.sql_type(gamma_type).unwrap()
+        };
+
+        match syntax.name() {
+            "postgres" => {
+                assert_eq!(gamma_type, ValueType::SmallInteger("smallint".to_string()))
+            }
+            "sqlite" => assert_eq!(gamma_type, ValueType::BigInteger("smallint".to_string())),
+            _ => panic!("Invalid syntax: '{}'", syntax.name()),
+        };
+
+        let delta_type = {
+            let delta_type = columns.get("delta").unwrap();
+            syntax.sql_type(delta_type).unwrap()
+        };
+        assert_eq!(
+            delta_type,
+            ValueType::BigReal("double precision".to_string())
+        );
+
+        let db_row = row! {
+            "alpha" => alpha_type.parse("foo").unwrap(),
+            "beta" => beta_type.parse(json!(11)).unwrap(),
+            "gamma" => gamma_type.convert(&Value::Integer(12)).unwrap(),
+            "delta" => delta_type.parse_str("1.32").unwrap(),
+        };
+
+        pool.insert(
+            "test_sql_type",
+            &["alpha", "beta", "gamma", "delta"],
+            &vec![db_row.clone()],
+        )
+        .await
+        .unwrap();
+
+        let row = pool
+            .query("SELECT * FROM test_sql_type", ())
+            .await
+            .unwrap()
+            .row()
+            .unwrap()
+            .clone();
+        assert_eq!(row, db_row);
+
+        // Clean up:
+        pool.drop_table("test_sql_type").await.unwrap();
+    }
+
+    #[tokio::test]
     // #[ignore] // TODO: This should be ignored by default?
     async fn test_table_names() {
         // Valid table names:
@@ -2650,6 +2743,7 @@ mod tests {
         assert_eq!(value, "123");
     }
 
+    #[cfg(feature = "tokio-postgres")]
     #[tokio::test]
     async fn test_postgres_aliases_and_builtin_functions() {
         let pool = AnyPool::connect("postgresql:///rltbl_db").await.unwrap();
@@ -2754,6 +2848,7 @@ mod tests {
     /// using [MAX_PARAMS_POSTGRES] parameters in a query is indeed supported.
     /// To run this and other ignored tests, use `cargo test -- --ignored` or
     /// `cargo test -- --include-ignored`
+    #[cfg(feature = "tokio-postgres")]
     #[tokio::test]
     // #[ignore]
     async fn test_postgres_max_params() {
@@ -2797,6 +2892,7 @@ mod tests {
         pool.drop_table("text_max_params").await.unwrap();
     }
 
+    #[cfg(feature = "tokio-postgres")]
     #[tokio::test]
     async fn test_postgres_special_floats() {
         let pool = AnyPool::connect("postgresql:///rltbl_db").await.unwrap();
@@ -2891,13 +2987,10 @@ mod tests {
         pool.drop_table("test_special_floats").await.unwrap();
     }
 
+    #[cfg(feature = "tokio-postgres")]
     #[tokio::test]
-    #[ignore]
     async fn test_other_types() {
-        /*
-        let pool = AnyPool::connect("postgresql:///rltbl_db")
-            .await
-            .unwrap();
+        let pool = AnyPool::connect("postgresql:///rltbl_db").await.unwrap();
 
         // CHAR
         pool.drop_table("test_other_types").await.unwrap();
@@ -3465,16 +3558,11 @@ mod tests {
 
         // Clean up.
         pool.drop_table("test_other_types").await.unwrap();
-        */
     }
 
     #[tokio::test]
-    #[ignore]
     async fn test_jsonb() {
-        /*
-        let pool = TokioPostgresPool::connect("postgresql:///rltbl_db")
-            .await
-            .unwrap();
+        let pool = AnyPool::connect("postgresql:///rltbl_db").await.unwrap();
 
         pool.drop_table("test_jsonb").await.unwrap();
         pool.execute(
@@ -3518,6 +3606,281 @@ mod tests {
              \"foo\": Boolean(true)} \
              }"
         );
-         */
+    }
+
+    #[test]
+    fn test_min_typing() {
+        let column_values = vec![
+            // Column A:
+            vec![
+                Value::from(true),
+                Value::from(1),
+                Value::from(u64::MAX),
+                Value::from(2.1),
+                Value::from(f64::MAX),
+            ],
+            // Column B:
+            vec![
+                Value::from(1),
+                Value::from(true),
+                Value::from(u64::MAX),
+                Value::from(2.1),
+                Value::from(f64::MAX),
+            ],
+            // Column C:
+            vec![
+                Value::from(f64::MAX),
+                Value::from(1),
+                Value::from(true),
+                Value::from(u64::MAX),
+                Value::from(2.1),
+            ],
+            // Column D:
+            vec![
+                Value::from("alphanum"),
+                Value::from(f32::MAX),
+                Value::from(true),
+                Value::from(25),
+                Value::from(i32::MAX),
+            ],
+            // Column E:
+            vec![
+                Value::from(true),
+                Value::from(true),
+                Value::from(true),
+                Value::from(false),
+                Value::from(0),
+            ],
+            // Column F:
+            vec![
+                Value::from(1),
+                Value::from(2.1),
+                Value::from(2.1),
+                Value::from(i64::MAX),
+                Value::Null,
+            ],
+            // Column G:
+            vec![
+                Value::Null,
+                Value::from(i64::MAX),
+                Value::from(2.1),
+                Value::from(1),
+                Value::from(2.1),
+            ],
+            // Column H:
+            vec![
+                Value::Null,
+                Value::from(i32::MAX),
+                Value::from(2),
+                Value::from(1),
+                Value::from(i32::MAX),
+            ],
+            // Column I:
+            vec![
+                Value::Null,
+                Value::from(i16::MAX),
+                Value::from(2),
+                Value::from(1),
+                Value::from(3),
+            ],
+            // Column J:
+            vec![
+                Value::Null,
+                Value::from(u64::MAX),
+                Value::from(2),
+                Value::from(1),
+                Value::from(3),
+            ],
+            // Column K:
+            vec![
+                Value::Null,
+                Value::from(u32::MAX),
+                Value::from(2),
+                Value::from(1),
+                Value::from(3),
+            ],
+        ];
+
+        let columns = Column::min_columns_from_column_values(column_values.into_iter()).unwrap();
+        assert_eq!(
+            columns,
+            [
+                // Column A:
+                Column {
+                    name: "".to_string(),
+                    sql_type: ValueType::BigReal("".to_string()),
+                    not_null: true,
+                    unique: true,
+                },
+                // Column B:
+                Column {
+                    name: "".to_string(),
+                    sql_type: ValueType::BigReal("".to_string()),
+                    not_null: true,
+                    unique: true,
+                },
+                // Column C:
+                Column {
+                    name: "".to_string(),
+                    sql_type: ValueType::BigReal("".to_string()),
+                    not_null: true,
+                    unique: true,
+                },
+                // Column D:
+                Column {
+                    name: "".to_string(),
+                    sql_type: ValueType::Text("".to_string()),
+                    not_null: true,
+                    unique: true,
+                },
+                // Column E:
+                Column {
+                    name: "".to_string(),
+                    sql_type: ValueType::Boolean("".to_string()),
+                    not_null: true,
+                    unique: false,
+                },
+                // Column F:
+                Column {
+                    name: "".to_string(),
+                    sql_type: ValueType::Real("".to_string()),
+                    not_null: false,
+                    unique: false,
+                },
+                // Column G:
+                Column {
+                    name: "".to_string(),
+                    sql_type: ValueType::Real("".to_string()),
+                    not_null: false,
+                    unique: false,
+                },
+                // Column H:
+                Column {
+                    name: "".to_string(),
+                    sql_type: ValueType::Integer("".to_string()),
+                    not_null: false,
+                    unique: false,
+                },
+                // Column I:
+                Column {
+                    name: "".to_string(),
+                    sql_type: ValueType::SmallInteger("".to_string()),
+                    not_null: false,
+                    unique: true,
+                },
+                // Column J:
+                Column {
+                    name: "".to_string(),
+                    sql_type: ValueType::Real("".to_string()),
+                    not_null: false,
+                    unique: true,
+                },
+                // Column K:
+                Column {
+                    name: "".to_string(),
+                    sql_type: ValueType::BigInteger("".to_string()),
+                    not_null: false,
+                    unique: true,
+                },
+            ]
+        );
+
+        let db_rows = vec![
+            row! { "foo" => 1, "bar" => 2.0, "jar" => "alphanum", "har" => true },
+            row! { "foo" => f32::MAX, "bar" => 2, "jar" => "alphanum", "har" => true },
+            row! { "foo" => 3, "bar" => 2.0, "jar" => "alphanum", "har" => false },
+            row! { "foo" => i64::MAX, "bar" => 2.0, "jar" => "alphanum", "har" => Value::Null },
+        ];
+
+        let column_map = Column::min_row_from_db_rows(db_rows.into_iter()).unwrap();
+        assert_eq!(
+            column_map,
+            indexmap! {
+                "foo".to_string() => Column {
+                    name: "foo".to_string(),
+                    sql_type: ValueType::Real("".to_string()),
+                    not_null: true,
+                    unique: true,
+                },
+                "bar".to_string() => Column {
+                    name: "bar".to_string(),
+                    sql_type: ValueType::SmallInteger("".to_string()),
+                    not_null: true,
+                    unique: false,
+                },
+                "jar".to_string() => Column {
+                    name: "jar".to_string(),
+                    sql_type: ValueType::Text("".to_string()),
+                    not_null: true,
+                    unique: false,
+                },
+                "har".to_string() => Column {
+                    name: "har".to_string(),
+                    sql_type: ValueType::Boolean("".to_string()),
+                    not_null: false,
+                    unique: false,
+                }
+            }
+        );
+
+        let anonymous_rows = vec![
+            // Row 0
+            vec![
+                Value::from(1),
+                Value::from(2.0),
+                Value::from("a"),
+                Value::from(true),
+            ],
+            // Row 1, etc.
+            vec![
+                Value::from(2),
+                Value::from(2),
+                Value::from("a"),
+                Value::from(true),
+            ],
+            vec![
+                Value::from(3),
+                Value::from(2.0),
+                Value::from("a"),
+                Value::from(false),
+            ],
+            vec![
+                Value::from(i64::MAX),
+                Value::from(2.0),
+                Value::from("a"),
+                Value::Null,
+            ],
+        ];
+
+        let columns = Column::min_columns_from_anonymous_rows(anonymous_rows.into_iter()).unwrap();
+        assert_eq!(
+            columns,
+            vec![
+                Column {
+                    name: "".to_string(),
+                    sql_type: ValueType::BigInteger("".to_string()),
+                    not_null: true,
+                    unique: true,
+                },
+                Column {
+                    name: "".to_string(),
+                    sql_type: ValueType::SmallInteger("".to_string()),
+                    not_null: true,
+                    unique: false,
+                },
+                Column {
+                    name: "".to_string(),
+                    sql_type: ValueType::Text("".to_string()),
+                    not_null: true,
+                    unique: false,
+                },
+                Column {
+                    name: "".to_string(),
+                    sql_type: ValueType::Boolean("".to_string()),
+                    not_null: false,
+                    unique: false,
+                }
+            ]
+        );
     }
 }

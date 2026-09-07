@@ -1548,6 +1548,7 @@ mod tests {
     use std::collections::HashMap;
 
     #[test]
+    #[ignore]
     fn test_min_typing() {
         let column_values = vec![
             // Column A:

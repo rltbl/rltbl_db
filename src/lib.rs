@@ -147,7 +147,7 @@ pub use self::row::{Row, Rows};
 pub use self::syntax::Syntax;
 pub use self::table::Table;
 pub use self::transaction::{AnyTransaction, Transaction};
-pub use self::value::{ValueType, Value};
+pub use self::value::{ValueType, Value, JsonValue};
 
 /// Error definitions used by all modules.
 pub mod error;

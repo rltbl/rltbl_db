@@ -29,9 +29,10 @@
 //! We implement [serde::Serialize] and [serde::Deserialize] for `Value`. For Rust primitives
 //! the serlialization is trivial. We represent complex cases as JSON using `serde_json`.
 
-use rust_decimal::Decimal;
+use rust_decimal::{Decimal, dec};
 use serde::{Deserialize, Serialize};
 use std::{
+    cmp::Ordering,
     fmt::Display,
     hash::{Hash, Hasher},
 };
@@ -47,12 +48,293 @@ pub type JsonValue = serde_json::Value;
 
 /// The type of a [Value], including the name of the type according to the underlying database,
 /// as a [String].
+#[derive(Clone, Debug, Hash)]
 pub enum ValueType {
     Null(String),
     Boolean(String),
+    SmallInteger(String),
+    Integer(String),
     BigInteger(String),
+    Real(String),
     BigReal(String),
+    Numeric(String),
     Text(String),
+}
+
+impl Default for ValueType {
+    fn default() -> ValueType {
+        ValueType::sorted().next().expect("No types defined")
+    }
+}
+
+impl PartialEq for ValueType {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            // Note that Null is a special type and is not equal to any other type,
+            // including itself.
+            (ValueType::Boolean(_), ValueType::Boolean(_)) => true,
+            (ValueType::SmallInteger(_), ValueType::SmallInteger(_)) => true,
+            (ValueType::Integer(_), ValueType::Integer(_)) => true,
+            (ValueType::BigInteger(_), ValueType::BigInteger(_)) => true,
+            (ValueType::Real(_), ValueType::Real(_)) => true,
+            (ValueType::BigReal(_), ValueType::BigReal(_)) => true,
+            (ValueType::Numeric(_), ValueType::Numeric(_)) => true,
+            (ValueType::Text(_), ValueType::Text(_)) => true,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for ValueType {}
+
+impl PartialOrd for ValueType {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match (self, other) {
+            // Nulls are special and are not assigned an order in the hierarchy.
+            (ValueType::Null(_), _) | (_, ValueType::Null(_)) => None,
+
+            (ValueType::Boolean(_), ValueType::Boolean(_)) => Some(Ordering::Equal),
+            (ValueType::Boolean(_), _) => Some(Ordering::Less),
+            (_, ValueType::Boolean(_)) => Some(Ordering::Greater),
+
+            (ValueType::SmallInteger(_), ValueType::SmallInteger(_)) => Some(Ordering::Equal),
+            (ValueType::SmallInteger(_), _) => Some(Ordering::Less),
+            (_, ValueType::SmallInteger(_)) => Some(Ordering::Greater),
+
+            (ValueType::Integer(_), ValueType::Integer(_)) => Some(Ordering::Equal),
+            (ValueType::Integer(_), _) => Some(Ordering::Less),
+            (_, ValueType::Integer(_)) => Some(Ordering::Greater),
+
+            (ValueType::BigInteger(_), ValueType::BigInteger(_)) => Some(Ordering::Equal),
+            (ValueType::BigInteger(_), _) => Some(Ordering::Less),
+            (_, ValueType::BigInteger(_)) => Some(Ordering::Greater),
+
+            (ValueType::Real(_), ValueType::Real(_)) => Some(Ordering::Equal),
+            (ValueType::Real(_), _) => Some(Ordering::Less),
+            (_, ValueType::Real(_)) => Some(Ordering::Greater),
+
+            (ValueType::BigReal(_), ValueType::BigReal(_)) => Some(Ordering::Equal),
+            (ValueType::BigReal(_), _) => Some(Ordering::Less),
+            (_, ValueType::BigReal(_)) => Some(Ordering::Greater),
+
+            (ValueType::Numeric(_), ValueType::Numeric(_)) => Some(Ordering::Equal),
+            (ValueType::Numeric(_), _) => Some(Ordering::Less),
+            (_, ValueType::Numeric(_)) => Some(Ordering::Greater),
+
+            (ValueType::Text(_), ValueType::Text(_)) => Some(Ordering::Equal),
+        }
+    }
+}
+
+impl ValueType {
+    /// Return an iterator over sortable database types.
+    pub fn sorted() -> impl Iterator<Item = ValueType> {
+        [
+            // Note that Null is a special type and is not part of this hierarchy.
+            ValueType::Boolean("".to_string()),
+            ValueType::SmallInteger("".to_string()),
+            ValueType::Integer("".to_string()),
+            ValueType::BigInteger("".to_string()),
+            ValueType::Real("".to_string()),
+            ValueType::BigReal("".to_string()),
+            ValueType::Numeric("".to_string()),
+            ValueType::Text("".to_string()),
+        ]
+        .into_iter()
+    }
+
+    /// Determine the minimum type (see [ValueType::sorted()]) needed to support the given value,
+    /// where the latter is given in the form of a string. The minimum type is the first type
+    /// in the type hierarchy for which we can parse the given value string as an instance of that
+    /// type.
+    pub fn min_type(&self, value: &str) -> Result<ValueType, Error> {
+        // If the value is an empty string, return a Null type and value.
+        if value == "" {
+            return Ok(ValueType::Null("".to_string()));
+        }
+
+        // Otherwise, try to parse it using the available types in order from most to least
+        // specific.
+        for value_type in ValueType::sorted() {
+            if value_type >= *self {
+                match value_type.parse_str(value) {
+                    Ok(_) => return Ok(value_type),
+                    Err(err) => {
+                        if let ValueType::Text(_) = value_type {
+                            return Err(Error::InputError(format!(
+                                "Could not determine most specific type for value: '{value}'. \
+                                 Got error: {err}"
+                            )));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(self.clone())
+    }
+
+    /// Parses a given string representing the value of a database field into a [Value] of this
+    /// type.
+    pub fn parse_str(&self, value: &str) -> Result<Value, Error> {
+        // If the value is a NULL value, then we just return a Null:
+        if value == "" {
+            return Ok(Value::Null);
+        }
+
+        // When parsing from a TSV or CSV file we will often encounter strings like "true",
+        // "false", "f", "t", "0", and "1", possibly in uppercase or mixed case. When the current
+        // type is a boolean, these should be interpreted as booleans. Otherwise, if the current
+        // type is a number type, then these should be interpreted as numbers of that type (with
+        // true => 1 and false => 0), otherwise if the current type is text then *all* values
+        // should be interpreted as text.
+        match self {
+            ValueType::Null(_) => Ok(Value::Null),
+            ValueType::Boolean(_) => match value.to_lowercase().as_str() {
+                "0" | "false" | "f" => Ok(Value::Boolean(false)),
+                "1" | "true" | "t" => Ok(Value::Boolean(true)),
+                _ => {
+                    let value = value
+                        .parse::<bool>()
+                        .map_err(|_| Error::InputError(format!("Not a boolean: '{value}'")))?;
+                    Ok(Value::Boolean(value))
+                }
+            },
+            ValueType::SmallInteger(_) => match value.to_lowercase().as_str() {
+                "0" | "false" | "f" => Ok(Value::SmallInteger(0)),
+                "1" | "true" | "t" => Ok(Value::SmallInteger(1)),
+                _ => {
+                    let value = value
+                        .parse::<i16>()
+                        .map_err(|_| Error::InputError(format!("Not an i16: '{value}'")))?;
+                    Ok(Value::SmallInteger(value))
+                }
+            },
+            ValueType::Integer(_) => match value.to_lowercase().as_str() {
+                "0" | "false" | "f" => Ok(Value::Integer(0)),
+                "1" | "true" | "t" => Ok(Value::Integer(1)),
+                _ => {
+                    let value = value
+                        .parse::<i32>()
+                        .map_err(|_| Error::InputError(format!("Not an i32: '{value}'")))?;
+                    Ok(Value::Integer(value))
+                }
+            },
+            ValueType::BigInteger(_) => match value.to_lowercase().as_str() {
+                "0" | "false" | "f" => Ok(Value::BigInteger(0)),
+                "1" | "true" | "t" => Ok(Value::BigInteger(1)),
+                _ => {
+                    let value = value
+                        .parse::<i64>()
+                        .map_err(|_| Error::InputError(format!("Not an i64: '{value}'")))?;
+                    Ok(Value::BigInteger(value))
+                }
+            },
+            ValueType::Real(_) => match value.to_lowercase().as_str() {
+                "0" | "false" | "f" => Ok(Value::Real(0_f32)),
+                "1" | "true" | "t" => Ok(Value::Real(1_f32)),
+                _ => match value
+                    .parse::<f32>()
+                    .map_err(|_| Error::InputError(format!("Not an f32: '{value}'")))?
+                {
+                    f32::INFINITY => Err(Error::InputError(format!("Not an f32: '{value}'"))),
+                    value => Ok(Value::Real(value)),
+                },
+            },
+            ValueType::BigReal(_) => match value.to_lowercase().as_str() {
+                "0" | "false" | "f" => Ok(Value::BigReal(0_f64)),
+                "1" | "true" | "t" => Ok(Value::BigReal(1_f64)),
+                _ => match value
+                    .parse::<f64>()
+                    .map_err(|_| Error::InputError(format!("Not an f64: '{value}'")))?
+                {
+                    f64::INFINITY => Err(Error::InputError(format!("Not an f64: '{value}'"))),
+                    value => Ok(Value::BigReal(value)),
+                },
+            },
+            ValueType::Numeric(_) => match value.to_lowercase().as_str() {
+                "0" | "false" | "f" => Ok(Value::Numeric(dec!(0))),
+                "1" | "true" | "t" => Ok(Value::Numeric(dec!(1))),
+                _ => {
+                    let value = value
+                        .parse::<Decimal>()
+                        .map_err(|_| Error::InputError(format!("Not a Decimal: '{value}'")))?;
+                    Ok(Value::Numeric(value))
+                }
+            },
+            ValueType::Text(_) => Ok(Value::Text(value.to_string())),
+        }
+    }
+
+    /// Parses a given [JsonValue] representing the value of a database field into a [Value] of
+    /// this type.
+    pub fn parse_json(&self, value: &JsonValue) -> Result<Value, Error> {
+        Ok(Value::from(value))
+    }
+
+    /// Parses the given value into a [Value] of this type.
+    pub fn parse(&self, value: impl IntoValue) -> Result<Value, Error> {
+        let value = value.into_value();
+        self.convert(&value)
+    }
+
+    /// Converts the given [Value] into a [Value] of this type.
+    pub fn convert(&self, value: &Value) -> Result<Value, Error> {
+        // First handle NULLs and Text types:
+        match self {
+            ValueType::Null(_) => match value {
+                Value::Null => return Ok(Value::Null),
+                value => {
+                    return Err(Error::InputError(format!(
+                        "Can't convert to {self:?} from {value:?}"
+                    )));
+                }
+            },
+            _ => {
+                if let Value::Text(value) = value {
+                    return Ok(self.parse_str(value)?);
+                }
+            }
+        };
+
+        // Then handle everything else:
+
+        let err_template = |db_value: &Value| {
+            Error::InputError(format!("Can't convert to {self:?} from {db_value:?}"))
+        };
+
+        match self {
+            ValueType::Null(_) => unreachable!(), // Handled above.
+            ValueType::Boolean(_) => {
+                let value = value.as_bool().ok_or(err_template(value))?;
+                Ok(Value::Boolean(value))
+            }
+            ValueType::SmallInteger(_) => {
+                let value = value.as_i16().ok_or(err_template(value))?;
+                Ok(Value::SmallInteger(value))
+            }
+            ValueType::Integer(_) => {
+                let value = value.as_i32().ok_or(err_template(value))?;
+                Ok(Value::Integer(value))
+            }
+            ValueType::BigInteger(_) => {
+                let value = value.as_i64().ok_or(err_template(value))?;
+                Ok(Value::BigInteger(value))
+            }
+            ValueType::Real(_) => {
+                let value = value.as_f32().ok_or(err_template(value))?;
+                Ok(Value::Real(value))
+            }
+            ValueType::BigReal(_) => {
+                let value = value.as_f64().ok_or(err_template(value))?;
+                Ok(Value::BigReal(value))
+            }
+            ValueType::Numeric(_) => {
+                let value = value.as_decimal().ok_or(err_template(value))?;
+                Ok(Value::Numeric(value))
+            }
+            ValueType::Text(_) => Ok(Value::Text(value.to_string())),
+        }
+    }
 }
 
 // MC: This is much more minimal than what we currently have in rltbl_db. Is this because
@@ -68,15 +350,29 @@ pub enum ValueType {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum Value {
+    /// Represents a NULL value. Can be used with any column type.
     Null,
+    /// Use with BOOL column types or equivalent.
     Boolean(bool),
+    /// Use with INT2 column types or equivalent.
     BigInteger(i64),
+    /// Use with INT4 column types or equivalent.
     Integer(i32),
+    /// Use with INT8 column types or equivalent.
     SmallInteger(i16),
+    /// Use with FLOAT4 column types or equivalent.
     Real(f32),
+    /// Use with FLOAT8 column types or equivalent.
     BigReal(f64),
+    /// Use with NUMERIC column types or equivalent.
     Numeric(Decimal),
+    /// Use with TEXT and VARCHAR column types or equivalent.
     Text(String),
+    /// Use with JSON or JSONB column types or equivalent.
+    Json(JsonValue),
+    /// Other types that are not explicitly supported, represented by the triple
+    /// (other type, raw representation, optional string representation)
+    Other(String, Vec<u8>, Option<String>),
 }
 
 impl Default for Value {
@@ -122,8 +418,8 @@ impl Hash for Value {
                 }
             }
             Value::Numeric(num) => num.hash(h),
-            // Value::Json(value) => value.hash(h),
-            // Value::Other(_, _, _) => format!("{self:?}").hash(h),
+            Value::Json(value) => value.hash(h),
+            Value::Other(_, _, _) => format!("{self:?}").hash(h),
         }
     }
 }
@@ -151,10 +447,10 @@ impl PartialEq for Value {
                     false
                 }
             }
-            // (Value::Numeric(a), Value::Numeric(b)) => a == b,
+            (Value::Numeric(a), Value::Numeric(b)) => a == b,
             (Value::Text(a), Value::Text(b)) => a == b,
-            // (Value::Json(a), Value::Json(b)) => a == b,
-            // (Value::Other(a, b, c), Value::Other(d, e, f)) => a == d && b == e && c == f,
+            (Value::Json(a), Value::Json(b)) => a == b,
+            (Value::Other(a, b, c), Value::Other(d, e, f)) => a == d && b == e && c == f,
             _ => false,
         }
     }
@@ -295,15 +591,21 @@ impl Value {
     /// The as_json() method returns a JsonValue only if the underlying type is
     // /// [Value::Json].
     pub fn as_json(&self) -> Option<JsonValue> {
-        todo!()
-        // match self {
-        //     Value::Json(value) => Some(value.clone()),
-        //     _ => None,
-        // }
+        match self {
+            Value::Json(value) => Some(value.clone()),
+            _ => None,
+        }
     }
 }
 
-// NULL conversions
+// Self-conversions:
+impl Into<Value> for &Value {
+    fn into(self) -> Value {
+        self.clone()
+    }
+}
+
+// NULL conversions:
 impl TryInto<()> for Value {
     type Error = Error;
 
@@ -336,6 +638,10 @@ impl Into<String> for Value {
             Value::Real(val) => val.to_string(),
             Value::BigReal(val) => val.to_string(),
             Value::Numeric(val) => val.to_string(),
+            Value::Json(value) => value.to_string(),
+            Value::Other(_, _, _) => {
+                format!("{self:?}")
+            }
         }
     }
 }
@@ -358,10 +664,64 @@ impl From<String> for Value {
     }
 }
 
+// JSON conversions.
+impl From<JsonValue> for Value {
+    fn from(item: JsonValue) -> Self {
+        match &item {
+            JsonValue::Null => Self::Null,
+            JsonValue::Bool(val) => Self::Boolean(*val),
+            JsonValue::Number(number) => {
+                if number.is_u64() {
+                    Self::from(number.as_u64().unwrap())
+                } else if number.is_i64() {
+                    Self::from(number.as_i64().unwrap())
+                } else if number.is_f64() {
+                    Self::BigReal(number.as_f64().unwrap())
+                } else {
+                    Self::Text(item.to_string())
+                }
+            }
+            JsonValue::String(string) => Self::Text(string.to_string()),
+            JsonValue::Array(_) => Self::Json(item),
+            JsonValue::Object(_) => Self::Json(item),
+        }
+    }
+}
+
+impl From<&JsonValue> for Value {
+    fn from(item: &JsonValue) -> Self {
+        item.clone().into()
+    }
+}
+
+// TODO: Not sure if the Intos are needed in addition to the Froms.
+// impl Into<JsonValue> for Value {
+//     fn into(self) -> JsonValue {
+//         match self {
+//             Value::Null => JsonValue::Null,
+//             Value::Boolean(value) => JsonValue::Bool(value),
+//             Value::SmallInteger(value) => JsonValue::Number(value.into()),
+//             Value::Integer(value) => JsonValue::Number(value.into()),
+//             Value::BigInteger(value) => JsonValue::Number(value.into()),
+//             Value::Real(value) => json!(value),
+//             Value::BigReal(value) => json!(value),
+//             Value::Numeric(value) => json!(value),
+//             Value::Text(value) => JsonValue::String(value),
+//             Value::Json(value) => value,
+//             Value::Other(_, _, _) => JsonValue::String(format!("{self:?}")),
+//         }
+//     }
+// }
+
+// impl Into<JsonValue> for &Value {
+//     fn into(self) -> JsonValue {
+//         self.clone().into()
+//     }
+// }
+
 // Other primitive type conversions.
 
-// TODO: Add more for all of the remaining rust primitive types, including isize and usize, and
-// also for JsonValue types.
+// TODO: Add more for all of the remaining rust primitive types, including isize and usize
 
 impl From<bool> for Value {
     fn from(item: bool) -> Self {
@@ -384,6 +744,16 @@ impl From<i32> for Value {
 impl From<i64> for Value {
     fn from(value: i64) -> Self {
         Self::BigInteger(value)
+    }
+}
+
+impl From<u32> for Value {
+    fn from(item: u32) -> Self {
+        if item <= i32::MAX as u32 {
+            Value::Integer(item as i32)
+        } else {
+            Value::BigInteger(item as i64)
+        }
     }
 }
 
