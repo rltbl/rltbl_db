@@ -138,21 +138,6 @@ pub struct RusqlitePool {
     pool: deadpool_sqlite::Pool,
 }
 
-impl RusqlitePool {
-    /// Connect to the database at the given URL using rusqlite.
-    pub async fn connect(url: &str) -> Result<Self, Error> {
-        let cfg = Config::new(url);
-        let pool = match url {
-            ":memory:" => cfg.builder(Runtime::Tokio1)?.max_size(1).build()?,
-            _ => cfg.create_pool(Runtime::Tokio1)?,
-        };
-        Ok(Self {
-            syntax: SqliteSyntax,
-            pool,
-        })
-    }
-}
-
 #[async_trait]
 impl Query for RusqlitePool {
     /// Implements [Query::syntax()] for SQLite.
@@ -245,6 +230,23 @@ impl Pool for RusqlitePool {
     }
 }
 
+impl RusqlitePool {
+    // TODO: Add regexp.
+
+    /// Connect to the database at the given URL using rusqlite.
+    pub async fn connect(url: &str) -> Result<Self, Error> {
+        let cfg = Config::new(url);
+        let pool = match url {
+            ":memory:" => cfg.builder(Runtime::Tokio1)?.max_size(1).build()?,
+            _ => cfg.create_pool(Runtime::Tokio1)?,
+        };
+        Ok(Self {
+            syntax: SqliteSyntax,
+            pool,
+        })
+    }
+}
+
 /// Represents a SQLite transaction.
 #[derive(Debug)]
 #[allow(dead_code)]
@@ -255,20 +257,8 @@ struct RusqliteTransaction {
     conn: Option<Connection>,
 }
 
-impl RusqliteTransaction {
-    /// Creates a new [RusqliteTransaction].
-    pub async fn begin(pool: deadpool_sqlite::Pool) -> Result<Self, Error> {
-        let conn = pool.get().await.unwrap();
-        conn.interact(move |conn| conn.execute("BEGIN TRANSACTION;", []).unwrap())
-            .await
-            .unwrap();
-        let conn = Some(conn);
-        let syntax = SqliteSyntax;
-        Ok(RusqliteTransaction { syntax, pool, conn })
-    }
-}
-
-impl std::ops::Drop for RusqliteTransaction {
+/// [Drop] implements the destruction operation for rust objects.
+impl Drop for RusqliteTransaction {
     /// Called whenever the object representing the RusqliteTransaction is dropped.
     /// Executes a ROLLBACK of the transaction.
     fn drop(&mut self) {
@@ -378,6 +368,19 @@ impl Transaction for RusqliteTransaction {
                 "transaction already complete"
             ))),
         }
+    }
+}
+
+impl RusqliteTransaction {
+    /// Creates a new [RusqliteTransaction].
+    pub async fn begin(pool: deadpool_sqlite::Pool) -> Result<Self, Error> {
+        let conn = pool.get().await.unwrap();
+        conn.interact(move |conn| conn.execute("BEGIN TRANSACTION;", []).unwrap())
+            .await
+            .unwrap();
+        let conn = Some(conn);
+        let syntax = SqliteSyntax;
+        Ok(RusqliteTransaction { syntax, pool, conn })
     }
 }
 
