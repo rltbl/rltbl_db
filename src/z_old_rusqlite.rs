@@ -721,6 +721,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_match() {
         let conn = RusqlitePool::connect("test_match_columns.db")
             .await

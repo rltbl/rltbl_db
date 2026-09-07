@@ -2,15 +2,18 @@
 
 use async_trait::async_trait;
 use deadpool_sqlite::{
-    Config, Connection, Runtime,
+    self, Config, Hook, Runtime,
     rusqlite::{
-        Statement,
+        self, Statement,
         fallible_iterator::FallibleIterator,
+        functions::FunctionFlags,
         types::{Null, ValueRef},
+        vtab::csvtab,
     },
 };
 use indexmap::indexmap;
-use std::str::from_utf8;
+use regex::Regex;
+use std::{str::from_utf8, sync::Arc};
 
 use crate::{
     Error, Pool, Query, Row, Rows, Syntax, Transaction, Value, sql_parse::validate_table_name,
@@ -130,6 +133,40 @@ fn query_prepared(stmt: &mut Statement<'_>, params: &[Value]) -> Result<Vec<Row>
     results.map_err(|err| Error::DeadpoolRusqliteError(err))
 }
 
+fn add_rusqlite_regexp_function(db: &rusqlite::Connection) -> Result<(), Error> {
+    type BoxError = Box<dyn std::error::Error + Send + Sync>;
+
+    // This function has been adapted from:
+    // https://docs.rs/rusqlite/0.32.1/rusqlite/functions/index.html
+    Ok(db.create_scalar_function(
+        "regexp_match",
+        2,
+        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+        move |ctx| {
+            let num_args = ctx.len();
+            if num_args != 2 {
+                return Err(rusqlite::Error::UserFunctionError(
+                    format!("Expected 2 arguments but got {num_args}").into(),
+                ));
+            }
+            let text = ctx.get_raw(0);
+            let regexp: Arc<Regex> = ctx.get_or_create_aux(1, |vr| -> Result<_, BoxError> {
+                Ok(Regex::new(vr.as_str()?)?)
+            })?;
+            match text {
+                // If the text to match is NULL then the condition is vacuously true:
+                ValueRef::Null => Ok(true),
+                _ => {
+                    let text = text
+                        .as_str()
+                        .map_err(|e| rusqlite::Error::UserFunctionError(e.into()))?;
+                    Ok(regexp.is_match(text))
+                }
+            }
+        },
+    )?)
+}
+
 /// Represents a deadpool-sqlite database connection pool.
 #[derive(Debug)]
 pub struct RusqlitePool {
@@ -231,14 +268,22 @@ impl Pool for RusqlitePool {
 }
 
 impl RusqlitePool {
-    // TODO: Add regexp.
-
     /// Connect to the database at the given URL using rusqlite.
     pub async fn connect(url: &str) -> Result<Self, Error> {
         let cfg = Config::new(url);
+        let pool = cfg
+            .builder(Runtime::Tokio1)
+            .map_err(|err| Error::ConnectError(format!("Error creating pool: {err}")))?
+            // TODO: Remove unwraps and expects if possible
+            .post_create(Hook::Fn(Box::new(|conn, _metrics| {
+                let guard = conn.lock().expect("lock this connection");
+                csvtab::load_module(&guard).unwrap();
+                add_rusqlite_regexp_function(&guard).expect("add regex_match function");
+                Ok(())
+            })));
         let pool = match url {
-            ":memory:" => cfg.builder(Runtime::Tokio1)?.max_size(1).build()?,
-            _ => cfg.create_pool(Runtime::Tokio1)?,
+            ":memory:" => pool.max_size(1).build()?,
+            _ => pool.build()?,
         };
         Ok(Self {
             syntax: SqliteSyntax,
@@ -254,7 +299,7 @@ struct RusqliteTransaction {
     /// The syntax used for this transaction.
     syntax: SqliteSyntax,
     pool: deadpool_sqlite::Pool,
-    conn: Option<Connection>,
+    conn: Option<deadpool_sqlite::Connection>,
 }
 
 /// [Drop] implements the destruction operation for rust objects.

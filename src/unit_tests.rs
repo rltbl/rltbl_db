@@ -3,7 +3,6 @@ mod tests {
     use indexmap::IndexMap;
     use rand::{SeedableRng, distr::Distribution, distr::Uniform, rngs::StdRng};
     use rust_decimal::dec;
-    use serde_json::json;
     use std::{
         collections::{BTreeMap, HashMap},
         str::FromStr,
@@ -2426,7 +2425,6 @@ mod tests {
     }
 
     #[cfg(feature = "rusqlite")]
-    #[ignore]
     #[tokio::test]
     async fn test_rusqlite_match() {
         let conn = AnyPool::connect("test_match_columns.db").await.unwrap();
@@ -2443,16 +2441,15 @@ mod tests {
             r#"INSERT INTO test_table_match
                (text_value, alt_text_value)
                VALUES ($1, $2)"#,
-            // TODO: Eliminate the calls to to_string().
-            // &[json!("foo"), json!("123")],
-            &[json!("foo").to_string(), json!("123").to_string()],
+            &["foo", "123"],
         )
         .await
         .unwrap();
 
         let value: String = conn
             .query(
-                "SELECT text_value from test_table_match WHERE regexp_match(text_value, $1) = 1",
+                "SELECT text_value from test_table_match
+                 WHERE regexp_match(text_value, $1) = 1",
                 values!["foo"],
             )
             .await
@@ -2464,8 +2461,9 @@ mod tests {
 
         let value: String = conn
             .query(
-                r#"SELECT alt_text_value from test_table_match WHERE regexp_match(alt_text_value, '\d+') = 1"#,
-                ()
+                r#"SELECT alt_text_value from test_table_match
+                   WHERE regexp_match(alt_text_value, '\d+') = 1"#,
+                (),
             )
             .await
             .unwrap()
