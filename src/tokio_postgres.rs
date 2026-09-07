@@ -10,11 +10,18 @@ use deadpool_postgres::{
         types::{FromSql, IsNull, ToSql, Type, to_sql_checked},
     },
 };
+use futures_util::{SinkExt, stream};
+use indexmap::IndexMap;
 use rust_decimal::Decimal;
+use std::{
+    fs::File,
+    io::{BufRead, BufReader},
+    pin::pin,
+};
 
 use crate::{
-    Error, JsonValue, Pool, Query, Row, Rows, Syntax, Transaction, Value, postgres::PostgresSyntax,
-    sql_parse::validate_table_name,
+    Column, Error, JsonValue, Pool, Query, Row, Rows, Syntax, Transaction, Value,
+    postgres::PostgresSyntax, sql_parse::validate_table_name,
 };
 
 /// Extracts the value at the given index from the given [PgRow].
@@ -306,6 +313,63 @@ impl Query for PostgresPool {
         }
 
         Ok(Rows { rows: db_rows })
+    }
+
+    /// Load the given table using the data from the given file.
+    async fn load_table(
+        &self,
+        table: &str,
+        _columns: &IndexMap<String, Column>,
+        filename: &str,
+    ) -> Result<(), Error> {
+        eprintln!("Loading table '{table}' from '{filename}' using PostgreSQL's COPY IN command.");
+        if !filename.to_lowercase().ends_with("tsv") && !filename.to_lowercase().ends_with(".csv") {
+            return Err(Error::InputError(format!(
+                "Filename: '{filename}' must end with .tsv or .csv"
+            )));
+        }
+        let file = File::open(filename)
+            .map_err(|err| Error::InputError(format!("Unable to open '{filename}': {err}")))?;
+        let buf_reader = BufReader::new(file);
+        let mut stream = buf_reader.split(b'\n').map(|line| {
+            let line = line.unwrap();
+            let mut bytes = BytesMut::with_capacity(line.len() + 1);
+            bytes.extend_from_slice(&line);
+            bytes.put_u8(b'\n');
+            bytes
+        });
+
+        // Send the input stream to the tokio-postgres client which is executing a copy_in():
+        let client = self
+            .pool
+            .get()
+            .await
+            .map_err(|err| Error::ConnectError(format!("Unable to get from pool: {err:?}")))?;
+        let mut sink = pin!(
+            client
+                .copy_in(&format!(r#"COPY "{table}" FROM STDIN WITH NULL ''"#))
+                .await
+                .map_err(|err| {
+                    Error::InputError(format!("Unable to COPY IN to '{table}': {err}"))
+                })?
+        );
+
+        // Ignore the header line:
+        stream
+            .next()
+            .ok_or(Error::InputError(format!("File '{filename}' is empty")))?;
+        let mut stream =
+            stream::iter(stream.map(Ok::<_, deadpool_postgres::tokio_postgres::Error>));
+
+        sink.send_all(&mut stream)
+            .await
+            .map_err(|err| Error::InputError(format!("Unable to COPY IN to '{table}': {err}")))?;
+        let _num_written = sink
+            .finish()
+            .await
+            .map_err(|err| Error::InputError(format!("Unable to COPY IN to '{table}': {err}")))?;
+
+        Ok(())
     }
 
     async fn drop_table(&self, table: &str) -> Result<(), Error> {

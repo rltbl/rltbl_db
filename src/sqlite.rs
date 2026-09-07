@@ -1,6 +1,8 @@
 //! SQLite syntax
 
-use crate::{Error, Syntax, Value, ValueType, values};
+use indexmap::IndexMap;
+
+use crate::{Column, Error, Syntax, Value, ValueType, values};
 
 /// The [maximum number of parameters](https://www.sqlite.org/limits.html#max_variable_number)
 /// that can be bound to a SQLite query
@@ -114,6 +116,45 @@ impl Syntax for SqliteSyntax {
             ),
             parameters.clone(),
         )
+    }
+
+    fn create_table_sql(
+        &self,
+        table: &str,
+        columns: &IndexMap<String, Column>,
+    ) -> Result<String, Error> {
+        let column_clauses = columns.iter().map(|(column_name, column)| {
+            let mut clause = format!(r#""{column_name}""#);
+            match column.sql_type {
+                ValueType::Null(_) => {
+                    return Err(Error::InputError(format!(
+                        "Can't use a NULL column to create table '{table}'."
+                    )));
+                }
+                ValueType::Boolean(_) => clause.push_str(" BOOL"),
+                ValueType::SmallInteger(_) | ValueType::Integer(_) | ValueType::BigInteger(_) => {
+                    clause.push_str(" INTEGER")
+                }
+                ValueType::Real(_) | ValueType::BigReal(_) => clause.push_str(" REAL"),
+                ValueType::Numeric(_) => clause.push_str(" NUMERIC"),
+                ValueType::Text(_) => clause.push_str(" TEXT"),
+            };
+            if column.unique {
+                clause.push_str(" UNIQUE");
+            }
+            if column.not_null {
+                clause.push_str(" NOT NULL");
+            }
+            Ok(clause)
+        });
+        let sql = format!(
+            r#"CREATE TABLE "{table}" ({})"#,
+            column_clauses
+                .into_iter()
+                .collect::<Result<Vec<String>, Error>>()?
+                .join(", ")
+        );
+        Ok(sql)
     }
 
     fn view_sql_sql(&self, view: &str) -> (String, [Value; 1]) {

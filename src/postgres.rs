@@ -1,6 +1,8 @@
 //! Postgres Syntax
 
-use crate::{Error, Syntax, Value, ValueType, values};
+use indexmap::IndexMap;
+
+use crate::{Column, Error, Syntax, Value, ValueType, values};
 
 /// The [maximum number of parameters](https://www.postgresql.org/docs/current/limits.html)
 /// that can be bound to a Postgres query is 65535. This has been true since at least PostgreSQL
@@ -150,6 +152,45 @@ impl Syntax for PostgresSyntax {
             ),
             parameters.clone(),
         )
+    }
+
+    fn create_table_sql(
+        &self,
+        table: &str,
+        columns: &IndexMap<String, Column>,
+    ) -> Result<String, Error> {
+        let column_clauses = columns.iter().map(|(column_name, column)| {
+            let mut clause = format!(r#""{column_name}""#);
+            match column.sql_type {
+                ValueType::Null(_) => {
+                    return Err(Error::InputError(format!(
+                        "Can't use a NULL column to create table '{table}'."
+                    )));
+                }
+                ValueType::Boolean(_) => clause.push_str(" BOOLEAN"),
+                ValueType::SmallInteger(_) => clause.push_str(" SMALLINT"),
+                ValueType::Integer(_) | ValueType::BigInteger(_) => clause.push_str(" INTEGER"),
+                ValueType::Real(_) => clause.push_str(" REAL"),
+                ValueType::BigReal(_) => clause.push_str(" DOUBLE PRECISION"),
+                ValueType::Numeric(_) => clause.push_str(" NUMERIC"),
+                ValueType::Text(_) => clause.push_str(" TEXT"),
+            };
+            if column.unique {
+                clause.push_str(" UNIQUE");
+            }
+            if column.not_null {
+                clause.push_str(" NOT NULL");
+            }
+            Ok(clause)
+        });
+        let sql = format!(
+            r#"CREATE TABLE "{table}" ({})"#,
+            column_clauses
+                .into_iter()
+                .collect::<Result<Vec<String>, Error>>()?
+                .join(", ")
+        );
+        Ok(sql)
     }
 
     fn view_sql_sql(&self, view: &str) -> (String, [Value; 1]) {

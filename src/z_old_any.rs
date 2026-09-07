@@ -2,7 +2,7 @@
 
 /// To connect to any supported database using a URL:
 ///
-/// ```
+/// ```ignore
 /// use rltbl_db::{z_old_any::AnyPool, z_old_core::{DbError, DbQuery}};
 ///
 /// async fn example() -> Result<String, DbError> {
@@ -2649,6 +2649,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_import() {
         #[cfg(feature = "rusqlite")]
         import(":memory:").await;

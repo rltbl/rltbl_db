@@ -15,8 +15,8 @@ use crate::{Error, Row, Value, ValueType};
 // methods between ValueType and ColumnType is. I'm also still skeptical about having both as
 // they are easy to confuse with one another.
 
-/// The type of a [Value](crate::Value), including the name of the type according to the
-/// underlying database. Note that this type is similar to [ValueType](crate::ValueType),
+/// The type of a [Value], including the name of the type according to the
+/// underlying database. Note that this type is similar to [ValueType],
 /// but excludes NULL, which is not a valid type for a column.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ColumnType {

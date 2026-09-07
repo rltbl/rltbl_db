@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use indexmap::IndexMap;
 
-use crate::{Error, Rows, Syntax, Value};
+use crate::{Column, Error, Rows, Syntax, Value};
 
 // JO: The Query trait provides the main database methods,
 // which are shared by both Pool and Transaction.
@@ -78,6 +78,13 @@ pub trait Query: std::fmt::Debug + Sync {
 
     /// Execute a query returning a collection of [Rows].
     async fn query(&self, sql: &str, params: &[Value]) -> Result<Rows, Error>;
+
+    async fn load_table(
+        &self,
+        table: &str,
+        columns: &IndexMap<String, Column>,
+        filename: &str,
+    ) -> Result<(), Error>;
 
     /// Drop the given table from the database. Note that for PostgreSQL (see
     /// <https://www.postgresql.org/docs/current/sql-droptable.html>), if the dropped table,

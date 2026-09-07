@@ -4,8 +4,10 @@
 //! different syntax. Our [Syntax] trait abstracts over some of those differences, so we can
 //! write our Rust code once and use different SQL databases at runtime.
 
+use indexmap::IndexMap;
+
 use crate::{
-    Error, Value, ValueType,
+    Column, Error, Value, ValueType,
     cache::{QUERY_CACHE_TABLE, TABLE_CACHE_TABLE},
     sql_parse,
 };
@@ -53,6 +55,13 @@ pub trait Syntax: std::fmt::Debug {
 
     /// TODO: Add docstring.
     fn which_are_views_sql(&self, objects: &[&str]) -> (String, Vec<Value>);
+
+    /// Generate the SQL needed to create a table with the given name and given column definitions.
+    fn create_table_sql(
+        &self,
+        table: &str,
+        columns: &IndexMap<String, Column>,
+    ) -> Result<String, Error>;
 
     /// TODO: Add docstring.
     fn view_sql_sql(&self, view: &str) -> (String, [Value; 1]);

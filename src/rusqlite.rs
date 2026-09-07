@@ -11,13 +11,13 @@ use deadpool_sqlite::{
         vtab::csvtab,
     },
 };
-use indexmap::indexmap;
+use indexmap::{IndexMap, indexmap};
 use regex::Regex;
 use rust_decimal::Decimal;
-use std::{str::from_utf8, sync::Arc};
+use std::{env, str::from_utf8, sync::Arc};
 
 use crate::{
-    Error, JsonValue, Pool, Query, Row, Rows, Syntax, Transaction, Value,
+    Column, Error, JsonValue, Pool, Query, Row, Rows, Syntax, Transaction, Value,
     sql_parse::validate_table_name, sqlite::SqliteSyntax,
 };
 
@@ -237,6 +237,33 @@ impl Query for RusqlitePool {
         .await?
     }
 
+    async fn load_table(
+        &self,
+        table: &str,
+        _columns: &IndexMap<String, Column>,
+        filename: &str,
+    ) -> Result<(), Error> {
+        if !filename.to_lowercase().ends_with(".csv") {
+            return Err(Error::InputError(format!(
+                "Filename: '{filename}' must end with .csv"
+            )));
+        }
+
+        eprintln!("Loading table '{table}' from '{filename}' using SQLite's CSV load extension.");
+        let current_dir = env::current_dir().map_err(|err| {
+            Error::ConnectError(format!("Error getting current directory: {err}"))
+        })?;
+        let current_dir = current_dir.display();
+        let sql = format!(
+            r#"CREATE VIRTUAL TABLE temp.t1
+                   USING CSV(filename='{current_dir}/{filename}', header=true)"#
+        );
+        self.execute(&sql, &[]).await?;
+        let sql = format!("INSERT INTO {table} SELECT * FROM temp.t1");
+        self.execute(&sql, &[]).await?;
+        Ok(())
+    }
+
     /// Implements [Query::drop_table()] for SQLite.
     async fn drop_table(&self, table: &str) -> Result<(), Error> {
         let table = validate_table_name(table)?;
@@ -371,6 +398,15 @@ impl Query for RusqliteTransaction {
                 "transaction already complete"
             ))),
         }
+    }
+
+    async fn load_table(
+        &self,
+        _table: &str,
+        _columns: &IndexMap<String, Column>,
+        _filename: &str,
+    ) -> Result<(), Error> {
+        todo!()
     }
 
     /// Implements [Query::drop_table()] for [RusqliteTransaction]

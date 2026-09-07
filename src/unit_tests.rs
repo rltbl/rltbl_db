@@ -4022,7 +4022,7 @@ mod tests {
     }
 
     #[test]
-    // #[ignore] // TODO: Ignore by default.
+    #[ignore]
     fn test_hashing() {
         let mut test_map = HashMap::new();
         for (i, value) in [
@@ -4044,6 +4044,181 @@ mod tests {
         {
             test_map.insert(value.clone(), i);
             assert_eq!(*test_map.get(&value).unwrap(), i);
+        }
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_import_perf() {
+        #[cfg(feature = "rusqlite")]
+        import_perf(":memory:").await;
+        #[cfg(feature = "tokio-postgres")]
+        import_perf("postgresql:///rltbl_db").await;
+        #[cfg(feature = "libsql")]
+        {
+            // import_perf(":memory:").await;
+        }
+    }
+
+    async fn import_perf(url: &str) {
+        let pool = AnyPool::connect(url).await.unwrap();
+
+        eprintln!("Import performance test for {}.", pool.syntax().name());
+        eprintln!("---");
+
+        let filename = match pool.syntax().name() {
+            "sqlite" => "tests/penguins/src/data/penguin.csv",
+            "postgres" => "tests/penguins/src/data/penguin.tsv",
+            _ => unreachable!(),
+        };
+        let now = Instant::now();
+        pool.import_table(filename).await.unwrap();
+        let elapsed = now.elapsed().as_secs();
+        let count: u64 = pool
+            .query("SELECT COUNT(1) FROM PENGUIN", ())
+            .await
+            .unwrap()
+            .try_into_value()
+            .unwrap();
+        assert_eq!(count, 100000);
+        eprintln!("Importing the data in '{filename}; using import_table() took {elapsed}s.");
+
+        let filename = "tests/penguins/src/data/penguin.tsv";
+        let now = Instant::now();
+        pool.import_table_using_batch_insert(filename)
+            .await
+            .unwrap();
+        let elapsed = now.elapsed().as_secs();
+        let count: u64 = pool
+            .query("SELECT COUNT(1) FROM PENGUIN", ())
+            .await
+            .unwrap()
+            .try_into_value()
+            .unwrap();
+        assert_eq!(count, 100000);
+        eprintln!(
+            "Importing the data in '{filename}' import_table_using_insert() took {elapsed}s."
+        );
+    }
+
+    #[tokio::test]
+    async fn test_import_small() {
+        #[cfg(feature = "rusqlite")]
+        import_small(":memory:").await;
+        #[cfg(feature = "tokio-postgres")]
+        import_small("postgresql:///rltbl_db").await;
+        #[cfg(feature = "libsql")]
+        {
+            // import_small(":memory:").await;
+        }
+    }
+
+    async fn import_small(url: &str) {
+        let pool = AnyPool::connect(url).await.unwrap();
+        if pool.syntax().name() == "sqlite" {
+            pool.import_table("tests/input/table1.csv").await.unwrap();
+            let rows = pool.query("SELECT * FROM table1", ()).await.unwrap();
+            assert_eq!(
+                rows.rows,
+                vec![
+                    row! {
+                        "alpha" => Value::BigInteger(1),
+                        "beta" => Value::Text("short".to_string()),
+                        "gamma" => Value::BigReal(9.0),
+                        "delta" => Value::BigReal(i64::MAX as f64),
+                    },
+                    row! {
+                        // TODO: This first value is wrong. It should be Value::Null,
+                        // but we need a way to import NULL values from TSV. One possibility
+                        // is to create a trigger on tables with nullable columns to insert NULL
+                        // whenever we are given some special string such as '\N', 'null', etc.
+                        "alpha" => Value::Text("".to_string()),
+                        "beta" => Value::Text("long".to_string()),
+                        "gamma" => Value::BigReal(i32::MAX as f64),
+                        "delta" => Value::BigReal(4.0),
+                    },
+                    row! {
+                        "alpha" => Value::BigInteger(19),
+                        "beta" => Value::Text("short".to_string()),
+                        "gamma" => Value::BigReal(5.2),
+                        "delta" => Value::BigReal(4.1),
+                    },
+                    row! {
+                        "alpha" => Value::BigInteger(100),
+                        "beta" => Value::Text("long".to_string()),
+                        "gamma" => Value::BigReal(7.0),
+                        "delta" => Value::BigReal(19.0),
+                    },
+                    row! {
+                        "alpha" => Value::BigInteger(115),
+                        "beta" => Value::Text("short".to_string()),
+                        "gamma" => Value::BigReal(10.0),
+                        "delta" => Value::BigReal(12.0),
+                    },
+                    row! {
+                        "alpha" => Value::BigInteger(30),
+                        "beta" => Value::Text("short".to_string()),
+                        "gamma" => Value::BigReal(4.0),
+                        "delta" => Value::BigReal(19.0),
+                    },
+                    row! {
+                        "alpha" => Value::BigInteger(39),
+                        "beta" => Value::Text("midway".to_string()),
+                        "gamma" => Value::BigReal(19.99),
+                        "delta" => Value::BigReal(75.0),
+                    },
+                ]
+            );
+        } else if pool.syntax().name() == "postgres" {
+            pool.import_table("tests/input/table1.tsv").await.unwrap();
+            let rows = pool.query("SELECT * FROM table1", ()).await.unwrap();
+            assert_eq!(
+                rows.rows,
+                vec![
+                    row! {
+                        "alpha" => Value::SmallInteger(1),
+                        "beta" => Value::Text("short".to_string()),
+                        "gamma" => Value::Real(9.0),
+                        "delta" => Value::Real(i64::MAX as f32),
+                    },
+                    row! {
+                        "alpha" => Value::Null,
+                        "beta" => Value::Text("long".to_string()),
+                        "gamma" => Value::Real(i32::MAX as f32),
+                        "delta" => Value::Real(4.0),
+                    },
+                    row! {
+                        "alpha" => Value::SmallInteger(19),
+                        "beta" => Value::Text("short".to_string()),
+                        "gamma" => Value::Real(5.2),
+                        "delta" => Value::Real(4.1),
+                    },
+                    row! {
+                        "alpha" => Value::SmallInteger(100),
+                        "beta" => Value::Text("long".to_string()),
+                        "gamma" => Value::Real(7.0),
+                        "delta" => Value::Real(19.0),
+                    },
+                    row! {
+                        "alpha" => Value::SmallInteger(115),
+                        "beta" => Value::Text("short".to_string()),
+                        "gamma" => Value::Real(10.0),
+                        "delta" => Value::Real(12.0),
+                    },
+                    row! {
+                        "alpha" => Value::SmallInteger(30),
+                        "beta" => Value::Text("short".to_string()),
+                        "gamma" => Value::Real(4.0),
+                        "delta" => Value::Real(19.0),
+                    },
+                    row! {
+                        "alpha" => Value::SmallInteger(39),
+                        "beta" => Value::Text("midway".to_string()),
+                        "gamma" => Value::Real(19.99),
+                        "delta" => Value::Real(75.0),
+                    },
+                ]
+            );
         }
     }
 }

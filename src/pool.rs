@@ -1,16 +1,38 @@
 //! The Pool Trait, for implementing a database connection pool
 
+/// To connect to any supported database using a URL:
+///
+/// ```
+/// use rltbl_db::{z_old_any::AnyPool, z_old_core::{DbError, DbQuery}};
+///
+/// async fn example() -> Result<String, DbError> {
+///     let pool = AnyPool::connect("test.db").await?;
+///     pool.execute_batch(
+///         "DROP TABLE IF EXISTS test;\
+///          CREATE TABLE test ( value TEXT );\
+///          INSERT INTO test VALUES ('foo');",
+///     ).await?;
+///     let value: String = pool.query("SELECT value FROM test;", ())
+///         .await?
+///         .value()?
+///         .into();
+///     Ok(value)
+/// }
+/// ```
 use async_trait::async_trait;
+use csv::ReaderBuilder;
 use indexmap::IndexMap;
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fmt::Display,
-    iter::IntoIterator,
+    fs::File,
+    iter::{IntoIterator, zip},
+    path::Path,
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use crate::{
-    AnyTransaction, Error, Query, Row, Rows, Syntax, Transaction, Value,
+    AnyTransaction, Column, Error, Query, Row, Rows, Syntax, Transaction, Value,
     cache::{
         CachingStrategy, MemoryQueryCache, MemoryQueryCacheKey, MemoryQueryCacheValue,
         MemoryTableCache, MetaCache, QUERY_CACHE_TABLE, TABLE_CACHE_TABLE,
@@ -320,6 +342,39 @@ impl AnyPool {
         .await
     }
 
+    /// Create a table, using the stem of the given file as the table name, and the headers
+    /// of each data column in the file as the names of the table's columns, and then load the
+    /// data into it using the bulk copy method if available for this driver, otherwise the
+    /// fallback is to [AnyPool::import_table_using_batch_insert()]
+    pub async fn import_table(&self, filename: &str) -> Result<(), Error> {
+        // The table name is just the name of the file:
+        let table = Path::new(filename)
+            .file_stem()
+            .and_then(|fs| fs.to_str())
+            .ok_or(Error::InputError(format!(
+                "Error getting table name from path '{filename}'"
+            )))?;
+        let columns = read_columns_from_file(filename)?;
+        self.recreate_table(&table, &columns).await?;
+        self.load_table(&table, &columns, filename).await
+    }
+
+    /// Create a table, using the stem of the given file as the table name, and the headers
+    /// of each data column in the file as the names of the table's columns, and then load the
+    /// data into it using the batch insert method.
+    pub async fn import_table_using_batch_insert(&self, filename: &str) -> Result<(), Error> {
+        // The table name is just the name of the file:
+        let table = Path::new(filename)
+            .file_stem()
+            .and_then(|fs| fs.to_str())
+            .ok_or(Error::InputError(format!(
+                "Error getting table name from path '{filename}'"
+            )))?;
+        let columns = read_columns_from_file(filename)?;
+        self.recreate_table(&table, &columns).await?;
+        self.batch_insert(table, &columns, filename).await
+    }
+
     /// TODO: Add docstring.
     pub async fn table_exists(&self, table: &str) -> Result<bool, Error> {
         Ok(self.which_are_tables(&[table]).await?.len() == 1)
@@ -439,6 +494,33 @@ impl AnyPool {
     }
 
     ////////// Private functions //////////
+
+    /// Load the given table using the data from the given file.
+    async fn load_table(
+        &self,
+        table: &str,
+        columns: &IndexMap<String, Column>,
+        filename: &str,
+    ) -> Result<(), Error> {
+        if self.syntax().name() == "sqlite" && filename.to_lowercase().ends_with(".tsv") {
+            self.batch_insert(table, columns, filename).await?;
+        } else {
+            self.pool.load_table(table, columns, filename).await?;
+        }
+        Ok(())
+    }
+
+    /// Create a given table with the given columns in the database. If a table with the
+    /// same name already exists, drop that one first.
+    async fn recreate_table(
+        &self,
+        table: &str,
+        columns: &IndexMap<String, Column>,
+    ) -> Result<(), Error> {
+        self.drop_table(&table).await?;
+        let sql = self.syntax().create_table_sql(table, columns)?;
+        self.pool.execute(&sql, &[]).await
+    }
 
     /// Similar to cache(). This version accepts an explicit list of tables, which
     /// must correspond to the tables queried from in the given SQL command(s).
@@ -1013,10 +1095,9 @@ impl AnyPool {
         })
     }
 
-    /* TODO:
     /// Read data from the given file and insert it to the given table in the database.
     pub async fn batch_insert(
-        pool: &AnyPool,
+        &self,
         table: &str,
         columns: &IndexMap<String, Column>,
         filename: &str,
@@ -1027,11 +1108,6 @@ impl AnyPool {
             "Loading table '{table}' from '{filename}' using batch_insert() \
              with batch size {batch_size}"
         );
-
-        // TODO: Change the signature of insert() and similar methods so that they take iterators
-        // as arguments instead of impl IntoRows. Then we will not have to collect the contents
-        // of the file into a vector but can keep it in the form of an iterator as we do in
-        // TokioPostgreSQLPool::load_table().
 
         let delimiter = {
             if filename.to_lowercase().ends_with("tsv") {
@@ -1079,7 +1155,6 @@ impl AnyPool {
         };
 
         // Collect all of the rows into vectors and insert them
-        // (TODO: See comment at the beginning of this function).
         let mut db_rows = vec![];
         let str_columns = headers.iter().map(|s| s.as_str()).collect::<Vec<_>>();
         for row in records {
@@ -1094,11 +1169,11 @@ impl AnyPool {
                 map: zip(headers.clone(), row_values).collect::<IndexMap<_, _>>(),
             };
 
-            // Logically we should be able to call coerce for both SQLite and PostgreSQL, but in the
-            // case of SQLite, since it is so liberal about types, this doesn't actually matter, and
-            // it avoids having to worry about differences in the rounding of real numbers between
-            // libsql and rusqlite.
-            if pool.kind().name() != "SQLite" {
+            // Logically we should be able to call coerce for both SQLite and PostgreSQL,
+            // but in the case of SQLite, since it is so liberal about types, this doesn't
+            // actually matter, and it avoids having to worry about differences in the
+            // rounding of real numbers between libsql and rusqlite.
+            if self.syntax().name() != "sqlite" {
                 db_rows.push(db_row.coerce(columns)?);
             } else {
                 db_rows.push(db_row);
@@ -1106,17 +1181,18 @@ impl AnyPool {
 
             // We don't insert more than batch_size at a time:
             if db_rows.len() >= batch_size {
-                pool.insert(table, &str_columns, db_rows.clone()).await?;
+                let tmp_db_rows: Vec<&Row> = db_rows.iter().map(|row| row).collect();
+                self.insert(table, &str_columns, tmp_db_rows).await?;
                 db_rows.clear();
             }
         }
         // Insert anything that's left:
         if db_rows.len() > 0 {
-            pool.insert(table, &str_columns, db_rows).await?;
+            let tmp_db_rows: Vec<&Row> = db_rows.iter().map(|row| row).collect();
+            self.insert(table, &str_columns, tmp_db_rows).await?;
         }
         Ok(())
     }
-    */
 
     /// Ensure that caching triggers exist for the given table. Note that this function calls
     /// ensure_cache_tables_exist() implicitly.
@@ -1535,6 +1611,122 @@ impl AnyPool {
 }
 
 // Private helper functions:
+
+/// Determine the database columns needed for each column of data in the given file.
+fn read_columns_from_file(filename: &str) -> Result<IndexMap<String, Column>, Error> {
+    let delimiter = {
+        if filename.to_lowercase().ends_with("tsv") {
+            b'\t'
+        } else if filename.to_lowercase().ends_with(".csv") {
+            b','
+        } else {
+            return Err(Error::InputError(format!(
+                "Filename: '{filename}' must end with .tsv or .csv"
+            )));
+        }
+    };
+
+    // Read the rows from the given file:
+    let mut rdr = ReaderBuilder::new()
+        .has_headers(false)
+        .delimiter(delimiter)
+        .from_reader(
+            File::open(filename)
+                .map_err(|err| Error::InputError(format!("Unable to open '{filename}': {err}")))?,
+        );
+    let mut records = rdr.records();
+
+    // Extract the headers from the first line of the file:
+    let headers = {
+        let headers = match records.next() {
+            None => return Err(Error::InputError(format!("'{filename}' is empty"))),
+            Some(record) => match record {
+                Err(err) => {
+                    return Err(Error::InputError(format!(
+                        "Error reading from '{filename}': {err}"
+                    )));
+                }
+                Ok(headers) => headers.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+            },
+        };
+        for header in &headers {
+            if header.trim().is_empty() {
+                return Err(Error::InputError(format!(
+                    "One or more of the header fields is empty in file '{filename}'"
+                )));
+            }
+        }
+        headers
+    };
+
+    // Determine the columns required:
+    let columns = {
+        let mut columns = vec![];
+        let mut values_seen = HashMap::new();
+        for row in records {
+            let row = row.map_err(|err| {
+                Error::InputError(format!("Error reading from '{filename}': {err}"))
+            })?;
+
+            // Determine the columns for the first row if this hasn't been done already:
+            if columns.is_empty() {
+                for value in &row {
+                    columns.push(
+                        Column::new()
+                            .min_column_from_strings(vec![value.to_string()].into_iter())?,
+                    );
+                }
+            }
+
+            // Sanity checks:
+            if row.len() != headers.len() {
+                return Err(Error::InputError(format!(
+                    "Number of row values ({}) != number of headers ({})",
+                    row.len(),
+                    headers.len()
+                )));
+            }
+            if row.len() != columns.len() {
+                return Err(Error::InputError(format!(
+                    "Number of row values ({}) != number of columns ({})",
+                    row.len(),
+                    columns.len()
+                )));
+            }
+
+            // Each new row will be used to refine the column types that were determined on the
+            // basis of the previous N rows.
+            for i in 0..row.len() {
+                if &row[i] == "" {
+                    if columns[i].not_null {
+                        columns[i].not_null = false;
+                    }
+                } else {
+                    columns[i] =
+                        columns[i].min_column_from_strings(vec![row[i].to_string()].into_iter())?;
+                    if let None = values_seen.get_mut(&headers[i]) {
+                        values_seen.insert(headers[i].to_string(), HashSet::new());
+                    }
+                    let this_column_seen = values_seen.get_mut(&headers[i]).unwrap();
+                    if !this_column_seen.insert(row[i].to_string()) && columns[i].unique {
+                        columns[i].unique = false;
+                    }
+                }
+            }
+        }
+
+        // Zip everything up into an IndexMap:
+        zip(headers, columns)
+            .map(|(key, mut column)| {
+                // Don't forget to copy the column name:
+                column.name = key.to_string();
+                (key, column)
+            })
+            .collect::<IndexMap<_, _>>()
+    };
+
+    Ok(columns)
+}
 
 /// Generate a SQL UPDATE statement for the given table and columns using the given clauses
 /// and the given value lines.
