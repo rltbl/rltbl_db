@@ -59,7 +59,7 @@ pub trait Pool: Query + std::fmt::Debug {
 /// An abstraction over the supported pool types.
 #[derive(Debug)]
 pub struct AnyPool {
-    pool: Box<dyn Pool>,
+    pub pool: Box<dyn Pool>,
     caching_strategy: CachingStrategy,
     /// When set to true, SQL statements sent to the [Query::query()] and [Query::execute()]
     /// functions will be parsed and if they will result in tables being edited and/or dropped,
@@ -420,6 +420,20 @@ impl AnyPool {
     /// TODO: Add docstring.
     pub fn clear_meta_cache(&self) -> Result<(), Error> {
         let mut cache = self.meta_cache.get_cache()?;
+        cache.clear();
+        Ok(())
+    }
+
+    /// TODO: Add docstring.
+    pub fn clear_memory_query_cache(&self) -> Result<(), Error> {
+        let mut cache = self.memory_query_cache.get_cache()?;
+        cache.clear();
+        Ok(())
+    }
+
+    /// TODO: Add docstring.
+    pub fn clear_memory_table_cache(&self) -> Result<(), Error> {
+        let mut cache = self.memory_table_cache.get_cache()?;
         cache.clear();
         Ok(())
     }
@@ -1135,7 +1149,7 @@ impl AnyPool {
     /// this function calls ensure_cache_tables_exist() implicitly.
     pub async fn ensure_caching_triggers_exist_for_view(&self, view: &str) -> Result<(), Error> {
         let view_triggers_name = format!("{view}_triggers");
-        if self.meta_cache.exists(&view_triggers_name)? {
+        if !self.meta_cache.exists(&view_triggers_name)? {
             self.ensure_cache_tables_exist().await?;
             let view_sql = self.get_view_sql(&view).await?;
             let source_tables = sql_parse::get_view_tables(&view_sql)?;

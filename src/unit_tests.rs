@@ -1420,11 +1420,9 @@ mod tests {
             let mut pool = AnyPool::connect(":memory:").await.unwrap();
             for caching_strategy in &all_strategies {
                 table_caching(&mut pool, &caching_strategy).await;
-                pool.clear_meta_cache().unwrap();
             }
             for strategy in &all_strategies {
                 view_caching(&mut pool, strategy).await;
-                pool.clear_meta_cache().unwrap();
             }
         }
         #[cfg(feature = "tokio-postgres")]
@@ -1432,11 +1430,9 @@ mod tests {
             let mut pool = AnyPool::connect("postgresql:///rltbl_db").await.unwrap();
             for caching_strategy in &all_strategies {
                 table_caching(&mut pool, &caching_strategy).await;
-                pool.clear_meta_cache().unwrap();
             }
             for strategy in &all_strategies {
                 view_caching(&mut pool, strategy).await;
-                pool.clear_meta_cache().unwrap();
             }
         }
         // TODO:
@@ -1456,6 +1452,9 @@ mod tests {
 
     #[allow(unused)]
     async fn table_caching(pool: &mut AnyPool, strategy: &CachingStrategy) {
+        pool.clear_meta_cache().unwrap();
+        pool.clear_memory_table_cache().unwrap();
+        pool.clear_memory_query_cache().unwrap();
         pool.drop_table(&format!("{QUERY_CACHE_TABLE}"))
             .await
             .unwrap();
@@ -1738,8 +1737,186 @@ mod tests {
     }
 
     #[allow(unused)]
-    async fn view_caching(_pool: &mut AnyPool, _strategy: &CachingStrategy) {
-        // TODO ...
+    async fn view_caching(pool: &mut AnyPool, strategy: &CachingStrategy) {
+        pool.clear_meta_cache().unwrap();
+        pool.clear_memory_table_cache().unwrap();
+        pool.clear_memory_query_cache().unwrap();
+        pool.drop_table(&format!("{QUERY_CACHE_TABLE}"))
+            .await
+            .unwrap();
+        pool.drop_table(&format!("{TABLE_CACHE_TABLE}"))
+            .await
+            .unwrap();
+        pool.drop_table(&format!("test_vcaching_table"))
+            .await
+            .unwrap();
+        pool.drop_view(&format!("test_vcaching_view_1"))
+            .await
+            .unwrap();
+        pool.drop_view(&format!("test_vcaching_view_2"))
+            .await
+            .unwrap();
+
+        pool.pool
+            .execute(
+                "CREATE TABLE test_vcaching_table ( \
+               foo BIGINT, \
+               bar BIGINT, \
+               PRIMARY KEY (foo) \
+             )",
+                &[],
+            )
+            .await
+            .unwrap();
+        pool.pool
+            .execute("INSERT INTO test_vcaching_table VALUES (1, 1000)", &[])
+            .await
+            .unwrap();
+        pool.pool
+            .execute(
+                "CREATE VIEW test_vcaching_view_1 AS \
+             SELECT bar \
+             FROM test_vcaching_table",
+                &[],
+            )
+            .await
+            .unwrap();
+
+        pool.pool
+            .execute(
+                "CREATE VIEW test_vcaching_view_2 AS \
+             SELECT bar \
+             FROM test_vcaching_table",
+                &[],
+            )
+            .await
+            .unwrap();
+
+        pool.set_caching_strategy(strategy);
+        pool.set_cache_aware_query(true);
+
+        pool.cache("SELECT * FROM test_vcaching_view_1", ())
+            .await
+            .unwrap();
+
+        match strategy {
+            CachingStrategy::None => unimplemented!(),
+            _ => assert_eq!(pool.count_query_cache_rows().await.unwrap(), 1),
+        };
+        match strategy {
+            CachingStrategy::None => unimplemented!(),
+            _ => assert_eq!(pool.count_table_cache_rows().await.unwrap(), 0),
+        };
+
+        pool.insert(
+            "test_vcaching_table",
+            &["foo", "bar"],
+            &[row! {
+                "foo" => 2_u64,
+                "bar" => 2_u64,
+            }],
+        )
+        .await
+        .unwrap();
+
+        match strategy {
+            CachingStrategy::None => unimplemented!(),
+            CachingStrategy::Memory(_) => {
+                assert_eq!(pool.count_query_cache_rows().await.unwrap(), 1)
+            }
+            // Truncate and trigger give different answers here because the query cache is cleaned
+            // for views at different times according to each strategy. The query cache is cleaned
+            // immediately after an edit in the case of the trigger option, while when using the
+            // truncate option, the cache is only cleaned at the next view access.
+            CachingStrategy::Truncate => {
+                assert_eq!(pool.count_query_cache_rows().await.unwrap(), 1)
+            }
+            _ => assert_eq!(pool.count_query_cache_rows().await.unwrap(), 0),
+        };
+
+        match strategy {
+            CachingStrategy::None => unimplemented!(),
+            CachingStrategy::Memory(_) => {
+                assert_eq!(pool.count_table_cache_rows().await.unwrap(), 1)
+            }
+            _ => assert_eq!(pool.count_table_cache_rows().await.unwrap(), 1),
+        };
+
+        pool.cache("SELECT * FROM test_vcaching_view_1", ())
+            .await
+            .unwrap();
+
+        match strategy {
+            CachingStrategy::None => unimplemented!(),
+            CachingStrategy::Memory(_) => {
+                assert_eq!(pool.count_query_cache_rows().await.unwrap(), 1)
+            }
+            _ => assert_eq!(pool.count_query_cache_rows().await.unwrap(), 1),
+        };
+
+        pool.cache("SELECT * FROM test_vcaching_view_2", ())
+            .await
+            .unwrap();
+
+        match strategy {
+            CachingStrategy::None => unimplemented!(),
+            CachingStrategy::Memory(_) => {
+                assert_eq!(pool.count_query_cache_rows().await.unwrap(), 2)
+            }
+            _ => assert_eq!(pool.count_query_cache_rows().await.unwrap(), 2),
+        };
+
+        pool.cache("SELECT * FROM test_vcaching_table", ())
+            .await
+            .unwrap();
+
+        match strategy {
+            CachingStrategy::None => unimplemented!(),
+            CachingStrategy::Memory(_) => {
+                assert_eq!(pool.count_query_cache_rows().await.unwrap(), 3)
+            }
+            _ => assert_eq!(pool.count_query_cache_rows().await.unwrap(), 3),
+        };
+
+        pool.insert(
+            "test_vcaching_table",
+            &["foo", "bar"],
+            &[row! {
+                "foo" => 27_u64,
+                "bar" => 27_u64,
+            }],
+        )
+        .await
+        .unwrap();
+
+        match strategy {
+            CachingStrategy::None => unimplemented!(),
+            CachingStrategy::Memory(_) => {
+                assert_eq!(pool.count_query_cache_rows().await.unwrap(), 2)
+            }
+            // Truncate and trigger give different answers here because the query cache is cleaned
+            // for views at different times according to each strategy. The query cache is cleaned
+            // immediately after an edit in the case of the trigger option, while when using the
+            // truncate option, the cache is only cleaned at the next view access. The reason
+            // there are two rows and not three below is because an edit of a table (as opposed
+            // to a view) triggers a cleaning of cache entries for itself in the query cache
+            // automatically.
+            CachingStrategy::Truncate => {
+                assert_eq!(pool.count_query_cache_rows().await.unwrap(), 2)
+            }
+            _ => assert_eq!(pool.count_query_cache_rows().await.unwrap(), 0),
+        };
+
+        // Cleanup:
+        pool.drop_table(&format!("test_vcaching_table"))
+            .await
+            .unwrap();
+        pool.drop_view(&format!("test_vcaching_view_1"))
+            .await
+            .unwrap();
+        pool.drop_view(&format!("test_vcaching_view_2"))
+            .await
+            .unwrap();
     }
 
     // This test takes a few minutes to run and is ignored by default.
