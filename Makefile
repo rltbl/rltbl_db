@@ -4,14 +4,11 @@ SHELL := bash
 .DELETE_ON_ERROR:
 .SUFFIXES:
 
-.PHONY: check crate_docs build build_libsql
+# Tests
+
+## Standard tests
+
 .PHONY: test test_default test_libsql
-.PHONY: test_caching_perf_and_max_params
-
-# Main test
-
-tests/input/table1.csv: tests/input/table1.tsv
-	csvtool -t TAB -u COMMA cat $< > $@
 
 test: test_default # test_libsql
 
@@ -25,16 +22,44 @@ test_libsql: | tests/input/table1.csv
 	cargo test --no-default-features --features libsql
 	@echo "Libsql unit tests succeeded."
 
-# Caching performance test
+tests/input/table1.csv: tests/input/table1.tsv
+	csvtool -t TAB -u COMMA cat $< > $@
 
-test_caching_perf_and_max_params:
-	@echo "Running caching_performance and max_params tests using default features."
-	cargo test -- --no-capture --ignored test_max_params test_caching_performance
+## Performance tests
+
+.PHONY: test_caching_perf test_import_perf
+
+test_caching_perf:
+	@echo "Running caching_performance test using default features."
+	cargo test -- --no-capture --ignored test_caching_performance
 	cargo test --no-default-features --features libsql \
-		-- --no-capture --ignored test_max_params test_caching_performance
+		-- --no-capture --ignored test_caching_performance
 	@echo "Tests succeeded."
 
+test_import_perf:
+	@echo "Running import_performance test using default features."
+	cargo test -- --no-capture --ignored test_import_performance
+	cargo test --no-default-features --features libsql \
+		-- --no-capture --ignored test_import_performance
+	@echo "Tests succeeded."
+
+## All ignored tests:
+
+.PHONY: test_ignored test_default_ignored test_libsql_ignored
+
+test_ignored: test_default_ignored # test_libsql_ignored
+
+test_default_ignored:
+	@echo "Running all (including normally) ignored unit tests using default features."
+	cargo test -- --include-ignored
+
+test_libsql_ignored:
+	@echo "Running all (including normally) ignored unit tests using default features."
+	cargo test -- --include-ignored
+
 # Documentation
+
+.PHONY: crate_docs
 
 crate_docs:
 	@echo "Testing documentation comments."
@@ -42,6 +67,8 @@ crate_docs:
 	@echo "Documentation comments are ok."
 
 # Build
+
+.PHONY: build build_libsql
 
 build:
 	cargo build

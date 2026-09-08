@@ -10,26 +10,6 @@ use std::collections::BTreeSet;
 use tree_sitter::{Node, Parser, Tree};
 use tree_sitter_sequel::LANGUAGE as SQL_LANGUAGE;
 
-/// Validates that a given [Node] is not an error node:
-fn validate_node(node: &Node<'_>, sql: &str) -> Result<(), Error> {
-    if node.is_error() {
-        return Err(Error::ParseError(format!("Error parsing '{sql}': {node}")));
-    }
-    Ok(())
-}
-
-/// Validates that the given list of [Node]s is of the expected length:
-fn validate_list_len(node_list: &Vec<Node<'_>>, len: usize) -> Result<(), Error> {
-    if node_list.len() != len {
-        return Err(Error::ParseError(format!(
-            "Wrong number of values: {}. Expected: {}",
-            node_list.len(),
-            len
-        )));
-    }
-    Ok(())
-}
-
 /// Represents a valid database table name.
 static VALID_TABLE_NAME_MATCH_STR: &str = r"^[A-Za-z_][0-9A-Za-z_]*$";
 
@@ -610,4 +590,24 @@ pub fn get_affected_tables(sql: &str) -> Result<(BTreeSet<String>, BTreeSet<Stri
         .collect::<BTreeSet<_>>();
 
     Ok((edited_tables.clone(), dropped_tables.clone()))
+}
+
+/// Validates that a given [Node] is not an error node:
+fn validate_node(node: &Node<'_>, sql: &str) -> Result<(), Error> {
+    if node.is_error() {
+        return Err(Error::ParseError(format!("Error parsing '{sql}': {node}")));
+    }
+    Ok(())
+}
+
+/// Validates that the given list of [Node]s is of the expected length:
+fn validate_list_len(node_list: &Vec<Node<'_>>, len: usize) -> Result<(), Error> {
+    if node_list.len() != len {
+        return Err(Error::ParseError(format!(
+            "Wrong number of values: {}. Expected: {}",
+            node_list.len(),
+            len
+        )));
+    }
+    Ok(())
 }

@@ -193,26 +193,3 @@ impl std::fmt::Display for Error {
         }
     }
 }
-
-// TODO: anyhow error?
-
-// MC: Actually I have been meaning to ask you for awhile now why we decided to forget
-// AnyHow in rltbl_db. I have found it pretty useful in the past.
-
-// JO: Anyhow is convenient and I use it in Relatable, which is designed as an application.
-// But the idea is that this is a library, and should expose more error information to the user,
-// so the user has the opportunity to handle it.
-// Here's one view: https://www.lpalmieri.com/posts/error-handling-rust/#anyhow-or-thiserror
-// I'm not sure what the best approach is in this case.
-
-// MC: I think it does make sense to not wrap errors in our case, for the reason you mentioned.
-// Note, though, that the author of that page makes the following point:
-//
-// "Freedom comes at a price - the interface is more complex, users need to sift through 10+
-// variants trying to figure out which (if any) deserve special handling."
-//
-// I think this is a good point in general, but I am not too concerned in our case.
-// I would be more worried about this if some of the errors above did not implement Display.
-// That was true of sqlx::Error, if I recall correctly, which was a source of some frustration.
-// But in our case, all of the above errors implement Display so the user will at least be able
-// to print the information.

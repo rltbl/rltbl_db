@@ -79,7 +79,7 @@ fn extract_value(row: &PgRow, idx: usize) -> Result<Value, Error> {
             Ok(Value::Json(value))
         }
         other => {
-            let value: Result<GenericValueType, Error> = row
+            let value: Result<GenericPostgresType, Error> = row
                 .try_get(idx)
                 .map_err(|err| Error::DatatypeError(err.to_string()));
             match value {
@@ -131,17 +131,17 @@ impl PostgresPool {
 
 /// Represents a PostgreSQL datatype that is not explicitly handled in extract_value() and query().
 #[derive(Clone, Debug)]
-pub struct GenericValueType {
+pub struct GenericPostgresType {
     // Raw representation of the value.
     bytes: Option<Vec<u8>>,
 }
 
-impl FromSql<'_> for GenericValueType {
+impl FromSql<'_> for GenericPostgresType {
     fn from_sql(
         _ty: &Type,
         raw: &[u8],
-    ) -> Result<GenericValueType, Box<dyn std::error::Error + Sync + Send>> {
-        Ok(GenericValueType {
+    ) -> Result<GenericPostgresType, Box<dyn std::error::Error + Sync + Send>> {
+        Ok(GenericPostgresType {
             bytes: Some(raw.to_owned()),
         })
     }
@@ -151,7 +151,7 @@ impl FromSql<'_> for GenericValueType {
     }
 }
 
-impl ToSql for GenericValueType {
+impl ToSql for GenericPostgresType {
     fn to_sql(
         &self,
         _ty: &Type,
@@ -273,9 +273,9 @@ impl Query for PostgresPool {
                 },
                 other => {
                     match param {
-                        Value::Null => paramses.push(Box::new(GenericValueType { bytes: None })),
+                        Value::Null => paramses.push(Box::new(GenericPostgresType { bytes: None })),
                         Value::Other(_cname, bytes, _string_opt) => {
-                            paramses.push(Box::new(GenericValueType {
+                            paramses.push(Box::new(GenericPostgresType {
                                 bytes: Some(bytes.clone()),
                             }))
                         }
@@ -396,6 +396,8 @@ impl Pool for PostgresPool {
         panic!("Don't use this! Use builtin driver methods instead")
     }
 }
+
+// TODO: Move these tests to unit_tests.rs
 
 #[cfg(test)]
 mod tests {

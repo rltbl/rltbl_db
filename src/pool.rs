@@ -23,7 +23,7 @@ use async_trait::async_trait;
 use csv::ReaderBuilder;
 use indexmap::IndexMap;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashSet,
     fmt::Display,
     fs::File,
     iter::{IntoIterator, zip},
@@ -354,7 +354,7 @@ impl AnyPool {
             .ok_or(Error::InputError(format!(
                 "Error getting table name from path '{filename}'"
             )))?;
-        let columns = read_columns_from_file(filename)?;
+        let columns = Column::from_table_file(filename)?;
         self.recreate_table(&table, &columns).await?;
         self.load_table(&table, &columns, filename).await
     }
@@ -370,7 +370,7 @@ impl AnyPool {
             .ok_or(Error::InputError(format!(
                 "Error getting table name from path '{filename}'"
             )))?;
-        let columns = read_columns_from_file(filename)?;
+        let columns = Column::from_table_file(filename)?;
         self.recreate_table(&table, &columns).await?;
         self.batch_insert(table, &columns, filename).await
     }
@@ -495,6 +495,9 @@ impl AnyPool {
 
     ////////// Private functions //////////
 
+    // TODO: Given that this is part of the Query interface, should it be public?
+    //       Currently, import_table(), which requires only a filename as input,
+    //       is being used as a handy public wrapper.
     /// Load the given table using the data from the given file.
     async fn load_table(
         &self,
@@ -893,6 +896,111 @@ impl AnyPool {
         Ok(view_sql)
     }
 
+    /// Generate a SQL UPDATE statement for the given table and columns using the given clauses
+    /// and the given value lines.
+    #[allow(unused)]
+    fn generate_update_statement(
+        table: &str,
+        columns: &[&str],
+        primary_keys: &[&str],
+        returning_clause: &str,
+        value_lines: &[&str],
+    ) -> String {
+        // Quote the column names to avoid potential clashes with database keywords:
+        let quoted_columns = columns
+            .iter()
+            .map(|c| format!(r#""{c}""#))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let set_clause = columns
+            .iter()
+            .filter(|column| !primary_keys.contains(&column))
+            .map(|column| format!(r#""{column}" = "source"."{column}""#))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let where_clause = primary_keys
+            .iter()
+            .map(|pk| format!(r#""{table}"."{pk}" = "source"."{pk}""#,))
+            .collect::<Vec<_>>()
+            .join(" AND ");
+
+        format!(
+            r#"WITH "source" ({quoted_columns}) AS (
+             VALUES
+             {}
+           )
+           UPDATE "{table}"
+           SET {set_clause}
+           FROM "source"
+           WHERE {where_clause}{returning_clause}"#,
+            value_lines.join(",\n")
+        )
+    }
+
+    /// Generate a SQL INSERT statement for the given table and columns using the given clauses
+    /// and the given value lines.
+    #[allow(unused)]
+    fn generate_insert_statement(
+        table: &str,
+        columns: &[&str],
+        returning_clause: &str,
+        value_lines: &[&str],
+    ) -> String {
+        // Quote the column names to avoid potential clashes with database keywords:
+        let quoted_columns = columns
+            .iter()
+            .map(|c| format!(r#""{c}""#))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        format!(
+            r#"INSERT INTO "{table}" ({quoted_columns})
+           VALUES
+           {}{returning_clause}"#,
+            value_lines.join(",\n")
+        )
+    }
+
+    /// Generate SQL statement of the form:
+    /// INSERT INTO <table> VALUES <tuples> ON CONFLICT (<primary key constraint>) DO UPDATE ...
+    #[allow(unused)]
+    fn generate_upsert_statement(
+        table: &str,
+        columns: &[&str],
+        primary_keys: &[&str],
+        returning_clause: &str,
+        value_lines: &[&str],
+    ) -> String {
+        let quoted_columns = columns
+            .iter()
+            .map(|c| format!(r#""{c}""#))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let constraint_clause = primary_keys
+            .iter()
+            .map(|pk| format!(r#""{pk}""#))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let set_clause = columns
+            .iter()
+            .filter(|column| !primary_keys.contains(&column))
+            .map(|column| format!(r#""{column}" = "excluded"."{column}""#))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        format!(
+            r#"INSERT INTO "{table}" ({quoted_columns})
+           VALUES
+           {}
+           ON CONFLICT ({constraint_clause}) DO UPDATE SET {set_clause}{returning_clause}"#,
+            value_lines.join(",\n"),
+        )
+    }
+
     /// Edit the given rows in the given table using the given queryable and optional returning
     /// clause (set with_returning = false to turn this off). When generating the SQL statements
     /// used to edit the table, do not use more than max_params bound parameters at a time. If more
@@ -980,7 +1088,7 @@ impl AnyPool {
                                                   params_to_be_bound: &mut Vec<Value>|
                -> Result<Rows, Error> {
             let sql = match edit_type {
-                EditType::Update => generate_update_statement(
+                EditType::Update => Self::generate_update_statement(
                     &table,
                     columns,
                     primary_keys
@@ -995,7 +1103,7 @@ impl AnyPool {
                         .collect::<Vec<_>>()
                         .as_slice(),
                 ),
-                EditType::Insert => generate_insert_statement(
+                EditType::Insert => Self::generate_insert_statement(
                     &table,
                     columns,
                     &returning_clause,
@@ -1005,7 +1113,7 @@ impl AnyPool {
                         .collect::<Vec<_>>()
                         .as_slice(),
                 ),
-                EditType::Upsert => generate_upsert_statement(
+                EditType::Upsert => Self::generate_upsert_statement(
                     &table,
                     columns,
                     primary_keys
@@ -1096,12 +1204,13 @@ impl AnyPool {
     }
 
     /// Read data from the given file and insert it to the given table in the database.
-    pub async fn batch_insert(
+    async fn batch_insert(
         &self,
         table: &str,
         columns: &IndexMap<String, Column>,
         filename: &str,
     ) -> Result<(), Error> {
+        // TODO: Add a static constant.
         let batch_size = 100;
 
         eprintln!(
@@ -1181,22 +1290,22 @@ impl AnyPool {
 
             // We don't insert more than batch_size at a time:
             if db_rows.len() >= batch_size {
-                let tmp_db_rows: Vec<&Row> = db_rows.iter().map(|row| row).collect();
-                self.insert(table, &str_columns, tmp_db_rows).await?;
+                let db_row_refs: Vec<&Row> = db_rows.iter().map(|row| row).collect();
+                self.insert(table, &str_columns, db_row_refs).await?;
                 db_rows.clear();
             }
         }
         // Insert anything that's left:
         if db_rows.len() > 0 {
-            let tmp_db_rows: Vec<&Row> = db_rows.iter().map(|row| row).collect();
-            self.insert(table, &str_columns, tmp_db_rows).await?;
+            let db_row_refs: Vec<&Row> = db_rows.iter().map(|row| row).collect();
+            self.insert(table, &str_columns, db_row_refs).await?;
         }
         Ok(())
     }
 
     /// Ensure that caching triggers exist for the given table. Note that this function calls
     /// ensure_cache_tables_exist() implicitly.
-    pub async fn ensure_caching_triggers_exist_for_table(&self, table: &str) -> Result<(), Error> {
+    async fn ensure_caching_triggers_exist_for_table(&self, table: &str) -> Result<(), Error> {
         let table_triggers_name = format!("{table}_triggers");
         if !self.meta_cache.exists(&table_triggers_name)? {
             self.ensure_cache_tables_exist().await?;
@@ -1209,7 +1318,7 @@ impl AnyPool {
 
     /// Ensure that the query cache table and the table cache table exist (see
     /// [QUERY_CACHE_TABLE] and [TABLE_CACHE_TABLE]).
-    pub async fn ensure_cache_tables_exist(&self) -> Result<(), Error> {
+    async fn ensure_cache_tables_exist(&self) -> Result<(), Error> {
         if !self.meta_cache.exists(QUERY_CACHE_TABLE)? {
             self.create_query_cache_table().await?;
             self.meta_cache.insert(QUERY_CACHE_TABLE)?;
@@ -1223,7 +1332,7 @@ impl AnyPool {
 
     /// Ensure that caching triggers exist for the source tables of the given view. Note that
     /// this function calls ensure_cache_tables_exist() implicitly.
-    pub async fn ensure_caching_triggers_exist_for_view(&self, view: &str) -> Result<(), Error> {
+    async fn ensure_caching_triggers_exist_for_view(&self, view: &str) -> Result<(), Error> {
         let view_triggers_name = format!("{view}_triggers");
         if !self.meta_cache.exists(&view_triggers_name)? {
             self.ensure_cache_tables_exist().await?;
@@ -1250,7 +1359,7 @@ impl AnyPool {
     /// Parse the given semi-colon-separated SQL commands and determine which tables will be
     /// affected (either edited or dropped) by the commands, then ensure that there are no
     /// entries for those tables in the cache in accordance with the current [CachingStrategy].
-    pub async fn clear_cache_for_affected_tables(&self, sql: &str) -> Result<(), Error> {
+    async fn clear_cache_for_affected_tables(&self, sql: &str) -> Result<(), Error> {
         if self.get_caching_strategy() != CachingStrategy::None {
             let (edited_tables, dropped_tables): (Vec<_>, Vec<_>) = {
                 let (edited_tables, dropped_tables) = sql_parse::get_affected_tables(sql)?;
@@ -1289,7 +1398,7 @@ impl AnyPool {
     /// Update the cache tables, for the given list of tables, using the current [CachingStrategy],
     /// under the assumption that the tables in the given list have all just been edited (i.e.,
     /// truncated, deleted from, inserted to, or updated).
-    pub async fn clear_cache_for_edited_tables(&self, tables: &[&str]) -> Result<(), Error> {
+    async fn clear_cache_for_edited_tables(&self, tables: &[&str]) -> Result<(), Error> {
         match self.get_caching_strategy() {
             CachingStrategy::None | CachingStrategy::Trigger => (),
             CachingStrategy::TruncateAll => {
@@ -1310,7 +1419,7 @@ impl AnyPool {
 
     /// Update the cache tables for the given list of tables, using the current [CachingStrategy],
     /// under the assumption that the tables in the given list have all just been dropped.
-    pub async fn clear_cache_for_dropped_tables(&self, tables: &[&str]) -> Result<(), Error> {
+    async fn clear_cache_for_dropped_tables(&self, tables: &[&str]) -> Result<(), Error> {
         if let CachingStrategy::Memory(_) = self.get_caching_strategy() {
             self.update_last_modified_times(tables).await?;
             self.memory_query_cache.clear(&tables)?;
@@ -1352,7 +1461,7 @@ impl AnyPool {
 
     /// Update the last verified time of the query cache entry identified by the triple:
     /// (tables, statement, params).
-    pub async fn update_last_verified(
+    async fn update_last_verified(
         &self,
         tables: &[&str],
         statement: &str,
@@ -1417,7 +1526,7 @@ impl AnyPool {
     }
 
     /// Update the last modified times of each of the given tables in the table cache.
-    pub async fn update_last_modified_times(&self, tables: &[&str]) -> Result<(), Error> {
+    async fn update_last_modified_times(&self, tables: &[&str]) -> Result<(), Error> {
         match self.get_caching_strategy() {
             CachingStrategy::Memory(_) => {
                 let mut cache = self.memory_table_cache.get_cache()?;
@@ -1449,7 +1558,7 @@ impl AnyPool {
     /// Delete the entries for the tables in the given list (independently of the current
     /// caching strategy) from the query cache table, if it exists. If the given list is empty,
     /// clear the entire query cache table.
-    pub async fn delete_query_cache_entries(&self, tables: &[&str]) -> Result<(), Error> {
+    async fn delete_query_cache_entries(&self, tables: &[&str]) -> Result<(), Error> {
         if self.table_exists(QUERY_CACHE_TABLE).await? {
             if tables.is_empty() {
                 self.pool
@@ -1476,7 +1585,7 @@ impl AnyPool {
     /// Uses the current caching strategy to clear the query cache for any of the given tables
     /// that (a) are views and (b) have source tables that have been modified more recently than
     /// the view. This function works both with database and memory cache strategies.
-    pub async fn update_cached_views(&self, tables: &[&str]) -> Result<(), Error> {
+    async fn update_cached_views(&self, tables: &[&str]) -> Result<(), Error> {
         let views = self.which_are_views(tables).await?;
         match self.get_caching_strategy() {
             CachingStrategy::Memory(_) => {
@@ -1529,7 +1638,7 @@ impl AnyPool {
     }
 
     /// Returns the latest of the last modified times of the given tables in the table cache.
-    pub async fn get_latest_last_modified(&self, tables: &[&str]) -> Result<u64, Error> {
+    async fn get_latest_last_modified(&self, tables: &[&str]) -> Result<u64, Error> {
         match self.table_exists(TABLE_CACHE_TABLE).await? {
             true => {
                 let prefix = self.syntax().param_prefix().to_string();
@@ -1570,17 +1679,18 @@ impl AnyPool {
         }
     }
 
+    // TODO: This function is unused. If it is unneeded, remove it.
     /// Gets the last time the given table was modified, as read from the table cache table.
     /// If there is no entry for the table in the table cache, or if the table cache does not
     /// exist, returns 0.
-    pub async fn last_modified(&self, table: &str) -> Result<u64, Error> {
+    async fn _last_modified(&self, table: &str) -> Result<u64, Error> {
         self.get_latest_last_modified(&[table]).await
     }
 
     /// Gets the last time that the given table was verified, as read from the query cache table.
     /// If there is no entry involving the given table in the query cache, or if the query cache
     /// table doesn't exist, returns 0.
-    pub async fn last_verified(&self, table: &str) -> Result<u64, Error> {
+    async fn last_verified(&self, table: &str) -> Result<u64, Error> {
         match self.table_exists(QUERY_CACHE_TABLE).await? {
             true => {
                 let sql = format!(
@@ -1608,227 +1718,4 @@ impl AnyPool {
             false => Ok(0),
         }
     }
-}
-
-// Private helper functions:
-
-/// Determine the database columns needed for each column of data in the given file.
-fn read_columns_from_file(filename: &str) -> Result<IndexMap<String, Column>, Error> {
-    let delimiter = {
-        if filename.to_lowercase().ends_with("tsv") {
-            b'\t'
-        } else if filename.to_lowercase().ends_with(".csv") {
-            b','
-        } else {
-            return Err(Error::InputError(format!(
-                "Filename: '{filename}' must end with .tsv or .csv"
-            )));
-        }
-    };
-
-    // Read the rows from the given file:
-    let mut rdr = ReaderBuilder::new()
-        .has_headers(false)
-        .delimiter(delimiter)
-        .from_reader(
-            File::open(filename)
-                .map_err(|err| Error::InputError(format!("Unable to open '{filename}': {err}")))?,
-        );
-    let mut records = rdr.records();
-
-    // Extract the headers from the first line of the file:
-    let headers = {
-        let headers = match records.next() {
-            None => return Err(Error::InputError(format!("'{filename}' is empty"))),
-            Some(record) => match record {
-                Err(err) => {
-                    return Err(Error::InputError(format!(
-                        "Error reading from '{filename}': {err}"
-                    )));
-                }
-                Ok(headers) => headers.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-            },
-        };
-        for header in &headers {
-            if header.trim().is_empty() {
-                return Err(Error::InputError(format!(
-                    "One or more of the header fields is empty in file '{filename}'"
-                )));
-            }
-        }
-        headers
-    };
-
-    // Determine the columns required:
-    let columns = {
-        let mut columns = vec![];
-        let mut values_seen = HashMap::new();
-        for row in records {
-            let row = row.map_err(|err| {
-                Error::InputError(format!("Error reading from '{filename}': {err}"))
-            })?;
-
-            // Determine the columns for the first row if this hasn't been done already:
-            if columns.is_empty() {
-                for value in &row {
-                    columns.push(
-                        Column::new()
-                            .min_column_from_strings(vec![value.to_string()].into_iter())?,
-                    );
-                }
-            }
-
-            // Sanity checks:
-            if row.len() != headers.len() {
-                return Err(Error::InputError(format!(
-                    "Number of row values ({}) != number of headers ({})",
-                    row.len(),
-                    headers.len()
-                )));
-            }
-            if row.len() != columns.len() {
-                return Err(Error::InputError(format!(
-                    "Number of row values ({}) != number of columns ({})",
-                    row.len(),
-                    columns.len()
-                )));
-            }
-
-            // Each new row will be used to refine the column types that were determined on the
-            // basis of the previous N rows.
-            for i in 0..row.len() {
-                if &row[i] == "" {
-                    if columns[i].not_null {
-                        columns[i].not_null = false;
-                    }
-                } else {
-                    columns[i] =
-                        columns[i].min_column_from_strings(vec![row[i].to_string()].into_iter())?;
-                    if let None = values_seen.get_mut(&headers[i]) {
-                        values_seen.insert(headers[i].to_string(), HashSet::new());
-                    }
-                    let this_column_seen = values_seen.get_mut(&headers[i]).unwrap();
-                    if !this_column_seen.insert(row[i].to_string()) && columns[i].unique {
-                        columns[i].unique = false;
-                    }
-                }
-            }
-        }
-
-        // Zip everything up into an IndexMap:
-        zip(headers, columns)
-            .map(|(key, mut column)| {
-                // Don't forget to copy the column name:
-                column.name = key.to_string();
-                (key, column)
-            })
-            .collect::<IndexMap<_, _>>()
-    };
-
-    Ok(columns)
-}
-
-/// Generate a SQL UPDATE statement for the given table and columns using the given clauses
-/// and the given value lines.
-#[allow(unused)]
-fn generate_update_statement(
-    table: &str,
-    columns: &[&str],
-    primary_keys: &[&str],
-    returning_clause: &str,
-    value_lines: &[&str],
-) -> String {
-    // Quote the column names to avoid potential clashes with database keywords:
-    let quoted_columns = columns
-        .iter()
-        .map(|c| format!(r#""{c}""#))
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    let set_clause = columns
-        .iter()
-        .filter(|column| !primary_keys.contains(&column))
-        .map(|column| format!(r#""{column}" = "source"."{column}""#))
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    let where_clause = primary_keys
-        .iter()
-        .map(|pk| format!(r#""{table}"."{pk}" = "source"."{pk}""#,))
-        .collect::<Vec<_>>()
-        .join(" AND ");
-
-    format!(
-        r#"WITH "source" ({quoted_columns}) AS (
-             VALUES
-             {}
-           )
-           UPDATE "{table}"
-           SET {set_clause}
-           FROM "source"
-           WHERE {where_clause}{returning_clause}"#,
-        value_lines.join(",\n")
-    )
-}
-
-/// Generate a SQL INSERT statement for the given table and columns using the given clauses
-/// and the given value lines.
-#[allow(unused)]
-fn generate_insert_statement(
-    table: &str,
-    columns: &[&str],
-    returning_clause: &str,
-    value_lines: &[&str],
-) -> String {
-    // Quote the column names to avoid potential clashes with database keywords:
-    let quoted_columns = columns
-        .iter()
-        .map(|c| format!(r#""{c}""#))
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    format!(
-        r#"INSERT INTO "{table}" ({quoted_columns})
-           VALUES
-           {}{returning_clause}"#,
-        value_lines.join(",\n")
-    )
-}
-
-/// Generate SQL statement of the form:
-/// INSERT INTO <table> VALUES <tuples> ON CONFLICT (<primary key constraint>) DO UPDATE ...
-#[allow(unused)]
-fn generate_upsert_statement(
-    table: &str,
-    columns: &[&str],
-    primary_keys: &[&str],
-    returning_clause: &str,
-    value_lines: &[&str],
-) -> String {
-    let quoted_columns = columns
-        .iter()
-        .map(|c| format!(r#""{c}""#))
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    let constraint_clause = primary_keys
-        .iter()
-        .map(|pk| format!(r#""{pk}""#))
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    let set_clause = columns
-        .iter()
-        .filter(|column| !primary_keys.contains(&column))
-        .map(|column| format!(r#""{column}" = "excluded"."{column}""#))
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    format!(
-        r#"INSERT INTO "{table}" ({quoted_columns})
-           VALUES
-           {}
-           ON CONFLICT ({constraint_clause}) DO UPDATE SET {set_clause}{returning_clause}"#,
-        value_lines.join(",\n"),
-    )
 }

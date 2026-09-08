@@ -1,5 +1,11 @@
+use csv::ReaderBuilder;
 use indexmap::{IndexMap, IndexSet};
-use std::{cmp::Ordering, collections::HashSet, iter::zip};
+use std::{
+    cmp::Ordering,
+    collections::{HashMap, HashSet},
+    fs::File,
+    iter::zip,
+};
 
 use crate::{Error, Row, Value, ValueType};
 
@@ -11,9 +17,8 @@ use crate::{Error, Row, Value, ValueType};
 // MC: Ok that's clear. I'm keeping the enum for now but I'll also keep these comments around
 // until it's time to merge the PR, in case we want to revisit this before then.
 
-// TODO: Not using this for now as I'm not quite sure what the best way to divide up the
-// methods between ValueType and ColumnType is. I'm also still skeptical about having both as
-// they are easy to confuse with one another.
+// MC: Update: I'm not going to use this for now as I'm not quite sure what the best way to
+// divide up the methods between ValueType and ColumnType is. TODO: Come back to this.
 
 /// The type of a [Value], including the name of the type according to the
 /// underlying database. Note that this type is similar to [ValueType],
@@ -73,6 +78,122 @@ impl Column {
             not_null: true,
             unique: true,
         }
+    }
+
+    /// Determine the database columns needed for each column of data in the given file.
+    pub fn from_table_file(filename: &str) -> Result<IndexMap<String, Self>, Error> {
+        let delimiter = {
+            if filename.to_lowercase().ends_with("tsv") {
+                b'\t'
+            } else if filename.to_lowercase().ends_with(".csv") {
+                b','
+            } else {
+                return Err(Error::InputError(format!(
+                    "Filename: '{filename}' must end with .tsv or .csv"
+                )));
+            }
+        };
+
+        // Read the rows from the given file:
+        let mut rdr =
+            ReaderBuilder::new()
+                .has_headers(false)
+                .delimiter(delimiter)
+                .from_reader(File::open(filename).map_err(|err| {
+                    Error::InputError(format!("Unable to open '{filename}': {err}"))
+                })?);
+        let mut records = rdr.records();
+
+        // Extract the headers from the first line of the file:
+        let headers = {
+            let headers = match records.next() {
+                None => return Err(Error::InputError(format!("'{filename}' is empty"))),
+                Some(record) => match record {
+                    Err(err) => {
+                        return Err(Error::InputError(format!(
+                            "Error reading from '{filename}': {err}"
+                        )));
+                    }
+                    Ok(headers) => headers.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+                },
+            };
+            for header in &headers {
+                if header.trim().is_empty() {
+                    return Err(Error::InputError(format!(
+                        "One or more of the header fields is empty in file '{filename}'"
+                    )));
+                }
+            }
+            headers
+        };
+
+        // Determine the columns required:
+        let columns = {
+            let mut columns = vec![];
+            let mut values_seen = HashMap::new();
+            for row in records {
+                let row = row.map_err(|err| {
+                    Error::InputError(format!("Error reading from '{filename}': {err}"))
+                })?;
+
+                // Determine the columns for the first row if this hasn't been done already:
+                if columns.is_empty() {
+                    for value in &row {
+                        columns.push(
+                            Column::new()
+                                .min_column_from_strings(vec![value.to_string()].into_iter())?,
+                        );
+                    }
+                }
+
+                // Sanity checks:
+                if row.len() != headers.len() {
+                    return Err(Error::InputError(format!(
+                        "Number of row values ({}) != number of headers ({})",
+                        row.len(),
+                        headers.len()
+                    )));
+                }
+                if row.len() != columns.len() {
+                    return Err(Error::InputError(format!(
+                        "Number of row values ({}) != number of columns ({})",
+                        row.len(),
+                        columns.len()
+                    )));
+                }
+
+                // Each new row will be used to refine the column types that were determined on the
+                // basis of the previous N rows.
+                for i in 0..row.len() {
+                    if &row[i] == "" {
+                        if columns[i].not_null {
+                            columns[i].not_null = false;
+                        }
+                    } else {
+                        columns[i] = columns[i]
+                            .min_column_from_strings(vec![row[i].to_string()].into_iter())?;
+                        if let None = values_seen.get_mut(&headers[i]) {
+                            values_seen.insert(headers[i].to_string(), HashSet::new());
+                        }
+                        let this_column_seen = values_seen.get_mut(&headers[i]).unwrap();
+                        if !this_column_seen.insert(row[i].to_string()) && columns[i].unique {
+                            columns[i].unique = false;
+                        }
+                    }
+                }
+            }
+
+            // Zip everything up into an IndexMap:
+            zip(headers, columns)
+                .map(|(key, mut column)| {
+                    // Don't forget to copy the column name:
+                    column.name = key.to_string();
+                    (key, column)
+                })
+                .collect::<IndexMap<_, _>>()
+        };
+
+        Ok(columns)
     }
 
     /// Return the minimum column required to contain the given database values.

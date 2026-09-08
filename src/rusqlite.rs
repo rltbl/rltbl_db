@@ -467,6 +467,8 @@ impl RusqliteTransaction {
     }
 }
 
+// TODO: Move these tests to unit_tests.rs
+
 #[cfg(test)]
 mod tests {
     use crate::{AnyPool, Error, Pool, Query, Transaction, Value, rusqlite::RusqlitePool, values};

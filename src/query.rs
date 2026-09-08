@@ -5,14 +5,6 @@ use indexmap::IndexMap;
 
 use crate::{Column, Error, Rows, Syntax, Value};
 
-// JO: The Query trait provides the main database methods,
-// which are shared by both Pool and Transaction.
-// JO: These trait all have concrete arguments (no traits, no impls)
-// to ensure that theyre dyn-compatible.
-// The "normal" AnyPool, AnyTransaction structs can use traits and impls as convenient,
-// because the structs don't have to be dyn-compatible.
-// MC: See my somewhat skeptical comment regarding this in pool.rs, in the insert() method.
-
 #[async_trait]
 pub trait Query: std::fmt::Debug + Sync {
     /// Returns the SQL syntax supported by this [Query]-able.
