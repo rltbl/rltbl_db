@@ -91,19 +91,21 @@
 //! ```
 //!
 //! Given a CSV or TSV file, we can determine a schema for the data, and load it into a new table.
-//!
-//! TODO: Un-ignore this block.
-//! ```ignore
+//! Note that to take full advantage of SQLite's direct bulk-loading capability, a .csv file is
+//! required. PostgreSQL supports both .tsv and .csv files.
+//! ```
 //! use rltbl_db::{AnyPool, Error as DbError};
 //!
 //! async fn tsv_example() -> Result<(), DbError> {
 //!     let pool = AnyPool::connect(":memory:").await?;
-//!
-//!     // determine table schema from TSV
-//!     // create table
-//!     // load TSV into table
-//!     // query from table
-//!
+//!     pool.import_table("tests/input/table1.csv").await.unwrap();
+//!     let count: u64 = pool
+//!         .query("SELECT COUNT(1) FROM table1", ())
+//!         .await
+//!         .unwrap()
+//!         .try_into_value()
+//!         .unwrap();
+//!     assert_eq!(count, 7);
 //!     Ok(())
 //! }
 //!

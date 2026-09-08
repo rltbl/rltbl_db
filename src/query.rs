@@ -71,6 +71,7 @@ pub trait Query: std::fmt::Debug + Sync {
     /// Execute a query returning a collection of [Rows].
     async fn query(&self, sql: &str, params: &[Value]) -> Result<Rows, Error>;
 
+    // TODO: Add docstring.
     async fn load_table(
         &self,
         table: &str,

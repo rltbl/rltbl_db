@@ -4075,7 +4075,7 @@ mod tests {
         pool.import_table(filename).await.unwrap();
         let elapsed = now.elapsed().as_secs();
         let count: u64 = pool
-            .query("SELECT COUNT(1) FROM PENGUIN", ())
+            .query("SELECT COUNT(1) FROM penguin", ())
             .await
             .unwrap()
             .try_into_value()
