@@ -22,6 +22,10 @@ where
     todo!()
 }
 
+////////////////////////////////////////////////////////////////////////////////
+// Serialization implementations
+////////////////////////////////////////////////////////////////////////////////
+
 struct ValueSerializer {
     value: Value,
 }
@@ -53,74 +57,88 @@ impl<'a> ser::Serializer for &'a mut ValueSerializer {
     type SerializeStructVariant = Self;
 
     // Primitive types
-    fn serialize_bool(self, _value: bool) -> Result<(), Self::Error> {
-        todo!()
+    fn serialize_bool(self, value: bool) -> Result<(), Self::Error> {
+        self.value = Value::from(value);
+        Ok(())
     }
 
-    fn serialize_i8(self, _value: i8) -> Result<(), Self::Error> {
-        todo!()
+    fn serialize_i8(self, value: i8) -> Result<(), Self::Error> {
+        self.value = Value::from(value);
+        Ok(())
     }
 
-    fn serialize_i16(self, _value: i16) -> Result<(), Self::Error> {
-        todo!()
+    fn serialize_i16(self, value: i16) -> Result<(), Self::Error> {
+        self.value = Value::from(value);
+        Ok(())
     }
 
-    fn serialize_i32(self, _value: i32) -> Result<(), Self::Error> {
-        todo!()
+    fn serialize_i32(self, value: i32) -> Result<(), Self::Error> {
+        self.value = Value::from(value);
+        Ok(())
     }
 
-    fn serialize_i64(self, _value: i64) -> Result<(), Self::Error> {
-        todo!()
+    fn serialize_i64(self, value: i64) -> Result<(), Self::Error> {
+        self.value = Value::from(value);
+        Ok(())
     }
 
-    fn serialize_u8(self, _value: u8) -> Result<(), Self::Error> {
-        todo!()
+    fn serialize_u8(self, value: u8) -> Result<(), Self::Error> {
+        self.value = Value::from(value);
+        Ok(())
     }
 
-    fn serialize_u16(self, _value: u16) -> Result<(), Self::Error> {
-        todo!()
+    fn serialize_u16(self, value: u16) -> Result<(), Self::Error> {
+        self.value = Value::from(value);
+        Ok(())
     }
 
-    fn serialize_u32(self, _value: u32) -> Result<(), Self::Error> {
-        todo!()
+    fn serialize_u32(self, value: u32) -> Result<(), Self::Error> {
+        self.value = Value::from(value);
+        Ok(())
     }
 
-    fn serialize_u64(self, _value: u64) -> Result<(), Self::Error> {
-        todo!()
+    fn serialize_u64(self, value: u64) -> Result<(), Self::Error> {
+        self.value = Value::from(value);
+        Ok(())
     }
 
-    fn serialize_f32(self, _value: f32) -> Result<(), Self::Error> {
-        todo!()
+    fn serialize_f32(self, value: f32) -> Result<(), Self::Error> {
+        self.value = Value::from(value);
+        Ok(())
     }
 
-    fn serialize_f64(self, _value: f64) -> Result<(), Self::Error> {
-        todo!()
+    fn serialize_f64(self, value: f64) -> Result<(), Self::Error> {
+        self.value = Value::from(value);
+        Ok(())
     }
 
-    fn serialize_str(self, _value: &str) -> Result<(), Self::Error> {
-        todo!()
+    fn serialize_str(self, value: &str) -> Result<(), Self::Error> {
+        self.value = Value::from(value);
+        Ok(())
     }
 
-    fn serialize_char(self, _value: char) -> Result<(), Self::Error> {
-        todo!()
+    fn serialize_char(self, value: char) -> Result<(), Self::Error> {
+        self.value = Value::from(value.to_string());
+        Ok(())
     }
 
     // Option types
 
     fn serialize_none(self) -> Result<(), Self::Error> {
-        todo!()
+        self.serialize_unit()
     }
 
-    fn serialize_some<T>(self, _value: &T) -> Result<(), Self::Error>
+    fn serialize_some<T>(self, value: &T) -> Result<(), Self::Error>
     where
         T: ?Sized + Serialize,
     {
-        todo!()
+        value.serialize(self)
     }
 
     // Serializes an absent _value (None)
     fn serialize_unit(self) -> Result<(), Self::Error> {
-        todo!()
+        self.value = Value::Null;
+        Ok(())
     }
 
     // Compound types:
@@ -344,3 +362,28 @@ impl<'a> ser::SerializeStructVariant for &'a mut ValueSerializer {
         todo!()
     }
 }
+
+////////////////////////////////////////////////////////////////////////////////
+// Deserialization implementations
+////////////////////////////////////////////////////////////////////////////////
+
+// TODO: Implement deserialization.
+
+// TODO: Move tests to unit_tests.rs
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_serde() {
+        let value = to_value(&1_i16).unwrap();
+        assert_eq!(value, Value::SmallInteger(1));
+
+        let value = to_value(&None::<String>).unwrap();
+        assert_eq!(value, Value::Null);
+
+        let value = to_value(&Some(1_f32)).unwrap();
+        assert_eq!(value, Value::Real(1_f32));
+    }
+}
+

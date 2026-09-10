@@ -731,6 +731,12 @@ impl From<bool> for Value {
     }
 }
 
+impl From<i8> for Value {
+    fn from(value: i8) -> Self {
+        Self::SmallInteger(value.into())
+    }
+}
+
 impl From<i16> for Value {
     fn from(value: i16) -> Self {
         Self::SmallInteger(value)
@@ -746,6 +752,34 @@ impl From<i32> for Value {
 impl From<i64> for Value {
     fn from(value: i64) -> Self {
         Self::BigInteger(value)
+    }
+}
+
+impl From<isize> for Value {
+    fn from(item: isize) -> Self {
+        if isize::BITS <= 16 {
+            Value::SmallInteger(item as i16)
+        } else if isize::BITS <= 32 {
+            Value::Integer(item as i32)
+        } else {
+            Value::BigInteger(item as i64)
+        }
+    }
+}
+
+impl From<u8> for Value {
+    fn from(item: u8) -> Self {
+        Value::SmallInteger(item.into())
+    }
+}
+
+impl From<u16> for Value {
+    fn from(item: u16) -> Self {
+        if item <= i16::MAX as u16 {
+            Value::SmallInteger(item as i16)
+        } else {
+            Value::Integer(item as i32)
+        }
     }
 }
 
@@ -765,6 +799,18 @@ impl From<u64> for Value {
             Value::BigInteger(item as i64)
         } else {
             Value::Numeric(Decimal::from(item))
+        }
+    }
+}
+
+impl From<usize> for Value {
+    fn from(item: usize) -> Self {
+        if usize::BITS <= 16 {
+            Value::from(item as u16)
+        } else if usize::BITS <= 32 {
+            Value::from(item as u32)
+        } else {
+            Value::from(item as u64)
         }
     }
 }
