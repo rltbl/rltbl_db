@@ -9,22 +9,13 @@ use std::{
 
 use crate::{Error, Row, Value, ValueType};
 
-// MC: We had DbType::Null in the old API. Was it unused? (I think it might have been
-// - I don't recall actually using it anywhere - but I'm not sure.)
-// JO: I think we want to distinguish between the type of a value (which might be NULL)
-// and the type of a column (which cannot be NULL).
-// Using two different enums is one way to do that, but maybe not the best way.
-// MC: Ok that's clear. I'm keeping the enum for now but I'll also keep these comments around
-// until it's time to merge the PR, in case we want to revisit this before then.
-
-// MC: Update: I'm not going to use this for now as I'm not quite sure what the best way to
-// divide up the methods between ValueType and ColumnType is. TODO: Come back to this.
-
+// TODO: Consider whether we want/need this:
 /// The type of a [Value], including the name of the type according to the
 /// underlying database. Note that this type is similar to [ValueType],
 /// but excludes NULL, which is not a valid type for a column.
+#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum ColumnType {
+enum ColumnType {
     Boolean(String),
     BigInteger(String),
     BigReal(String),
@@ -32,11 +23,9 @@ pub enum ColumnType {
 }
 
 /// TODO: Add docstring.
-#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Column {
     pub name: String,
-    // TODO: We will probably want to use ColumnType instead of ValueType here:
     pub sql_type: ValueType,
     pub not_null: bool,
     pub unique: bool,

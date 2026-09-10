@@ -11,13 +11,13 @@ use deadpool_sqlite::{
         vtab::csvtab,
     },
 };
-use indexmap::{IndexMap, indexmap};
+use indexmap::indexmap;
 use regex::Regex;
 use rust_decimal::Decimal;
 use std::{env, str::from_utf8, sync::Arc};
 
 use crate::{
-    Column, Error, JsonValue, Pool, Query, Row, Rows, Syntax, Transaction, Value,
+    Error, JsonValue, Pool, Query, Row, Rows, Syntax, Transaction, Value,
     sql_parse::validate_table_name, sqlite::SqliteSyntax,
 };
 
@@ -237,13 +237,12 @@ impl Query for RusqlitePool {
         .await?
     }
 
-    async fn load_table(
-        &self,
-        table: &str,
-        _columns: &IndexMap<String, Column>,
-        filename: &str,
-    ) -> Result<(), Error> {
-        if !filename.to_lowercase().ends_with(".csv") {
+    fn can_load(&self, filename: &str) -> bool {
+        filename.to_lowercase().ends_with(".csv")
+    }
+
+    async fn load_table(&self, table: &str, filename: &str) -> Result<(), Error> {
+        if !self.can_load(filename) {
             return Err(Error::InputError(format!(
                 "Filename: '{filename}' must end with .csv"
             )));
@@ -256,7 +255,7 @@ impl Query for RusqlitePool {
         let current_dir = current_dir.display();
         let sql = format!(
             r#"CREATE VIRTUAL TABLE temp.t1
-                   USING CSV(filename='{current_dir}/{filename}', header=true)"#
+               USING CSV(filename='{current_dir}/{filename}', header=true)"#
         );
         self.execute(&sql, &[]).await?;
         let sql = format!("INSERT INTO {table} SELECT * FROM temp.t1");
@@ -400,12 +399,11 @@ impl Query for RusqliteTransaction {
         }
     }
 
-    async fn load_table(
-        &self,
-        _table: &str,
-        _columns: &IndexMap<String, Column>,
-        _filename: &str,
-    ) -> Result<(), Error> {
+    fn can_load(&self, _filename: &str) -> bool {
+        todo!()
+    }
+
+    async fn load_table(&self, _table: &str, _filename: &str) -> Result<(), Error> {
         todo!()
     }
 

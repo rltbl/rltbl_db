@@ -154,6 +154,9 @@ pub use self::value::{ValueType, Value, JsonValue};
 /// Error definitions used by all modules.
 pub mod error;
 
+/// Serialization and deserialization support.
+pub mod serde;
+
 /// Database tables
 pub mod table;
 

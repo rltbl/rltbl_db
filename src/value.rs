@@ -60,6 +60,8 @@ pub enum ValueType {
     BigReal(String),
     Numeric(String),
     Text(String),
+    // TODO: add more types (including JSON). Make sure to take account of
+    // it in min_type(), etc. But leave this aside for now.
 }
 
 impl Default for ValueType {

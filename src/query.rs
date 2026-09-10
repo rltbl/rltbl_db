@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use indexmap::IndexMap;
 
-use crate::{Column, Error, Rows, Syntax, Value};
+use crate::{Error, Rows, Syntax, Value};
 
 #[async_trait]
 pub trait Query: std::fmt::Debug + Sync {
@@ -71,13 +71,11 @@ pub trait Query: std::fmt::Debug + Sync {
     /// Execute a query returning a collection of [Rows].
     async fn query(&self, sql: &str, params: &[Value]) -> Result<Rows, Error>;
 
-    // TODO: Add docstring.
-    async fn load_table(
-        &self,
-        table: &str,
-        columns: &IndexMap<String, Column>,
-        filename: &str,
-    ) -> Result<(), Error>;
+    /// Returns true if this queryable interface is capable of bulk loading this file.
+    fn can_load(&self, filename: &str) -> bool;
+
+    /// TODO: Add docstring.
+    async fn load_table(&self, table: &str, filename: &str) -> Result<(), Error>;
 
     /// Drop the given table from the database. Note that for PostgreSQL (see
     /// <https://www.postgresql.org/docs/current/sql-droptable.html>), if the dropped table,

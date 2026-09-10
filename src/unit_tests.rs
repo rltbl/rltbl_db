@@ -1924,7 +1924,7 @@ mod tests {
     // Use `cargo test -- --ignored` or `cargo test -- --include-ignored` to run it.
     #[tokio::test]
     #[ignore]
-    async fn test_caching_performance() {
+    async fn test_caching_perf() {
         let runs = 1000;
         let edit_rate = 25;
         let fail_after = 60;
@@ -2174,6 +2174,55 @@ mod tests {
         assert_eq!(bar, json!({"alpha":1}));
         let foo = db_row.get("foo").unwrap();
         assert_eq!(*foo, Value::BigInteger(1));
+    }
+
+    #[cfg(feature = "tokio-postgres")]
+    #[tokio::test]
+    async fn test_jsonb() {
+        let pool = AnyPool::connect("postgresql:///rltbl_db").await.unwrap();
+
+        pool.drop_table("test_jsonb").await.unwrap();
+        pool.execute(
+            r#"CREATE TABLE test_jsonb (bar JSONB, foo BOOL DEFAULT FALSE)"#,
+            (),
+        )
+        .await
+        .unwrap();
+        pool.execute(r#"INSERT INTO test_jsonb VALUES ('["foo", 1]')"#, ())
+            .await
+            .unwrap();
+
+        // Get the value that was just inserted and use it to edit the table and verify the result:
+        let mut db_rows = pool.query(r#"SELECT * FROM test_jsonb"#, ()).await.unwrap();
+        let db_row = db_rows.rows.pop().unwrap();
+        assert_eq!(
+            format!("{db_row:?}"),
+            "Row { \
+             map: {\
+             \"bar\": Json(Array [String(\"foo\"), Number(1)]), \
+             \"foo\": Boolean(false)} \
+             }"
+        );
+
+        let db_value = db_row.get("bar").unwrap();
+
+        pool.execute(
+            r#"UPDATE test_jsonb SET foo = TRUE WHERE bar = $1"#,
+            values![db_value],
+        )
+        .await
+        .unwrap();
+
+        let mut db_rows = pool.query(r#"SELECT * FROM test_jsonb"#, ()).await.unwrap();
+        let db_row = db_rows.rows.pop().unwrap();
+        assert_eq!(
+            format!("{db_row:?}"),
+            "Row { \
+             map: {\
+             \"bar\": Json(Array [String(\"foo\"), Number(1)]), \
+             \"foo\": Boolean(true)} \
+             }"
+        );
     }
 
     #[tokio::test]
@@ -3603,54 +3652,6 @@ mod tests {
         pool.drop_table("test_other_types").await.unwrap();
     }
 
-    #[tokio::test]
-    async fn test_jsonb() {
-        let pool = AnyPool::connect("postgresql:///rltbl_db").await.unwrap();
-
-        pool.drop_table("test_jsonb").await.unwrap();
-        pool.execute(
-            r#"CREATE TABLE test_jsonb (bar JSONB, foo BOOL DEFAULT FALSE)"#,
-            (),
-        )
-        .await
-        .unwrap();
-        pool.execute(r#"INSERT INTO test_jsonb VALUES ('["foo", 1]')"#, ())
-            .await
-            .unwrap();
-
-        // Get the value that was just inserted and use it to edit the table and verify the result:
-        let mut db_rows = pool.query(r#"SELECT * FROM test_jsonb"#, ()).await.unwrap();
-        let db_row = db_rows.rows.pop().unwrap();
-        assert_eq!(
-            format!("{db_row:?}"),
-            "Row { \
-             map: {\
-             \"bar\": Json(Array [String(\"foo\"), Number(1)]), \
-             \"foo\": Boolean(false)} \
-             }"
-        );
-
-        let db_value = db_row.get("bar").unwrap();
-
-        pool.execute(
-            r#"UPDATE test_jsonb SET foo = TRUE WHERE bar = $1"#,
-            values![db_value],
-        )
-        .await
-        .unwrap();
-
-        let mut db_rows = pool.query(r#"SELECT * FROM test_jsonb"#, ()).await.unwrap();
-        let db_row = db_rows.rows.pop().unwrap();
-        assert_eq!(
-            format!("{db_row:?}"),
-            "Row { \
-             map: {\
-             \"bar\": Json(Array [String(\"foo\"), Number(1)]), \
-             \"foo\": Boolean(true)} \
-             }"
-        );
-    }
-
     #[test]
     fn test_min_typing() {
         let column_values = vec![
@@ -4046,6 +4047,9 @@ mod tests {
             assert_eq!(*test_map.get(&value).unwrap(), i);
         }
     }
+
+    // TODO: The import_perf test relies on the existence of data in tests/penguins/.
+    // Is it ok to add the generation script to the repository?
 
     #[tokio::test]
     #[ignore]

@@ -347,7 +347,7 @@ impl AnyPool {
     /// data into it using the bulk copy method if available for this driver, otherwise the
     /// fallback is to [AnyPool::import_table_using_batch_insert()]
     pub async fn import_table(&self, filename: &str) -> Result<(), Error> {
-        // The table name is just the name of the file:
+        // Recreate the table (the table name is just the name of the file) in the database:
         let table = Path::new(filename)
             .file_stem()
             .and_then(|fs| fs.to_str())
@@ -356,7 +356,13 @@ impl AnyPool {
             )))?;
         let columns = Column::from_table_file(filename)?;
         self.recreate_table(&table, &columns).await?;
-        self.load_table(&table, &columns, filename).await
+
+        // Fill the table with the data from the file:
+        if self.can_load(filename) {
+            self.load_table(table, filename).await
+        } else {
+            self.batch_insert(table, &columns, filename).await
+        }
     }
 
     /// Create a table, using the stem of the given file as the table name, and the headers
@@ -495,22 +501,14 @@ impl AnyPool {
 
     ////////// Private functions //////////
 
-    // TODO: Given that this is part of the Query interface, should it be public?
-    //       Currently, import_table(), which requires only a filename as input,
-    //       is being used as a handy public wrapper.
+    /// Returns true if the database driver is capable of bulk loading this file.
+    fn can_load(&self, filename: &str) -> bool {
+        self.pool.can_load(filename)
+    }
+
     /// Load the given table using the data from the given file.
-    async fn load_table(
-        &self,
-        table: &str,
-        columns: &IndexMap<String, Column>,
-        filename: &str,
-    ) -> Result<(), Error> {
-        if self.syntax().name() == "sqlite" && filename.to_lowercase().ends_with(".tsv") {
-            self.batch_insert(table, columns, filename).await?;
-        } else {
-            self.pool.load_table(table, columns, filename).await?;
-        }
-        Ok(())
+    async fn load_table(&self, table: &str, filename: &str) -> Result<(), Error> {
+        self.pool.load_table(table, filename).await
     }
 
     /// Create a given table with the given columns in the database. If a table with the

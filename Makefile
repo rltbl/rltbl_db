@@ -30,17 +30,17 @@ tests/input/table1.csv: tests/input/table1.tsv
 .PHONY: test_caching_perf test_import_perf
 
 test_caching_perf:
-	@echo "Running caching_performance test using default features."
-	cargo test -- --no-capture --ignored test_caching_performance
+	@echo "Running caching performance test using default features."
+	cargo test -- --no-capture --ignored test_caching_perf
 	cargo test --no-default-features --features libsql \
-		-- --no-capture --ignored test_caching_performance
+		-- --no-capture --ignored test_caching_perf
 	@echo "Tests succeeded."
 
 test_import_perf:
-	@echo "Running import_performance test using default features."
-	cargo test -- --no-capture --ignored test_import_performance
+	@echo "Running import performance test using default features."
+	cargo test -- --no-capture --ignored test_import_perf
 	cargo test --no-default-features --features libsql \
-		-- --no-capture --ignored test_import_performance
+		-- --no-capture --ignored test_import_perf
 	@echo "Tests succeeded."
 
 ## All ignored tests:

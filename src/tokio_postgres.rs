@@ -11,7 +11,6 @@ use deadpool_postgres::{
     },
 };
 use futures_util::{SinkExt, stream};
-use indexmap::IndexMap;
 use rust_decimal::Decimal;
 use std::{
     fs::File,
@@ -20,8 +19,8 @@ use std::{
 };
 
 use crate::{
-    Column, Error, JsonValue, Pool, Query, Row, Rows, Syntax, Transaction, Value,
-    postgres::PostgresSyntax, sql_parse::validate_table_name,
+    Error, JsonValue, Pool, Query, Row, Rows, Syntax, Transaction, Value, postgres::PostgresSyntax,
+    sql_parse::validate_table_name,
 };
 
 /// Extracts the value at the given index from the given [PgRow].
@@ -129,9 +128,10 @@ impl PostgresPool {
     }
 }
 
-/// Represents a PostgreSQL datatype that is not explicitly handled in extract_value() and query().
+/// Represents a PostgreSQL datatype that does not correspond to any [ValueType](crate::ValueType).
+/// Values of this type are represented as [Value::Other].
 #[derive(Clone, Debug)]
-pub struct GenericPostgresType {
+struct GenericPostgresType {
     // Raw representation of the value.
     bytes: Option<Vec<u8>>,
 }
@@ -315,19 +315,20 @@ impl Query for PostgresPool {
         Ok(Rows { rows: db_rows })
     }
 
+    /// TODO: Add docstring.
+    fn can_load(&self, filename: &str) -> bool {
+        let filename = filename.to_lowercase();
+        filename.ends_with("tsv") || filename.ends_with(".csv")
+    }
+
     /// Load the given table using the data from the given file.
-    async fn load_table(
-        &self,
-        table: &str,
-        _columns: &IndexMap<String, Column>,
-        filename: &str,
-    ) -> Result<(), Error> {
-        eprintln!("Loading table '{table}' from '{filename}' using PostgreSQL's COPY IN command.");
-        if !filename.to_lowercase().ends_with("tsv") && !filename.to_lowercase().ends_with(".csv") {
+    async fn load_table(&self, table: &str, filename: &str) -> Result<(), Error> {
+        if !self.can_load(filename) {
             return Err(Error::InputError(format!(
                 "Filename: '{filename}' must end with .tsv or .csv"
             )));
         }
+        eprintln!("Loading table '{table}' from '{filename}' using PostgreSQL's COPY IN command.");
         let file = File::open(filename)
             .map_err(|err| Error::InputError(format!("Unable to open '{filename}': {err}")))?;
         let buf_reader = BufReader::new(file);
