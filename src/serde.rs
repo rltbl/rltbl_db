@@ -1,8 +1,16 @@
 //! Implement `serde` for values and rows.
 
 use crate::{Error, JsonValue, Value};
-use serde::{Deserialize, Serialize, ser};
+use serde::{
+    Deserialize, Serialize,
+    de::{self, Visitor},
+    ser,
+};
 use serde_json::{Map as JsonMap, json, value::Serializer as JsonValueSerializer};
+
+////////////////////////////////////////////////////////////////////////////////
+// Serialization implementations
+////////////////////////////////////////////////////////////////////////////////
 
 /// TODO: Add docstring.
 pub fn to_value<T>(value: &T) -> Result<Value, Error>
@@ -14,18 +22,6 @@ where
     value.serialize(&mut serializer)?;
     Ok(serializer.value)
 }
-
-/// TODO: Add docstring.
-pub fn from_value<T>(_value: &Value) -> Result<T, Error>
-where
-    T: for<'de> Deserialize<'de>,
-{
-    todo!()
-}
-
-////////////////////////////////////////////////////////////////////////////////
-// Serialization implementations
-////////////////////////////////////////////////////////////////////////////////
 
 #[derive(Default)]
 struct ValueSerializer {
@@ -224,13 +220,19 @@ impl<'a> ser::Serializer for &'a mut ValueSerializer {
         self,
         _name: &str,
         _variant_index: u32,
-        _variant: &str,
-        _value: &T,
+        variant: &str,
+        value: &T,
     ) -> Result<(), Self::Error>
     where
         T: ?Sized + Serialize,
     {
-        todo!()
+        let json_serializer = JsonValueSerializer;
+        let json_value = value
+            .serialize(json_serializer)
+            .map_err(|err| Error::SerdeError(err.to_string()))?;
+        let json_value = json!({variant.to_string(): json_value});
+        self.value = Value::Json(json_value);
+        Ok(())
     }
 
     fn serialize_tuple_variant(
@@ -550,7 +552,7 @@ impl<'a> ser::SerializeMap for &'a mut ValueSerializer {
         for (i, key) in keys.iter().enumerate() {
             let key = key
                 .as_str()
-                .ok_or(Error::SerdeError(format!("Not a string: {key}")))?
+                .ok_or(Error::SerdeError(format!("Not a string 1: {key}")))?
                 .to_string();
             json_map.insert(key, values[i].clone());
         }
@@ -583,53 +585,571 @@ impl<'a> ser::SerializeStructVariant for &'a mut ValueSerializer {
 // Deserialization implementations
 ////////////////////////////////////////////////////////////////////////////////
 
-// TODO: Implement deserialization.
+/// TODO: Add docstring.
+pub fn from_value<T>(value: &Value) -> Result<T, Error>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    let mut deserializer = ValueDeserializer::from_value(value);
+    let deserialized = T::deserialize(&mut deserializer)?;
+    Ok(deserialized)
+}
+
+#[derive(Debug)]
+pub(crate) struct ValueDeserializer<'de> {
+    first: bool,
+    value: &'de Value,
+    inner_keys: Vec<&'de str>,
+    inner_values: Vec<&'de JsonValue>,
+}
+
+impl<'de> ValueDeserializer<'de> {
+    pub(crate) fn from_value(input: &'de Value) -> Self {
+        let mut inner_keys = vec![];
+        let mut inner_values = vec![];
+        match input {
+            Value::Json(JsonValue::Object(obj)) => {
+                inner_keys = obj.keys().map(|s| s.as_str()).collect::<Vec<_>>();
+                inner_values = obj.values().collect::<Vec<_>>();
+            }
+            _ => (),
+        };
+        ValueDeserializer {
+            first: true,
+            value: input,
+            inner_keys,
+            inner_values,
+        }
+    }
+}
+
+impl<'de, 'a> de::Deserializer<'de> for &'a mut ValueDeserializer<'de> {
+    type Error = Error;
+
+    // Primitives:
+
+    fn deserialize_bool<V>(self, _visitor: V) -> Result<V::Value, Error>
+    where
+        V: Visitor<'de>,
+    {
+        todo!()
+    }
+
+    fn deserialize_i8<V>(self, _visitor: V) -> Result<V::Value, Error>
+    where
+        V: Visitor<'de>,
+    {
+        todo!()
+    }
+
+    fn deserialize_i16<V>(self, visitor: V) -> Result<V::Value, Error>
+    where
+        V: Visitor<'de>,
+    {
+        if !self.inner_values.is_empty() {
+            let value = self.inner_values.pop().unwrap();
+            match value {
+                JsonValue::Null => self.deserialize_unit(visitor),
+                _ => {
+                    let value = Value::from(value)
+                        .as_i16()
+                        .ok_or(Error::SerdeError(format!("Not an i16: {}", value)))?;
+                    visitor.visit_i16(value)
+                }
+            }
+        } else {
+            match self.value {
+                Value::Null => self.deserialize_unit(visitor),
+                _ => {
+                    let value = self
+                        .value
+                        .as_i16()
+                        .ok_or(Error::SerdeError(format!("Not an i16: {}", self.value)))?;
+                    visitor.visit_i16(value)
+                }
+            }
+        }
+    }
+
+    fn deserialize_i32<V>(self, _visitor: V) -> Result<V::Value, Error>
+    where
+        V: Visitor<'de>,
+    {
+        todo!()
+    }
+
+    fn deserialize_i64<V>(self, _visitor: V) -> Result<V::Value, Error>
+    where
+        V: Visitor<'de>,
+    {
+        todo!()
+    }
+
+    fn deserialize_u8<V>(self, _visitor: V) -> Result<V::Value, Error>
+    where
+        V: Visitor<'de>,
+    {
+        todo!()
+    }
+
+    fn deserialize_u16<V>(self, _visitor: V) -> Result<V::Value, Error>
+    where
+        V: Visitor<'de>,
+    {
+        todo!()
+    }
+
+    fn deserialize_u32<V>(self, _visitor: V) -> Result<V::Value, Error>
+    where
+        V: Visitor<'de>,
+    {
+        todo!()
+    }
+
+    fn deserialize_u64<V>(self, visitor: V) -> Result<V::Value, Error>
+    where
+        V: Visitor<'de>,
+    {
+        if !self.inner_values.is_empty() {
+            let value = self.inner_values.pop().unwrap();
+            match value {
+                JsonValue::Null => self.deserialize_unit(visitor),
+                _ => {
+                    let value = value
+                        .as_u64()
+                        .ok_or(Error::SerdeError(format!("Not an u64: {}", value)))?;
+                    visitor.visit_u64(value)
+                }
+            }
+        } else {
+            match self.value {
+                Value::Null => self.deserialize_unit(visitor),
+                _ => {
+                    let value = self
+                        .value
+                        .as_u64()
+                        .ok_or(Error::SerdeError(format!("Not an u64: {}", self.value)))?;
+                    visitor.visit_u64(value)
+                }
+            }
+        }
+    }
+
+    fn deserialize_f32<V>(self, visitor: V) -> Result<V::Value, Error>
+    where
+        V: Visitor<'de>,
+    {
+        if !self.inner_values.is_empty() {
+            let value = self.inner_values.pop().unwrap();
+            match value {
+                JsonValue::Null => self.deserialize_unit(visitor),
+                _ => {
+                    let value = Value::from(value)
+                        .as_f32()
+                        .ok_or(Error::SerdeError(format!("Not an f32: {}", value)))?;
+                    visitor.visit_f32(value)
+                }
+            }
+        } else {
+            match self.value {
+                Value::Null => self.deserialize_unit(visitor),
+                _ => {
+                    let value = self
+                        .value
+                        .as_f32()
+                        .ok_or(Error::SerdeError(format!("Not an f32: {}", self.value)))?;
+                    visitor.visit_f32(value)
+                }
+            }
+        }
+    }
+
+    fn deserialize_f64<V>(self, _visitor: V) -> Result<V::Value, Error>
+    where
+        V: Visitor<'de>,
+    {
+        todo!()
+    }
+
+    fn deserialize_string<V>(self, visitor: V) -> Result<V::Value, Error>
+    where
+        V: Visitor<'de>,
+    {
+        if !self.inner_values.is_empty() {
+            let value = self.inner_values.pop().unwrap();
+            match value {
+                JsonValue::Null => self.deserialize_unit(visitor),
+                _ => {
+                    let value = value
+                        .as_str()
+                        .ok_or(Error::SerdeError(format!("Not an str: {}", value)))?;
+                    visitor.visit_str(value)
+                }
+            }
+        } else {
+            match self.value {
+                Value::Null => self.deserialize_unit(visitor),
+                _ => {
+                    let value = self
+                        .value
+                        .as_str()
+                        .ok_or(Error::SerdeError(format!("Not a string 2: {}", self.value)))?;
+                    visitor.visit_borrowed_str(value)
+                }
+            }
+        }
+    }
+
+    fn deserialize_char<V>(self, _visitor: V) -> Result<V::Value, Error>
+    where
+        V: Visitor<'de>,
+    {
+        todo!()
+    }
+
+    fn deserialize_str<V>(self, _visitor: V) -> Result<V::Value, Error>
+    where
+        V: Visitor<'de>,
+    {
+        todo!()
+    }
+
+    fn deserialize_any<V>(self, _visitor: V) -> Result<V::Value, Error>
+    where
+        V: Visitor<'de>,
+    {
+        todo!()
+    }
+
+    fn deserialize_ignored_any<V>(self, _visitor: V) -> Result<V::Value, Error>
+    where
+        V: Visitor<'de>,
+    {
+        todo!()
+    }
+
+    // Options
+
+    fn deserialize_option<V>(self, visitor: V) -> Result<V::Value, Error>
+    where
+        V: Visitor<'de>,
+    {
+        match self.value {
+            Value::Null => self.deserialize_unit(visitor),
+            _ => visitor.visit_some(self),
+        }
+    }
+
+    // Deserializes to an absent value (i.e., a None).
+    fn deserialize_unit<V>(self, visitor: V) -> Result<V::Value, Error>
+    where
+        V: Visitor<'de>,
+    {
+        if *self.value != Value::Null {
+            return Err(Error::SerdeError("Expected NULL".to_string()));
+        }
+        visitor.visit_unit()
+    }
+
+    // Compound types
+
+    fn deserialize_struct<V>(
+        self,
+        name: &'static str,
+        fields: &'static [&'static str],
+        visitor: V,
+    ) -> Result<V::Value, Error>
+    where
+        V: Visitor<'de>,
+    {
+        if self.first {
+            self.first = false;
+            self.deserialize_map(visitor)
+        } else {
+            match self.value {
+                Value::Text(value) | Value::Json(JsonValue::String(value)) => {
+                    serde_json::Deserializer::from_str(value)
+                        .deserialize_struct(name, fields, visitor)
+                        .map_err(|err| Error::SerdeError(err.to_string()))
+                }
+                Value::Json(value) => match value {
+                    JsonValue::Array(_) => value.deserialize_map(visitor).map_err(|err| {
+                        Error::SerdeError(format!("Error deserializing array: '{err}'."))
+                    }),
+                    JsonValue::Object(_) => value.deserialize_map(visitor).map_err(|err| {
+                        Error::SerdeError(format!("Error deserializing object: '{err}'."))
+                    }),
+                    _ => {
+                        return Err(Error::SerdeError(format!(
+                            "In deserialize_struct(): Invalid JSON value: {:?}",
+                            self.value
+                        )));
+                    }
+                },
+                _ => {
+                    return Err(Error::SerdeError(format!(
+                        "Invalid DB value: {:?}",
+                        self.value
+                    )));
+                }
+            }
+        }
+    }
+
+    fn deserialize_map<V>(self, visitor: V) -> Result<V::Value, Error>
+    where
+        V: Visitor<'de>,
+    {
+        visitor.visit_map(self)
+    }
+
+    fn deserialize_identifier<V>(self, visitor: V) -> Result<V::Value, Error>
+    where
+        V: Visitor<'de>,
+    {
+        let key = self
+            .inner_keys
+            .pop()
+            .ok_or(Error::SerdeError("No more keys".to_string()))
+            .unwrap();
+        visitor.visit_borrowed_str(key)
+    }
+
+    // A "unit" struct has no fields.
+    fn deserialize_unit_struct<V>(self, _name: &'static str, _visitor: V) -> Result<V::Value, Error>
+    where
+        V: Visitor<'de>,
+    {
+        todo!()
+    }
+
+    fn deserialize_newtype_struct<V>(
+        self,
+        _name: &'static str,
+        _visitor: V,
+    ) -> Result<V::Value, Error>
+    where
+        V: Visitor<'de>,
+    {
+        todo!()
+    }
+
+    fn deserialize_tuple_struct<V>(
+        self,
+        _name: &'static str,
+        _len: usize,
+        _visitor: V,
+    ) -> Result<V::Value, Error>
+    where
+        V: Visitor<'de>,
+    {
+        todo!()
+    }
+
+    fn deserialize_enum<V>(
+        self,
+        _name: &'static str,
+        _variants: &'static [&'static str],
+        _visitor: V,
+    ) -> Result<V::Value, Error>
+    where
+        V: Visitor<'de>,
+    {
+        todo!()
+    }
+
+    fn deserialize_seq<V>(self, visitor: V) -> Result<V::Value, Error>
+    where
+        V: Visitor<'de>,
+    {
+        match self.value {
+            Value::Text(value) | Value::Json(JsonValue::String(value)) => {
+                serde_json::Deserializer::from_str(value)
+                    .deserialize_seq(visitor)
+                    .map_err(|err| Error::SerdeError(err.to_string()))
+            }
+            Value::Json(value) => match value {
+                JsonValue::Array(_) => value.deserialize_seq(visitor).map_err(|err| {
+                    Error::SerdeError(format!("Error deserializing array: '{err}'."))
+                }),
+                JsonValue::Object(_) => value.deserialize_seq(visitor).map_err(|err| {
+                    Error::SerdeError(format!("Error deserializing object: '{err}'."))
+                }),
+                _ => {
+                    return Err(Error::SerdeError(format!(
+                        "In deserialize_seq(): Invalid JSON value: {:?}",
+                        self.value
+                    )));
+                }
+            },
+            _ => {
+                return Err(Error::SerdeError(format!(
+                    "Invalid DB value: {:?}",
+                    self.value
+                )));
+            }
+        }
+    }
+
+    fn deserialize_tuple<V>(self, _len: usize, visitor: V) -> Result<V::Value, Error>
+    where
+        V: Visitor<'de>,
+    {
+        match self.value {
+            Value::Text(value) | Value::Json(JsonValue::String(value)) => {
+                serde_json::Deserializer::from_str(value)
+                    .deserialize_seq(visitor)
+                    .map_err(|err| Error::SerdeError(err.to_string()))
+            }
+            Value::Json(value) => match value {
+                JsonValue::Array(_) => value.deserialize_seq(visitor).map_err(|err| {
+                    Error::SerdeError(format!("Error deserializing array: '{err}'."))
+                }),
+                JsonValue::Object(_) => value.deserialize_seq(visitor).map_err(|err| {
+                    Error::SerdeError(format!("Error deserializing object: '{err}'."))
+                }),
+                _ => {
+                    return Err(Error::SerdeError(format!(
+                        "In deserialize_tuple(): Invalid JSON value: {:?}",
+                        self.value
+                    )));
+                }
+            },
+            _ => {
+                return Err(Error::SerdeError(format!(
+                    "Invalid DB value: {:?}",
+                    self.value
+                )));
+            }
+        }
+    }
+
+    // Unsupported types
+
+    fn deserialize_bytes<V>(self, __visitor: V) -> Result<V::Value, Error>
+    where
+        V: Visitor<'de>,
+    {
+        todo!()
+    }
+
+    fn deserialize_byte_buf<V>(self, __visitor: V) -> Result<V::Value, Error>
+    where
+        V: Visitor<'de>,
+    {
+        todo!()
+    }
+}
+
+impl<'de> de::MapAccess<'de> for ValueDeserializer<'de> {
+    type Error = Error;
+
+    fn next_key_seed<S>(&mut self, seed: S) -> Result<Option<S::Value>, Self::Error>
+    where
+        S: de::DeserializeSeed<'de>,
+    {
+        if self.inner_keys.len() == 0 {
+            return Ok(None);
+        }
+        seed.deserialize(&mut *self).map(Some)
+    }
+
+    fn next_value_seed<S>(&mut self, seed: S) -> Result<S::Value, Self::Error>
+    where
+        S: de::DeserializeSeed<'de>,
+    {
+        seed.deserialize(&mut *self)
+    }
+}
 
 // TODO: Move tests to unit_tests.rs later.
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rust_decimal::Decimal;
     use std::collections::{HashMap, HashSet};
 
     #[test]
     fn test_serde() {
         // Test primitives, options, tuples, seqs, and maps:
-        let value = to_value(&()).unwrap();
-        assert_eq!(value, Value::Null);
 
-        let value = to_value(&1_i16).unwrap();
-        assert_eq!(value, Value::SmallInteger(1));
+        let expected_deserialized = ();
+        let expected_serialized = Value::Null;
+        let value = to_value(&expected_deserialized).unwrap();
+        assert_eq!(value, expected_serialized);
+        let value: () = from_value(&value).unwrap();
+        assert_eq!(value, expected_deserialized);
 
-        let value = to_value(&None::<String>).unwrap();
-        assert_eq!(value, Value::Null);
+        let expected_deserialized = 1_i16;
+        let expected_serialized = Value::from(1_i16);
+        let value = to_value(&expected_deserialized).unwrap();
+        assert_eq!(value, expected_serialized);
+        let value: i16 = from_value(&value).unwrap();
+        assert_eq!(value, expected_deserialized);
 
-        let value = to_value(&Some(1_f32)).unwrap();
-        assert_eq!(value, Value::Real(1_f32));
+        let expected_deserialized = None::<String>;
+        let expected_serialized = Value::Null;
+        let value = to_value(&expected_deserialized).unwrap();
+        assert_eq!(value, expected_serialized);
+        let value: Option<String> = from_value(&value).unwrap();
+        assert_eq!(value, expected_deserialized);
 
-        let value = to_value(&(1_i16, 3_u32)).unwrap();
-        assert_eq!(value, Value::Json(json!([1_i16, 3_u32])));
+        let expected_deserialized = 1_f32;
+        let expected_serialized = Value::Real(1_f32);
+        let value = to_value(&expected_deserialized).unwrap();
+        assert_eq!(value, expected_serialized);
+        let value: f32 = from_value(&value).unwrap();
+        assert_eq!(value, expected_deserialized);
 
-        let value = to_value(&[-11_i32, 20_i32]).unwrap();
-        assert_eq!(value, Value::Json(json!([-11_i32, 20_i32])));
+        let expected_deserialized = (1_i16, 3_u32);
+        let expected_serialized = Value::Json(json!([1_i16, 3_u32]));
+        let value = to_value(&expected_deserialized).unwrap();
+        assert_eq!(value, expected_serialized);
+        let value: (i16, u32) = from_value(&value).unwrap();
+        assert_eq!(value, expected_deserialized);
 
-        let value = to_value(&vec![1_f32, 3_f32]).unwrap();
-        assert_eq!(value, Value::Json(json!([1_f32, 3_f32])));
+        let expected_deserialized = [-11_i32, 20_i32];
+        let expected_serialized = Value::Json(json!([-11_i32, 20_i32]));
+        let value = to_value(&expected_deserialized).unwrap();
+        assert_eq!(value, expected_serialized);
+        let value: [i32; 2] = from_value(&value).unwrap();
+        assert_eq!(value, expected_deserialized);
 
-        let value = to_value::<Vec<u64>>(&vec![]).unwrap();
-        assert_eq!(value, Value::Json(json!([])));
+        let expected_deserialized = vec![1_f32, 3_f32];
+        let expected_serialized = Value::Json(json!([1_f32, 3_f32]));
+        let value = to_value(&expected_deserialized).unwrap();
+        assert_eq!(value, expected_serialized);
+        let value: Vec<f32> = from_value(&value).unwrap();
+        assert_eq!(value, expected_deserialized);
 
-        let value = to_value::<HashSet<f64>>(&HashSet::new()).unwrap();
-        assert_eq!(value, Value::Json(json!([])));
+        let expected_deserialized: Vec<u64> = vec![];
+        let expected_serialized = Value::Json(json!([]));
+        let value = to_value(&expected_deserialized).unwrap();
+        assert_eq!(value, expected_serialized);
+        let value: Vec<u64> = from_value(&value).unwrap();
+        assert_eq!(value, expected_deserialized);
 
-        let mut input = HashMap::new();
-        input.insert("foo".to_string(), true);
-        let value = to_value(&input).unwrap();
-        assert_eq!(value, Value::Json(json!({"foo": true})));
+        let expected_deserialized: HashSet<u64> = HashSet::new();
+        let expected_serialized = Value::Json(json!([]));
+        let value = to_value(&expected_deserialized).unwrap();
+        assert_eq!(value, expected_serialized);
+        let value: HashSet<u64> = from_value(&value).unwrap();
+        assert_eq!(value, expected_deserialized);
 
-        let input = HashMap::<String, u64>::new();
-        let value = to_value(&input).unwrap();
-        assert_eq!(value, Value::Json(json!({})));
+        let expected_deserialized = [("foo".to_string(), true)]
+            .into_iter()
+            .collect::<HashMap<_, _>>();
+        let expected_serialized = Value::Json(json!({"foo": true}));
+        let value = to_value(&expected_deserialized).unwrap();
+        assert_eq!(value, expected_serialized);
+        // let value: HashMap<String, bool> = from_value(&value).unwrap();
+        // assert_eq!(value, expected_deserialized);
+
+        // let expected_deserialized = HashMap::<String, u64>::new();
+        // let expected_deserialized = Value::Json(json!({}));
+        // let value = to_value(&expected_deserialized).unwrap();
+        // assert_eq!(value, expected_serialized);
+        // let value: HashMap<String, bool> = from_value(&value).unwrap();
+        // assert_eq!(value, expected_deserialized);
 
         // Test more complex types:
 
@@ -638,173 +1158,13 @@ mod tests {
             foo: u64,
         }
 
-        let expected_struct = BasicStruct { foo: 1 };
-        let serialized = to_value(&expected_struct).unwrap();
-        assert_eq!(serialized, Value::Json(json!({"foo": 1})),);
+        let expected_deserialized = BasicStruct { foo: 1 };
+        let expected_serialized = Value::Json(json!({"foo": 1}));
+        let value = to_value(&expected_deserialized).unwrap();
+        assert_eq!(value, expected_serialized);
+        let value: BasicStruct = from_value(&value).unwrap();
+        assert_eq!(value, expected_deserialized);
 
-        // TODO: Start on deserialization first, then go on to the rest:
-
-        #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
-        struct NormalStruct {
-            foo: String,
-            bar: u64,
-            list: Vec<i16>,
-            tuple: (u64, String),
-            json: JsonValue,
-        }
-
-        #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
-        struct UnitStruct;
-
-        #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
-        struct NewTypeStruct(i64);
-
-        #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
-        struct TupleStruct(i64, i64);
-
-        #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
-        enum Enumeration {
-            UnitVariant,
-            NewTypeVariant(f32),
-            StructVariant(BasicStruct),
-            TupleVariant(i64, i64),
-        }
-
-        #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
-        struct NestedStruct {
-            foo: Enumeration,
-            bar: NormalStruct,
-            foo_list: Vec<Enumeration>,
-            bar_list: Vec<NormalStruct>,
-            bar_tuple: (u32, i32, String),
-        }
-
-        // Serializing and deserializing an arbitrary struct to a DbRow:
-        #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
-        struct TestStruct {
-            // json
-            json_simple_1: JsonValue,
-            json_simple_2: JsonValue,
-            json_simple_3: JsonValue,
-            json_simple_4: JsonValue,
-            json_complex: JsonValue,
-            json_opt_none: Option<JsonValue>,
-            json_opt_some: Option<JsonValue>,
-
-            // bool
-            boolean: bool,
-            boolean_opt_none: Option<bool>,
-            boolean_opt_some: Option<bool>,
-            //
-            // i8
-            tinyint: i8,
-            tinyint_opt_none: Option<i8>,
-            tinyint_opt_some: Option<i8>,
-            //
-            // i16
-            smallint: i16,
-            smallint_opt_none: Option<i16>,
-            smallint_opt_some: Option<i16>,
-            //
-            // i32
-            mediumint: i32,
-            mediumint_opt_none: Option<i32>,
-            mediumint_opt_some: Option<i32>,
-            //
-            // i64
-            bigint: i64,
-            bigint_opt_none: Option<i64>,
-            bigint_opt_some: Option<i64>,
-            //
-            // u8
-            tiny_unsigned: u8,
-            tiny_unsigned_opt_none: Option<u8>,
-            tiny_unsigned_opt_some: Option<u8>,
-            //
-            // u16
-            small_unsigned: u16,
-            small_unsigned_opt_none: Option<u16>,
-            small_unsigned_opt_some: Option<u16>,
-            //
-            // u32
-            medium_unsigned: u32,
-            medium_unsigned_opt_none: Option<u32>,
-            medium_unsigned_opt_some: Option<u32>,
-            //
-            // u64
-            big_unsigned: u64,
-            big_unsigned_opt_none: Option<u64>,
-            big_unsigned_opt_some: Option<u64>,
-            //
-            // f32
-            smallfloat: f32,
-            smallfloat_opt_none: Option<f32>,
-            smallfloat_opt_some: Option<f32>,
-            //
-            // f64
-            bigfloat: f64,
-            bigfloat_opt_none: Option<f64>,
-            bigfloat_opt_some: Option<f64>,
-            //
-            // String
-            text: String,
-            text_opt_none: Option<String>,
-            text_opt_some: Option<String>,
-            //
-            // Note that rust's serializer serializes Decimal values to text (see also below).
-            biggerfloat: Decimal,
-            biggerfloat_opt_none: Option<Decimal>,
-            biggerfloat_opt_some: Option<Decimal>,
-            //
-            // A vector of u8 (bytes)
-            sequence: Vec<u8>,
-            sequence_opt_none: Option<Vec<u8>>,
-            sequence_opt_some: Option<Vec<u8>>,
-            //
-            // Enum
-            enumeration: Enumeration,
-            enumeration_opt_none: Option<Enumeration>,
-            enumeration_opt_some: Option<Enumeration>,
-            //
-            // Struct variant
-            struct_variant: Enumeration,
-            struct_variant_opt_none: Option<Enumeration>,
-            struct_variant_opt_some: Option<Enumeration>,
-            //
-            // Tuple variant
-            tuple_variant: Enumeration,
-            tuple_variant_opt_none: Option<Enumeration>,
-            tuple_variant_opt_some: Option<Enumeration>,
-            //
-            // Unit struct
-            unit_struct: UnitStruct,
-            unit_struct_opt_none: Option<UnitStruct>,
-            unit_struct_opt_some: Option<UnitStruct>,
-            //
-            // Struct
-            structure: NormalStruct,
-            structure_opt_none: Option<NormalStruct>,
-            structure_opt_some: Option<NormalStruct>,
-            //
-            // Newtype struct
-            newtype_struct: NewTypeStruct,
-            newtype_struct_opt_none: Option<NewTypeStruct>,
-            newtype_struct_opt_some: Option<NewTypeStruct>,
-            //
-            // Tuple
-            tuple: (u32, String),
-            tuple_opt_none: Option<(u32, String)>,
-            tuple_opt_some: Option<(u32, String)>,
-            //
-            // Tuple struct
-            tuple_struct: TupleStruct,
-            tuple_struct_opt_none: Option<TupleStruct>,
-            tuple_struct_opt_some: Option<TupleStruct>,
-            //
-            // Nested struct
-            nested_struct: NestedStruct,
-            nested_struct_opt_none: Option<NestedStruct>,
-            nested_struct_opt_some: Option<NestedStruct>,
-        }
+        // TODO: the rest.
     }
 }

@@ -149,7 +149,13 @@ pub use self::row::{Row, Rows};
 pub use self::syntax::Syntax;
 pub use self::table::Table;
 pub use self::transaction::{AnyTransaction, Transaction};
-pub use self::value::{ValueType, Value, JsonValue};
+pub use self::value::{ValueType, Value};
+
+// Useful type aliases:
+pub type JsonValue = serde_json::Value;
+pub type JsonRow = serde_json::Map<String, JsonValue>;
+pub type StringRow = indexmap::IndexMap<String, String>;
+
 
 /// Error definitions used by all modules.
 pub mod error;

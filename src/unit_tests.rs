@@ -12,10 +12,9 @@ mod tests {
     };
 
     use crate::{
-        AnyPool, Column, JsonValue, Row, Rows, Value, ValueType,
+        AnyPool, Column, JsonValue, Row, Rows, StringRow, Value, ValueType,
         cache::{CachingStrategy, QUERY_CACHE_TABLE, TABLE_CACHE_TABLE},
         row,
-        row::StringRow,
         sql_parse::{
             get_accessed_tables, get_affected_tables, get_view_tables, validate_table_name,
         },

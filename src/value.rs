@@ -38,10 +38,7 @@ use std::{
     hash::{Hash, Hasher},
 };
 
-use crate::Error;
-
-// A useful alias:
-pub type JsonValue = serde_json::Value;
+use crate::{Error, JsonValue};
 
 ///////////////////////////////////////////////////////////////////////////////
 // Value and ValueType

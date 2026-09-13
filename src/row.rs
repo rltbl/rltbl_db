@@ -42,7 +42,7 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use std::ops::{Deref, DerefMut};
 
-use crate::{Column, Error, Value};
+use crate::{Column, Error, StringRow, Value};
 
 /// Represents a database row.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -118,9 +118,6 @@ impl FromIterator<(String, Value)> for Row {
         }
     }
 }
-
-/// A stringified version of [Row], where each column value is represented as a [String].
-pub type StringRow = IndexMap<String, String>;
 
 impl Into<StringRow> for Row {
     fn into(self) -> StringRow {

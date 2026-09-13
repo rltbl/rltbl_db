@@ -72,7 +72,9 @@ pub trait Query: std::fmt::Debug + Sync {
     async fn query(&self, sql: &str, params: &[Value]) -> Result<Rows, Error>;
 
     /// Returns true if this queryable interface is capable of bulk loading this file.
-    fn can_load(&self, filename: &str) -> bool;
+    fn can_load(&self, _filename: &str) -> bool {
+        false
+    }
 
     /// TODO: Add docstring.
     async fn load_table(&self, table: &str, filename: &str) -> Result<(), Error>;

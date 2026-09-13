@@ -89,6 +89,15 @@ impl serde::ser::Error for Error {
     }
 }
 
+impl serde::de::Error for Error {
+    fn custom<T>(msg: T) -> Self
+    where
+        T: Display,
+    {
+        Error::SerdeError(msg.to_string())
+    }
+}
+
 impl From<std::convert::Infallible> for Error {
     fn from(err: std::convert::Infallible) -> Error {
         Error::InfallibleError(err)
