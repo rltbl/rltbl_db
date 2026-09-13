@@ -3991,13 +3991,13 @@ mod tests {
 
     #[test]
     fn test_from_str() {
-        let foo = ValueType::default().min_type("True").unwrap();
+        let foo = ValueType::lowest().min_type("True").unwrap();
         assert_eq!(foo, ValueType::Boolean("".to_string()));
 
-        let foo = ValueType::default().min_type("2").unwrap();
+        let foo = ValueType::lowest().min_type("2").unwrap();
         assert_eq!(foo, ValueType::SmallInteger("".to_string()));
 
-        let foo = ValueType::default().min_type("2.0").unwrap();
+        let foo = ValueType::lowest().min_type("2.0").unwrap();
         assert_eq!(foo, ValueType::Real("".to_string()));
     }
 

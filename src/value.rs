@@ -66,7 +66,7 @@ pub enum ValueType {
 
 impl Default for ValueType {
     fn default() -> ValueType {
-        ValueType::sorted().next().expect("No types defined")
+        ValueType::Null("".to_string())
     }
 }
 
@@ -144,6 +144,20 @@ impl ValueType {
             ValueType::Text("".to_string()),
         ]
         .into_iter()
+    }
+
+    /// Return the lowest type in the hierarchy
+    pub fn lowest() -> ValueType {
+        // This can only fail if no actual types were defined:
+        ValueType::sorted().next().expect("No types defined")
+    }
+
+    /// Return the highest type in the hierarchy
+    pub fn highest() -> ValueType {
+        // This can only fail if no actual types were defined:
+        let mut vtypes = ValueType::sorted().collect::<Vec<_>>();
+        vtypes.reverse();
+        vtypes.iter().next().expect("No types defined").clone()
     }
 
     /// Determine the minimum type (see [ValueType::sorted()]) needed to support the given value,

@@ -1,7 +1,8 @@
 //! Implement `serde` for values and rows.
 
-use crate::{Error, Value};
+use crate::{Error, JsonValue, Value};
 use serde::{Deserialize, Serialize, ser};
+use serde_json::{json, value::Serializer as JsonValueSerializer};
 
 /// TODO: Add docstring.
 pub fn to_value<T>(value: &T) -> Result<Value, Error>
@@ -9,7 +10,7 @@ where
     T: Serialize,
 {
     // Serialize the given value.
-    let mut serializer = ValueSerializer::new();
+    let mut serializer = ValueSerializer::default();
     value.serialize(&mut serializer)?;
     Ok(serializer.value)
 }
@@ -26,16 +27,11 @@ where
 // Serialization implementations
 ////////////////////////////////////////////////////////////////////////////////
 
+#[derive(Default)]
 struct ValueSerializer {
     value: Value,
-}
-
-impl ValueSerializer {
-    fn new() -> Self {
-        ValueSerializer {
-            value: Value::default(),
-        }
-    }
+    inner_value: JsonValue,
+    remaining_fields: usize,
 }
 
 impl<'a> ser::Serializer for &'a mut ValueSerializer {
@@ -143,8 +139,15 @@ impl<'a> ser::Serializer for &'a mut ValueSerializer {
 
     // Compound types:
 
-    fn serialize_tuple(self, _len: usize) -> Result<Self::SerializeTuple, Self::Error> {
-        todo!()
+    fn serialize_tuple(self, len: usize) -> Result<Self::SerializeTuple, Self::Error> {
+        if self.inner_value == JsonValue::Null {
+            self.remaining_fields = len;
+            // Start a new empty inner value which will be progressively filled in later:
+            self.inner_value = json!([]);
+            Ok(self)
+        } else {
+            Ok(self)
+        }
     }
 
     fn serialize_seq(self, _len: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> {
@@ -273,15 +276,38 @@ impl<'a> ser::SerializeTuple for &'a mut ValueSerializer {
     type Ok = ();
     type Error = Error;
 
-    fn serialize_element<T>(&mut self, _value: &T) -> Result<(), Error>
+    fn serialize_element<T>(&mut self, value: &T) -> Result<(), Error>
     where
         T: ?Sized + Serialize,
     {
-        todo!()
+        if self.remaining_fields > 0 {
+            self.remaining_fields -= 1;
+            let json_serializer = JsonValueSerializer;
+            let json_value = value
+                .serialize(json_serializer)
+                .map_err(|err| Error::SerdeError(err.to_string()))?;
+            let inner = match self.inner_value.as_array_mut() {
+                Some(inner) => inner,
+                None => {
+                    return Err(Error::SerdeError(format!(
+                        "Not a JSON Array: {}",
+                        self.inner_value
+                    )));
+                }
+            };
+            inner.push(json_value);
+        } else {
+            value.serialize(&mut **self)?;
+        }
+        Ok(())
     }
 
     fn end(self) -> Result<(), Error> {
-        todo!()
+        if self.inner_value != JsonValue::Null {
+            self.value = Value::Json(self.inner_value.clone());
+            self.inner_value = JsonValue::Null;
+        }
+        Ok(())
     }
 }
 
@@ -369,7 +395,7 @@ impl<'a> ser::SerializeStructVariant for &'a mut ValueSerializer {
 
 // TODO: Implement deserialization.
 
-// TODO: Move tests to unit_tests.rs
+// TODO: Move tests to unit_tests.rs later.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -384,6 +410,8 @@ mod tests {
 
         let value = to_value(&Some(1_f32)).unwrap();
         assert_eq!(value, Value::Real(1_f32));
+
+        let value = to_value(&(1_i16, 3_u32)).unwrap();
+        assert_eq!(value, Value::Json(json!([1_i16, 3_u32])));
     }
 }
-
