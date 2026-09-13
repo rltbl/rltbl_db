@@ -176,9 +176,19 @@ impl<'a> ser::Serializer for &'a mut ValueSerializer {
     fn serialize_struct(
         self,
         _name: &str,
-        _len: usize,
+        len: usize,
     ) -> Result<Self::SerializeStruct, Self::Error> {
-        todo!()
+        if self.inner_value == JsonValue::Null {
+            self.remaining_fields = len;
+            // Start a new empty inner value which will be progressively filled in later:
+            self.inner_value = json!({
+                "keys": [],
+                "values": [],
+            });
+            Ok(self)
+        } else {
+            self.serialize_map(Some(len))
+        }
     }
 
     // A "unit" struct has no fields.
@@ -257,15 +267,72 @@ impl<'a> ser::SerializeStruct for &'a mut ValueSerializer {
     type Ok = ();
     type Error = Error;
 
-    fn serialize_field<T>(&mut self, _key: &'static str, _value: &T) -> Result<(), Error>
+    fn serialize_field<T>(&mut self, key: &'static str, value: &T) -> Result<(), Error>
     where
         T: ?Sized + Serialize,
     {
-        todo!()
+        // Add the key to the keys list:
+        match self
+            .inner_value
+            .get_mut("keys")
+            .and_then(|k| k.as_array_mut())
+        {
+            Some(inner) => inner.push(json!(key)),
+            None => {
+                return Err(Error::SerdeError(format!(
+                    "SchmKeyInvalid inner value: {:?}",
+                    self.inner_value
+                )));
+            }
+        };
+        // Add the value to the values list:
+        match self
+            .inner_value
+            .get_mut("values")
+            .and_then(|v| v.as_array_mut())
+        {
+            Some(inner) => inner.push(json!(value)),
+            None => {
+                return Err(Error::SerdeError(format!(
+                    "SchmValueInvalid inner value: {:?}",
+                    self.inner_value
+                )));
+            }
+        };
+        Ok(())
     }
 
     fn end(self) -> Result<(), Error> {
-        todo!()
+        if self.inner_value != JsonValue::Null {
+            let empty_vec = vec![];
+            let keys = self
+                .inner_value
+                .get("keys")
+                .and_then(|k| k.as_array())
+                .unwrap_or(&empty_vec)
+                .into_iter()
+                .collect::<Vec<_>>();
+            let values = self
+                .inner_value
+                .get("values")
+                .and_then(|v| v.as_array())
+                .unwrap_or(&empty_vec)
+                .into_iter()
+                .collect::<Vec<_>>();
+            if keys.len() != values.len() {
+                // TODO: Use a proper error here.
+                panic!();
+            }
+
+            let mut json_map = JsonMap::new();
+            for i in 0..keys.len() {
+                json_map.insert(keys[i].as_str().unwrap().to_string(), values[i].clone());
+            }
+
+            self.value = Value::Json(json!(json_map));
+            self.inner_value = JsonValue::Null;
+        }
+        Ok(())
     }
 }
 
@@ -522,10 +589,12 @@ impl<'a> ser::SerializeStructVariant for &'a mut ValueSerializer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rust_decimal::Decimal;
     use std::collections::{HashMap, HashSet};
 
     #[test]
     fn test_serde() {
+        // Test primitives, options, tuples, seqs, and maps:
         let value = to_value(&()).unwrap();
         assert_eq!(value, Value::Null);
 
@@ -561,5 +630,181 @@ mod tests {
         let input = HashMap::<String, u64>::new();
         let value = to_value(&input).unwrap();
         assert_eq!(value, Value::Json(json!({})));
+
+        // Test more complex types:
+
+        #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
+        struct BasicStruct {
+            foo: u64,
+        }
+
+        let expected_struct = BasicStruct { foo: 1 };
+        let serialized = to_value(&expected_struct).unwrap();
+        assert_eq!(serialized, Value::Json(json!({"foo": 1})),);
+
+        // TODO: Start on deserialization first, then go on to the rest:
+
+        #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
+        struct NormalStruct {
+            foo: String,
+            bar: u64,
+            list: Vec<i16>,
+            tuple: (u64, String),
+            json: JsonValue,
+        }
+
+        #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
+        struct UnitStruct;
+
+        #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
+        struct NewTypeStruct(i64);
+
+        #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
+        struct TupleStruct(i64, i64);
+
+        #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
+        enum Enumeration {
+            UnitVariant,
+            NewTypeVariant(f32),
+            StructVariant(BasicStruct),
+            TupleVariant(i64, i64),
+        }
+
+        #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
+        struct NestedStruct {
+            foo: Enumeration,
+            bar: NormalStruct,
+            foo_list: Vec<Enumeration>,
+            bar_list: Vec<NormalStruct>,
+            bar_tuple: (u32, i32, String),
+        }
+
+        // Serializing and deserializing an arbitrary struct to a DbRow:
+        #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
+        struct TestStruct {
+            // json
+            json_simple_1: JsonValue,
+            json_simple_2: JsonValue,
+            json_simple_3: JsonValue,
+            json_simple_4: JsonValue,
+            json_complex: JsonValue,
+            json_opt_none: Option<JsonValue>,
+            json_opt_some: Option<JsonValue>,
+
+            // bool
+            boolean: bool,
+            boolean_opt_none: Option<bool>,
+            boolean_opt_some: Option<bool>,
+            //
+            // i8
+            tinyint: i8,
+            tinyint_opt_none: Option<i8>,
+            tinyint_opt_some: Option<i8>,
+            //
+            // i16
+            smallint: i16,
+            smallint_opt_none: Option<i16>,
+            smallint_opt_some: Option<i16>,
+            //
+            // i32
+            mediumint: i32,
+            mediumint_opt_none: Option<i32>,
+            mediumint_opt_some: Option<i32>,
+            //
+            // i64
+            bigint: i64,
+            bigint_opt_none: Option<i64>,
+            bigint_opt_some: Option<i64>,
+            //
+            // u8
+            tiny_unsigned: u8,
+            tiny_unsigned_opt_none: Option<u8>,
+            tiny_unsigned_opt_some: Option<u8>,
+            //
+            // u16
+            small_unsigned: u16,
+            small_unsigned_opt_none: Option<u16>,
+            small_unsigned_opt_some: Option<u16>,
+            //
+            // u32
+            medium_unsigned: u32,
+            medium_unsigned_opt_none: Option<u32>,
+            medium_unsigned_opt_some: Option<u32>,
+            //
+            // u64
+            big_unsigned: u64,
+            big_unsigned_opt_none: Option<u64>,
+            big_unsigned_opt_some: Option<u64>,
+            //
+            // f32
+            smallfloat: f32,
+            smallfloat_opt_none: Option<f32>,
+            smallfloat_opt_some: Option<f32>,
+            //
+            // f64
+            bigfloat: f64,
+            bigfloat_opt_none: Option<f64>,
+            bigfloat_opt_some: Option<f64>,
+            //
+            // String
+            text: String,
+            text_opt_none: Option<String>,
+            text_opt_some: Option<String>,
+            //
+            // Note that rust's serializer serializes Decimal values to text (see also below).
+            biggerfloat: Decimal,
+            biggerfloat_opt_none: Option<Decimal>,
+            biggerfloat_opt_some: Option<Decimal>,
+            //
+            // A vector of u8 (bytes)
+            sequence: Vec<u8>,
+            sequence_opt_none: Option<Vec<u8>>,
+            sequence_opt_some: Option<Vec<u8>>,
+            //
+            // Enum
+            enumeration: Enumeration,
+            enumeration_opt_none: Option<Enumeration>,
+            enumeration_opt_some: Option<Enumeration>,
+            //
+            // Struct variant
+            struct_variant: Enumeration,
+            struct_variant_opt_none: Option<Enumeration>,
+            struct_variant_opt_some: Option<Enumeration>,
+            //
+            // Tuple variant
+            tuple_variant: Enumeration,
+            tuple_variant_opt_none: Option<Enumeration>,
+            tuple_variant_opt_some: Option<Enumeration>,
+            //
+            // Unit struct
+            unit_struct: UnitStruct,
+            unit_struct_opt_none: Option<UnitStruct>,
+            unit_struct_opt_some: Option<UnitStruct>,
+            //
+            // Struct
+            structure: NormalStruct,
+            structure_opt_none: Option<NormalStruct>,
+            structure_opt_some: Option<NormalStruct>,
+            //
+            // Newtype struct
+            newtype_struct: NewTypeStruct,
+            newtype_struct_opt_none: Option<NewTypeStruct>,
+            newtype_struct_opt_some: Option<NewTypeStruct>,
+            //
+            // Tuple
+            tuple: (u32, String),
+            tuple_opt_none: Option<(u32, String)>,
+            tuple_opt_some: Option<(u32, String)>,
+            //
+            // Tuple struct
+            tuple_struct: TupleStruct,
+            tuple_struct_opt_none: Option<TupleStruct>,
+            tuple_struct_opt_some: Option<TupleStruct>,
+            //
+            // Nested struct
+            nested_struct: NestedStruct,
+            nested_struct_opt_none: Option<NestedStruct>,
+            nested_struct_opt_some: Option<NestedStruct>,
+        }
     }
 }
