@@ -1885,6 +1885,7 @@ dependencies = [
  "rust_decimal",
  "serde",
  "serde_json",
+ "serde_unit_struct",
  "tokio",
  "tokio-postgres",
  "tower-service",
@@ -2120,6 +2121,25 @@ dependencies = [
  "itoa",
  "serde",
  "serde_core",
+]
+
+[[package]]
+name = "serde_unit_struct"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b418094c8214601333cd524022780e678c0526c9ee296e0d8023ad9fad5f4f25"
+dependencies = [
+ "serde_unit_struct_derive",
+]
+
+[[package]]
+name = "serde_unit_struct_derive"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e1859bf81e27dde5e698f3fcd626f9b9ac584cc72224ac9f11cb35bed3c4f151"
+dependencies = [
+ "quote",
+ "syn 3.0.3",
 ]
 
 [[package]]

@@ -1,4 +1,4 @@
-//! Implement `serde` for values and rows.
+//! Implement serialization/deserialization to/from a [Value].
 
 use crate::{Error, JsonValue, Value, ValueType};
 use serde::{Deserialize, Serialize};
@@ -18,8 +18,8 @@ where
         JsonValue::Bool(val) => Ok(Value::Boolean(val)),
         JsonValue::Number(val) => match val.as_u64() {
             Some(val) => {
-                let min_type = ValueType::min_integer().min_type(&val.to_string()).unwrap();
-                match min_type {
+                let val_type = ValueType::min_integer().min_type(&val.to_string()).unwrap();
+                match val_type {
                     ValueType::SmallInteger(_) => Ok(Value::SmallInteger(val as i16)),
                     ValueType::Integer(_) => Ok(Value::Integer(val as i32)),
                     ValueType::BigInteger(_) => Ok(Value::BigInteger(val as i64)),
@@ -28,8 +28,8 @@ where
             }
             None => match val.as_f64() {
                 Some(val) => {
-                    let min_type = ValueType::min_real().min_type(&val.to_string()).unwrap();
-                    match min_type {
+                    let val_type = ValueType::min_real().min_type(&val.to_string()).unwrap();
+                    match val_type {
                         ValueType::Real(_) => Ok(Value::Real(val as f32)),
                         ValueType::BigReal(_) => Ok(Value::BigReal(val as f64)),
                         _ => panic!(),
@@ -65,6 +65,7 @@ mod tests {
     use super::*;
     use rust_decimal::{Decimal, dec};
     use serde_json::json;
+    use serde_unit_struct::{Deserialize_unit_struct, Serialize_unit_struct};
     use std::collections::{HashMap, HashSet};
 
     #[test]
@@ -164,7 +165,7 @@ mod tests {
         let value: BasicStruct = from_value(&value).unwrap();
         assert_eq!(value, expected_deserialized);
 
-        #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
+        #[derive(Deserialize_unit_struct, Serialize_unit_struct, PartialEq, Debug, Clone)]
         struct UnitStruct;
 
         #[derive(Deserialize, Serialize, PartialEq, Debug, Clone)]
@@ -296,10 +297,10 @@ mod tests {
             tuple_variant_opt_none: Option<Enumeration>,
             tuple_variant_opt_some: Option<Enumeration>,
 
-            // // Unit struct
-            // unit_struct: UnitStruct,
-            // unit_struct_opt_none: Option<UnitStruct>,
-            // unit_struct_opt_some: Option<UnitStruct>,
+            // Unit struct
+            unit_struct: UnitStruct,
+            unit_struct_opt_none: Option<UnitStruct>,
+            unit_struct_opt_some: Option<UnitStruct>,
 
             // Struct
             structure: NormalStruct,
@@ -405,9 +406,10 @@ mod tests {
             tuple_variant_opt_none: None,
             tuple_variant_opt_some: Some(Enumeration::TupleVariant(1, 1)),
 
-            //unit_struct: UnitStruct,
-            //unit_struct_opt_none: None,
-            //unit_struct_opt_some: Some(UnitStruct),
+            unit_struct: UnitStruct,
+            unit_struct_opt_none: None,
+            unit_struct_opt_some: Some(UnitStruct),
+
             structure: NormalStruct {
                 foo: String::from("bar"),
                 bar: 1,
@@ -553,9 +555,9 @@ mod tests {
             "tuple_variant_opt_none": JsonValue::Null,
             "tuple_variant_opt_some": {"TupleVariant":[1, 1]},
 
-            //"unit_struct": "UnitStruct",
-            //"unit_struct_opt_none": JsonValue::Null,
-            //"unit_struct_opt_some": "UnitStruct",
+            "unit_struct": "UnitStruct",
+            "unit_struct_opt_none": JsonValue::Null,
+            "unit_struct_opt_some": "UnitStruct",
 
             "structure": {
                 "foo": "bar",
