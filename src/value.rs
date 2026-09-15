@@ -26,7 +26,7 @@
 //! We implement `From<PRIMITIVE>` into `Value`, and `TryFrom<Value>` into PRIMITIVE,
 //! for all the Rust primitives.
 //!
-//! We implement [serde::Serialize] and [serde::Deserialize] for `Value`. For Rust primitives
+//! We implement `Serialize and `Deserialize` for `Value`. For Rust primitives
 //! the serlialization is trivial. We represent complex cases as JSON using `serde_json`.
 
 use rust_decimal::{Decimal, dec};
@@ -143,18 +143,26 @@ impl ValueType {
         .into_iter()
     }
 
-    /// Return the lowest type in the hierarchy
-    pub fn lowest() -> ValueType {
+    /// Return the minimum type in the hierarchy
+    pub fn minimum() -> ValueType {
         // This can only fail if no actual types were defined:
         ValueType::sorted().next().expect("No types defined")
     }
 
-    /// Return the highest type in the hierarchy
-    pub fn highest() -> ValueType {
+    /// Return the maximum type in the hierarchy
+    pub fn maximum() -> ValueType {
         // This can only fail if no actual types were defined:
         let mut vtypes = ValueType::sorted().collect::<Vec<_>>();
         vtypes.reverse();
         vtypes.iter().next().expect("No types defined").clone()
+    }
+
+    pub fn min_integer() -> ValueType {
+        ValueType::SmallInteger("".to_string())
+    }
+
+    pub fn min_real() -> ValueType {
+        ValueType::Real("".to_string())
     }
 
     /// Determine the minimum type (see [ValueType::sorted()]) needed to support the given value,

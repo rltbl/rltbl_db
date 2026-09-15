@@ -141,6 +141,8 @@
 //! Each of these traits has default implementations of most methods, so only a few method
 //! implementations are required.
 
+#![recursion_limit = "2000"]
+
 pub use self::column::Column;
 pub use self::error::Error;
 pub use self::pool::{AnyPool, Pool};

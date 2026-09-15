@@ -31,9 +31,6 @@
 //! assert_eq!(row1, row2);
 //! ```
 //!
-//! A "normal" Rust struct with named fields can be converted back and forth from a `Row`
-//! if it implements [serde::Serialize] and [serde::Deserialize].
-//!
 //! MC: Do we want to mention the subtleties involved in handling JSON values in these
 //! comments?
 //! JO: Yes, eventually.
