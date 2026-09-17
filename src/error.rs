@@ -27,19 +27,23 @@ pub enum Error {
     /////////////////////////////
     // Upstream error types:
     /////////////////////////////
+    /// An error that occurred while processing input/output.
+    IOError(std::io::Error),
+
+    /// An error that occurred while writing or reading a CSV (or TSV) file.
+    CSVError(csv::Error),
+
     /// An error that occurred when trying to convert one primitive rust type to another.
     IntegerConversionError(std::num::TryFromIntError),
 
     /// An error that occurred when trying to convert a primitive type to a [rust_decimal::Decimal].
     DecimalConversionError(rust_decimal::Error),
 
-    // TODO: Not sure if this is really needed. It's basically guaranteed never to occur?
-    // It's the result of a call like: i16::try_from(1_i16) which in principle should never fail.
     // See https://stackoverflow.com/questions/67830696/
     //             what-is-the-point-of-an-infallible-result-over-just-returning-the-ok-branch
     // for an explanation of the rationale behind Infallible. Essentially it's a convenience
     // to allow for treating generics consistently.
-    /// An error that occurred (impossibly?) as the result of an [std::convert::Infallible]
+    /// An error that occurred (impossibly) as the result of an [std::convert::Infallible]
     /// operation.
     InfallibleError(std::convert::Infallible),
 
@@ -95,6 +99,28 @@ impl serde::de::Error for Error {
         T: Display,
     {
         Error::SerdeError(msg.to_string())
+    }
+}
+
+impl From<std::io::Error> for Error {
+    fn from(err: std::io::Error) -> Error {
+        Error::IOError(err.into())
+    }
+}
+
+impl From<serde_json::Error> for Error {
+    fn from(err: serde_json::Error) -> Error {
+        use serde_json::error::Category;
+        match err.classify() {
+            Category::Io => Error::IOError(err.into()),
+            Category::Syntax | Category::Data | Category::Eof => Error::SerdeError(err.to_string()),
+        }
+    }
+}
+
+impl From<csv::Error> for Error {
+    fn from(err: csv::Error) -> Error {
+        Error::IOError(err.into())
     }
 }
 
@@ -187,6 +213,8 @@ impl std::fmt::Display for Error {
             | Error::ParseError(err)
             | Error::ValueError(err)
             | Error::SerdeError(err) => write!(f, "{err}"),
+            Error::IOError(err) => write!(f, "{err}"),
+            Error::CSVError(err) => write!(f, "{err}"),
             Error::InfallibleError(err) => write!(f, "{err}"),
             Error::IntegerConversionError(err) => write!(f, "{err}"),
             Error::DecimalConversionError(err) => write!(f, "{err}"),

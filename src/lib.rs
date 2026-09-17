@@ -58,27 +58,33 @@
 //! Given a struct with named fields that implements `serde` `Serialize` and `Deserialize`,
 //! we can convert it to a row to insert it into the database, and from a row back into a struct.
 //!
-//! TODO: Un-ignore this block.
-//! ```ignore
-//! use rltbl_db::{AnyPool, to_row, Error as DbError};
+//! ```
+//! use rltbl_db::{AnyPool, Error, serde::{to_value, from_value}, Value, row};
 //! use serde::{Deserialize, Serialize};
+//! use serde_json::json;
+//! use std::ops::Deref;
 //!
-//! #[derive(Deserialize, Serialize)]
+//! #[derive(Debug, PartialEq, Deserialize, Serialize)]
 //! struct Foo {
 //!     bar: i64,
 //!     baz: String,
 //! }
 //!
-//! async fn serde_example() -> Result<(), DbError> {
+//! async fn serde_example() -> Result<(), Error> {
 //!     let pool = AnyPool::connect(":memory:").await?;
 //!
-//!     let test = Foo { bar: 1, baz: "b" };
-//!     let row = to_row(test)?;
-//!     pool.execute("CREATE TABLE foo ( bar INT, baz TEXT )", ()).await?;
-//!     pool.insert("foo", &["bar", "baz"], [&row]).await?;
+//!     // Serialize the struct `Foo` into a value:
+//!     let test = Foo { bar: 1, baz: "b".to_string() };
+//!     let value = to_value(&test)?;
+//!     assert_eq!(value, Value::Json(json!({"bar": 1, "baz": "b"}))); 
 //!
-//!     // Retrieve the inserted row as a Foo struct.
-//!     let result: Foo = pool.query("SELECT bar FROM foo", ()).await?.row()?.try_into()?;
+//!     // Insert the value, as a row, into the database:
+//!     pool.execute("CREATE TABLE foo ( bar INT, baz TEXT )", ()).await?;
+//!     pool.insert("foo", &["bar", "baz"], [&value.try_into()?]).await?;
+//!
+//!     // Retrieve the inserted row as a Foo struct:
+//!     let row = pool.query("SELECT bar, baz FROM foo", ()).await?.row()?;
+//!     let result: Foo = from_value(&row.into())?;
 //!     assert_eq!(result, test);
 //!
 //!     Ok(())
@@ -94,9 +100,9 @@
 //! Note that to take full advantage of SQLite's direct bulk-loading capability, a .csv file is
 //! required. PostgreSQL supports both .tsv and .csv files.
 //! ```
-//! use rltbl_db::{AnyPool, Error as DbError};
+//! use rltbl_db::{AnyPool, Error};
 //!
-//! async fn tsv_example() -> Result<(), DbError> {
+//! async fn tsv_example() -> Result<(), Error> {
 //!     let pool = AnyPool::connect(":memory:").await?;
 //!     pool.import_table("tests/input/table1.csv").await.unwrap();
 //!     let count: u64 = pool

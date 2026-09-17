@@ -31,9 +31,7 @@
 //! assert_eq!(row1, row2);
 //! ```
 //!
-//! MC: Do we want to mention the subtleties involved in handling JSON values in these
-//! comments?
-//! JO: Yes, eventually.
+//! TODO: mention the subtleties involved in handling JSON values.
 
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
@@ -42,14 +40,14 @@ use std::ops::{Deref, DerefMut};
 use crate::{Column, Error, StringRow, Value};
 
 /// Represents a database row.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Row {
     /// A map from column names to column values.
     pub map: IndexMap<String, Value>,
 }
 
 impl Row {
-    // Create an empty row.
+    /// Create a new empty row.
     pub fn new() -> Self {
         Row {
             map: IndexMap::new(),
@@ -59,24 +57,25 @@ impl Row {
     /// Coerce this row into a row whose columns have the types specified in the given
     /// column_map.
     pub fn coerce(&self, column_map: &IndexMap<String, Column>) -> Result<Row, Error> {
-        // For each Value in db_row, get the corresponding Column from the column_map.
-        // Then use the db_type to parse the string representation of the value into the
-        // correct type and place the converted Value into a new row that will be returned.
+        // For each Value in this row, get the corresponding Column from the column_map.
+        // Then use `sql_type` (a ValueType) to parse the string representation of the value
+        // into the correct type and place the converted Value into a new row that will be
+        // returned.
         let mut coerced = Row::new();
-        for (column_name, db_value) in self.iter() {
+        for (column_name, value) in self.iter() {
             let column_type = &column_map
                 .get(column_name)
                 .ok_or(Error::InputError(format!(
                     "Column '{column_name}' not in column map."
                 )))?
                 .sql_type;
-            let converted = column_type.parse_str(&db_value.to_string())?;
+            let converted = column_type.parse_str(&value.to_string())?;
             coerced.insert(column_name.to_string(), converted);
         }
         Ok(coerced)
     }
 
-    // Returns the first value of the first column of this row.
+    /// Returns the first value of the first column of this row.
     pub fn value(mut self) -> Result<Value, Error> {
         match self.map.shift_remove_index(0) {
             Some((_, value)) => Ok(value),
@@ -84,6 +83,8 @@ impl Row {
         }
     }
 }
+
+// For dereferencing the inner map:
 
 impl Deref for Row {
     type Target = IndexMap<String, Value>;
@@ -98,6 +99,8 @@ impl DerefMut for Row {
         &mut self.map
     }
 }
+
+// From/to iterator conversion:
 
 impl IntoIterator for Row {
     type Item = (String, Value);
@@ -115,6 +118,8 @@ impl FromIterator<(String, Value)> for Row {
         }
     }
 }
+
+// From/to StringRow conversion:
 
 impl Into<StringRow> for Row {
     fn into(self) -> StringRow {
@@ -197,7 +202,7 @@ impl Rows {
         db_rows.map(|row| row.coerce(column_map))
     }
 
-    /// Returns the first value from the first of these rows.
+    /// Try to get the first value from the first of these rows.
     pub fn try_into_value<T: TryFrom<Value>>(self) -> Result<T, Error> {
         match self.row()?.value()?.try_into() {
             Ok(value) => Ok(value),

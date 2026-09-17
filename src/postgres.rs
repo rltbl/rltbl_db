@@ -22,6 +22,11 @@ impl Syntax for PostgresSyntax {
         POSTGRES_SYNTAX_NAME
     }
 
+    /// Implements [Syntax::param_prefix()] for [PostgresSyntax]
+    fn param_prefix(&self) -> &str {
+        "$"
+    }
+
     /// Implements [Syntax::sql_type()] for [PostgresSyntax]
     fn sql_type(&self, name: &str) -> Result<ValueType, Error> {
         let name = name.to_uppercase();
@@ -88,11 +93,6 @@ impl Syntax for PostgresSyntax {
                 .to_string(),
             values![table],
         )
-    }
-
-    /// Implements [Syntax::param_prefix()] for [PostgresSyntax]
-    fn param_prefix(&self) -> &str {
-        "$"
     }
 
     /// TODO: Add docstring here.

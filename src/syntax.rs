@@ -16,7 +16,11 @@ pub trait Syntax: std::fmt::Debug {
     /// Returns the name for this syntax.
     fn name(&self) -> &str;
 
-    /// Get a SQL ValueType by its name in this SQL syntax.
+    /// Get the prefix to use for parameters to queries that need to be bound.
+    fn param_prefix(&self) -> &str;
+
+    /// Get a SQL ValueType by its name in this SQL syntax. The default implementation of this
+    /// method recognizes standard datatype names: TEXT, (SMALL|BIG)INT, FLOAT, REAL, DOUBLE.
     fn sql_type(&self, name: &str) -> Result<ValueType, Error> {
         let name = name.to_uppercase();
         match name.as_str() {
@@ -34,26 +38,21 @@ pub trait Syntax: std::fmt::Debug {
 
     /// Generate the SQL and parameters needed to query the database's metadata for the names and
     /// types of the columns of the given table.
-    fn columns_sql(&self, _table: &str) -> (String, [Value; 1]) {
-        // MC: I don't see why we need a default implementation of this function?
-        // What would it be valid for?
-        todo!("write default implementation for columns_sql")
-    }
+    fn columns_sql(&self, table: &str) -> (String, [Value; 1]);
 
     /// Generate the SQL and parameters needed to query the database's metadata for the primary
     /// key columns of the given table.
     fn primary_keys_sql(&self, table: &str) -> (String, [Value; 1]);
 
-    /// Get the prefix to use for parameters to queries that need to be bound.
-    fn param_prefix(&self) -> &str;
-
-    /// TODO: Add docstring here.
+    /// Generate the SQL needed to query the current epoch time in seconds.
     fn get_epoch_time_sql(&self) -> &str;
 
-    /// TODO: Add docstring.
+    /// Generate the SQL and parameters needed to determine which of the given objects are
+    /// database tables.
     fn which_are_tables_sql(&self, objects: &[&str]) -> (String, Vec<Value>);
 
-    /// TODO: Add docstring.
+    /// Generate the SQL and parameters needed to determine which of the given objects are
+    /// database views.
     fn which_are_views_sql(&self, objects: &[&str]) -> (String, Vec<Value>);
 
     /// Generate the SQL needed to create a table with the given name and given column definitions.
@@ -63,10 +62,11 @@ pub trait Syntax: std::fmt::Debug {
         columns: &IndexMap<String, Column>,
     ) -> Result<String, Error>;
 
-    /// TODO: Add docstring.
+    /// Generate the SQL and parameters needed to query the database's metadata in order to
+    /// retrieve the SQL required to create the given view.
     fn view_sql_sql(&self, view: &str) -> (String, [Value; 1]);
 
-    /// Generate the SQL needed to create the query cache.
+    /// Generate the SQL needed to create the query cache table.
     fn create_query_cache_table_sql(&self) -> String {
         let get_epoch_now = self.get_epoch_time_sql();
         format!(
@@ -81,7 +81,7 @@ pub trait Syntax: std::fmt::Debug {
         )
     }
 
-    /// Generate the SQL needed to create the table cache.
+    /// Generate the SQL needed to create the table cache table.
     fn create_table_cache_table_sql(&self) -> String {
         let get_epoch_now = self.get_epoch_time_sql();
         format!(
@@ -92,7 +92,8 @@ pub trait Syntax: std::fmt::Debug {
         )
     }
 
-    /// TODO: Add docstring.
+    /// Generate the (multiple) SQL statements needed in order to create caching triggers
+    /// for the given table in the database.
     fn create_table_caching_triggers_for_table_sql(
         &self,
         table: &str,
@@ -143,6 +144,4 @@ pub trait Syntax: std::fmt::Debug {
         trigger_basename: &str,
         trigger_content: &str,
     ) -> Result<Vec<String>, Error>;
-
-    // TODO: Other methods ...
 }

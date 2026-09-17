@@ -10,7 +10,7 @@ pub trait Query: std::fmt::Debug + Sync {
     /// Returns the SQL syntax supported by this [Query]-able.
     fn syntax(&self) -> &dyn Syntax;
 
-    /// Given a table, return an [IndexMap] from column names to column SQL types.
+    /// Given a table, return an [IndexMap] from column names to the names of their datatypes.
     async fn columns(&self, table: &str) -> Result<IndexMap<String, String>, Error> {
         let mut columns = IndexMap::new();
         let (sql, params) = self.syntax().columns_sql(table);
@@ -40,7 +40,6 @@ pub trait Query: std::fmt::Debug + Sync {
         }
     }
 
-    // TODO: Possibly combine this with columns?
     /// Retrieve the primary key column names for a given table.
     async fn primary_keys(&self, table: &str) -> Result<Vec<String>, Error> {
         let (sql, params) = self.syntax().primary_keys_sql(table);
@@ -71,18 +70,19 @@ pub trait Query: std::fmt::Debug + Sync {
     /// Execute a query returning a collection of [Rows].
     async fn query(&self, sql: &str, params: &[Value]) -> Result<Rows, Error>;
 
-    /// Returns true if this queryable interface is capable of bulk loading this file.
+    /// Returns true if this [Query]-able is capable of bulk loading this file.
     fn can_load(&self, _filename: &str) -> bool {
+        // The default implementation is for bulk loading to be unsupported. Implementations
+        // for specific drivers (libsql, tokio-postgresql, rusqlite, etc.) will have their
+        // own criteria.
         false
     }
 
-    /// TODO: Add docstring.
+    /// Bulk-load the contents of the given file into a table with the given name. If the
+    /// table already exists it will be dropped first and recreated.
     async fn load_table(&self, table: &str, filename: &str) -> Result<(), Error>;
 
-    /// Drop the given table from the database. Note that for PostgreSQL (see
-    /// <https://www.postgresql.org/docs/current/sql-droptable.html>), if the dropped table,
-    /// say table1, appears in a foreign key constraint for another table, say table2, then
-    /// table2's foreign constraint will be removed, but table2 will not be dropped.
+    /// Drop the given table from the database.
     async fn drop_table(&self, table: &str) -> Result<(), Error>;
 
     /// Drop the given view from the database.

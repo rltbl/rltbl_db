@@ -15,14 +15,14 @@ use crate::{Error, Row, Value, ValueType};
 /// but excludes NULL, which is not a valid type for a column.
 #[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-enum ColumnType {
+enum _ColumnType {
     Boolean(String),
     BigInteger(String),
     BigReal(String),
     Text(String),
 }
 
-/// TODO: Add docstring.
+/// Represents a column of a database table.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Column {
     pub name: String,
@@ -32,6 +32,8 @@ pub struct Column {
 }
 
 impl PartialOrd for Column {
+    /// Orders [Column]s by sql_type, not_null, and unique, in that order, where a not_null
+    /// column comes before a nullable column and a unique column comes before a non-unique column.
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self.sql_type.partial_cmp(&other.sql_type) {
             None => None,
@@ -70,11 +72,13 @@ impl Column {
     }
 
     /// Determine the database columns needed for each column of data in the given file.
+    /// Returns an [IndexMap] from column names to [Column]s.
     pub fn from_table_file(filename: &str) -> Result<IndexMap<String, Self>, Error> {
         let delimiter = {
-            if filename.to_lowercase().ends_with("tsv") {
+            let filename_lower = filename.to_lowercase();
+            if filename_lower.ends_with("tsv") {
                 b'\t'
-            } else if filename.to_lowercase().ends_with(".csv") {
+            } else if filename_lower.ends_with(".csv") {
                 b','
             } else {
                 return Err(Error::InputError(format!(
@@ -84,13 +88,10 @@ impl Column {
         };
 
         // Read the rows from the given file:
-        let mut rdr =
-            ReaderBuilder::new()
-                .has_headers(false)
-                .delimiter(delimiter)
-                .from_reader(File::open(filename).map_err(|err| {
-                    Error::InputError(format!("Unable to open '{filename}': {err}"))
-                })?);
+        let mut rdr = ReaderBuilder::new()
+            .has_headers(false)
+            .delimiter(delimiter)
+            .from_reader(File::open(filename)?);
         let mut records = rdr.records();
 
         // Extract the headers from the first line of the file:
@@ -121,9 +122,7 @@ impl Column {
             let mut columns = vec![];
             let mut values_seen = HashMap::new();
             for row in records {
-                let row = row.map_err(|err| {
-                    Error::InputError(format!("Error reading from '{filename}': {err}"))
-                })?;
+                let row = row?;
 
                 // Determine the columns for the first row if this hasn't been done already:
                 if columns.is_empty() {
@@ -193,7 +192,7 @@ impl Column {
         self.min_column_from_strings(values.map(|value| value.to_string()))
     }
 
-    /// Return the minimum column required to contain the given string values.
+    /// Return the minimum column (by [ValueType]) required to contain the given string values.
     pub fn min_column_from_strings<I>(&mut self, values: I) -> Result<Column, Error>
     where
         I: Iterator<Item = String>,
@@ -229,7 +228,8 @@ impl Column {
         Ok(self.clone())
     }
 
-    /// Return the minimum column types corresponding to the given vectors of column values.
+    /// Return the minimum columns (by [ValueType]) corresponding to the given vectors of
+    /// column values.
     pub fn min_columns_from_column_values<I>(column_values: I) -> Result<Vec<Column>, Error>
     where
         I: Iterator<Item = Vec<Value>>,

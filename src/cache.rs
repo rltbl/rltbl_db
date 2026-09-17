@@ -88,6 +88,12 @@ impl Display for CachingStrategy {
     }
 }
 
+/// The in-memory query cache.
+#[derive(Debug, Default)]
+pub struct MemoryQueryCache {
+    pub cache: Mutex<IndexMap<MemoryQueryCacheKey, MemoryQueryCacheValue>>,
+}
+
 /// The structure used to look up query results in the in-memory query cache.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct MemoryQueryCacheKey {
@@ -103,67 +109,8 @@ pub struct MemoryQueryCacheValue {
     pub last_verified: u128,
 }
 
-/// The meta-cache: A set of the names of things that are known to exist.
-#[derive(Debug, Default)]
-pub struct MetaCache {
-    cache: Mutex<HashSet<String>>,
-}
-
-impl MetaCache {
-    /// TODO: Add docstring.
-    pub fn get_cache<'a>(&'a self) -> Result<MutexGuard<'a, HashSet<String>>, Error> {
-        let mut remaining_attempts = MAX_RETRIEVAL_ATTEMPTS;
-        let mut meta_cache = self.cache.try_lock();
-        while let Err(err) = meta_cache {
-            meta_cache = self.cache.try_lock();
-            if let Ok(_) = meta_cache {
-                break;
-            }
-            remaining_attempts -= 1;
-            if remaining_attempts == 0 {
-                return Err(Error::ConnectError(format!(
-                    "Error locking cache: {err} (retried {MAX_RETRIEVAL_ATTEMPTS} times)"
-                )));
-            } else {
-                thread::sleep(Duration::from_millis(5));
-            }
-        }
-        let meta_cache = meta_cache.unwrap();
-        Ok(meta_cache)
-    }
-
-    /// TODO: Add docstring.
-    pub fn exists(&self, object: &str) -> Result<bool, Error> {
-        let cache = self.get_cache()?;
-        match cache.get(object) {
-            Some(_) => Ok(true),
-            None => Ok(false),
-        }
-    }
-
-    /// TODO: Add docstring.
-    pub fn insert(&self, object: &str) -> Result<(), Error> {
-        let mut cache = self.get_cache()?;
-        cache.insert(object.to_string());
-        Ok(())
-    }
-
-    /// Clear the meta cache.
-    pub fn clear(&self) -> Result<(), Error> {
-        let mut cache = self.get_cache()?;
-        cache.clear();
-        Ok(())
-    }
-}
-
-/// The in-memory query cache.
-#[derive(Debug, Default)]
-pub struct MemoryQueryCache {
-    pub cache: Mutex<IndexMap<MemoryQueryCacheKey, MemoryQueryCacheValue>>,
-}
-
 impl MemoryQueryCache {
-    /// TODO: Add docstring.
+    /// Lock the cache and retrieve it.
     pub fn get_cache<'a>(
         &'a self,
     ) -> Result<MutexGuard<'a, IndexMap<MemoryQueryCacheKey, MemoryQueryCacheValue>>, Error> {
@@ -218,6 +165,7 @@ pub struct MemoryTableCache {
 }
 
 impl MemoryTableCache {
+    /// Lock the cache and retrieve it.
     pub fn get_cache<'a>(&'a self) -> Result<MutexGuard<'a, HashMap<String, u128>>, Error> {
         let mut remaining_attempts = MAX_RETRIEVAL_ATTEMPTS;
         let mut memory_cache = self.cache.try_lock();
@@ -248,6 +196,59 @@ impl MemoryTableCache {
         for table in tables {
             cache.remove(&table.to_string());
         }
+        Ok(())
+    }
+}
+
+/// The meta-cache: A set of names of things that are known to exist.
+#[derive(Debug, Default)]
+pub struct MetaCache {
+    cache: Mutex<HashSet<String>>,
+}
+
+impl MetaCache {
+    /// Lock the cache and retrieve it.
+    pub fn get_cache<'a>(&'a self) -> Result<MutexGuard<'a, HashSet<String>>, Error> {
+        let mut remaining_attempts = MAX_RETRIEVAL_ATTEMPTS;
+        let mut meta_cache = self.cache.try_lock();
+        while let Err(err) = meta_cache {
+            meta_cache = self.cache.try_lock();
+            if let Ok(_) = meta_cache {
+                break;
+            }
+            remaining_attempts -= 1;
+            if remaining_attempts == 0 {
+                return Err(Error::ConnectError(format!(
+                    "Error locking cache: {err} (retried {MAX_RETRIEVAL_ATTEMPTS} times)"
+                )));
+            } else {
+                thread::sleep(Duration::from_millis(5));
+            }
+        }
+        let meta_cache = meta_cache.unwrap();
+        Ok(meta_cache)
+    }
+
+    /// Determine whether the given object exists in the meta-cache.
+    pub fn exists(&self, object: &str) -> Result<bool, Error> {
+        let cache = self.get_cache()?;
+        match cache.get(object) {
+            Some(_) => Ok(true),
+            None => Ok(false),
+        }
+    }
+
+    /// Insert the given object to the meta-cache.
+    pub fn insert(&self, object: &str) -> Result<(), Error> {
+        let mut cache = self.get_cache()?;
+        cache.insert(object.to_string());
+        Ok(())
+    }
+
+    /// Clear the meta cache.
+    pub fn clear(&self) -> Result<(), Error> {
+        let mut cache = self.get_cache()?;
+        cache.clear();
         Ok(())
     }
 }

@@ -102,7 +102,7 @@ fn extract_value(row: &PgRow, idx: usize) -> Result<Value, Error> {
 #[derive(Debug)]
 pub struct PostgresPool {
     syntax: PostgresSyntax,
-    pool: deadpool_postgres::Pool,
+    pub pool: deadpool_postgres::Pool,
 }
 
 impl PostgresPool {
@@ -315,7 +315,7 @@ impl Query for PostgresPool {
         Ok(Rows { rows: db_rows })
     }
 
-    /// TODO: Add docstring.
+    /// Returns true if this pool is capable of loading the given filename, or false if it is not.
     fn can_load(&self, filename: &str) -> bool {
         let filename = filename.to_lowercase();
         filename.ends_with("tsv") || filename.ends_with(".csv")
@@ -332,6 +332,7 @@ impl Query for PostgresPool {
         let file = File::open(filename)
             .map_err(|err| Error::InputError(format!("Unable to open '{filename}': {err}")))?;
         let buf_reader = BufReader::new(file);
+
         let mut stream = buf_reader.split(b'\n').map(|line| {
             let line = line.unwrap();
             let mut bytes = BytesMut::with_capacity(line.len() + 1);
@@ -373,6 +374,10 @@ impl Query for PostgresPool {
         Ok(())
     }
 
+    /// Implements [Query::drop_table()]. Note that for PostgreSQL (see
+    /// <https://www.postgresql.org/docs/current/sql-droptable.html>), if the dropped table,
+    /// say `table1`, appears in a foreign key constraint for another table, say `table2`, then
+    /// `table2`'s foreign constraint will be removed, but `table2` will not be dropped.
     async fn drop_table(&self, table: &str) -> Result<(), Error> {
         let table = validate_table_name(table)?;
 
@@ -394,33 +399,6 @@ impl Query for PostgresPool {
 #[async_trait]
 impl Pool for PostgresPool {
     async fn transaction(&self) -> Result<Box<dyn Transaction>, Error> {
-        panic!("Don't use this! Use builtin driver methods instead")
-    }
-}
-
-// TODO: Move these tests to unit_tests.rs
-
-#[cfg(test)]
-mod tests {
-    use crate::{AnyPool, Error, Pool, Value, tokio_postgres::PostgresPool, values};
-
-    #[tokio::test]
-    async fn test_postgres_anypool() -> Result<(), Error> {
-        let url = "postgresql:///rltbl_db";
-        let pool = PostgresPool::connect(url).await?;
-        let pool: Box<dyn Pool> = Box::new(pool);
-        let pool = AnyPool::from(pool);
-
-        let _rows = pool.query("DROP TABLE IF EXISTS foo CASCADE", ()).await?;
-        let _rows = pool
-            .query("CREATE TABLE foo (bar BIGINT, gar TEXT)", ())
-            .await?;
-        let sql = "INSERT INTO foo VALUES ($1, $2)";
-        let values = vec![Value::from(1_i64), Value::from("foo")];
-        let _values = values![1_i64, "foo"];
-        let _rows = pool.query(sql, &values).await?;
-        let _rows = pool.query("DROP TABLE foo CASCADE", ()).await?;
-
-        Ok(())
+        unimplemented!()
     }
 }

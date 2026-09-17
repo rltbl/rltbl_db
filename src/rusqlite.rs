@@ -2,7 +2,7 @@
 
 use async_trait::async_trait;
 use deadpool_sqlite::{
-    self, Config, Hook, Runtime,
+    self, Config, Hook, HookError, Runtime,
     rusqlite::{
         self, Statement,
         fallible_iterator::FallibleIterator,
@@ -21,7 +21,7 @@ use crate::{
     sql_parse::validate_table_name, sqlite::SqliteSyntax,
 };
 
-/// Uses the rusqlite driver to directly query a database using the given prepared [Statement]
+/// Uses the rusqlite driver directly to query a database using the given prepared [Statement]
 /// and parameters.
 fn query_prepared(stmt: &mut Statement<'_>, params: &[Value]) -> Result<Vec<Row>, Error> {
     // Begin by binding all of the parameters to the statement:
@@ -117,12 +117,33 @@ fn query_prepared(stmt: &mut Statement<'_>, params: &[Value]) -> Result<Vec<Row>
                     ValueRef::Real(value) => Value::BigReal(value),
                     ValueRef::Text(value) | ValueRef::Blob(value) => match column_type {
                         Some(ctype) if ctype.to_lowercase() == "numeric" => {
-                            let value = from_utf8(value).unwrap_or_default();
-                            let value = value.parse::<Decimal>().unwrap();
+                            let value = match from_utf8(value) {
+                                Ok(value) => value,
+                                Err(err) => {
+                                    // TODO: Replace with logger.
+                                    eprintln!("ERROR {err}");
+                                    return Err(deadpool_sqlite::rusqlite::Error::InvalidQuery);
+                                }
+                            };
+                            let value = match value.parse::<Decimal>() {
+                                Ok(value) => value,
+                                Err(err) => {
+                                    // TODO: Replace with logger.
+                                    eprintln!("ERROR {err}");
+                                    return Err(deadpool_sqlite::rusqlite::Error::InvalidQuery);
+                                }
+                            };
                             Value::Numeric(value)
                         }
                         _ => {
-                            let value = from_utf8(value).unwrap_or_default();
+                            let value = match from_utf8(value) {
+                                Ok(value) => value,
+                                Err(err) => {
+                                    // TODO: Replace with logger.
+                                    eprintln!("ERROR {err}");
+                                    return Err(deadpool_sqlite::rusqlite::Error::InvalidQuery);
+                                }
+                            };
                             Value::Text(value.to_string())
                         }
                     },
@@ -132,9 +153,10 @@ fn query_prepared(stmt: &mut Statement<'_>, params: &[Value]) -> Result<Vec<Row>
             Ok(db_row)
         })
         .collect::<Vec<_>>();
-    results.map_err(|err| Error::DeadpoolRusqliteError(err))
+    Ok(results?)
 }
 
+/// Define a regular expression matching function and add it to the database.
 fn add_rusqlite_regexp_function(db: &rusqlite::Connection) -> Result<(), Error> {
     type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
@@ -159,9 +181,7 @@ fn add_rusqlite_regexp_function(db: &rusqlite::Connection) -> Result<(), Error> 
                 // If the text to match is NULL then the condition is vacuously true:
                 ValueRef::Null => Ok(true),
                 _ => {
-                    let text = text
-                        .as_str()
-                        .map_err(|e| rusqlite::Error::UserFunctionError(e.into()))?;
+                    let text = text.as_str()?;
                     Ok(regexp.is_match(text))
                 }
             }
@@ -174,17 +194,17 @@ fn add_rusqlite_regexp_function(db: &rusqlite::Connection) -> Result<(), Error> 
 pub struct RusqlitePool {
     /// The [Syntax] of this type of pool is [SqliteSyntax].
     syntax: SqliteSyntax,
-    pool: deadpool_sqlite::Pool,
+    pub pool: deadpool_sqlite::Pool,
 }
 
 #[async_trait]
 impl Query for RusqlitePool {
-    /// Implements [Query::syntax()] for SQLite.
+    /// Implements [Query::syntax()].
     fn syntax(&self) -> &dyn Syntax {
         &self.syntax
     }
 
-    /// Implements [Query::execute_batch()] for SQLite.
+    /// Implements [Query::execute_batch()].
     async fn execute_batch(&self, sql: &str) -> Result<(), Error> {
         let conn = self.pool.get().await?;
         let sql_string = sql.to_string();
@@ -206,21 +226,15 @@ impl Query for RusqlitePool {
         }
     }
 
-    /// Implements [Query::query()] for SQLite.
+    /// Implements [Query::query()].
     async fn query(&self, sql: &str, params: &[Value]) -> Result<Rows, Error> {
         let conn = self.pool.get().await?;
         let sql_string = sql.to_string();
-        // TODO: All of this cloning is annoying and probably unnecessary.
-        let params: Vec<Value> = params.iter().cloned().map(|v| v.clone()).collect();
+        let params = params.to_vec();
         conn.interact(move |conn| {
-            let mut stmt = conn
-                .prepare(&sql_string)
-                .map_err(|err| Error::DeadpoolRusqliteError(err))
-                // TODO: Replace expect() with a proper error if possible.
-                .expect("generate statement");
+            let mut stmt = conn.prepare(&sql_string)?;
             for (i, param) in params.iter().enumerate() {
-                stmt.raw_bind_parameter(i + 1, param.to_string())
-                    .expect("bind parameter");
+                stmt.raw_bind_parameter(i + 1, param.to_string())?;
             }
             let rows: Vec<Row> = query_prepared(&mut stmt, &params)?
                 .into_iter()
@@ -237,10 +251,12 @@ impl Query for RusqlitePool {
         .await?
     }
 
+    /// Implements [Query::can_load()]
     fn can_load(&self, filename: &str) -> bool {
         filename.to_lowercase().ends_with(".csv")
     }
 
+    /// Implements [Query::load_table()]
     async fn load_table(&self, table: &str, filename: &str) -> Result<(), Error> {
         if !self.can_load(filename) {
             return Err(Error::InputError(format!(
@@ -249,9 +265,7 @@ impl Query for RusqlitePool {
         }
 
         eprintln!("Loading table '{table}' from '{filename}' using SQLite's CSV load extension.");
-        let current_dir = env::current_dir().map_err(|err| {
-            Error::ConnectError(format!("Error getting current directory: {err}"))
-        })?;
+        let current_dir = env::current_dir()?;
         let current_dir = current_dir.display();
         let sql = format!(
             r#"CREATE VIRTUAL TABLE temp.t1
@@ -263,7 +277,7 @@ impl Query for RusqlitePool {
         Ok(())
     }
 
-    /// Implements [Query::drop_table()] for SQLite.
+    /// Implements [Query::drop_table()].
     async fn drop_table(&self, table: &str) -> Result<(), Error> {
         let table = validate_table_name(table)?;
 
@@ -274,6 +288,7 @@ impl Query for RusqlitePool {
         Ok(())
     }
 
+    /// Implements [Query::drop_view()]
     async fn drop_view(&self, view: &str) -> Result<(), Error> {
         let view = validate_table_name(view)?;
 
@@ -299,16 +314,18 @@ impl RusqlitePool {
     /// Connect to the database at the given URL using rusqlite.
     pub async fn connect(url: &str) -> Result<Self, Error> {
         let cfg = Config::new(url);
-        let pool = cfg
-            .builder(Runtime::Tokio1)
-            .map_err(|err| Error::ConnectError(format!("Error creating pool: {err}")))?
-            // TODO: Remove unwraps and expects if possible
-            .post_create(Hook::Fn(Box::new(|conn, _metrics| {
-                let guard = conn.lock().expect("lock this connection");
-                csvtab::load_module(&guard).unwrap();
-                add_rusqlite_regexp_function(&guard).expect("add regex_match function");
-                Ok(())
-            })));
+        let pool =
+            cfg.builder(Runtime::Tokio1)?
+                .post_create(Hook::Fn(Box::new(|conn, _metrics| {
+                    let guard = conn
+                        .lock()
+                        .map_err(|err| HookError::message(err.to_string()))?;
+                    csvtab::load_module(&guard)
+                        .map_err(|err| HookError::message(err.to_string()))?;
+                    add_rusqlite_regexp_function(&guard)
+                        .map_err(|err| HookError::message(err.to_string()))?;
+                    Ok(())
+                })));
         let pool = match url {
             ":memory:" => pool.max_size(1).build()?,
             _ => pool.build()?,
@@ -367,28 +384,21 @@ impl Query for RusqliteTransaction {
         match &self.conn {
             Some(conn) => {
                 let sql_string = sql.to_string();
-                // TODO: So much cloning ...
-                let params: Vec<Value> = params.iter().cloned().map(|v| v.clone()).collect();
+                let params = params.to_vec();
                 conn.interact(move |conn| {
-                    let mut stmt = conn
-                        .prepare(&sql_string)
-                        .map_err(|err| Error::DeadpoolRusqliteError(err))
-                        // TODO: Replace expect() with a proper error if possible.
-                        .expect("generate statement");
+                    let mut stmt = conn.prepare(&sql_string)?;
                     for (i, param) in params.iter().enumerate() {
-                        stmt.raw_bind_parameter(i + 1, param.to_string())
-                            .expect("bind parameter");
+                        stmt.raw_bind_parameter(i + 1, param.to_string())?;
                     }
                     let rows: Vec<Row> = stmt
                         .raw_query()
                         .map(|row| {
-                            let string: String = row.get_unwrap(0);
+                            let string: String = row.get(0)?;
                             Ok(Row {
                                 map: indexmap! { "a".to_string() => Value::from(string)},
                             })
                         })
-                        .collect()
-                        .unwrap();
+                        .collect()?;
                     Ok(Rows { rows })
                 })
                 .await?
@@ -462,88 +472,5 @@ impl RusqliteTransaction {
         let conn = Some(conn);
         let syntax = SqliteSyntax;
         Ok(RusqliteTransaction { syntax, pool, conn })
-    }
-}
-
-// TODO: Move these tests to unit_tests.rs
-
-#[cfg(test)]
-mod tests {
-    use crate::{AnyPool, Error, Pool, Query, Transaction, Value, rusqlite::RusqlitePool, values};
-
-    async fn foo(tx: &Box<dyn Transaction>) {
-        tx.query("SELECT 'baz'", &[]).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_transaction() {
-        let url = ":memory:";
-        let pool = RusqlitePool::connect(url).await.expect("connect to sqlite");
-        pool.query("DROP TABLE IF EXISTS foo", &[])
-            .await
-            .expect("create table");
-        pool.query("CREATE TABLE foo ( bar TEXT )", &[])
-            .await
-            .expect("create table");
-        pool.query("INSERT INTO foo VALUES ('A')", &[])
-            .await
-            .expect("insert values");
-        let rows = pool
-            .query("SELECT bar FROM foo", &[])
-            .await
-            .expect("count rows");
-        assert_eq!(rows.rows.len(), 1, "count rows before");
-
-        println!("before pool {:?}", pool.pool.status());
-
-        let mut tx = pool.transaction().await.unwrap();
-        tx.query("INSERT INTO foo VALUES (456)", &[])
-            .await
-            .expect("transaction insert");
-        foo(&tx).await;
-        let rows = tx
-            .query("SELECT bar FROM foo", &[])
-            .await
-            .expect("count rows");
-        assert_eq!(rows.rows.len(), 2, "count rows inside transaction");
-
-        // WARN: Don't do this for :memory:!
-        // Because we set max_size = 1
-        // and the transaction holds one connection,
-        // asking for another connection will await forever.
-        if url != ":memory:" {
-            let rows = pool
-                .query("SELECT bar FROM foo", &[])
-                .await
-                .expect("count rows");
-            assert_eq!(rows.rows.len(), 1, "count rows during");
-        }
-
-        tx.commit().await.unwrap();
-        println!("after pool {:?}", pool.pool.status());
-        let rows = pool
-            .query("SELECT bar FROM foo", &[])
-            .await
-            .expect("count rows");
-        assert_eq!(rows.rows.len(), 2, "count rows after");
-
-        // assert!(false, "DONE");
-    }
-
-    #[tokio::test]
-    async fn test_rusqlite_anypool() -> Result<(), Error> {
-        let url = ":memory:";
-        let pool = RusqlitePool::connect(url).await?;
-        let pool: Box<dyn Pool> = Box::new(pool);
-        let pool = AnyPool::from(pool);
-
-        let sql = "SELECT $1, $2";
-        // let values = [1, 2];
-        // let values = vec![1, 2];
-        let values = vec![Value::from(1), Value::from("foo")];
-        let _values = values![1, "foo"];
-        let _rows = pool.query(sql, &values).await?;
-
-        Ok(())
     }
 }

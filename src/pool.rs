@@ -133,23 +133,22 @@ impl AnyPool {
         Ok(AnyPool::from(pool))
     }
 
-    /// syntax() for [AnyPool]
+    /// [Query::syntax()] for [AnyPool]
     pub fn syntax(&self) -> &dyn Syntax {
         self.pool.syntax()
     }
 
-    /// columns() for [AnyPool]
+    /// [Query::columns()] for [AnyPool]
     pub async fn columns(&self, table: &str) -> Result<IndexMap<String, String>, Error> {
         self.pool.columns(table).await
     }
 
-    // TODO: Combine this with columns() if possible
-    /// primary_keys() for [AnyPool]
+    /// [Query::primary_keys()] for [AnyPool]
     pub async fn primary_keys(&self, table: &str) -> Result<Vec<String>, Error> {
         self.pool.primary_keys(table).await
     }
 
-    /// execute() for [AnyPool]
+    /// [Query::execute()] for [AnyPool]
     pub async fn execute(&self, sql: &str, values: impl IntoValues) -> Result<(), Error> {
         let values = values.into_values()?.collect::<Vec<_>>();
         self.query(sql, values).await?;

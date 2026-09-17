@@ -38,7 +38,7 @@ use std::{
     hash::{Hash, Hasher},
 };
 
-use crate::{Error, JsonValue};
+use crate::{Error, JsonValue, Row};
 
 ///////////////////////////////////////////////////////////////////////////////
 // Value and ValueType
@@ -166,9 +166,9 @@ impl ValueType {
     }
 
     /// Determine the minimum type (see [ValueType::sorted()]) needed to support the given value,
-    /// where the latter is given in the form of a string. The minimum type is the first type
-    /// in the type hierarchy for which we can parse the given value string as an instance of that
-    /// type.
+    /// where the latter is given in the form of a string, relative to the type of self
+    /// Note that the minimum type is the first type in the type hierarchy starting from self's
+    /// type for which we can parse the given value string as an instance of that type.
     pub fn min_type(&self, value: &str) -> Result<ValueType, Error> {
         // If the value is an empty string, return a Null type and value.
         if value == "" {
@@ -737,6 +737,38 @@ impl Into<JsonValue> for Value {
 impl Into<JsonValue> for &Value {
     fn into(self) -> JsonValue {
         self.clone().into()
+    }
+}
+
+// Row conversions
+
+impl From<Row> for Value {
+    fn from(row: Row) -> Self {
+        let mut json_value = json!({});
+        let json_value = json_value.as_object_mut().unwrap();
+        for (key, value) in row.iter() {
+            json_value.insert(key.to_string(), value.into());
+        }
+        Value::Json(json!(json_value))
+    }
+}
+
+impl TryInto<Row> for Value {
+    type Error = Error;
+    fn try_into(self) -> Result<Row, Error> {
+        let mut row = Row::new();
+        match self {
+            Value::Json(ref json_value) => {
+                let json_value = json_value
+                    .as_object()
+                    .ok_or(Error::InputError(format!("Not JSON map value: {self:?}")))?;
+                for (key, value) in json_value {
+                    row.insert(key.to_string(), value.into());
+                }
+            }
+            _ => return Err(Error::InputError(format!("Not JSON map value: {self:?}"))),
+        }
+        Ok(row)
     }
 }
 

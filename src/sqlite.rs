@@ -15,12 +15,17 @@ pub static SQLITE_SYNTAX_NAME: &str = "sqlite";
 pub struct SqliteSyntax;
 
 impl Syntax for SqliteSyntax {
-    /// Implements [Syntax::name()] for SQLite.
+    /// Implements [Syntax::name()].
     fn name(&self) -> &str {
         SQLITE_SYNTAX_NAME
     }
 
-    /// Implements [Syntax::sql_type()] for SQLite.
+    /// Implements [Syntax::param_prefix()].
+    fn param_prefix(&self) -> &str {
+        "?"
+    }
+
+    /// Implements [Syntax::sql_type()].
     fn sql_type(&self, name: &str) -> Result<ValueType, Error> {
         let name = name.to_uppercase();
         match name.as_str() {
@@ -45,7 +50,7 @@ impl Syntax for SqliteSyntax {
         }
     }
 
-    /// Implements [Syntax::columns_sql()] for SQLite.
+    /// Implements [Syntax::columns_sql()].
     fn columns_sql(&self, table: &str) -> (String, [Value; 1]) {
         (
             r#"SELECT "name" AS "column_name", "type" AS "data_type"
@@ -56,7 +61,7 @@ impl Syntax for SqliteSyntax {
         )
     }
 
-    /// Implements [Syntax::primary_keys_sql()] for SQLiteKind.
+    /// Implements [Syntax::primary_keys_sql()].
     fn primary_keys_sql(&self, table: &str) -> (String, [Value; 1]) {
         (
             r#"SELECT "name" AS "column_name"
@@ -68,17 +73,12 @@ impl Syntax for SqliteSyntax {
         )
     }
 
-    /// Implements [Syntax::param_prefix()] for SQLite.
-    fn param_prefix(&self) -> &str {
-        "?"
-    }
-
-    /// TODO: Add docstring here.
+    /// Implements [Syntax::get_epoch_time_sql()].
     fn get_epoch_time_sql(&self) -> &str {
-        "strftime('%s', 'now')"
+        "STRFTIME('%s', 'NOW')"
     }
 
-    /// TODO: Add docstring
+    /// Implements [Syntax::which_are_tables_sql()]
     fn which_are_tables_sql(&self, objects: &[&str]) -> (String, Vec<Value>) {
         let prefix = self.param_prefix().to_string();
         let mut placeholders = vec![];
@@ -98,7 +98,7 @@ impl Syntax for SqliteSyntax {
         )
     }
 
-    /// TODO: Add docstring
+    /// Implements [Syntax::which_are_views_sql()].
     fn which_are_views_sql(&self, objects: &[&str]) -> (String, Vec<Value>) {
         let prefix = self.param_prefix().to_string();
         let mut placeholders = vec![];
@@ -118,6 +118,7 @@ impl Syntax for SqliteSyntax {
         )
     }
 
+    /// Implements [Syntax::create_table_sql()].
     fn create_table_sql(
         &self,
         table: &str,
@@ -157,6 +158,7 @@ impl Syntax for SqliteSyntax {
         Ok(sql)
     }
 
+    /// Implements [Syntax::view_sql_sql()].
     fn view_sql_sql(&self, view: &str) -> (String, [Value; 1]) {
         (
             r#"SELECT "sql" FROM "sqlite_master"
@@ -166,7 +168,7 @@ impl Syntax for SqliteSyntax {
         )
     }
 
-    /// TODO: Add docstring.
+    /// Implements [Syntax::wrap_trigger_content].
     fn wrap_trigger_content(
         &self,
         table: &str,
