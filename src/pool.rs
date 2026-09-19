@@ -44,6 +44,8 @@ use crate::{
     values,
 };
 
+static BATCH_INSERT_SIZE: usize = 100;
+
 // Note: This is dyn compatible ONLY if every impl Query uses #[async_trait].
 /// Create a database connection pool associated with the given URL.
 pub async fn connect(url: &str) -> Result<Box<dyn Pool>, Error> {
@@ -191,7 +193,12 @@ impl AnyPool {
         let max_params = match self.syntax().name() {
             "sqlite" => sqlite::MAX_PARAMS_SQLITE,
             "postgres" => postgres::MAX_PARAMS_POSTGRES,
-            _ => panic!(),
+            _ => {
+                return Err(Error::InputError(format!(
+                    "Invalid syntax: {}",
+                    self.syntax().name()
+                )));
+            }
         };
         self.edit(
             &EditType::Insert,
@@ -219,7 +226,12 @@ impl AnyPool {
         let max_params = match self.syntax().name() {
             "sqlite" => sqlite::MAX_PARAMS_SQLITE,
             "postgres" => postgres::MAX_PARAMS_POSTGRES,
-            _ => panic!(),
+            _ => {
+                return Err(Error::InputError(format!(
+                    "Invalid syntax: {}",
+                    self.syntax().name()
+                )));
+            }
         };
         self.edit(
             &EditType::Insert,
@@ -246,7 +258,12 @@ impl AnyPool {
         let max_params = match self.syntax().name() {
             "sqlite" => sqlite::MAX_PARAMS_SQLITE,
             "postgres" => postgres::MAX_PARAMS_POSTGRES,
-            _ => panic!(),
+            _ => {
+                return Err(Error::InputError(format!(
+                    "Invalid syntax: {}",
+                    self.syntax().name()
+                )));
+            }
         };
         self.edit(
             &EditType::Update,
@@ -274,7 +291,12 @@ impl AnyPool {
         let max_params = match self.syntax().name() {
             "sqlite" => sqlite::MAX_PARAMS_SQLITE,
             "postgres" => postgres::MAX_PARAMS_POSTGRES,
-            _ => panic!(),
+            _ => {
+                return Err(Error::InputError(format!(
+                    "Invalid syntax: {}",
+                    self.syntax().name()
+                )));
+            }
         };
         self.edit(
             &EditType::Update,
@@ -299,7 +321,12 @@ impl AnyPool {
         let max_params = match self.syntax().name() {
             "sqlite" => sqlite::MAX_PARAMS_SQLITE,
             "postgres" => postgres::MAX_PARAMS_POSTGRES,
-            _ => panic!(),
+            _ => {
+                return Err(Error::InputError(format!(
+                    "Invalid syntax: {}",
+                    self.syntax().name()
+                )));
+            }
         };
         self.edit(
             &EditType::Upsert,
@@ -327,7 +354,12 @@ impl AnyPool {
         let max_params = match self.syntax().name() {
             "sqlite" => sqlite::MAX_PARAMS_SQLITE,
             "postgres" => postgres::MAX_PARAMS_POSTGRES,
-            _ => panic!(),
+            _ => {
+                return Err(Error::InputError(format!(
+                    "Invalid syntax: {}",
+                    self.syntax().name()
+                )));
+            }
         };
         self.edit(
             &EditType::Upsert,
@@ -380,31 +412,34 @@ impl AnyPool {
         self.batch_insert(table, &columns, filename).await
     }
 
-    /// TODO: Add docstring.
+    /// Determine whether the given table exists in the database.
     pub async fn table_exists(&self, table: &str) -> Result<bool, Error> {
         Ok(self.which_are_tables(&[table]).await?.len() == 1)
     }
 
-    #[allow(unused)]
-    /// drop_table()
+    /// Implements [Query::drop_table()].
     pub async fn drop_table(&self, table: &str) -> Result<(), Error> {
         self.pool.drop_table(table).await?;
         self.clear_cache_for_dropped_tables(&[&table]).await?;
         Ok(())
     }
 
+    /// Implements [Query::drop_view()].
     pub async fn drop_view(&self, view: &str) -> Result<(), Error> {
         self.pool.drop_view(view).await?;
         self.clear_cache_for_dropped_tables(&[&view]).await?;
         Ok(())
     }
 
-    /// TODO: Add docstring.
+    /// Begin a transaction.
     pub async fn transaction(&self) -> Result<AnyTransaction, Error> {
         Ok(AnyTransaction::begin(self.pool.transaction().await?))
     }
 
-    /// TODO: Add docstring.
+    /// Execute the given SQL command with the given parameters, returning a vector of rows.
+    /// If the result of the command exists in the query cache for the given tables, get the
+    /// value from there instead of from the tables themselves, in accordance with the given
+    /// [CachingStrategy].
     pub async fn cache(&self, sql: &str, values: impl IntoValues) -> Result<Rows, Error> {
         match self.get_caching_strategy() {
             CachingStrategy::None => self.cache_tables(&[], sql, values).await,
@@ -421,27 +456,38 @@ impl AnyPool {
         }
     }
 
-    /// TODO: Add docstring.
+    /// Set the caching strategy.
     pub fn set_caching_strategy(&mut self, strategy: &CachingStrategy) {
         self.caching_strategy = *strategy;
     }
 
-    /// Implements
+    /// Get the current caching strategy.
     pub fn get_caching_strategy(&self) -> CachingStrategy {
         self.caching_strategy
     }
 
-    /// Implements
+    /// When turned on, and the current [CachingStrategy] is not [None](CachingStrategy::None),
+    /// SQL commands executed through the API will be automatically checked to see if they
+    /// involve edits and/or drops of database tables. If they do then the cache will be
+    /// automatically updated in accordance with the current [CachingStrategy].
+    /// Note that setting this flag does not imply that the results of queries should be
+    /// cached. Setting this flag only means that the current contents, if any, of the cache
+    /// table should be kept up to date whenever the data in the database is edited
+    /// via one of the query_* or execute() methods in [DbQuery]. To add new content to the cache
+    /// that can be later be reused you must explicitly use the [DbQuery::cache()] method.
+    /// To explicitly skip the housekeeping implied by setting the cache-aware-query flag, even
+    /// when it is set to on, use [DbQuery::execute_no_cache_clean()] or
+    /// [DbQuery::query_no_cache_clean()].
     pub fn set_cache_aware_query(&mut self, value: bool) {
         self.cache_aware_query = value;
     }
 
-    /// Implements
+    /// Returns true if the cache-aware-query option is currently on.
     pub fn get_cache_aware_query(&self) -> bool {
         self.cache_aware_query
     }
 
-    /// TODO: Add docstring.
+    /// Returns the current number of rows in the query cache.
     pub async fn count_query_cache_rows(&self) -> Result<u64, Error> {
         match self.caching_strategy {
             CachingStrategy::None => Ok(0),
@@ -451,15 +497,14 @@ impl AnyPool {
             _ => {
                 let rows = self
                     .query(&format!("SELECT COUNT(1) from {QUERY_CACHE_TABLE}"), ())
-                    .await
-                    .unwrap();
+                    .await?;
                 let value: u64 = rows.try_into_value::<u64>()?;
                 Ok(value)
             }
         }
     }
 
-    /// TODO: Add docstring.
+    /// Returns the current number of rows in the tabke cache.
     pub async fn count_table_cache_rows(&self) -> Result<u64, Error> {
         match self.caching_strategy {
             CachingStrategy::None => Ok(0),
@@ -469,29 +514,28 @@ impl AnyPool {
             _ => {
                 let rows = self
                     .query(&format!("SELECT COUNT(1) from {TABLE_CACHE_TABLE}"), ())
-                    .await
-                    .unwrap();
+                    .await?;
                 let value: u64 = rows.try_into_value::<u64>()?;
                 Ok(value)
             }
         }
     }
 
-    /// TODO: Add docstring.
+    /// Clear the meta-cache.
     pub fn clear_meta_cache(&self) -> Result<(), Error> {
         let mut cache = self.meta_cache.get_cache()?;
         cache.clear();
         Ok(())
     }
 
-    /// TODO: Add docstring.
+    /// Clear the memory query cache.
     pub fn clear_memory_query_cache(&self) -> Result<(), Error> {
         let mut cache = self.memory_query_cache.get_cache()?;
         cache.clear();
         Ok(())
     }
 
-    /// TODO: Add docstring.
+    /// Clear the memory table cache.
     pub fn clear_memory_table_cache(&self) -> Result<(), Error> {
         let mut cache = self.memory_table_cache.get_cache()?;
         cache.clear();
@@ -571,11 +615,10 @@ impl AnyPool {
         }
     }
 
+    /// Look in the cache to see if there is an entry corresponding to the given SQL
+    /// string for the given tables and parameters. If so, return the data from the
+    /// cache, otherwise execute the given SQL statement on the actualy specified tables.
     async fn db_cache(&self, tables: &[&str], sql: &str, params: &[Value]) -> Result<Rows, Error> {
-        // Look in the cache to see if there is an entry corresponding to the given SQL
-        // string for the given tables and parameters. If so, return the data from the
-        // cache, otherwise execute the given SQL statement on the actualy specified
-        // tables.
         let prefix = self.syntax().param_prefix().to_string();
         let cache_sql = format!(
             r#"SELECT {prefix}1||rtrim(ltrim("value", '['), ']')||{prefix}2 AS "value"
@@ -655,6 +698,7 @@ impl AnyPool {
         }
     }
 
+    /// The in-memory version of [AnyPool::db_cache()].
     async fn mem_cache(
         &self,
         tables: &[&str],
@@ -847,7 +891,8 @@ impl AnyPool {
         }
     }
 
-    /// TODO: Add docstring.
+    /// Create the triggers used in [CachingStrategy::Trigger] to implement caching for the
+    /// given table.
     async fn create_table_caching_triggers_for_table(&self, table: &str) -> Result<(), Error> {
         let sql = self
             .syntax()
@@ -857,7 +902,8 @@ impl AnyPool {
         Ok(())
     }
 
-    /// TODO: Add docstring.
+    /// Create the triggers used in [CachingStrategy::Trigger] to implement caching for the
+    /// given view.
     async fn create_table_caching_triggers_for_view(
         &self,
         table: &str,
@@ -1207,8 +1253,7 @@ impl AnyPool {
         columns: &IndexMap<String, Column>,
         filename: &str,
     ) -> Result<(), Error> {
-        // TODO: Add a static constant.
-        let batch_size = 100;
+        let batch_size = BATCH_INSERT_SIZE;
 
         eprintln!(
             "Loading table '{table}' from '{filename}' using batch_insert() \
@@ -1674,14 +1719,6 @@ impl AnyPool {
             }
             false => Ok(0),
         }
-    }
-
-    // TODO: This function is unused. If it is unneeded, remove it.
-    /// Gets the last time the given table was modified, as read from the table cache table.
-    /// If there is no entry for the table in the table cache, or if the table cache does not
-    /// exist, returns 0.
-    async fn _last_modified(&self, table: &str) -> Result<u64, Error> {
-        self.get_latest_last_modified(&[table]).await
     }
 
     /// Gets the last time that the given table was verified, as read from the query cache table.

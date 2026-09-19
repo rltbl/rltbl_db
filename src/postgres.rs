@@ -17,17 +17,17 @@ pub static POSTGRES_SYNTAX_NAME: &str = "postgres";
 pub struct PostgresSyntax;
 
 impl Syntax for PostgresSyntax {
-    /// Implements [Syntax::name()] for [PostgresSyntax]. Returns [POSTGRES_SYNTAX_NAME].
+    /// Implements [Syntax::name()]. Returns [POSTGRES_SYNTAX_NAME].
     fn name(&self) -> &str {
         POSTGRES_SYNTAX_NAME
     }
 
-    /// Implements [Syntax::param_prefix()] for [PostgresSyntax]
+    /// Implements [Syntax::param_prefix()].
     fn param_prefix(&self) -> &str {
         "$"
     }
 
-    /// Implements [Syntax::sql_type()] for [PostgresSyntax]
+    /// Implements [Syntax::sql_type()].
     fn sql_type(&self, name: &str) -> Result<ValueType, Error> {
         let name = name.to_uppercase();
         match name.as_str() {
@@ -53,7 +53,7 @@ impl Syntax for PostgresSyntax {
         }
     }
 
-    /// Implements [Syntax::columns_sql()] for [PostgresSyntax]
+    /// Implements [Syntax::columns_sql()].
     fn columns_sql(&self, table: &str) -> (String, [Value; 1]) {
         (
             r#"SELECT
@@ -74,7 +74,7 @@ impl Syntax for PostgresSyntax {
         )
     }
 
-    /// Implements [Syntax::primary_keys_sql()] for [PostgresSyntax].
+    /// Implements [Syntax::primary_keys_sql()].
     fn primary_keys_sql(&self, table: &str) -> (String, [Value; 1]) {
         (
             r#"SELECT "kcu"."column_name"
@@ -95,12 +95,12 @@ impl Syntax for PostgresSyntax {
         )
     }
 
-    /// TODO: Add docstring here.
+    /// Implements [Syntax::get_epoch_time_sql()].
     fn get_epoch_time_sql(&self) -> &str {
         "extract(epoch from now())"
     }
 
-    /// TODO: Add docstring.
+    /// Implements [Syntax::which_are_tables_sql()].
     fn which_are_tables_sql(&self, objects: &[&str]) -> (String, Vec<Value>) {
         let prefix = self.param_prefix().to_string();
         let mut placeholders = vec![];
@@ -127,7 +127,7 @@ impl Syntax for PostgresSyntax {
         )
     }
 
-    /// TODO: Add docstring.
+    /// Implements [Syntax::which_are_views_sql()].
     fn which_are_views_sql(&self, objects: &[&str]) -> (String, Vec<Value>) {
         let prefix = self.param_prefix().to_string();
         let mut placeholders = vec![];
@@ -154,6 +154,7 @@ impl Syntax for PostgresSyntax {
         )
     }
 
+    /// Implements [Syntax::create_table_sql()].
     fn create_table_sql(
         &self,
         table: &str,
@@ -193,6 +194,7 @@ impl Syntax for PostgresSyntax {
         Ok(sql)
     }
 
+    /// Implements [Syntax::view_sql_sql()].
     fn view_sql_sql(&self, view: &str) -> (String, [Value; 1]) {
         (
             format!(
@@ -209,7 +211,7 @@ impl Syntax for PostgresSyntax {
         )
     }
 
-    /// TODO: Add docstring.
+    /// Implements [Syntax::wrap_trigger_content()].
     fn wrap_trigger_content(
         &self,
         table: &str,

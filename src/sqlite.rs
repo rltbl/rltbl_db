@@ -15,7 +15,7 @@ pub static SQLITE_SYNTAX_NAME: &str = "sqlite";
 pub struct SqliteSyntax;
 
 impl Syntax for SqliteSyntax {
-    /// Implements [Syntax::name()].
+    /// Implements [Syntax::name()]. Returns [SQLITE_SYNTAX_NAME].
     fn name(&self) -> &str {
         SQLITE_SYNTAX_NAME
     }

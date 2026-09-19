@@ -337,6 +337,7 @@ pub fn get_accessed_tables(sql: &str) -> Result<BTreeSet<String>, Error> {
         let children = root_node
             .children(&mut root_node.walk())
             .collect::<Vec<_>>();
+        // Note that these unwraps are safe because of the first sub-condition:
         if children.len() > 0 && children.first().unwrap().kind().to_lowercase() == "transaction" {
             children
                 .first()
@@ -392,6 +393,7 @@ pub fn get_affected_tables(sql: &str) -> Result<(BTreeSet<String>, BTreeSet<Stri
         let children = root_node
             .children(&mut root_node.walk())
             .collect::<Vec<_>>();
+        // Note that these unwraps are safe because of the first sub-condition:
         if children.len() > 0 && children.first().unwrap().kind().to_lowercase() == "transaction" {
             children
                 .first()

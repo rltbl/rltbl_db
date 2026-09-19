@@ -508,6 +508,10 @@ impl Value {
         self.as_i64().is_some()
     }
 
+    pub fn is_i128(&self) -> bool {
+        self.as_i128().is_some()
+    }
+
     pub fn is_u8(&self) -> bool {
         self.as_u8().is_some()
     }
@@ -522,6 +526,10 @@ impl Value {
 
     pub fn is_u64(&self) -> bool {
         self.as_u64().is_some()
+    }
+
+    pub fn is_u128(&self) -> bool {
+        self.as_u128().is_some()
     }
 
     pub fn is_f32(&self) -> bool {
@@ -570,6 +578,10 @@ impl Value {
         self.try_into().ok()
     }
 
+    pub fn as_i128(&self) -> Option<i128> {
+        self.try_into().ok()
+    }
+
     pub fn as_u8(&self) -> Option<u8> {
         self.try_into().ok()
     }
@@ -583,6 +595,10 @@ impl Value {
     }
 
     pub fn as_u64(&self) -> Option<u64> {
+        self.try_into().ok()
+    }
+
+    pub fn as_u128(&self) -> Option<u128> {
         self.try_into().ok()
     }
 
@@ -647,6 +663,12 @@ impl TryInto<()> for &Value {
     }
 }
 
+impl From<()> for Value {
+    fn from(_value: ()) -> Self {
+        Value::Null
+    }
+}
+
 // String and &str conversions:
 impl Into<String> for Value {
     fn into(self) -> String {
@@ -676,6 +698,12 @@ impl Into<String> for &Value {
 
 impl From<&str> for Value {
     fn from(value: &str) -> Self {
+        Self::Text(value.to_string())
+    }
+}
+
+impl From<char> for Value {
+    fn from(value: char) -> Self {
         Self::Text(value.to_string())
     }
 }
@@ -774,8 +802,6 @@ impl TryInto<Row> for Value {
 
 // Primitive type conversions.
 
-// TODO: Add more for all of the remaining rust primitive types, including isize and usize
-
 impl From<bool> for Value {
     fn from(item: bool) -> Self {
         Value::Boolean(item)
@@ -803,6 +829,16 @@ impl From<i32> for Value {
 impl From<i64> for Value {
     fn from(value: i64) -> Self {
         Self::BigInteger(value)
+    }
+}
+
+impl From<i128> for Value {
+    fn from(value: i128) -> Self {
+        if value <= i64::MAX as i128 {
+            Self::BigInteger(value as i64)
+        } else {
+            Value::Numeric(value.into())
+        }
     }
 }
 
@@ -850,6 +886,16 @@ impl From<u64> for Value {
             Value::BigInteger(item as i64)
         } else {
             Value::Numeric(Decimal::from(item))
+        }
+    }
+}
+
+impl From<u128> for Value {
+    fn from(item: u128) -> Self {
+        if item <= i64::MAX as u128 {
+            Self::BigInteger(item as i64)
+        } else {
+            Value::Numeric(item.into())
         }
     }
 }
@@ -947,6 +993,20 @@ impl TryFrom<Value> for i64 {
     }
 }
 
+impl TryFrom<Value> for i128 {
+    type Error = Error;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::SmallInteger(number) => Ok(i128::try_from(number)?),
+            Value::Integer(number) => Ok(i128::try_from(number)?),
+            Value::BigInteger(number) => Ok(i128::try_from(number)?),
+            Value::Numeric(number) => Ok(i128::try_from(number)?),
+            _ => Err(Error::InputError(format!("Not an integer: {value:?}"))),
+        }
+    }
+}
+
 impl TryFrom<Value> for u8 {
     type Error = Error;
 
@@ -994,6 +1054,20 @@ impl TryFrom<Value> for u64 {
             Value::SmallInteger(number) => Ok(u64::try_from(number)?),
             Value::Integer(number) => Ok(u64::try_from(number)?),
             Value::BigInteger(number) => Ok(u64::try_from(number)?),
+            _ => Err(Error::InputError(format!("Not an integer: {value:?}"))),
+        }
+    }
+}
+
+impl TryFrom<Value> for u128 {
+    type Error = Error;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::SmallInteger(number) => Ok(u128::try_from(number)?),
+            Value::Integer(number) => Ok(u128::try_from(number)?),
+            Value::BigInteger(number) => Ok(u128::try_from(number)?),
+            Value::Numeric(number) => Ok(u128::try_from(number)?),
             _ => Err(Error::InputError(format!("Not an integer: {value:?}"))),
         }
     }
@@ -1084,6 +1158,14 @@ impl TryFrom<&Value> for i64 {
     }
 }
 
+impl TryFrom<&Value> for i128 {
+    type Error = Error;
+
+    fn try_from(value: &Value) -> Result<Self, Self::Error> {
+        value.clone().try_into()
+    }
+}
+
 impl TryFrom<&Value> for u8 {
     type Error = Error;
 
@@ -1109,6 +1191,14 @@ impl TryFrom<&Value> for u32 {
 }
 
 impl TryFrom<&Value> for u64 {
+    type Error = Error;
+
+    fn try_from(value: &Value) -> Result<Self, Self::Error> {
+        value.clone().try_into()
+    }
+}
+
+impl TryFrom<&Value> for u128 {
     type Error = Error;
 
     fn try_from(value: &Value) -> Result<Self, Self::Error> {

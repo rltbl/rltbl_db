@@ -311,39 +311,3 @@ macro_rules! z_old_db_row {
         }
     };
 }
-
-#[cfg(test)]
-mod tests {
-    use crate::z_old_db_value::{DbRow, DbValue};
-
-    #[test]
-    fn test_macros() {
-        let params = z_old_params![1_i32, "foo", 1.1_f64];
-        assert_eq!(
-            params,
-            [
-                DbValue::Integer(1),
-                DbValue::Text("foo".to_string()),
-                DbValue::BigReal(1.1_f64)
-            ]
-        );
-
-        // Row with values:
-        let mut expected_db_row = DbRow::new();
-        expected_db_row
-            .map
-            .insert("foo".to_string(), DbValue::Boolean(true));
-        expected_db_row
-            .map
-            .insert("bar".to_string(), DbValue::BigReal(1_f64));
-
-
-        assert_eq!(
-            expected_db_row,
-            z_old_db_row! { "foo" => true, "bar" => 1_f64}
-        );
-
-        // Empty row:
-        assert_eq!(z_old_db_row! { }, DbRow::new());
-    }
-}

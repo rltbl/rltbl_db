@@ -37,6 +37,33 @@ mod tests {
     #[cfg(feature = "tokio-postgres")]
     use crate::tokio_postgres::PostgresPool;
 
+    #[test]
+    fn test_macros() {
+        let params = values![1_i32, "foo", 1.1_f64];
+        assert_eq!(
+            params,
+            [
+                Value::Integer(1),
+                Value::Text("foo".to_string()),
+                Value::BigReal(1.1_f64)
+            ]
+        );
+
+        // Row with values:
+        let mut expected_db_row = Row::new();
+        expected_db_row
+            .map
+            .insert("foo".to_string(), Value::Boolean(true));
+        expected_db_row
+            .map
+            .insert("bar".to_string(), Value::BigReal(1_f64));
+
+        assert_eq!(expected_db_row, row! { "foo" => true, "bar" => 1_f64});
+
+        // Empty row:
+        assert_eq!(row! {}, Row::new());
+    }
+
     #[tokio::test]
     async fn test_primary_keys() {
         #[cfg(feature = "rusqlite")]
@@ -408,20 +435,7 @@ mod tests {
                    )
                    VALUES ({pp}1, {pp}2, {pp}3, {pp}4, {pp}5, {pp}6, {pp}7, {pp}8, {pp}9, {pp}10)"#,
             ),
-            // TODO: It would be nice if we could use the old syntax here:
-            //&values!["foo", (), 1.05_f64, (), 1_i64, (), true, (), dec!(1), ()],
-            &values![
-                "foo",
-                Value::Null,
-                1.05_f64,
-                Value::Null,
-                1_i64,
-                Value::Null,
-                true,
-                Value::Null,
-                dec!(1),
-                Value::Null
-            ],
+            &values!["foo", (), 1.05_f64, (), 1_i64, (), true, (), dec!(1), ()],
         )
         .await
         .unwrap();
