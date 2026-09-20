@@ -10,7 +10,11 @@ SHELL := bash
 
 .PHONY: test test_default test_libsql
 
-test: test_default # test_libsql
+check:
+	cargo check
+	cargo check --no-default-features --features libsql
+
+test: test_libsql # test_default test_libsql
 
 test_default: | tests/input/table1.csv
 	@echo "Running unit tests using default features."

@@ -219,9 +219,8 @@ pub mod rusqlite;
 #[cfg(feature = "tokio-postgres")]
 pub mod tokio_postgres;
 
-// TODO:
-// #[cfg(feature = "libsql")]
-// pub mod libsql;
+#[cfg(feature = "libsql")]
+pub mod libsql;
 
 ///////////////////////////////////////////////
 // Macro definitions.
@@ -257,9 +256,3 @@ macro_rules! row {
         }
     };
 }
-
-// TODO: Remove everything below right before merging this PR.
-///////////////////////////// OLD CODE /////////////////////////////////////////////////////////////
-
-#[cfg(feature = "libsql")]
-pub mod z_old_libsql;

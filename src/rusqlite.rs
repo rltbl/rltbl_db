@@ -192,7 +192,6 @@ fn add_rusqlite_regexp_function(db: &rusqlite::Connection) -> Result<(), Error> 
 /// Represents a deadpool-sqlite database connection pool.
 #[derive(Debug)]
 pub struct RusqlitePool {
-    /// The [Syntax] of this type of pool is [SqliteSyntax].
     syntax: SqliteSyntax,
     pub pool: deadpool_sqlite::Pool,
 }
