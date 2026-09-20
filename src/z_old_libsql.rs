@@ -1,5 +1,6 @@
 //! [libsql](<https://crates.io/crates/deadpool-libsql>) implementation for rltbl_db.
 
+/*
 use crate::{
     z_old_any::AnyPool,
     z_old_cache::{CachingStrategy, clear_cache_for_dropped_tables},
@@ -584,3 +585,4 @@ mod tests {
         pool.drop_table("text_max_params").await.unwrap();
     }
 }
+*/

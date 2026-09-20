@@ -3,10 +3,10 @@
 /// To connect to any supported database using a URL:
 ///
 /// ```
-/// use rltbl_db::{z_old_any::AnyPool, z_old_core::{DbError, DbQuery}};
+/// use rltbl_db::{AnyPool, Error, Query};
 ///
-/// async fn example() -> Result<String, DbError> {
-///     let pool = AnyPool::connect("test.db").await?;
+/// async fn example() -> Result<String, Error> {
+///     let pool = AnyPool::connect(":memory:").await?;
 ///     pool.execute_batch(
 ///         "DROP TABLE IF EXISTS test;\
 ///          CREATE TABLE test ( value TEXT );\
@@ -14,8 +14,7 @@
 ///     ).await?;
 ///     let value: String = pool.query("SELECT value FROM test;", ())
 ///         .await?
-///         .value()?
-///         .into();
+///         .try_into_value::<String>()?;
 ///     Ok(value)
 /// }
 /// ```
@@ -473,11 +472,11 @@ impl AnyPool {
     /// Note that setting this flag does not imply that the results of queries should be
     /// cached. Setting this flag only means that the current contents, if any, of the cache
     /// table should be kept up to date whenever the data in the database is edited
-    /// via one of the query_* or execute() methods in [DbQuery]. To add new content to the cache
-    /// that can be later be reused you must explicitly use the [DbQuery::cache()] method.
+    /// via one of the query_* or execute() methods in [Query]. To add new content to the cache
+    /// that can be later be reused you must explicitly use the [Query::cache()] method.
     /// To explicitly skip the housekeeping implied by setting the cache-aware-query flag, even
-    /// when it is set to on, use [DbQuery::execute_no_cache_clean()] or
-    /// [DbQuery::query_no_cache_clean()].
+    /// when it is set to on, use [Query::execute_no_cache_clean()] or
+    /// [Query::query_no_cache_clean()].
     pub fn set_cache_aware_query(&mut self, value: bool) {
         self.cache_aware_query = value;
     }

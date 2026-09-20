@@ -6,7 +6,7 @@ use indexmap::IndexMap;
 use crate::{Error, Rows, Syntax, Value};
 
 #[async_trait]
-pub trait Query: std::fmt::Debug + Sync {
+pub trait Query: std::fmt::Debug + Sync + Send {
     /// Returns the SQL syntax supported by this [Query]-able.
     fn syntax(&self) -> &dyn Syntax;
 

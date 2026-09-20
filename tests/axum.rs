@@ -4,26 +4,26 @@ use axum::{
     response::{Html, IntoResponse},
     routing::get,
 };
-use rltbl_db::{z_old_any::AnyPool, z_old_core::DbQuery, z_old_db_row, z_old_db_value::DbRow};
-use std::{marker::Sync, sync::Arc};
+use rltbl_db::{AnyPool, row};
+use std::sync::Arc;
 use tower_service::Service;
 
-async fn get_root(State(pool): State<Arc<impl DbQuery + Sync>>) -> impl IntoResponse {
+async fn get_root(State(pool): State<Arc<AnyPool>>) -> impl IntoResponse {
     let value = pool
         .query("SELECT value FROM test LIMIT 1", ())
         .await
         .unwrap();
-    let value: String = value.value().unwrap().into();
+    let value: String = value.try_into_value::<String>().unwrap();
     Html(value)
 }
 
 async fn run_axum(url: &str) {
     let pool = AnyPool::connect(url).await.unwrap();
-    let kind = pool.kind();
+    let kind = pool.syntax().name();
     let cascade = match kind.to_string().as_str() {
         "sqlite" => "",
-        "postgresql" => " CASCADE",
-        _ => panic!("Invalid kind: '{kind}'"),
+        "postgres" => " CASCADE",
+        _ => panic!("Invalid kind: '{}'", pool.syntax().name()),
     };
     pool.execute_batch(&format!(
         "DROP TABLE IF EXISTS test{cascade};\
@@ -35,7 +35,7 @@ async fn run_axum(url: &str) {
     pool.insert(
         "test",
         &["value"],
-        &[&z_old_db_row! {
+        &[row! {
             "value" => "foo",
         }],
     )

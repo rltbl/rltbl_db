@@ -261,53 +261,5 @@ macro_rules! row {
 // TODO: Remove everything below right before merging this PR.
 ///////////////////////////// OLD CODE /////////////////////////////////////////////////////////////
 
-pub mod z_old_any;
-pub mod z_old_cache;
-pub mod z_old_core;
-pub mod z_old_db_kind;
-pub mod z_old_db_value;
-pub mod z_old_parse;
-pub mod z_old_serde;
-pub mod z_old_shared;
-
-#[cfg(feature = "rusqlite")]
-pub mod z_old_rusqlite;
-
-#[cfg(feature = "tokio-postgres")]
-pub mod z_old_tokio_postgres;
-
 #[cfg(feature = "libsql")]
 pub mod z_old_libsql;
-
-// Macro definitions
-
-/// Converts a list of assorted types implementing [z_old_db_value::IntoDbValue] into [z_old_db_value::DbParams]
-#[macro_export]
-macro_rules! z_old_params {
-    () => {
-       ()
-    };
-    ($($value:expr),* $(,)?) => {{
-        use $crate::z_old_db_value::IntoDbValue;
-        [$($value.into_db_value()),*]
-
-    }};
-}
-
-/// Converts a set of pairs into a [z_old_db_value::DbRow].
-#[macro_export]
-macro_rules! z_old_db_row {
-    ($($key:expr => $value:expr,)+) => {
-        DbRow {map: indexmap::indexmap!($($key.to_string() => $value.into()),+) }
-    };
-    ($($key:expr => $value:expr),*) => {
-        {
-            const CAP: usize = <[()]>::len(&[$({ stringify!($key); }),*]);
-            let mut _map = indexmap::IndexMap::with_capacity(CAP);
-            $(
-                let _ = _map.insert($key.to_string(), $value.into());
-            )*
-                DbRow { map: _map }
-        }
-    };
-}
