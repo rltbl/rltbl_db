@@ -25,17 +25,23 @@ mod tests {
         values,
     };
 
+    #[cfg(feature = "libsql")]
+    use std::ops::Deref;
+
     #[cfg(feature = "rusqlite")]
     use crate::rusqlite::RusqlitePool;
 
-    #[cfg(feature = "rusqlite")]
+    #[cfg(feature = "tokio-postgres")]
+    use crate::tokio_postgres::PostgresPool;
+
+    #[cfg(feature = "libsql")]
+    use crate::libsql::LibSQLPool;
+
+    #[cfg(any(feature = "rusqlite", feature = "libsql"))]
     use crate::sqlite::MAX_PARAMS_SQLITE;
 
     #[cfg(feature = "tokio-postgres")]
     use crate::postgres::MAX_PARAMS_POSTGRES;
-
-    #[cfg(feature = "tokio-postgres")]
-    use crate::tokio_postgres::PostgresPool;
 
     #[test]
     fn test_macros() {
@@ -118,13 +124,10 @@ mod tests {
         text_column_query(":memory:").await;
         #[cfg(feature = "tokio-postgres")]
         text_column_query("postgresql:///rltbl_db").await;
-        // TODO:
-        //#[cfg(feature = "libsql")]
-        //text_column_query(":memory:").await;
+        #[cfg(feature = "libsql")]
+        text_column_query(":memory:").await;
     }
 
-    // TODO (later): Remove #[allow(unused)] from everywhere in the code.
-    #[allow(unused)]
     async fn text_column_query(url: &str) {
         let pool = AnyPool::connect(url).await.unwrap();
         let syntax = pool.syntax();
@@ -209,12 +212,10 @@ mod tests {
         integer_column_query(":memory:").await;
         #[cfg(feature = "tokio-postgres")]
         integer_column_query("postgresql:///rltbl_db").await;
-        // TODO:
-        //#[cfg(feature = "libsql")]
-        //integer_column_query(":memory:").await;
+        #[cfg(feature = "libsql")]
+        integer_column_query(":memory:").await;
     }
 
-    #[allow(unused)]
     async fn integer_column_query(url: &str) {
         let pool = AnyPool::connect(url).await.unwrap();
         let syntax = pool.syntax();
@@ -286,12 +287,10 @@ mod tests {
         float_column_query(":memory:").await;
         #[cfg(feature = "tokio-postgres")]
         float_column_query("postgresql:///rltbl_db").await;
-        // TODO:
-        //#[cfg(feature = "libsql")]
-        //float_column_query(":memory:").await;
+        #[cfg(feature = "libsql")]
+        float_column_query(":memory:").await;
     }
 
-    #[allow(unused)]
     async fn float_column_query(url: &str) {
         let pool = AnyPool::connect(url).await.unwrap();
         let syntax = pool.syntax();
@@ -384,12 +383,10 @@ mod tests {
         mixed_column_query(":memory:").await;
         #[cfg(feature = "tokio-postgres")]
         mixed_column_query("postgresql:///rltbl_db").await;
-        // TODO:
-        // #[cfg(feature = "libsql")]
-        // mixed_column_query(":memory:").await;
+        #[cfg(feature = "libsql")]
+        mixed_column_query(":memory:").await;
     }
 
-    #[allow(unused)]
     async fn mixed_column_query(url: &str) {
         let pool = AnyPool::connect(url).await.unwrap();
         let syntax = pool.syntax();
@@ -525,12 +522,10 @@ mod tests {
         input_params(":memory:").await;
         #[cfg(feature = "tokio-postgres")]
         input_params("postgresql:///rltbl_db").await;
-        // TODO:
-        // #[cfg(feature = "libsql")]
-        // input_params(":memory:").await;
+        #[cfg(feature = "libsql")]
+        input_params(":memory:").await;
     }
 
-    #[allow(unused)]
     async fn input_params(url: &str) {
         let pool = AnyPool::connect(url).await.unwrap();
         let syntax = pool.syntax();
@@ -653,12 +648,10 @@ mod tests {
         drop_table(":memory:").await;
         #[cfg(feature = "tokio-postgres")]
         drop_table("postgresql:///rltbl_db").await;
-        // TODO:
-        //#[cfg(feature = "libsql")]
-        //drop_table(":memory:").await;
+        #[cfg(feature = "libsql")]
+        drop_table(":memory:").await;
     }
 
-    #[allow(unused)]
     async fn drop_table(url: &str) {
         let pool = AnyPool::connect(url).await.unwrap();
         let syntax = pool.syntax();
@@ -704,12 +697,10 @@ mod tests {
         insert(":memory:").await;
         #[cfg(feature = "tokio-postgres")]
         insert("postgresql:///rltbl_db").await;
-        // TODO:
-        // #[cfg(feature = "libsql")]
-        // insert(":memory:").await;
+        #[cfg(feature = "libsql")]
+        insert(":memory:").await;
     }
 
-    #[allow(unused)]
     async fn insert(url: &str) {
         let pool = AnyPool::connect(url).await.unwrap();
         let syntax = pool.syntax();
@@ -789,12 +780,10 @@ mod tests {
         insert_returning(":memory:").await;
         #[cfg(feature = "tokio-postgres")]
         insert_returning("postgresql:///rltbl_db").await;
-        // TODO:
-        // #[cfg(feature = "libsql")]
-        // insert_returning(":memory:").await;
+        #[cfg(feature = "libsql")]
+        insert_returning(":memory:").await;
     }
 
-    #[allow(unused)]
     async fn insert_returning(url: &str) {
         let pool = AnyPool::connect(url).await.unwrap();
         let syntax = pool.syntax();
@@ -898,12 +887,10 @@ mod tests {
         update(":memory:").await;
         #[cfg(feature = "tokio-postgres")]
         update("postgresql:///rltbl_db").await;
-        // TODO:
-        //#[cfg(feature = "libsql")]
-        //update(":memory:").await;
+        #[cfg(feature = "libsql")]
+        update(":memory:").await;
     }
 
-    #[allow(unused)]
     async fn update(url: &str) {
         let pool = AnyPool::connect(url).await.unwrap();
         let syntax = pool.syntax();
@@ -1005,12 +992,10 @@ mod tests {
         update_returning(":memory:").await;
         #[cfg(feature = "tokio-postgres")]
         update_returning("postgresql:///rltbl_db").await;
-        // TODO:
-        // #[cfg(feature = "libsql")]
-        // update_returning(":memory:").await;
+        #[cfg(feature = "libsql")]
+        update_returning(":memory:").await;
     }
 
-    #[allow(unused)]
     async fn update_returning(url: &str) {
         let pool = AnyPool::connect(url).await.unwrap();
         let syntax = pool.syntax();
@@ -1214,12 +1199,10 @@ mod tests {
         upsert(":memory:").await;
         #[cfg(feature = "tokio-postgres")]
         upsert("postgresql:///rltbl_db").await;
-        // TODO:
-        // #[cfg(feature = "libsql")]
-        // upsert(":memory:").await;
+        #[cfg(feature = "libsql")]
+        upsert(":memory:").await;
     }
 
-    #[allow(unused)]
     async fn upsert(url: &str) {
         let pool = AnyPool::connect(url).await.unwrap();
         let syntax = pool.syntax();
@@ -1327,12 +1310,10 @@ mod tests {
         upsert_returning(":memory:").await;
         #[cfg(feature = "tokio-postgres")]
         upsert_returning("postgresql:///rltbl_db").await;
-        // TODO:
-        //#[cfg(feature = "libsql")]
-        //upsert_returning(":memory:").await;
+        #[cfg(feature = "libsql")]
+        upsert_returning(":memory:").await;
     }
 
-    #[allow(unused)]
     async fn upsert_returning(url: &str) {
         let pool = AnyPool::connect(url).await.unwrap();
         let syntax = pool.syntax();
@@ -1434,7 +1415,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_caching() {
-        #[allow(unused)]
         let all_strategies = ["truncate_all", "truncate", "trigger", "memory:5"]
             .iter()
             .map(|strategy| CachingStrategy::from_str(strategy).unwrap())
@@ -1459,22 +1439,18 @@ mod tests {
                 view_caching(&mut pool, strategy).await;
             }
         }
-        // TODO:
-        // #[cfg(feature = "libsql")]
-        // {
-        //     let mut pool = AnyPool::connect(":memory:").await.unwrap();
-        //     for caching_strategy in &all_strategies {
-        //         table_caching(&mut pool, &caching_strategy).await;
-        //         pool.clear_meta_cache()?;
-        //     }
-        //     for strategy in &all_strategies {
-        //         view_caching(&mut pool, strategy).await;
-        //         pool.clear_meta_cache()?;
-        //     }
-        // }
+        #[cfg(feature = "libsql")]
+        {
+            let mut pool = AnyPool::connect(":memory:").await.unwrap();
+            for caching_strategy in &all_strategies {
+                table_caching(&mut pool, &caching_strategy).await;
+            }
+            for strategy in &all_strategies {
+                view_caching(&mut pool, strategy).await;
+            }
+        }
     }
 
-    #[allow(unused)]
     async fn table_caching(pool: &mut AnyPool, strategy: &CachingStrategy) {
         pool.clear_meta_cache().unwrap();
         pool.clear_memory_table_cache().unwrap();
@@ -1760,7 +1736,6 @@ mod tests {
         pool.drop_table("test_table_caching_2").await.unwrap();
     }
 
-    #[allow(unused)]
     async fn view_caching(pool: &mut AnyPool, strategy: &CachingStrategy) {
         pool.clear_meta_cache().unwrap();
         pool.clear_memory_table_cache().unwrap();
@@ -1956,9 +1931,7 @@ mod tests {
         #[cfg(feature = "tokio-postgres")]
         perform_caching("postgresql:///rltbl_db", runs, edit_rate, fail_after).await;
         #[cfg(feature = "libsql")]
-        {
-            // perform_caching(":memory:", runs, edit_rate, fail_after).await;
-        }
+        perform_caching(":memory:", runs, edit_rate, fail_after).await;
     }
 
     // Performs the caching performance test on the database located at the given url, using
@@ -2255,9 +2228,7 @@ mod tests {
         #[cfg(feature = "tokio-postgres")]
         sql_type("postgresql:///rltbl_db").await;
         #[cfg(feature = "libsql")]
-        {
-            // sql_type(":memory:").await;
-        }
+        sql_type(":memory:").await;
     }
 
     async fn sql_type(url: &str) {
@@ -4046,7 +4017,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
+    // #[ignore]
     fn test_hashing() {
         let mut test_map = HashMap::new();
         for (i, value) in [
@@ -4082,9 +4053,7 @@ mod tests {
         #[cfg(feature = "tokio-postgres")]
         import_perf("postgresql:///rltbl_db").await;
         #[cfg(feature = "libsql")]
-        {
-            // import_perf(":memory:").await;
-        }
+        import_perf(":memory:").await;
     }
 
     async fn import_perf(url: &str) {
@@ -4135,9 +4104,7 @@ mod tests {
         #[cfg(feature = "tokio-postgres")]
         import_small("postgresql:///rltbl_db").await;
         #[cfg(feature = "libsql")]
-        {
-            // import_small(":memory:").await;
-        }
+        import_small(":memory:").await;
     }
 
     async fn import_small(url: &str) {
@@ -4871,6 +4838,9 @@ mod tests {
         // assert!(false, "DONE");
     }
 
+    // We allow unused here since this isn't being tested for LibSQL.
+    // TODO: Add a test once transactions have been implemented.
+    #[allow(unused)]
     async fn foo(tx: &Box<dyn Transaction>) {
         tx.query("SELECT 'baz'", &[]).await.unwrap();
     }
@@ -4880,6 +4850,24 @@ mod tests {
     async fn test_rusqlite_anypool() -> Result<(), Error> {
         let url = ":memory:";
         let pool = RusqlitePool::connect(url).await?;
+        let pool: Box<dyn Pool> = Box::new(pool);
+        let pool = AnyPool::from(pool);
+
+        let sql = "SELECT $1, $2";
+        // let values = [1, 2];
+        // let values = vec![1, 2];
+        let values = vec![Value::from(1), Value::from("foo")];
+        let _values = values![1, "foo"];
+        let _rows = pool.query(sql, &values).await?;
+
+        Ok(())
+    }
+
+    #[cfg(feature = "libsql")]
+    #[tokio::test]
+    async fn test_libsql_anypool() -> Result<(), Error> {
+        let url = ":memory:";
+        let pool = LibSQLPool::connect(url).await?;
         let pool: Box<dyn Pool> = Box::new(pool);
         let pool = AnyPool::from(pool);
 
@@ -4910,6 +4898,165 @@ mod tests {
         let _values = values![1_i64, "foo"];
         let _rows = pool.query(sql, &values).await?;
         let _rows = pool.query("DROP TABLE foo CASCADE", ()).await?;
+
+        Ok(())
+    }
+
+    #[cfg(feature = "libsql")]
+    #[tokio::test]
+    async fn test_aliases_and_builtin_functions() -> Result<(), Error> {
+        let pool = LibSQLPool::connect(":memory:").await.unwrap();
+        pool.execute_batch(
+            "DROP TABLE IF EXISTS test_table_indirect;\
+             CREATE TABLE test_table_indirect (\
+                 text_value TEXT,\
+                 alt_text_value TEXT,\
+                 float_value FLOAT8,\
+                 int_value INT8,\
+                 bool_value BOOL\
+             )",
+        )
+        .await
+        .unwrap();
+        pool.execute(
+            r#"INSERT INTO test_table_indirect
+               (text_value, alt_text_value, float_value, int_value, bool_value)
+               VALUES (?1, ?2, ?3, ?4, ?5)"#,
+            &values!["foo", (), 1.05_f64, 1_i64, true],
+        )
+        .await
+        .unwrap();
+
+        // Test aggregate:
+        let rows = pool
+            .query("SELECT MAX(int_value) FROM test_table_indirect", &[])
+            .await
+            .unwrap();
+        assert_eq!(
+            *rows.deref(),
+            [row! {
+                "MAX(int_value)" => 1_i64,
+            }]
+        );
+
+        // Test alias:
+        let rows = pool
+            .query(
+                "SELECT bool_value AS bool_value_alias FROM test_table_indirect",
+                &[],
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            *rows.deref(),
+            [row! {
+                "bool_value_alias" => 1_i64,
+            }]
+        );
+
+        // Test aggregate with alias:
+        let rows = pool
+            .query(
+                "SELECT MAX(int_value) AS max_int_value FROM test_table_indirect",
+                &[],
+            )
+            .await
+            .unwrap();
+        // Note that the alias is not shown in the results:
+        assert_eq!(
+            *rows.deref(),
+            [row! {
+                "max_int_value" => 1_i64,
+            }]
+        );
+
+        // Test non-aggregate function:
+        let rows = pool
+            .query(
+                "SELECT CAST(int_value AS TEXT) FROM test_table_indirect",
+                &[],
+            )
+            .await
+            .unwrap();
+        assert_eq!(*rows.deref(), [row! {"CAST(int_value AS TEXT)" => "1",}]);
+
+        // Test non-aggregate function with alias:
+        let rows = pool
+            .query(
+                "SELECT CAST(int_value AS TEXT) AS int_value_cast FROM test_table_indirect",
+                &[],
+            )
+            .await
+            .unwrap();
+        assert_eq!(*rows.deref(), [row! {"int_value_cast" => "1",}]);
+
+        // Test functions over booleans:
+        let rows = pool
+            .query("SELECT MAX(bool_value) FROM test_table_indirect", &[])
+            .await
+            .unwrap();
+        // It is not possible to represent the boolean result of an aggregate function as a
+        // boolean, since internally to sqlite it is stored as an integer, and we can't query
+        // the metadata to get the datatype of an expression. If we want to represent it as a
+        // boolean, we will need to parse the expression. Note that PostgreSQL does not support
+        // MAX(bool_value) - it gives the error:
+        //   ERROR: function max(boolean) does not exist\nHINT: No function matches the given
+        //          name and argument types. You might need to add explicit type casts.
+        // So, perhaps, this is tu quoque an argument that the behaviour below is acceptable for
+        // sqlite.
+        assert_eq!(*rows.deref(), [row! {"MAX(bool_value)" => 1_i64,}]);
+
+        Ok(())
+    }
+
+    /// This test is resource intensive and therefore ignored by default. It verifies that
+    /// using [MAX_PARAMS_SQLITE] parameters in a query is indeed supported.
+    /// To run this and other ignored tests, use `cargo test -- --ignored` or
+    /// `cargo test -- --include-ignored`
+    #[cfg(feature = "libsql")]
+    #[tokio::test]
+    // #[ignore] // ignore by default.
+    async fn test_max_params() -> Result<(), Error> {
+        let pool = LibSQLPool::connect(":memory:").await.unwrap();
+        pool.execute_batch(
+            "DROP TABLE IF EXISTS test_max_params;\
+             CREATE TABLE test_max_params (\
+                 column1 INT,\
+                 column2 INT,\
+                 column3 INT,\
+                 column4 INT,\
+                 column5 INT,\
+                 column6 INT\
+             )",
+        )
+        .await
+        .unwrap();
+
+        let mut sql = "INSERT INTO test_max_params VALUES ".to_string();
+        let mut values = vec![];
+        let mut params = vec![];
+        let mut n = 1;
+        while n <= MAX_PARAMS_SQLITE {
+            values.push(format!(
+                "(?{}, ?{}, ?{}, ?{}, ?{}, ?{})",
+                n,
+                n + 1,
+                n + 2,
+                n + 3,
+                n + 4,
+                n + 5
+            ));
+            params.push(Value::from(1));
+            params.push(Value::from(1));
+            params.push(Value::from(1));
+            params.push(Value::from(1));
+            params.push(Value::from(1));
+            params.push(Value::from(1));
+            n += 6;
+        }
+        sql.push_str(&values.join(", "));
+        pool.execute(&sql, &params).await.unwrap();
+        pool.drop_table("text_max_params").await.unwrap();
 
         Ok(())
     }

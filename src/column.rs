@@ -13,7 +13,6 @@ use crate::{Error, Row, Value, ValueType};
 /// The type of a [Value], including the name of the type according to the
 /// underlying database. Note that this type is similar to [ValueType],
 /// but excludes NULL, which is not a valid type for a column.
-#[allow(dead_code)]
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum _ColumnType {
     Boolean(String),

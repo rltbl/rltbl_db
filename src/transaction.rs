@@ -13,10 +13,10 @@ pub trait Transaction: Query + std::fmt::Debug {
 }
 
 /// An abstraction over the supported types of database [Transaction].
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct AnyTransaction {
     tx: Box<dyn Transaction>,
-    #[allow(dead_code)]
     modified_tables: Vec<String>,
 }
 

@@ -338,11 +338,10 @@ impl RusqlitePool {
 
 /// Represents a SQLite transaction.
 #[derive(Debug)]
-#[allow(dead_code)]
-struct RusqliteTransaction {
+pub struct RusqliteTransaction {
+    pub pool: deadpool_sqlite::Pool,
     /// The syntax used for this transaction.
     syntax: SqliteSyntax,
-    pool: deadpool_sqlite::Pool,
     conn: Option<deadpool_sqlite::Connection>,
 }
 
@@ -372,7 +371,6 @@ impl Query for RusqliteTransaction {
         &self.syntax
     }
 
-    #[allow(unused)]
     /// Implements [Query::execute_batch()] for [RusqliteTransaction]
     async fn execute_batch(&self, _sql: &str) -> Result<(), Error> {
         todo!()

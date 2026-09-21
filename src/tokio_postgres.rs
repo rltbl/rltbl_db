@@ -101,8 +101,8 @@ fn extract_value(row: &PgRow, idx: usize) -> Result<Value, Error> {
 /// Represents a deadool-postgres database connection pool.
 #[derive(Debug)]
 pub struct PostgresPool {
-    syntax: PostgresSyntax,
     pub pool: deadpool_postgres::Pool,
+    syntax: PostgresSyntax,
 }
 
 impl PostgresPool {

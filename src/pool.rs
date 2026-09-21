@@ -48,7 +48,6 @@ static BATCH_INSERT_SIZE: usize = 100;
 // Note: This is dyn compatible ONLY if every impl Query uses #[async_trait].
 /// Create a database connection pool associated with the given URL.
 pub async fn connect(url: &str) -> Result<Box<dyn Pool>, Error> {
-    // TODO: Add libsql support.
     if url.starts_with("postgresql://") {
         #[cfg(feature = "tokio-postgres")]
         {
@@ -67,7 +66,15 @@ pub async fn connect(url: &str) -> Result<Box<dyn Pool>, Error> {
         }
         #[cfg(not(feature = "rusqlite"))]
         {
-            Err(Error::ConnectError(format!("Unsupported URL: '{url}'")))
+            #[cfg(feature = "libsql")]
+            {
+                let pool = crate::libsql::LibSQLPool::connect(url).await?;
+                Ok(Box::new(pool))
+            }
+            #[cfg(not(feature = "libsql"))]
+            {
+                Err(Error::ConnectError(format!("Unsupported URL: '{url}'")))
+            }
         }
     }
 }
@@ -95,12 +102,10 @@ pub struct AnyPool {
 }
 
 /// Ways in which to edit a table.
-#[allow(unused)]
 #[derive(PartialEq, Eq)]
 enum EditType {
     Insert,
     Update,
-    #[allow(unused)]
     Upsert,
 }
 
@@ -159,7 +164,6 @@ impl AnyPool {
     /// Note that all of the methods on AnyPool implicitly check if the cache needs to be cleaned.
     /// to use the raw "no-cache" method, call the underlying pool, self.pool.execute_batch()
     /// instead of self.execute_batch().
-    #[allow(unused)]
     pub async fn execute_batch(&self, sql: &str) -> Result<(), Error> {
         self.pool.execute_batch(sql).await?;
         if self.get_cache_aware_query() {
@@ -473,10 +477,9 @@ impl AnyPool {
     /// cached. Setting this flag only means that the current contents, if any, of the cache
     /// table should be kept up to date whenever the data in the database is edited
     /// via one of the query_* or execute() methods in [Query]. To add new content to the cache
-    /// that can be later be reused you must explicitly use the [Query::cache()] method.
+    /// that can be later be reused you must explicitly use the [AnyPool::cache()] method.
     /// To explicitly skip the housekeeping implied by setting the cache-aware-query flag, even
-    /// when it is set to on, use [Query::execute_no_cache_clean()] or
-    /// [Query::query_no_cache_clean()].
+    /// when it is set to on, use: self.pool.execute() syntax. TODO: Improve this comment.
     pub fn set_cache_aware_query(&mut self, value: bool) {
         self.cache_aware_query = value;
     }
@@ -940,7 +943,6 @@ impl AnyPool {
 
     /// Generate a SQL UPDATE statement for the given table and columns using the given clauses
     /// and the given value lines.
-    #[allow(unused)]
     fn generate_update_statement(
         table: &str,
         columns: &[&str],
@@ -983,7 +985,6 @@ impl AnyPool {
 
     /// Generate a SQL INSERT statement for the given table and columns using the given clauses
     /// and the given value lines.
-    #[allow(unused)]
     fn generate_insert_statement(
         table: &str,
         columns: &[&str],
@@ -1007,7 +1008,6 @@ impl AnyPool {
 
     /// Generate SQL statement of the form:
     /// INSERT INTO <table> VALUES <tuples> ON CONFLICT (<primary key constraint>) DO UPDATE ...
-    #[allow(unused)]
     fn generate_upsert_statement(
         table: &str,
         columns: &[&str],

@@ -49,8 +49,6 @@
 //!
 //! #[tokio::main]
 //! async fn main() {
-//!     // TODO: Remove this cfg line later:
-//!     #[cfg(not(feature = "libsql"))]
 //!     basic_example().await.unwrap();
 //! }
 //! ```

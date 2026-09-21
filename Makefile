@@ -14,7 +14,7 @@ check:
 	cargo check
 	cargo check --no-default-features --features libsql
 
-test: test_libsql # test_default test_libsql
+test: test_default test_libsql
 
 test_default: | tests/input/table1.csv
 	@echo "Running unit tests using default features."
@@ -51,7 +51,7 @@ test_import_perf:
 
 .PHONY: test_ignored test_default_ignored test_libsql_ignored
 
-test_ignored: test_default_ignored # test_libsql_ignored
+test_ignored: test_default_ignored test_libsql_ignored
 
 test_default_ignored:
 	@echo "Running all (including normally) ignored unit tests using default features."
