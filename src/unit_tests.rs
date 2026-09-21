@@ -25,9 +25,6 @@ mod tests {
         values,
     };
 
-    #[cfg(feature = "libsql")]
-    use std::ops::Deref;
-
     #[cfg(feature = "rusqlite")]
     use crate::rusqlite::RusqlitePool;
 
@@ -4933,7 +4930,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            *rows.deref(),
+            rows.rows,
             [row! {
                 "MAX(int_value)" => 1_i64,
             }]
@@ -4948,7 +4945,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            *rows.deref(),
+            rows.rows,
             [row! {
                 "bool_value_alias" => 1_i64,
             }]
@@ -4964,7 +4961,7 @@ mod tests {
             .unwrap();
         // Note that the alias is not shown in the results:
         assert_eq!(
-            *rows.deref(),
+            rows.rows,
             [row! {
                 "max_int_value" => 1_i64,
             }]
@@ -4978,7 +4975,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(*rows.deref(), [row! {"CAST(int_value AS TEXT)" => "1",}]);
+        assert_eq!(rows.rows, [row! {"CAST(int_value AS TEXT)" => "1",}]);
 
         // Test non-aggregate function with alias:
         let rows = pool
@@ -4988,7 +4985,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(*rows.deref(), [row! {"int_value_cast" => "1",}]);
+        assert_eq!(rows.rows, [row! {"int_value_cast" => "1",}]);
 
         // Test functions over booleans:
         let rows = pool
@@ -5004,7 +5001,7 @@ mod tests {
         //          name and argument types. You might need to add explicit type casts.
         // So, perhaps, this is tu quoque an argument that the behaviour below is acceptable for
         // sqlite.
-        assert_eq!(*rows.deref(), [row! {"MAX(bool_value)" => 1_i64,}]);
+        assert_eq!(rows.rows, [row! {"MAX(bool_value)" => 1_i64,}]);
 
         Ok(())
     }
