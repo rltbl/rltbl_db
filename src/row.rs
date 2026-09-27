@@ -30,8 +30,6 @@
 //! };
 //! assert_eq!(row1, row2);
 //! ```
-//!
-//! TODO: mention the subtleties involved in handling JSON values.
 
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};

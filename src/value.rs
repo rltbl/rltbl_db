@@ -57,8 +57,7 @@ pub enum ValueType {
     BigReal(String),
     Numeric(String),
     Text(String),
-    // TODO: add more types (including JSON). Make sure to take account of
-    // it in min_type(), etc. But leave this aside for now.
+    // TODO: Eventually add more types (e.g., JSON). Make sure to handle it in the code below.
 }
 
 impl Default for ValueType {
@@ -359,16 +358,6 @@ impl ValueType {
     }
 }
 
-// MC: This is much more minimal than what we currently have in rltbl_db. Is this because
-// you wanted to start with these basic types and add the others later, or is the
-// intention to simplify?
-// JO: We should have at least as many types as we currently have in rltbl_db.
-// I just used fewer types here as a stub implementation.
-// JO: Now I'm thinking that we should handle all the Rust primitives that Serde handles.
-// If we do that, we should use the Rust names.
-// bool, i8, i16, i32, i64, u8, u16, u32, u64, f32, f64, str -> String, char -> String
-// In addition to these: Null, Json, and Other.
-// Eventually we want to try Timestamp.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum Value {
@@ -376,12 +365,12 @@ pub enum Value {
     Null,
     /// Use with BOOL column types or equivalent.
     Boolean(bool),
-    /// Use with INT2 column types or equivalent.
-    BigInteger(i64),
-    /// Use with INT4 column types or equivalent.
-    Integer(i32),
     /// Use with INT8 column types or equivalent.
     SmallInteger(i16),
+    /// Use with INT4 column types or equivalent.
+    Integer(i32),
+    /// Use with INT2 column types or equivalent.
+    BigInteger(i64),
     /// Use with FLOAT4 column types or equivalent.
     Real(f32),
     /// Use with FLOAT8 column types or equivalent.

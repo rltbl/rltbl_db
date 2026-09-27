@@ -114,7 +114,8 @@ impl Query for RusqlitePool {
         .await?
     }
 
-    /// Implements [Query::can_load()]
+    /// Implements [Query::can_load()]. Returns true if the given filename ends
+    /// (case-insensitively) with '.csv'.
     fn can_load(&self, filename: &str) -> bool {
         filename.to_lowercase().ends_with(".csv")
     }
@@ -428,17 +429,13 @@ fn query_prepared(stmt: &mut Statement<'_>, params: &[Value]) -> Result<Vec<Row>
                         Some(ctype) if ctype.to_lowercase() == "numeric" => {
                             let value = match from_utf8(value) {
                                 Ok(value) => value,
-                                Err(err) => {
-                                    // TODO: Replace with logger.
-                                    eprintln!("ERROR {err}");
+                                Err(_err) => {
                                     return Err(deadpool_sqlite::rusqlite::Error::InvalidQuery);
                                 }
                             };
                             let value = match value.parse::<Decimal>() {
                                 Ok(value) => value,
-                                Err(err) => {
-                                    // TODO: Replace with logger.
-                                    eprintln!("ERROR {err}");
+                                Err(_err) => {
                                     return Err(deadpool_sqlite::rusqlite::Error::InvalidQuery);
                                 }
                             };
@@ -447,9 +444,7 @@ fn query_prepared(stmt: &mut Statement<'_>, params: &[Value]) -> Result<Vec<Row>
                         _ => {
                             let value = match from_utf8(value) {
                                 Ok(value) => value,
-                                Err(err) => {
-                                    // TODO: Replace with logger.
-                                    eprintln!("ERROR {err}");
+                                Err(_err) => {
                                     return Err(deadpool_sqlite::rusqlite::Error::InvalidQuery);
                                 }
                             };

@@ -260,7 +260,8 @@ impl Query for PostgresPool {
         Ok(Rows { rows: db_rows })
     }
 
-    /// Returns true if this pool is capable of loading the given filename, or false if it is not.
+    /// Implements [Query::can_load()]. Returns true if the given filename ends
+    /// (case-insensitively) with either '.csv' or '.tsv'.
     fn can_load(&self, filename: &str) -> bool {
         let filename = filename.to_lowercase();
         filename.ends_with("tsv") || filename.ends_with(".csv")

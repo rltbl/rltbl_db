@@ -1,4 +1,4 @@
-//! Driver using deadpool-sqlite (ilbsql).
+//! Driver using deadpool-sqlite (libsql).
 
 use async_trait::async_trait;
 use deadpool_libsql::{self, Manager, libsql, libsql::Builder};
@@ -108,7 +108,6 @@ impl Query for LibSQLPool {
     /// Implements [Query::query()].
     async fn query(&self, sql: &str, params: &[Value]) -> Result<Rows, Error> {
         let conn = self.pool.get().await?;
-
         let params = params.to_vec();
         let mut rows = conn.query(sql, params).await?;
 
@@ -128,7 +127,10 @@ impl Query for LibSQLPool {
         Ok(Rows { rows: db_rows })
     }
 
-    /// Implements [Query::can_load()]
+    /// Implements [Query::can_load()]. Returns true if the CSV load extension is enabled for
+    /// the connection pool and the given filename ends (case-insensitively) with '.csv'. The
+    /// CSV load extension will be enabled if the shared object file `csv.so` exists in the
+    /// current directory when the connection pool is created.
     fn can_load(&self, filename: &str) -> bool {
         self.csv_extension_enabled || filename.to_lowercase().ends_with(".csv")
     }
@@ -147,7 +149,7 @@ impl Query for LibSQLPool {
         let current_dir = current_dir.display();
         let sql = format!(
             r#"CREATE VIRTUAL TABLE temp.t1
-                   USING CSV(filename='{current_dir}/{filename}', header=true)"#
+               USING CSV(filename='{current_dir}/{filename}', header=true)"#
         );
         self.execute(&sql, &[]).await?;
         let sql = format!("INSERT INTO {table} SELECT * FROM temp.t1");
@@ -177,26 +179,17 @@ impl Query for LibSQLPool {
     }
 }
 
-#[async_trait]
-impl Pool for LibSQLPool {
-    /// Begins a new [Transaction].
-    async fn transaction(&self) -> Result<Box<dyn Transaction>, Error> {
-        todo!()
-    }
-}
-
 impl LibSQLPool {
-    /// Connect to the database at the given URL.
+    /// Connects to the database at the given URL. If the file shared object file `csv.so` is in
+    /// the current directory, enables the CSV load extension.
     pub async fn connect(url: &str) -> Result<Self, Error> {
         let db = Builder::new_local(url).build().await?;
         let manager = Manager::from_libsql_database(db);
         let pool = deadpool_libsql::Pool::builder(manager).build()?;
-
         let conn = pool.get().await?;
 
-        // TODO: Document this somewhere.
-        // Enable the CSV load extension.
-        // Note that this requires that csv.so be in the current directory.
+        // Enable the CSV load extension if possible. This requires that the file `csv.so` is in
+        // the current directory.
         conn.load_extension_enable()?;
         let current_dir = env::current_dir()?;
         let current_dir = current_dir.display();
@@ -208,9 +201,7 @@ impl LibSQLPool {
             }),
             Err(err) => {
                 eprintln!("WARNING Unable to load extension 'csv': {err}");
-                conn.load_extension_disable().map_err(|err| {
-                    Error::ConnectError(format!("Error creating pool from URL: '{url}': {err}"))
-                })?;
+                conn.load_extension_disable()?;
                 Ok(Self {
                     pool: pool,
                     syntax: SqliteSyntax,
@@ -218,6 +209,14 @@ impl LibSQLPool {
                 })
             }
         }
+    }
+}
+
+#[async_trait]
+impl Pool for LibSQLPool {
+    /// Begins a new [Transaction].
+    async fn transaction(&self) -> Result<Box<dyn Transaction>, Error> {
+        todo!()
     }
 }
 

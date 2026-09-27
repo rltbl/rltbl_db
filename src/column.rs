@@ -9,7 +9,7 @@ use std::{
 
 use crate::{Error, Row, Value, ValueType};
 
-// TODO: Consider whether we want/need this:
+// TODO: Consider whether we want/need this in addition to ValueType.
 /// The type of a [Value], including the name of the type according to the
 /// underlying database. Note that this type is similar to [ValueType],
 /// but excludes NULL, which is not a valid type for a column.
@@ -31,7 +31,7 @@ pub struct Column {
 }
 
 impl PartialOrd for Column {
-    /// Orders [Column]s by sql_type, not_null, and unique, in that order, where a not_null
+    /// Orders [Column]s by `sql_type`, `not_null`, and `unique`, in that order, where a not_null
     /// column comes before a nullable column and a unique column comes before a non-unique column.
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self.sql_type.partial_cmp(&other.sql_type) {
@@ -59,7 +59,7 @@ impl PartialOrd for Column {
 }
 
 impl Column {
-    /// Return a blank database column of the minumum type.
+    /// Return a blank database column of the lowest type.
     pub fn new() -> Self {
         Column {
             name: "".to_string(),
@@ -191,7 +191,7 @@ impl Column {
         self.min_column_from_strings(values.map(|value| value.to_string()))
     }
 
-    /// Return the minimum column (by [ValueType]) required to contain the given string values.
+    /// Return the minimum column required to contain the given string values.
     pub fn min_column_from_strings<I>(&mut self, values: I) -> Result<Column, Error>
     where
         I: Iterator<Item = String>,
@@ -199,7 +199,6 @@ impl Column {
         // Iterate over the given values and determine the most specific type that is compatible
         // with them all:
         let mut values_seen = HashSet::new();
-        let mut types_seen = HashSet::new();
         for value in values {
             // First check whether this is a null value or a duplicate:
             if value == "" {
@@ -214,21 +213,16 @@ impl Column {
                 continue;
             }
 
-            // Get the most specific type for this value and adjust the overall column type
-            // accordingly.
-            let sql_type = self.sql_type.min_type(&value)?;
-            self.sql_type = sql_type.clone();
-
-            // Add to the sets of values and types seen:
-            types_seen.insert(sql_type);
+            // Get the most specific type for this value, adjust the overall column type
+            // accordingly, and add to the sets of values seen:
+            self.sql_type = self.sql_type.min_type(&value)?.clone();
             values_seen.insert(value);
         }
 
         Ok(self.clone())
     }
 
-    /// Return the minimum columns (by [ValueType]) corresponding to the given vectors of
-    /// column values.
+    /// Return the minimum columns corresponding to the given vectors of column values.
     pub fn min_columns_from_column_values<I>(column_values: I) -> Result<Vec<Column>, Error>
     where
         I: Iterator<Item = Vec<Value>>,

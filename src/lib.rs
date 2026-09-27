@@ -147,6 +147,7 @@
 
 #![recursion_limit = "2000"]
 
+// Re-exports:
 pub use self::column::Column;
 pub use self::error::Error;
 pub use self::pool::{AnyPool, Pool};
@@ -161,7 +162,6 @@ pub use self::value::{ValueType, Value};
 pub type JsonValue = serde_json::Value;
 pub type JsonRow = serde_json::Map<String, JsonValue>;
 pub type StringRow = indexmap::IndexMap<String, String>;
-
 
 /// Error definitions used by all modules.
 pub mod error;
@@ -184,10 +184,10 @@ pub mod value;
 /// The Syntax trait
 pub mod syntax;
 
-// Built-in Syntax trait implementations
-/// SQLite [Syntax] implementation.
+/// Built-in SQLite [Syntax] implementation.
 pub mod sqlite;
-/// Postgres [Syntax] implementation.
+
+/// Built-in Postgres [Syntax] implementation.
 pub mod postgres;
 
 /// Utilities for parsing (generic) SQL expressions
@@ -208,9 +208,9 @@ pub mod cache;
 /// Unit tests:
 pub mod unit_tests;
 
-///////////////////////////////////////////////
+
 // Driver-specific implementations.
-///////////////////////////////////////////////
+
 #[cfg(feature = "rusqlite")]
 pub mod rusqlite;
 
@@ -220,9 +220,7 @@ pub mod tokio_postgres;
 #[cfg(feature = "libsql")]
 pub mod libsql;
 
-///////////////////////////////////////////////
 // Macro definitions.
-///////////////////////////////////////////////
 
 /// Convert a list of items that implement `Into<Value>` into a list of [Value]s.
 #[macro_export]

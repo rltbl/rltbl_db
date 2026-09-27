@@ -32,9 +32,9 @@ pub enum CachingStrategy {
     None,
     /// Truncate the entire cache when it is dirty.
     TruncateAll,
-    /// Truncate entries only for edited tables when the cache is dirty.
+    /// Truncate entries for edited tables when the cache is dirty.
     Truncate,
-    /// Truncate cache entries, for edited tables only, automatically whenever tables are edited.
+    /// Truncate cache entries, for edited tables, automatically whenever tables are edited.
     Trigger,
     /// Similar to Truncate, but use an in-memory cache.
     Memory(usize),
@@ -88,13 +88,13 @@ impl Display for CachingStrategy {
     }
 }
 
-/// The in-memory query cache.
+/// The in-memory query cache, mapping queries to their results.
 #[derive(Debug, Default)]
 pub struct MemoryQueryCache {
     pub cache: Mutex<IndexMap<MemoryQueryCacheKey, MemoryQueryCacheValue>>,
 }
 
-/// The structure used to look up query results in the in-memory query cache.
+/// Used to look up query results in the in-memory query cache.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub struct MemoryQueryCacheKey {
     pub tables: String,
@@ -102,7 +102,7 @@ pub struct MemoryQueryCacheKey {
     pub parameters: String,
 }
 
-/// Represents the value of an entry in the in-memory query cache.
+/// Represents the results of a particular query in the in-memory query cache.
 #[derive(Clone, Debug)]
 pub struct MemoryQueryCacheValue {
     pub content: Vec<Row>,
@@ -134,7 +134,8 @@ impl MemoryQueryCache {
         Ok(memory_cache)
     }
 
-    /// Clear the memory query cache.
+    /// Clear the entries for the given tables from the memory query cache. If the table list
+    /// is empty, clear the entire cache.
     pub fn clear(&self, tables: &[&str]) -> Result<(), Error> {
         let mut cache = self.get_cache()?;
         if tables.is_empty() {
@@ -158,7 +159,7 @@ impl MemoryQueryCache {
     }
 }
 
-/// The in-memory table cache.
+/// The in-memory table cache, mapping table names to their last modified times.
 #[derive(Debug, Default)]
 pub struct MemoryTableCache {
     pub cache: Mutex<HashMap<String, u128>>,
@@ -187,7 +188,8 @@ impl MemoryTableCache {
         Ok(memory_cache)
     }
 
-    /// Clear the memory table cache.
+    /// Clear the entries for the given tables from the memory query cache. If the table list
+    /// is empty, clear the entire cache.
     pub fn clear(&self, tables: &[&str]) -> Result<(), Error> {
         let mut cache = self.get_cache()?;
         if tables.is_empty() {

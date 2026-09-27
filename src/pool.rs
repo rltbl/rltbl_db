@@ -43,6 +43,7 @@ use crate::{
     values,
 };
 
+// The maximum number of rows to insert at a time when using the batch_insert() method.
 static BATCH_INSERT_SIZE: usize = 100;
 
 // Note: This is dyn compatible ONLY if every impl Query uses #[async_trait].
@@ -92,13 +93,26 @@ pub struct AnyPool {
     pub pool: Box<dyn Pool>,
     caching_strategy: CachingStrategy,
     /// When set to true, SQL statements sent to the [Query::query()] and [Query::execute()]
-    /// functions will be parsed and if they will result in tables being edited and/or dropped,
-    /// the cache will be maintained in accordance with the given [CachingStrategy].
-    /// For further information, see [Query::set_cache_aware_query()].
+    /// functions will be parsed and if executing them will result in tables being edited
+    /// and/or dropped, the cache will be maintained in accordance with the given
+    /// [CachingStrategy].
     cache_aware_query: bool,
     meta_cache: MetaCache,
     memory_query_cache: MemoryQueryCache,
     memory_table_cache: MemoryTableCache,
+}
+
+impl From<Box<dyn Pool>> for AnyPool {
+    fn from(pool: Box<dyn Pool>) -> Self {
+        AnyPool {
+            pool,
+            caching_strategy: CachingStrategy::None,
+            cache_aware_query: false,
+            meta_cache: MetaCache::default(),
+            memory_query_cache: MemoryQueryCache::default(),
+            memory_table_cache: MemoryTableCache::default(),
+        }
+    }
 }
 
 /// Ways in which to edit a table.
@@ -119,51 +133,36 @@ impl Display for EditType {
     }
 }
 
-impl From<Box<dyn Pool>> for AnyPool {
-    fn from(pool: Box<dyn Pool>) -> Self {
-        AnyPool {
-            pool,
-            caching_strategy: CachingStrategy::None,
-            cache_aware_query: false,
-            meta_cache: MetaCache::default(),
-            memory_query_cache: MemoryQueryCache::default(),
-            memory_table_cache: MemoryTableCache::default(),
-        }
-    }
-}
-
 impl AnyPool {
-    /// Returns a connection to the database located at the giveb URL.
+    /// Returns a connection to the database located at the given URL.
     pub async fn connect(url: &str) -> Result<Self, Error> {
         let pool = connect(url).await?;
         Ok(AnyPool::from(pool))
     }
 
-    /// [Query::syntax()] for [AnyPool]
+    /// Implements [Query::syntax()] for [AnyPool]
     pub fn syntax(&self) -> &dyn Syntax {
         self.pool.syntax()
     }
 
-    /// [Query::columns()] for [AnyPool]
+    /// Implements [Query::columns()] for [AnyPool]
     pub async fn columns(&self, table: &str) -> Result<IndexMap<String, String>, Error> {
         self.pool.columns(table).await
     }
 
-    /// [Query::primary_keys()] for [AnyPool]
+    /// Implements [Query::primary_keys()] for [AnyPool]
     pub async fn primary_keys(&self, table: &str) -> Result<Vec<String>, Error> {
         self.pool.primary_keys(table).await
     }
 
-    /// [Query::execute()] for [AnyPool]
+    /// Implements [Query::execute()] for [AnyPool]
     pub async fn execute(&self, sql: &str, values: impl IntoValues) -> Result<(), Error> {
         let values = values.into_values()?.collect::<Vec<_>>();
         self.query(sql, values).await?;
         Ok(())
     }
 
-    /// Note that all of the methods on AnyPool implicitly check if the cache needs to be cleaned.
-    /// to use the raw "no-cache" method, call the underlying pool, self.pool.execute_batch()
-    /// instead of self.execute_batch().
+    /// Implements [Query::execute_batch()] for [AnyPool]
     pub async fn execute_batch(&self, sql: &str) -> Result<(), Error> {
         self.pool.execute_batch(sql).await?;
         if self.get_cache_aware_query() {
@@ -172,9 +171,7 @@ impl AnyPool {
         Ok(())
     }
 
-    /// Note that all of the methods on AnyPool implicitly check if the cache needs to be cleaned.
-    /// to use the raw "no-cache" method, call the underlying pool, self.pool.query() instead
-    /// of self.query().
+    /// Implements [Query::query()] for [AnyPool]
     pub async fn query(&self, sql: &str, values: impl IntoValues) -> Result<Rows, Error> {
         let values = values.into_values()?.collect::<Vec<_>>();
         let rows = self.pool.query(sql, &values).await?;
@@ -445,7 +442,7 @@ impl AnyPool {
     /// [CachingStrategy].
     pub async fn cache(&self, sql: &str, values: impl IntoValues) -> Result<Rows, Error> {
         match self.get_caching_strategy() {
-            CachingStrategy::None => self.cache_tables(&[], sql, values).await,
+            CachingStrategy::None => self.query(sql, values).await,
             _ => {
                 let tables_read = get_accessed_tables(sql)?;
                 let tables_read: Vec<_> = tables_read.iter().map(|s| s.as_str()).collect();
@@ -473,13 +470,14 @@ impl AnyPool {
     /// SQL commands executed through the API will be automatically checked to see if they
     /// involve edits and/or drops of database tables. If they do then the cache will be
     /// automatically updated in accordance with the current [CachingStrategy].
-    /// Note that setting this flag does not imply that the results of queries should be
+    /// Note that setting this flag does not imply that the results of queries will be
     /// cached. Setting this flag only means that the current contents, if any, of the cache
     /// table should be kept up to date whenever the data in the database is edited
-    /// via one of the query_* or execute() methods in [Query]. To add new content to the cache
-    /// that can be later be reused you must explicitly use the [AnyPool::cache()] method.
+    /// via one of the query_* or execute() methods in [Query]. To actually use the cache
+    /// for caching query results you must explicitly use the [AnyPool::cache()] method.
     /// To explicitly skip the housekeeping implied by setting the cache-aware-query flag, even
-    /// when it is set to on, use: self.pool.execute() syntax. TODO: Improve this comment.
+    /// when it is set to on, call the desired method on the underlying [dyn Pool](Pool) object
+    /// instead of on this [AnyPool]. E.g., `self.pool.execute()` instead of `self.execute()`.
     pub fn set_cache_aware_query(&mut self, value: bool) {
         self.cache_aware_query = value;
     }
@@ -506,7 +504,7 @@ impl AnyPool {
         }
     }
 
-    /// Returns the current number of rows in the tabke cache.
+    /// Returns the current number of rows in the table cache.
     pub async fn count_table_cache_rows(&self) -> Result<u64, Error> {
         match self.caching_strategy {
             CachingStrategy::None => Ok(0),
@@ -617,8 +615,8 @@ impl AnyPool {
         }
     }
 
-    /// Look in the cache to see if there is an entry corresponding to the given SQL
-    /// string for the given tables and parameters. If so, return the data from the
+    /// Look in the database cache to see if there is an entry corresponding to the given SQL
+    /// string for the given tables and parameters. If so, return the data from the database
     /// cache, otherwise execute the given SQL statement on the actualy specified tables.
     async fn db_cache(&self, tables: &[&str], sql: &str, params: &[Value]) -> Result<Rows, Error> {
         let prefix = self.syntax().param_prefix().to_string();
@@ -1045,8 +1043,8 @@ impl AnyPool {
         )
     }
 
-    /// Edit the given rows in the given table using the given queryable and optional returning
-    /// clause (set with_returning = false to turn this off). When generating the SQL statements
+    /// Edit the given rows in the given table using the given optional returning
+    /// clause (set with_returning = false to ignore this). When generating the SQL statements
     /// used to edit the table, do not use more than max_params bound parameters at a time. If more
     /// than max_params are required, multiple SQL statements will be generated.
     async fn edit(
