@@ -4224,6 +4224,15 @@ mod tests {
         let value: () = from_value(&value).unwrap();
         assert_eq!(value, expected_deserialized);
 
+        // TODO: Test all of the primitive types.
+
+        let expected_deserialized = true;
+        let expected_serialized = Value::from(true);
+        let value = to_value(&expected_deserialized).unwrap();
+        assert_eq!(value, expected_serialized);
+        let value: bool = from_value(&value).unwrap();
+        assert_eq!(value, expected_deserialized);
+
         let expected_deserialized = 1_i16;
         let expected_serialized = Value::from(1_i16);
         let value = to_value(&expected_deserialized).unwrap();

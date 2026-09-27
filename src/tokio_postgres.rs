@@ -19,82 +19,27 @@ use std::{
 };
 
 use crate::{
-    Error, JsonValue, Pool, Query, Row, Rows, Syntax, Transaction, Value, postgres::PostgresSyntax,
-    sql_parse::validate_table_name,
+    Error, JsonValue, Pool, Query, Row, Rows, Syntax, Transaction, Value, error::DatabaseError,
+    postgres::PostgresSyntax, sql_parse::validate_table_name,
 };
 
-/// Extracts the value at the given index from the given [PgRow].
-fn extract_value(row: &PgRow, idx: usize) -> Result<Value, Error> {
-    let column = &row.columns()[idx];
-    match column.type_() {
-        &Type::TEXT | &Type::VARCHAR | &Type::NAME => {
-            match row.try_get::<usize, Option<&str>>(idx)? {
-                Some(value) => Ok(value.into()),
-                None => Ok(Value::Null),
-            }
-        }
-        &Type::INT2 => match row.try_get::<usize, Option<i16>>(idx)? {
-            Some(value) => Ok(value.into()),
-            None => Ok(Value::Null),
-        },
-        &Type::INT4 => match row.try_get::<usize, Option<i32>>(idx)? {
-            Some(value) => Ok(value.into()),
-            None => Ok(Value::Null),
-        },
-        &Type::INT8 => match row.try_get::<usize, Option<i64>>(idx)? {
-            Some(value) => Ok(value.into()),
-            None => Ok(Value::Null),
-        },
-        &Type::BOOL => match row.try_get::<usize, Option<bool>>(idx)? {
-            Some(value) => Ok(value.into()),
-            None => Ok(Value::Null),
-        },
-        &Type::FLOAT4 => match row.try_get::<usize, Option<f32>>(idx)? {
-            Some(value) => Ok(value.into()),
-            None => Ok(Value::Null),
-        },
-        &Type::FLOAT8 => match row.try_get::<usize, Option<f64>>(idx)? {
-            Some(value) => Ok(value.into()),
-            None => Ok(Value::Null),
-        },
-        // WARN: This downcasts a Postgres NUMERIC to a 64 bit Number.
-        &Type::NUMERIC => match row.try_get::<usize, Option<Decimal>>(idx)? {
-            Some(value) => {
-                let v = value.to_string();
-                if let Ok(number) = v.parse::<u64>() {
-                    Ok(number.into())
-                } else if let Ok(number) = v.parse::<i64>() {
-                    Ok(number.into())
-                } else if let Ok(number) = v.parse::<f64>() {
-                    Ok(number.into())
-                } else {
-                    Err(Error::DataError(format!("Not a u64, i64, or f64: {value}")))
-                }
-            }
-            None => Ok(Value::Null),
-        },
-        &Type::JSON | &Type::JSONB => {
-            let value = row.try_get::<usize, JsonValue>(idx)?;
-            Ok(Value::Json(value))
-        }
-        other => {
-            let value: Result<GenericPostgresType, Error> = row
-                .try_get(idx)
-                .map_err(|err| Error::DatatypeError(err.to_string()));
-            match value {
-                Ok(value) => match value.bytes {
-                    Some(bytes) => {
-                        let string_opt = match std::str::from_utf8(&bytes) {
-                            Ok(string) => Some(string.to_string()),
-                            Err(_err) => None,
-                        };
-                        Ok(Value::Other(other.to_string(), bytes, string_opt))
-                    }
-                    None => Ok(Value::Null),
-                },
-                Err(_) => Ok(Value::Null),
-            }
-        }
+// Error implementations:
+
+impl From<deadpool_postgres::tokio_postgres::Error> for DatabaseError {
+    fn from(err: deadpool_postgres::tokio_postgres::Error) -> DatabaseError {
+        DatabaseError::Error(err.to_string())
+    }
+}
+
+impl From<deadpool_postgres::CreatePoolError> for DatabaseError {
+    fn from(err: deadpool_postgres::CreatePoolError) -> DatabaseError {
+        DatabaseError::CreatePoolError(err.to_string())
+    }
+}
+
+impl From<deadpool_postgres::PoolError> for DatabaseError {
+    fn from(err: deadpool_postgres::PoolError) -> DatabaseError {
+        DatabaseError::PoolError(err.to_string())
     }
 }
 
@@ -400,5 +345,80 @@ impl Query for PostgresPool {
 impl Pool for PostgresPool {
     async fn transaction(&self) -> Result<Box<dyn Transaction>, Error> {
         unimplemented!()
+    }
+}
+
+/// Extracts the value at the given index from the given [PgRow].
+fn extract_value(row: &PgRow, idx: usize) -> Result<Value, Error> {
+    let column = &row.columns()[idx];
+    match column.type_() {
+        &Type::TEXT | &Type::VARCHAR | &Type::NAME => {
+            match row.try_get::<usize, Option<&str>>(idx)? {
+                Some(value) => Ok(value.into()),
+                None => Ok(Value::Null),
+            }
+        }
+        &Type::INT2 => match row.try_get::<usize, Option<i16>>(idx)? {
+            Some(value) => Ok(value.into()),
+            None => Ok(Value::Null),
+        },
+        &Type::INT4 => match row.try_get::<usize, Option<i32>>(idx)? {
+            Some(value) => Ok(value.into()),
+            None => Ok(Value::Null),
+        },
+        &Type::INT8 => match row.try_get::<usize, Option<i64>>(idx)? {
+            Some(value) => Ok(value.into()),
+            None => Ok(Value::Null),
+        },
+        &Type::BOOL => match row.try_get::<usize, Option<bool>>(idx)? {
+            Some(value) => Ok(value.into()),
+            None => Ok(Value::Null),
+        },
+        &Type::FLOAT4 => match row.try_get::<usize, Option<f32>>(idx)? {
+            Some(value) => Ok(value.into()),
+            None => Ok(Value::Null),
+        },
+        &Type::FLOAT8 => match row.try_get::<usize, Option<f64>>(idx)? {
+            Some(value) => Ok(value.into()),
+            None => Ok(Value::Null),
+        },
+        // WARN: This downcasts a Postgres NUMERIC to a 64 bit Number.
+        &Type::NUMERIC => match row.try_get::<usize, Option<Decimal>>(idx)? {
+            Some(value) => {
+                let v = value.to_string();
+                if let Ok(number) = v.parse::<u64>() {
+                    Ok(number.into())
+                } else if let Ok(number) = v.parse::<i64>() {
+                    Ok(number.into())
+                } else if let Ok(number) = v.parse::<f64>() {
+                    Ok(number.into())
+                } else {
+                    Err(Error::DataError(format!("Not a u64, i64, or f64: {value}")))
+                }
+            }
+            None => Ok(Value::Null),
+        },
+        &Type::JSON | &Type::JSONB => {
+            let value = row.try_get::<usize, JsonValue>(idx)?;
+            Ok(Value::Json(value))
+        }
+        other => {
+            let value: Result<GenericPostgresType, Error> = row
+                .try_get(idx)
+                .map_err(|err| Error::DatatypeError(err.to_string()));
+            match value {
+                Ok(value) => match value.bytes {
+                    Some(bytes) => {
+                        let string_opt = match std::str::from_utf8(&bytes) {
+                            Ok(string) => Some(string.to_string()),
+                            Err(_err) => None,
+                        };
+                        Ok(Value::Other(other.to_string(), bytes, string_opt))
+                    }
+                    None => Ok(Value::Null),
+                },
+                Err(_) => Ok(Value::Null),
+            }
+        }
     }
 }

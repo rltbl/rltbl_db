@@ -17,176 +17,40 @@ use rust_decimal::Decimal;
 use std::{env, str::from_utf8, sync::Arc};
 
 use crate::{
-    Error, JsonValue, Pool, Query, Row, Rows, Syntax, Transaction, Value,
+    Error, JsonValue, Pool, Query, Row, Rows, Syntax, Transaction, Value, error::DatabaseError,
     sql_parse::validate_table_name, sqlite::SqliteSyntax,
 };
 
-/// Uses the rusqlite driver directly to query a database using the given prepared [Statement]
-/// and parameters.
-fn query_prepared(stmt: &mut Statement<'_>, params: &[Value]) -> Result<Vec<Row>, Error> {
-    // Begin by binding all of the parameters to the statement:
-    for (i, param) in params.iter().enumerate() {
-        match param {
-            Value::Text(text) => {
-                stmt.raw_bind_parameter(i + 1, text)?;
-            }
-            Value::SmallInteger(num) => {
-                stmt.raw_bind_parameter(i + 1, num.to_string())?;
-            }
-            Value::Integer(num) => {
-                stmt.raw_bind_parameter(i + 1, num.to_string())?;
-            }
-            Value::BigInteger(num) => {
-                stmt.raw_bind_parameter(i + 1, num.to_string())?;
-            }
-            Value::Real(num) => {
-                stmt.raw_bind_parameter(i + 1, num.to_string())?;
-            }
-            Value::BigReal(num) => {
-                stmt.raw_bind_parameter(i + 1, num.to_string())?;
-            }
-            Value::Numeric(num) => {
-                stmt.raw_bind_parameter(i + 1, num.to_string())?;
-            }
-            Value::Boolean(flag) => {
-                // Note that SQLite's type affinity means that booleans are actually
-                // implemented as numbers (see https://sqlite.org/datatype3.html).
-                let num = match flag {
-                    true => 1,
-                    false => 0,
-                };
-                stmt.raw_bind_parameter(i + 1, num.to_string())?;
-            }
-            Value::Null => {
-                stmt.raw_bind_parameter(i + 1, &Null)?;
-            }
-            Value::Json(value) => {
-                let value = match value {
-                    JsonValue::String(value) => value.to_string(),
-                    _ => value.to_string(),
-                };
-                stmt.raw_bind_parameter(i + 1, value)?;
-            }
-            Value::Other(type_name, bytes, string_opt) => {
-                return Err(Error::InputError(format!(
-                    "Not supported for SQLite: \
-                             Value::Other({type_name}, {bytes:?}, {string_opt:?})"
-                )));
-            }
-        };
+// DatabaseError implementations:
+
+impl From<deadpool_sqlite::rusqlite::Error> for DatabaseError {
+    fn from(err: deadpool_sqlite::rusqlite::Error) -> DatabaseError {
+        DatabaseError::Error(err.to_string())
     }
-
-    // Define the struct that we will use (internally to this function) to represent information
-    // about a given column:
-    struct ColumnConfig {
-        name: String,
-        datatype: Option<String>,
-    }
-
-    // Collect the column information from the prepared statement:
-    let columns = stmt
-        .column_names()
-        .iter()
-        .map(|col| ColumnConfig {
-            name: col.to_string(),
-            datatype: None,
-        })
-        .collect::<Vec<_>>();
-
-    // Execute the statement and send back the results
-    let results = stmt
-        .raw_query()
-        .map(|row| {
-            let mut db_row = Row::new();
-            for column in &columns {
-                let column_name = &column.name;
-                let column_type = &column.datatype;
-                let value = row.get_ref(column_name.as_str())?;
-                let value = match value {
-                    ValueRef::Null => Value::Null,
-                    ValueRef::Integer(value) => match column_type {
-                        Some(ctype) if ctype.to_lowercase() == "bool" => Value::Boolean(value != 0),
-                        // The remaining cases are (a) the column's datatype is integer, and
-                        // (b) the column is an expression. In the latter case it doesn't seem
-                        // possible to get the datatype of the expression from the metadata.
-                        // So the only thing to do here is just to convert the value
-                        // using the default method, and since we already know that it
-                        // is an integer, the result of the conversion will be a number.
-                        _ => Value::from(value),
-                    },
-                    ValueRef::Real(value) => Value::BigReal(value),
-                    ValueRef::Text(value) | ValueRef::Blob(value) => match column_type {
-                        Some(ctype) if ctype.to_lowercase() == "numeric" => {
-                            let value = match from_utf8(value) {
-                                Ok(value) => value,
-                                Err(err) => {
-                                    // TODO: Replace with logger.
-                                    eprintln!("ERROR {err}");
-                                    return Err(deadpool_sqlite::rusqlite::Error::InvalidQuery);
-                                }
-                            };
-                            let value = match value.parse::<Decimal>() {
-                                Ok(value) => value,
-                                Err(err) => {
-                                    // TODO: Replace with logger.
-                                    eprintln!("ERROR {err}");
-                                    return Err(deadpool_sqlite::rusqlite::Error::InvalidQuery);
-                                }
-                            };
-                            Value::Numeric(value)
-                        }
-                        _ => {
-                            let value = match from_utf8(value) {
-                                Ok(value) => value,
-                                Err(err) => {
-                                    // TODO: Replace with logger.
-                                    eprintln!("ERROR {err}");
-                                    return Err(deadpool_sqlite::rusqlite::Error::InvalidQuery);
-                                }
-                            };
-                            Value::Text(value.to_string())
-                        }
-                    },
-                };
-                db_row.insert(column_name.to_string(), value);
-            }
-            Ok(db_row)
-        })
-        .collect::<Vec<_>>();
-    Ok(results?)
 }
 
-/// Define a regular expression matching function and add it to the database.
-fn add_rusqlite_regexp_function(db: &rusqlite::Connection) -> Result<(), Error> {
-    type BoxError = Box<dyn std::error::Error + Send + Sync>;
+impl From<deadpool_sqlite::BuildError> for DatabaseError {
+    fn from(err: deadpool_sqlite::BuildError) -> DatabaseError {
+        DatabaseError::BuildError(err.to_string())
+    }
+}
 
-    // This function has been adapted from:
-    // https://docs.rs/rusqlite/0.32.1/rusqlite/functions/index.html
-    Ok(db.create_scalar_function(
-        "regexp_match",
-        2,
-        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
-        move |ctx| {
-            let num_args = ctx.len();
-            if num_args != 2 {
-                return Err(rusqlite::Error::UserFunctionError(
-                    format!("Expected 2 arguments but got {num_args}").into(),
-                ));
-            }
-            let text = ctx.get_raw(0);
-            let regexp: Arc<Regex> = ctx.get_or_create_aux(1, |vr| -> Result<_, BoxError> {
-                Ok(Regex::new(vr.as_str()?)?)
-            })?;
-            match text {
-                // If the text to match is NULL then the condition is vacuously true:
-                ValueRef::Null => Ok(true),
-                _ => {
-                    let text = text.as_str()?;
-                    Ok(regexp.is_match(text))
-                }
-            }
-        },
-    )?)
+impl From<deadpool_sqlite::CreatePoolError> for DatabaseError {
+    fn from(err: deadpool_sqlite::CreatePoolError) -> DatabaseError {
+        DatabaseError::CreatePoolError(err.to_string())
+    }
+}
+
+impl From<deadpool_sqlite::PoolError> for DatabaseError {
+    fn from(err: deadpool_sqlite::PoolError) -> DatabaseError {
+        DatabaseError::PoolError(err.to_string())
+    }
+}
+
+impl From<deadpool_sqlite::InteractError> for DatabaseError {
+    fn from(err: deadpool_sqlite::InteractError) -> DatabaseError {
+        DatabaseError::InteractError(err.to_string())
+    }
 }
 
 /// Represents a deadpool-sqlite database connection pool.
@@ -210,13 +74,13 @@ impl Query for RusqlitePool {
         match conn
             .interact(move |conn| match conn.execute_batch(&sql_string) {
                 Err(err) => {
-                    return Err(Error::DeadpoolRusqliteError(err));
+                    return Err(DatabaseError::InteractError(err.to_string()));
                 }
                 Ok(_) => Ok(()),
             })
             .await
         {
-            Err(err) => Err(Error::DeadpoolRusqliteInteractError(err)),
+            Err(err) => Err(err.into()),
             Ok(_) => {
                 // We need to drop conn here to ensure that any changes to the db are persisted.
                 drop(conn);
@@ -400,9 +264,7 @@ impl Query for RusqliteTransaction {
                 })
                 .await?
             }
-            None => Err(Error::DatabaseError(format!(
-                "transaction already complete"
-            ))),
+            None => Err(Error::DatabaseError("transaction already complete".into())),
         }
     }
 
@@ -436,9 +298,7 @@ impl Transaction for RusqliteTransaction {
                 self.conn = None;
                 Ok(())
             }
-            None => Err(Error::DatabaseError(format!(
-                "transaction already complete"
-            ))),
+            None => Err(Error::DatabaseError("transaction already complete".into())),
         }
     }
 
@@ -452,9 +312,7 @@ impl Transaction for RusqliteTransaction {
                 self.conn = None;
                 Ok(())
             }
-            None => Err(Error::DatabaseError(format!(
-                "transaction already complete"
-            ))),
+            None => Err(Error::DatabaseError("transaction already complete".into())),
         }
     }
 }
@@ -470,4 +328,172 @@ impl RusqliteTransaction {
         let syntax = SqliteSyntax;
         Ok(RusqliteTransaction { syntax, pool, conn })
     }
+}
+
+/// Uses the rusqlite driver directly to query a database using the given prepared [Statement]
+/// and parameters.
+fn query_prepared(stmt: &mut Statement<'_>, params: &[Value]) -> Result<Vec<Row>, Error> {
+    // Begin by binding all of the parameters to the statement:
+    for (i, param) in params.iter().enumerate() {
+        match param {
+            Value::Text(text) => {
+                stmt.raw_bind_parameter(i + 1, text)?;
+            }
+            Value::SmallInteger(num) => {
+                stmt.raw_bind_parameter(i + 1, num.to_string())?;
+            }
+            Value::Integer(num) => {
+                stmt.raw_bind_parameter(i + 1, num.to_string())?;
+            }
+            Value::BigInteger(num) => {
+                stmt.raw_bind_parameter(i + 1, num.to_string())?;
+            }
+            Value::Real(num) => {
+                stmt.raw_bind_parameter(i + 1, num.to_string())?;
+            }
+            Value::BigReal(num) => {
+                stmt.raw_bind_parameter(i + 1, num.to_string())?;
+            }
+            Value::Numeric(num) => {
+                stmt.raw_bind_parameter(i + 1, num.to_string())?;
+            }
+            Value::Boolean(flag) => {
+                // Note that SQLite's type affinity means that booleans are actually
+                // implemented as numbers (see https://sqlite.org/datatype3.html).
+                let num = match flag {
+                    true => 1,
+                    false => 0,
+                };
+                stmt.raw_bind_parameter(i + 1, num.to_string())?;
+            }
+            Value::Null => {
+                stmt.raw_bind_parameter(i + 1, &Null)?;
+            }
+            Value::Json(value) => {
+                let value = match value {
+                    JsonValue::String(value) => value.to_string(),
+                    _ => value.to_string(),
+                };
+                stmt.raw_bind_parameter(i + 1, value)?;
+            }
+            Value::Other(type_name, bytes, string_opt) => {
+                return Err(Error::InputError(format!(
+                    "Not supported for SQLite: \
+                             Value::Other({type_name}, {bytes:?}, {string_opt:?})"
+                )));
+            }
+        };
+    }
+
+    // Define the struct that we will use (internally to this function) to represent information
+    // about a given column:
+    struct ColumnConfig {
+        name: String,
+        datatype: Option<String>,
+    }
+
+    // Collect the column information from the prepared statement:
+    let columns = stmt
+        .column_names()
+        .iter()
+        .map(|col| ColumnConfig {
+            name: col.to_string(),
+            datatype: None,
+        })
+        .collect::<Vec<_>>();
+
+    // Execute the statement and send back the results
+    let results = stmt
+        .raw_query()
+        .map(|row| {
+            let mut db_row = Row::new();
+            for column in &columns {
+                let column_name = &column.name;
+                let column_type = &column.datatype;
+                let value = row.get_ref(column_name.as_str())?;
+                let value = match value {
+                    ValueRef::Null => Value::Null,
+                    ValueRef::Integer(value) => match column_type {
+                        Some(ctype) if ctype.to_lowercase() == "bool" => Value::Boolean(value != 0),
+                        // The remaining cases are (a) the column's datatype is integer, and
+                        // (b) the column is an expression. In the latter case it doesn't seem
+                        // possible to get the datatype of the expression from the metadata.
+                        // So the only thing to do here is just to convert the value
+                        // using the default method, and since we already know that it
+                        // is an integer, the result of the conversion will be a number.
+                        _ => Value::from(value),
+                    },
+                    ValueRef::Real(value) => Value::BigReal(value),
+                    ValueRef::Text(value) | ValueRef::Blob(value) => match column_type {
+                        Some(ctype) if ctype.to_lowercase() == "numeric" => {
+                            let value = match from_utf8(value) {
+                                Ok(value) => value,
+                                Err(err) => {
+                                    // TODO: Replace with logger.
+                                    eprintln!("ERROR {err}");
+                                    return Err(deadpool_sqlite::rusqlite::Error::InvalidQuery);
+                                }
+                            };
+                            let value = match value.parse::<Decimal>() {
+                                Ok(value) => value,
+                                Err(err) => {
+                                    // TODO: Replace with logger.
+                                    eprintln!("ERROR {err}");
+                                    return Err(deadpool_sqlite::rusqlite::Error::InvalidQuery);
+                                }
+                            };
+                            Value::Numeric(value)
+                        }
+                        _ => {
+                            let value = match from_utf8(value) {
+                                Ok(value) => value,
+                                Err(err) => {
+                                    // TODO: Replace with logger.
+                                    eprintln!("ERROR {err}");
+                                    return Err(deadpool_sqlite::rusqlite::Error::InvalidQuery);
+                                }
+                            };
+                            Value::Text(value.to_string())
+                        }
+                    },
+                };
+                db_row.insert(column_name.to_string(), value);
+            }
+            Ok(db_row)
+        })
+        .collect::<Vec<_>>();
+    Ok(results?)
+}
+
+/// Define a regular expression matching function and add it to the database.
+fn add_rusqlite_regexp_function(db: &rusqlite::Connection) -> Result<(), Error> {
+    type BoxError = Box<dyn std::error::Error + Send + Sync>;
+
+    // This function has been adapted from:
+    // https://docs.rs/rusqlite/0.32.1/rusqlite/functions/index.html
+    Ok(db.create_scalar_function(
+        "regexp_match",
+        2,
+        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+        move |ctx| {
+            let num_args = ctx.len();
+            if num_args != 2 {
+                return Err(rusqlite::Error::UserFunctionError(
+                    format!("Expected 2 arguments but got {num_args}").into(),
+                ));
+            }
+            let text = ctx.get_raw(0);
+            let regexp: Arc<Regex> = ctx.get_or_create_aux(1, |vr| -> Result<_, BoxError> {
+                Ok(Regex::new(vr.as_str()?)?)
+            })?;
+            match text {
+                // If the text to match is NULL then the condition is vacuously true:
+                ValueRef::Null => Ok(true),
+                _ => {
+                    let text = text.as_str()?;
+                    Ok(regexp.is_match(text))
+                }
+            }
+        },
+    )?)
 }

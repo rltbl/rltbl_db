@@ -61,6 +61,10 @@ where
         Value::Json(json_value) => Ok(serde_json::from_str(&json_value.to_string())?),
         Value::Null => Ok(serde_json::from_str("null")?),
         Value::Text(text) => Ok(serde_json::from_str(&text.as_str().to_string())?),
+        // TODO:
+        // Value::Other.
+        // Value::Boolean
+        // Verify that the numbers are ok (check the db contents).
         _ => {
             let value = value.to_string();
             Ok(serde_json::from_str(&value)?)

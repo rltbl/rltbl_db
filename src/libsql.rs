@@ -6,11 +6,36 @@ use rust_decimal::prelude::ToPrimitive;
 use std::env;
 
 use crate::{
-    Error, JsonValue, Pool, Query, Row, Rows, Syntax, Transaction, Value,
+    Error, JsonValue, Pool, Query, Row, Rows, Syntax, Transaction, Value, error::DatabaseError,
     sql_parse::validate_table_name, sqlite::SqliteSyntax,
 };
 
-// Conversions from Values to libsql::Values and vice versa:
+// DatabaseError implementations.
+impl From<deadpool_libsql::libsql::Error> for DatabaseError {
+    fn from(err: deadpool_libsql::libsql::Error) -> DatabaseError {
+        DatabaseError::Error(err.to_string())
+    }
+}
+
+impl From<deadpool_libsql::BuildError> for DatabaseError {
+    fn from(err: deadpool_libsql::BuildError) -> DatabaseError {
+        DatabaseError::BuildError(err.to_string())
+    }
+}
+
+impl From<deadpool_libsql::CreatePoolError> for DatabaseError {
+    fn from(err: deadpool_libsql::CreatePoolError) -> DatabaseError {
+        DatabaseError::CreatePoolError(err.to_string())
+    }
+}
+
+impl From<deadpool_libsql::PoolError> for DatabaseError {
+    fn from(err: deadpool_libsql::PoolError) -> DatabaseError {
+        DatabaseError::PoolError(err.to_string())
+    }
+}
+
+// Conversions from Values to libsql::Values and vice versa.
 impl TryFrom<libsql::Value> for Value {
     type Error = Error;
 
@@ -39,7 +64,6 @@ impl TryInto<libsql::Value> for Value {
             Value::SmallInteger(val) => Ok(libsql::Value::Integer(val.into())),
             Value::Real(val) => Ok(libsql::Value::Real(val.into())),
             Value::BigReal(val) => Ok(libsql::Value::Real(val.into())),
-            // TODO: Add another error type.
             Value::Numeric(val) => {
                 let val = val.to_f64().ok_or(Error::DatatypeError(format!(
                     "Error converting value '{val}' to f64"
@@ -64,7 +88,7 @@ impl TryInto<libsql::Value> for Value {
 pub struct LibSQLPool {
     pub pool: deadpool_libsql::Pool,
     syntax: SqliteSyntax,
-    load_extensions_enabled: bool,
+    csv_extension_enabled: bool,
 }
 
 #[async_trait]
@@ -76,47 +100,26 @@ impl Query for LibSQLPool {
 
     /// Implements [Query::execute_batch()].
     async fn execute_batch(&self, sql: &str) -> Result<(), Error> {
-        let conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|err| Error::ConnectError(format!("Error getting from pool: {err}")))?;
-        match conn.execute_batch(sql).await {
-            Err(err) => {
-                return Err(Error::DatabaseError(format!("Error during query: {err}")));
-            }
-            Ok(_) => Ok(()),
-        }
+        let conn = self.pool.get().await?;
+        conn.execute_batch(sql).await?;
+        Ok(())
     }
 
     /// Implements [Query::query()].
     async fn query(&self, sql: &str, params: &[Value]) -> Result<Rows, Error> {
-        let conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|err| Error::ConnectError(format!("Error getting from pool: {err}")))?;
+        let conn = self.pool.get().await?;
 
         let params = params.to_vec();
-        let mut rows = conn
-            .query(sql, params)
-            .await
-            .map_err(|err| Error::ConnectError(format!("Query error: {err}")))?;
+        let mut rows = conn.query(sql, params).await?;
 
         let mut db_rows = vec![];
-        while let Some(row) = rows
-            .next()
-            .await
-            .map_err(|err| Error::DataError(err.to_string()))?
-        {
+        while let Some(row) = rows.next().await? {
             let mut db_row = Row::new();
             for i in 0..row.column_count() {
-                let column = row.column_name(i).ok_or(Error::DataError(format!(
-                    "Error getting name of column {i} of row."
-                )))?;
-                let value = row.get_value(i).map_err(|err| {
-                    Error::DataError(format!("Error getting value of column {i} of row: {err}"))
-                })?;
+                let column = row.column_name(i).ok_or(Error::DatabaseError(
+                    format!("Error getting name of column {i} of row.").into(),
+                ))?;
+                let value = row.get_value(i)?;
                 db_row.insert(column.to_string(), value.try_into()?);
             }
             db_rows.push(db_row);
@@ -127,7 +130,7 @@ impl Query for LibSQLPool {
 
     /// Implements [Query::can_load()]
     fn can_load(&self, filename: &str) -> bool {
-        self.load_extensions_enabled || filename.to_lowercase().ends_with(".csv")
+        self.csv_extension_enabled || filename.to_lowercase().ends_with(".csv")
     }
 
     /// Implements [Query::load_table()]
@@ -140,9 +143,7 @@ impl Query for LibSQLPool {
         }
 
         eprintln!("Loading table '{table}' from '{filename}' using SQLite's CSV load extension.");
-        let current_dir = env::current_dir().map_err(|err| {
-            Error::ConnectError(format!("Error getting current directory: {err}"))
-        })?;
+        let current_dir = env::current_dir()?;
         let current_dir = current_dir.display();
         let sql = format!(
             r#"CREATE VIRTUAL TABLE temp.t1
@@ -187,35 +188,23 @@ impl Pool for LibSQLPool {
 impl LibSQLPool {
     /// Connect to the database at the given URL.
     pub async fn connect(url: &str) -> Result<Self, Error> {
-        let db = Builder::new_local(url).build().await.map_err(|err| {
-            Error::ConnectError(format!("Error creating pool from URL: '{url}': {err}"))
-        })?;
+        let db = Builder::new_local(url).build().await?;
         let manager = Manager::from_libsql_database(db);
-        let pool = deadpool_libsql::Pool::builder(manager)
-            .build()
-            .map_err(|err| {
-                Error::ConnectError(format!("Error creating pool from URL: '{url}': {err}"))
-            })?;
+        let pool = deadpool_libsql::Pool::builder(manager).build()?;
 
-        let conn = pool
-            .get()
-            .await
-            .map_err(|err| Error::ConnectError(format!("Error getting from pool: {err}")))?;
+        let conn = pool.get().await?;
 
+        // TODO: Document this somewhere.
         // Enable the CSV load extension.
         // Note that this requires that csv.so be in the current directory.
-        conn.load_extension_enable().map_err(|err| {
-            Error::ConnectError(format!("Error creating pool from URL: '{url}': {err}"))
-        })?;
-        let current_dir = env::current_dir().map_err(|err| {
-            Error::ConnectError(format!("Error creating pool from URL: '{url}': {err}"))
-        })?;
+        conn.load_extension_enable()?;
+        let current_dir = env::current_dir()?;
         let current_dir = current_dir.display();
         match conn.load_extension(&format!("{current_dir}/csv"), None) {
             Ok(_) => Ok(Self {
                 pool: pool,
                 syntax: SqliteSyntax,
-                load_extensions_enabled: true,
+                csv_extension_enabled: true,
             }),
             Err(err) => {
                 eprintln!("WARNING Unable to load extension 'csv': {err}");
@@ -225,7 +214,7 @@ impl LibSQLPool {
                 Ok(Self {
                     pool: pool,
                     syntax: SqliteSyntax,
-                    load_extensions_enabled: false,
+                    csv_extension_enabled: false,
                 })
             }
         }

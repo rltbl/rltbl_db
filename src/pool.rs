@@ -863,9 +863,10 @@ impl AnyPool {
                 // there is an error creating the cache table we just check that it exists
                 // and if it does we assume that all is ok.
                 match self.table_exists(QUERY_CACHE_TABLE).await? {
-                    false => Err(Error::DatabaseError(format!(
-                        "The cache table '{QUERY_CACHE_TABLE}' could not be created"
-                    ))),
+                    false => Err(Error::DatabaseError(
+                        format!("The cache table '{QUERY_CACHE_TABLE}' could not be created")
+                            .into(),
+                    )),
                     true => Ok(()),
                 }
             }
@@ -884,9 +885,10 @@ impl AnyPool {
                 // there is an error creating the cache table we just check that it exists
                 // and if it does we assume that all is ok.
                 match self.table_exists(TABLE_CACHE_TABLE).await? {
-                    false => Err(Error::DatabaseError(format!(
-                        "The cache table '{TABLE_CACHE_TABLE}' could not be created"
-                    ))),
+                    false => Err(Error::DatabaseError(
+                        format!("The cache table '{TABLE_CACHE_TABLE}' could not be created")
+                            .into(),
+                    )),
                     true => Ok(()),
                 }
             }

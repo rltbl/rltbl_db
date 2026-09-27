@@ -11,8 +11,6 @@ pub enum Error {
     /////////////////////////////
     /// An error that occurred while connecting to a database.
     ConnectError(String),
-    /// An error that originated from the database.
-    DatabaseError(String),
     /// An error in the input to a function.
     InputError(String),
     /// An error related to the content of retrieved data.
@@ -50,40 +48,74 @@ pub enum Error {
     /// An error that occurred during serialization or deserialization.
     SerdeError(String),
 
-    // TODO: Think about (but don't do anything yet) whether it would be better to not
-    // expose driver-specific errors as opposed to having a driver-agnostic version of each
-    // of these error types.
-    #[cfg(feature = "rusqlite")]
-    /// A wrapper around [deadpool_sqlite::rusqlite::Error]
-    DeadpoolRusqliteError(deadpool_sqlite::rusqlite::Error),
-    #[cfg(feature = "rusqlite")]
-    /// A wrapper around [deadpool_sqlite::BuildError]
-    DeadpoolRusqliteBuildError(deadpool_sqlite::BuildError),
-    #[cfg(feature = "rusqlite")]
-    /// A wrapper around [deadpool_sqlite::CreatePoolError]
-    DeadpoolRusqliteCreatePoolError(deadpool_sqlite::CreatePoolError),
-    #[cfg(feature = "rusqlite")]
-    /// A wrapper around [deadpool_sqlite::PoolError]
-    DeadpoolRusqlitePoolError(deadpool_sqlite::PoolError),
-    #[cfg(feature = "rusqlite")]
-    /// A wrapper around [deadpool_sqlite::InteractError]
-    DeadpoolRusqliteInteractError(deadpool_sqlite::InteractError),
-
-    #[cfg(feature = "tokio-postgres")]
-    /// A wrapper around [deadpool_postgres::tokio_postgres::Error]
-    DeadpoolPostgresError(deadpool_postgres::tokio_postgres::Error),
-    #[cfg(feature = "tokio-postgres")]
-    /// A wrapper around [deadpool_postgres::CreatePoolError]
-    DeadpoolPostgresCreatePoolError(deadpool_postgres::CreatePoolError),
-    #[cfg(feature = "tokio-postgres")]
-    /// A wrapper around [deadpool_postgres::PoolError]
-    DeadpoolPostgresPoolError(deadpool_postgres::PoolError),
-    //
-    // TODO: libsql errors
+    /// An error orginating from the database.
+    DatabaseError(DatabaseError),
 }
 
-impl std::error::Error for Error {}
+/// An abstraction over the kinds of errors originating in database driver modules.
+#[derive(Debug)]
+pub enum DatabaseError {
+    /// Undifferentiated database error.
+    Error(String),
 
+    /// Failure to build a pool.
+    BuildError(String),
+
+    /// Failure to create a pool from a given configuration.
+    CreatePoolError(String),
+
+    /// Failure to retrieve a pool.
+    PoolError(String),
+
+    /// Failure to interact with a pool.
+    InteractError(String),
+}
+
+// Implement std::error::Error for our error types:
+impl std::error::Error for Error {}
+impl std::error::Error for DatabaseError {}
+
+// Implement std::fmt::Display for our error types:
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Error::ConnectError(err)
+            | Error::DataError(err)
+            | Error::InputError(err)
+            | Error::DatatypeError(err)
+            | Error::ParseError(err)
+            | Error::ValueError(err)
+            | Error::SerdeError(err) => write!(f, "{err}"),
+            Error::IOError(err) => write!(f, "{err}"),
+            Error::CSVError(err) => write!(f, "{err}"),
+            Error::InfallibleError(err) => write!(f, "{err}"),
+            Error::IntegerConversionError(err) => write!(f, "{err}"),
+            Error::DecimalConversionError(err) => write!(f, "{err}"),
+            Error::DatabaseError(err) => write!(f, "{err}"),
+        }
+    }
+}
+
+impl std::fmt::Display for DatabaseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            DatabaseError::Error(err)
+            | DatabaseError::BuildError(err)
+            | DatabaseError::CreatePoolError(err)
+            | DatabaseError::PoolError(err)
+            | DatabaseError::InteractError(err) => write!(f, "{err}"),
+        }
+    }
+}
+
+// Anything that implements Into<DatabaseError> is also an Error.
+impl<T: Into<DatabaseError>> From<T> for Error {
+    fn from(err: T) -> Error {
+        Error::DatabaseError(err.into())
+    }
+}
+
+// Serialization / Deserialization error implementations:
 impl serde::ser::Error for Error {
     fn custom<T>(msg: T) -> Self
     where
@@ -99,6 +131,19 @@ impl serde::de::Error for Error {
         T: Display,
     {
         Error::SerdeError(msg.to_string())
+    }
+}
+
+// Conversions to and from our error types and various other error types.
+impl From<&str> for DatabaseError {
+    fn from(err: &str) -> DatabaseError {
+        DatabaseError::Error(err.to_string())
+    }
+}
+
+impl From<String> for DatabaseError {
+    fn from(err: String) -> DatabaseError {
+        DatabaseError::Error(err)
     }
 }
 
@@ -139,101 +184,5 @@ impl From<std::num::TryFromIntError> for Error {
 impl From<rust_decimal::Error> for Error {
     fn from(err: rust_decimal::Error) -> Error {
         Error::DecimalConversionError(err)
-    }
-}
-
-// Rusqlite error implementations:
-
-#[cfg(feature = "rusqlite")]
-impl From<deadpool_sqlite::rusqlite::Error> for Error {
-    fn from(err: deadpool_sqlite::rusqlite::Error) -> Error {
-        Error::DeadpoolRusqliteError(err)
-    }
-}
-
-#[cfg(feature = "rusqlite")]
-impl From<deadpool_sqlite::BuildError> for Error {
-    fn from(err: deadpool_sqlite::BuildError) -> Error {
-        Error::DeadpoolRusqliteBuildError(err)
-    }
-}
-
-#[cfg(feature = "rusqlite")]
-impl From<deadpool_sqlite::CreatePoolError> for Error {
-    fn from(err: deadpool_sqlite::CreatePoolError) -> Error {
-        Error::DeadpoolRusqliteCreatePoolError(err)
-    }
-}
-
-#[cfg(feature = "rusqlite")]
-impl From<deadpool_sqlite::PoolError> for Error {
-    fn from(err: deadpool_sqlite::PoolError) -> Error {
-        Error::DeadpoolRusqlitePoolError(err)
-    }
-}
-
-#[cfg(feature = "rusqlite")]
-impl From<deadpool_sqlite::InteractError> for Error {
-    fn from(err: deadpool_sqlite::InteractError) -> Error {
-        Error::DeadpoolRusqliteInteractError(err)
-    }
-}
-
-// Tokio-postgres error implementations:
-
-#[cfg(feature = "tokio-postgres")]
-impl From<deadpool_postgres::tokio_postgres::Error> for Error {
-    fn from(err: deadpool_postgres::tokio_postgres::Error) -> Error {
-        Error::DeadpoolPostgresError(err)
-    }
-}
-
-#[cfg(feature = "tokio-postgres")]
-impl From<deadpool_postgres::CreatePoolError> for Error {
-    fn from(err: deadpool_postgres::CreatePoolError) -> Error {
-        Error::DeadpoolPostgresCreatePoolError(err)
-    }
-}
-
-#[cfg(feature = "tokio-postgres")]
-impl From<deadpool_postgres::PoolError> for Error {
-    fn from(err: deadpool_postgres::PoolError) -> Error {
-        Error::DeadpoolPostgresPoolError(err)
-    }
-}
-
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match self {
-            Error::ConnectError(err)
-            | Error::DataError(err)
-            | Error::InputError(err)
-            | Error::DatabaseError(err)
-            | Error::DatatypeError(err)
-            | Error::ParseError(err)
-            | Error::ValueError(err)
-            | Error::SerdeError(err) => write!(f, "{err}"),
-            Error::IOError(err) => write!(f, "{err}"),
-            Error::CSVError(err) => write!(f, "{err}"),
-            Error::InfallibleError(err) => write!(f, "{err}"),
-            Error::IntegerConversionError(err) => write!(f, "{err}"),
-            Error::DecimalConversionError(err) => write!(f, "{err}"),
-            #[cfg(feature = "rusqlite")]
-            Error::DeadpoolRusqliteError(err) => write!(f, "{err}"),
-            #[cfg(feature = "rusqlite")]
-            Error::DeadpoolRusqliteBuildError(err) => write!(f, "{err}"),
-            #[cfg(feature = "rusqlite")]
-            Error::DeadpoolRusqliteCreatePoolError(err) => write!(f, "{err}"),
-            #[cfg(feature = "rusqlite")]
-            Error::DeadpoolRusqlitePoolError(err) => write!(f, "{err}"),
-            #[cfg(feature = "rusqlite")]
-            Error::DeadpoolRusqliteInteractError(err) => write!(f, "{err}"),
-            #[cfg(feature = "tokio-postgres")]
-            Error::DeadpoolPostgresError(err) => write!(f, "{err}"),
-            #[cfg(feature = "tokio-postgres")]
-            Error::DeadpoolPostgresCreatePoolError(err) => write!(f, "{err}"),
-            #[cfg(feature = "tokio-postgres")]
-            Error::DeadpoolPostgresPoolError(err) => write!(f, "{err}"),
-        }
     }
 }
