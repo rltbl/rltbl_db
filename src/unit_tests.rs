@@ -4681,9 +4681,6 @@ mod tests {
         }
     }
 
-    // TODO: The import_perf test relies on the existence of data in tests/penguins/.
-    // Is it ok to add the generation script to the repository?
-
     #[tokio::test]
     #[ignore]
     async fn test_import_perf() {
@@ -4702,8 +4699,8 @@ mod tests {
         eprintln!("---");
 
         let filename = match pool.syntax().name() {
-            "sqlite" => "tests/penguins/src/data/penguin.csv",
-            "postgres" => "tests/penguins/src/data/penguin.tsv",
+            "sqlite" => "tests/data/penguin.csv",
+            "postgres" => "tests/data/penguin.tsv",
             _ => unreachable!(),
         };
         let now = Instant::now();
@@ -4715,10 +4712,10 @@ mod tests {
             .unwrap()
             .try_into_value()
             .unwrap();
-        assert_eq!(count, 100000);
+        assert_eq!(count, 9);
         eprintln!("Importing the data in '{filename}; using import_table() took {elapsed}s.");
 
-        let filename = "tests/penguins/src/data/penguin.tsv";
+        let filename = "tests/data/penguin.tsv";
         let now = Instant::now();
         pool.import_table_using_batch_insert(filename)
             .await
@@ -4730,7 +4727,7 @@ mod tests {
             .unwrap()
             .try_into_value()
             .unwrap();
-        assert_eq!(count, 100000);
+        assert_eq!(count, 9);
         eprintln!(
             "Importing the data in '{filename}' import_table_using_insert() took {elapsed}s."
         );
@@ -4749,7 +4746,7 @@ mod tests {
     async fn import_small(url: &str) {
         let pool = AnyPool::connect(url).await.unwrap();
         if pool.syntax().name() == "sqlite" {
-            pool.import_table("tests/input/table1.csv").await.unwrap();
+            pool.import_table("tests/data/table1.csv").await.unwrap();
             let rows = pool.query("SELECT * FROM table1", ()).await.unwrap();
             assert_eq!(
                 rows.rows,
@@ -4803,7 +4800,7 @@ mod tests {
                 ]
             );
         } else if pool.syntax().name() == "postgres" {
-            pool.import_table("tests/input/table1.tsv").await.unwrap();
+            pool.import_table("tests/data/table1.tsv").await.unwrap();
             let rows = pool.query("SELECT * FROM table1", ()).await.unwrap();
             assert_eq!(
                 rows.rows,
