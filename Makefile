@@ -31,6 +31,13 @@ tests/data/table1.csv: tests/data/table1.tsv
 
 ## Performance tests
 
+.PHONY: perf
+
+perf:
+	cargo run --bin rltbl_db_perf
+
+
+##### TODO: Replace these with the benchmark tests:
 .PHONY: test_caching_perf test_import_perf
 
 test_caching_perf:
