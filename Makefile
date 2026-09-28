@@ -59,7 +59,8 @@ test_default_ignored:
 
 test_libsql_ignored:
 	@echo "Running all (including normally) ignored unit tests using default features."
-	cargo test -- --no-capture --include-ignored
+	cargo test --no-default-features --features libsql \
+		-- --no-capture --include-ignored
 
 # Documentation
 
