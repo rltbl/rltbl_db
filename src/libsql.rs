@@ -132,7 +132,7 @@ impl Query for LibSQLPool {
     /// CSV load extension will be enabled if the shared object file `csv.so` exists in the
     /// current directory when the connection pool is created.
     fn can_load(&self, filename: &str) -> bool {
-        self.csv_extension_enabled || filename.to_lowercase().ends_with(".csv")
+        self.csv_extension_enabled && filename.to_lowercase().ends_with(".csv")
     }
 
     /// Implements [Query::load_table()]
