@@ -145,8 +145,6 @@
 //! Each of these traits has default implementations of most methods, so only a few method
 //! implementations are required.
 
-#![recursion_limit = "2000"]
-
 // Re-exports:
 pub use self::column::Column;
 pub use self::error::Error;
@@ -204,10 +202,6 @@ pub mod transaction;
 
 /// Caching support
 pub mod cache;
-
-/// Unit tests:
-pub mod unit_tests;
-
 
 // Driver-specific implementations.
 
