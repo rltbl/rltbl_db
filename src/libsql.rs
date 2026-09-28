@@ -200,7 +200,7 @@ impl LibSQLPool {
                 csv_extension_enabled: true,
             }),
             Err(err) => {
-                eprintln!("WARNING Unable to load extension 'csv': {err}");
+                eprintln!("INFO Unable to CSV load extension: '{err}'. Disabling.");
                 conn.load_extension_disable()?;
                 Ok(Self {
                     pool: pool,
