@@ -29,13 +29,40 @@ test_libsql: | tests/data/table1.csv
 tests/data/table1.csv: tests/data/table1.tsv
 	csvtool -t TAB -u COMMA cat $< > $@
 
+##### TODO: Use this section to replace the older tests below it.
 ## Performance tests
 
-.PHONY: perf
+.PHONY: rltbl_tokio tokio_raw caching_perf_new
 
-perf:
-	cargo run --bin rltbl_db_perf
+baselines:
+	mkdir -p $@
 
+output:
+	mkdir -p $@
+
+rltbl_tokio: | baselines output
+	cargo run --bin rltbl_db_perf -- \
+		--seed 0 --collector silent --warmup 10 \
+		--duration 1m \
+		--output json --output-file output/driver-rltbl-tokio-postgres-v0.1.0.json \
+		--baseline-file baselines/driver-rltbl-tokio-postgres-v0.1.0.json \
+		rltbl-driver tokio-postgres
+
+tokio_raw: | baselines output
+	cargo run --bin rltbl_db_perf -- \
+		--seed 0 --collector silent --warmup 10 \
+		--duration 1m \
+		--output json --output-file output/driver-tokio-postgres-raw-v0.1.0.json \
+		--baseline-file baselines/driver-tokio-postgres-raw-v0.1.0.json \
+		tokio-postgres-driver
+
+caching_perf_new: | baselines output
+	cargo run --no-default-features --features tokio-postgres -- \
+		--seed 0 --collector silent --warmup 10 \
+		--noise-threshold 5 \
+		--baseline-file baselines/caching-postgresql-none-v0.1.0.json \
+		--output json --output-file output/caching-postgresql-none-v0.1.0.json \
+		caching --totals-file baselines/caching-totals-v0.1.0.json postgres truncate
 
 ##### TODO: Replace these with the benchmark tests:
 .PHONY: test_caching_perf test_import_perf
