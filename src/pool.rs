@@ -92,10 +92,7 @@ pub trait Pool: Query + std::fmt::Debug {
 pub struct AnyPool {
     pub pool: Box<dyn Pool>,
     caching_strategy: CachingStrategy,
-    /// When set to true, SQL statements sent to the [Query::query()] and [Query::execute()]
-    /// functions will be parsed and if executing them will result in tables being edited
-    /// and/or dropped, the cache will be maintained in accordance with the given
-    /// [CachingStrategy].
+    // See [AnyPool::set_cache_aware_query()].
     cache_aware_query: bool,
     meta_cache: MetaCache,
     memory_query_cache: MemoryQueryCache,
@@ -140,29 +137,29 @@ impl AnyPool {
         Ok(AnyPool::from(pool))
     }
 
-    /// Implements [Query::syntax()] for [AnyPool]
+    /// Implements [Query::syntax()].
     pub fn syntax(&self) -> &dyn Syntax {
         self.pool.syntax()
     }
 
-    /// Implements [Query::columns()] for [AnyPool]
+    /// Implements [Query::columns()].
     pub async fn columns(&self, table: &str) -> Result<IndexMap<String, String>, Error> {
         self.pool.columns(table).await
     }
 
-    /// Implements [Query::primary_keys()] for [AnyPool]
+    /// Implements [Query::primary_keys()].
     pub async fn primary_keys(&self, table: &str) -> Result<Vec<String>, Error> {
         self.pool.primary_keys(table).await
     }
 
-    /// Implements [Query::execute()] for [AnyPool]
+    /// Implements [Query::execute()].
     pub async fn execute(&self, sql: &str, values: impl IntoValues) -> Result<(), Error> {
         let values = values.into_values()?.collect::<Vec<_>>();
         self.query(sql, values).await?;
         Ok(())
     }
 
-    /// Implements [Query::execute_batch()] for [AnyPool]
+    /// Implements [Query::execute_batch()].
     pub async fn execute_batch(&self, sql: &str) -> Result<(), Error> {
         self.pool.execute_batch(sql).await?;
         if self.get_cache_aware_query() {
@@ -179,6 +176,20 @@ impl AnyPool {
             self.clear_cache_for_affected_tables(sql).await?;
         }
         Ok(rows)
+    }
+
+    /// Implements [Query::drop_table()].
+    pub async fn drop_table(&self, table: &str) -> Result<(), Error> {
+        self.pool.drop_table(table).await?;
+        self.clear_cache_for_dropped_tables(&[&table]).await?;
+        Ok(())
+    }
+
+    /// Implements [Query::drop_view()].
+    pub async fn drop_view(&self, view: &str) -> Result<(), Error> {
+        self.pool.drop_view(view).await?;
+        self.clear_cache_for_dropped_tables(&[&view]).await?;
+        Ok(())
     }
 
     /// Insert rows into the given columns of the given table. If an input row does not have a
@@ -375,8 +386,8 @@ impl AnyPool {
 
     /// Create a table, using the stem of the given file as the table name, and the headers
     /// of each data column in the file as the names of the table's columns, and then load the
-    /// data into it using the bulk copy method if available for this driver, otherwise the
-    /// fallback is to [AnyPool::import_table_using_batch_insert()]
+    /// data into it using the bulk copy method for this driver, or, if that is not
+    /// available, use [AnyPool::import_table_using_batch_insert()]
     pub async fn import_table(&self, filename: &str) -> Result<(), Error> {
         // Recreate the table (the table name is just the name of the file) in the database:
         let table = Path::new(filename)
@@ -415,20 +426,6 @@ impl AnyPool {
     /// Determine whether the given table exists in the database.
     pub async fn table_exists(&self, table: &str) -> Result<bool, Error> {
         Ok(self.which_are_tables(&[table]).await?.len() == 1)
-    }
-
-    /// Implements [Query::drop_table()].
-    pub async fn drop_table(&self, table: &str) -> Result<(), Error> {
-        self.pool.drop_table(table).await?;
-        self.clear_cache_for_dropped_tables(&[&table]).await?;
-        Ok(())
-    }
-
-    /// Implements [Query::drop_view()].
-    pub async fn drop_view(&self, view: &str) -> Result<(), Error> {
-        self.pool.drop_view(view).await?;
-        self.clear_cache_for_dropped_tables(&[&view]).await?;
-        Ok(())
     }
 
     /// Begin a transaction.
@@ -477,7 +474,12 @@ impl AnyPool {
     /// for caching query results you must explicitly use the [AnyPool::cache()] method.
     /// To explicitly skip the housekeeping implied by setting the cache-aware-query flag, even
     /// when it is set to on, call the desired method on the underlying [dyn Pool](Pool) object
-    /// instead of on this [AnyPool]. E.g., `self.pool.execute()` instead of `self.execute()`.
+    /// instead of on this [AnyPool]. For instance, if you want to call the execute() method
+    /// you should use:
+    ///    `self.pool.execute()`
+    /// instead of
+    ///    `self.execute()`
+    /// to force-bypass cache maintenance.
     pub fn set_cache_aware_query(&mut self, value: bool) {
         self.cache_aware_query = value;
     }
@@ -920,7 +922,7 @@ impl AnyPool {
     }
 
     /// Get the SQL code that is used to define the given view.
-    async fn get_view_sql(&self, view: &str) -> Result<String, Error> {
+    async fn get_view_code(&self, view: &str) -> Result<String, Error> {
         let view_sql = {
             let rows = {
                 let (sql, params) = self.syntax().view_sql_sql(view);
@@ -939,6 +941,414 @@ impl AnyPool {
             }
         };
         Ok(view_sql)
+    }
+
+    /// Ensure that caching triggers exist for the given table. Note that this function calls
+    /// ensure_cache_tables_exist() implicitly.
+    async fn ensure_caching_triggers_exist_for_table(&self, table: &str) -> Result<(), Error> {
+        let table_triggers_name = format!("{table}_triggers");
+        if !self.meta_cache.exists(&table_triggers_name)? {
+            self.ensure_cache_tables_exist().await?;
+            self.create_table_caching_triggers_for_table(&table).await?;
+            // Indicate that triggers exist for `table` in the meta-cache:
+            self.meta_cache.insert(&table_triggers_name)?;
+        }
+        Ok(())
+    }
+
+    /// Ensure that the query cache table and the table cache table exist (see
+    /// [QUERY_CACHE_TABLE] and [TABLE_CACHE_TABLE]).
+    async fn ensure_cache_tables_exist(&self) -> Result<(), Error> {
+        if !self.meta_cache.exists(QUERY_CACHE_TABLE)? {
+            self.create_query_cache_table().await?;
+            self.meta_cache.insert(QUERY_CACHE_TABLE)?;
+        }
+        if !self.meta_cache.exists(TABLE_CACHE_TABLE)? {
+            self.create_table_cache_table().await?;
+            self.meta_cache.insert(TABLE_CACHE_TABLE)?;
+        }
+        Ok(())
+    }
+
+    /// Ensure that caching triggers exist for the source tables of the given view. Note that
+    /// this function calls ensure_cache_tables_exist() implicitly.
+    async fn ensure_caching_triggers_exist_for_view(&self, view: &str) -> Result<(), Error> {
+        let view_triggers_name = format!("{view}_triggers");
+        if !self.meta_cache.exists(&view_triggers_name)? {
+            self.ensure_cache_tables_exist().await?;
+            let view_sql = self.get_view_code(&view).await?;
+            let source_tables = sql_parse::get_view_tables(&view_sql)?;
+            for source_table in source_tables.iter() {
+                // Add a trigger to clean entries from the cache for the source table itself:
+                self.create_table_caching_triggers_for_table(source_table)
+                    .await?;
+                // Add a trigger to clean entries from the cache for the view:
+                self.create_table_caching_triggers_for_view(&source_table, &view)
+                    .await?;
+                // Add an entry for the source table triggers to the metacache. If there is another
+                // entry for this source table it will be overwritten, which is desirable in
+                // case it was not previously known if the table was the source table for a view.
+                self.meta_cache
+                    .insert(&format!("{source_table}_triggers"))?;
+            }
+            self.meta_cache.insert(&view_triggers_name)?;
+        }
+        Ok(())
+    }
+
+    /// Parse the given semi-colon-separated SQL commands and determine which tables will be
+    /// affected (either edited or dropped) by the commands, then ensure that there are no
+    /// entries for those tables in the cache in accordance with the current [CachingStrategy].
+    async fn clear_cache_for_affected_tables(&self, sql: &str) -> Result<(), Error> {
+        if self.get_caching_strategy() != CachingStrategy::None {
+            let (edited_tables, dropped_tables): (Vec<_>, Vec<_>) = {
+                let (edited_tables, dropped_tables) = sql_parse::get_affected_tables(sql)?;
+                (
+                    edited_tables.into_iter().collect(),
+                    dropped_tables.into_iter().collect(),
+                )
+            };
+            if !edited_tables.is_empty() {
+                let edited_tables: Vec<_> = edited_tables.iter().map(|t| t.as_str()).collect();
+                self.clear_cache_for_edited_tables(&edited_tables).await?;
+            }
+            if !dropped_tables.is_empty() {
+                let dropped_tables: Vec<_> = dropped_tables.iter().map(|t| t.as_str()).collect();
+                self.clear_cache_for_dropped_tables(&dropped_tables).await?;
+            }
+        }
+        Ok(())
+    }
+
+    // Triggers cannot apply to DROP commands, only to INSERT, UPDATE, DELETE, or TRUNCATE.
+    // See https://www.postgresql.org/docs/current/sql-createtrigger.html and
+    // https://sqlite.org/lang_createtrigger.html. Note that PostgreSQL has the concept
+    // of an "event trigger":
+    // https://www.pgtutorial.com/postgresql-tutorial/postgresql-event-triggers/ which could
+    // be used, but SQLite has no such capability. To workaround this limitation, we
+    // define two clear_cache_() functions, one for edited tables, and one for dropped tables.
+    // In the case of a dropped table, unlike an edit, we cannot rely on the caching trigger,
+    // when we are using the [CachingStategy::Trigger] strategy, to automatically delete the
+    // entries from the cache for those tables, since those triggers will have beeen dropped
+    // along with the table.
+    // Although strictly speaking, PostgreSQL (which has event triggers) is not subject to this
+    // limitation, for simplicity we will not be creating a PostgreSQL event trigger and we will
+    // use both functions below for both database types.
+
+    /// Update the cache tables, for the given list of tables, using the current [CachingStrategy],
+    /// under the assumption that the tables in the given list have all just been edited (i.e.,
+    /// truncated, deleted from, inserted to, or updated).
+    async fn clear_cache_for_edited_tables(&self, tables: &[&str]) -> Result<(), Error> {
+        match self.get_caching_strategy() {
+            CachingStrategy::None | CachingStrategy::Trigger => (),
+            CachingStrategy::TruncateAll => {
+                self.update_last_modified_times(tables).await?;
+                self.delete_query_cache_entries(&[]).await?
+            }
+            CachingStrategy::Truncate => {
+                self.update_last_modified_times(tables).await?;
+                self.delete_query_cache_entries(tables).await?
+            }
+            CachingStrategy::Memory(_) => {
+                self.update_last_modified_times(tables).await?;
+                self.memory_query_cache.clear(tables)?;
+            }
+        };
+        Ok(())
+    }
+
+    /// Update the cache tables for the given list of tables, using the current [CachingStrategy],
+    /// under the assumption that the tables in the given list have all just been dropped.
+    async fn clear_cache_for_dropped_tables(&self, tables: &[&str]) -> Result<(), Error> {
+        if let CachingStrategy::Memory(_) = self.get_caching_strategy() {
+            self.update_last_modified_times(tables).await?;
+            self.memory_query_cache.clear(&tables)?;
+        } else {
+            // Do not clear the cache if the dropped tables include the cache tables themselves:
+            if !tables
+                .iter()
+                .any(|table| [QUERY_CACHE_TABLE, TABLE_CACHE_TABLE].contains(table))
+            {
+                match self.get_caching_strategy() {
+                    CachingStrategy::Memory(_) => unreachable!(),
+                    CachingStrategy::None => (),
+                    CachingStrategy::TruncateAll => {
+                        self.update_last_modified_times(tables).await?;
+                        self.delete_query_cache_entries(&[]).await?;
+                    }
+                    CachingStrategy::Trigger | CachingStrategy::Truncate => {
+                        self.update_last_modified_times(tables).await?;
+                        self.delete_query_cache_entries(tables).await?;
+                    }
+                }
+            }
+        }
+        // Update the meta-cache to remove any entries associated with tables that no longer exist:
+        let mut meta_cache = self.meta_cache.get_cache()?;
+        for table in tables {
+            if *table == QUERY_CACHE_TABLE {
+                meta_cache.remove(QUERY_CACHE_TABLE);
+            } else if *table == TABLE_CACHE_TABLE {
+                meta_cache.remove(TABLE_CACHE_TABLE);
+            } else {
+                meta_cache.remove(&format!("{table}_triggers"));
+                meta_cache.remove(&format!("{table}_VIEW"));
+                meta_cache.remove(&format!("{table}_TABLE"));
+            }
+        }
+        Ok(())
+    }
+
+    /// Update the last verified time of the query cache entry identified by the triple:
+    /// (tables, statement, params).
+    async fn update_last_verified(
+        &self,
+        tables: &[&str],
+        statement: &str,
+        params: &[Value],
+    ) -> Result<(), Error> {
+        match self.get_caching_strategy() {
+            CachingStrategy::Memory(_) => {
+                let mut cache = self.memory_query_cache.get_cache()?;
+                let epoch_now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map_err(|err| Error::DataError(format!("Error getting epoch time: {err}")))?;
+                let mem_key = MemoryQueryCacheKey {
+                    tables: format!(
+                        "[{}]",
+                        tables
+                            .iter()
+                            .map(|table| format!("\"{table}\""))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                    statement: statement.to_string(),
+                    parameters: format!("{params:?}"),
+                };
+                match cache.get_mut(&mem_key) {
+                    Some(value) => value.last_verified = epoch_now.as_millis(),
+                    None => (),
+                };
+            }
+            _ => match self.table_exists(QUERY_CACHE_TABLE).await? {
+                true => {
+                    let tables_param = format!(
+                        "[{}]",
+                        tables
+                            .iter()
+                            .map(|table| format!("\"{table}\""))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
+                    self.pool
+                        .execute(
+                            &format!(
+                                r#"UPDATE "{QUERY_CACHE_TABLE}"
+                               SET "last_verified" = {ts}
+                               WHERE "tables" = {p}1
+                               AND "statement" = {p}2
+                               AND "parameters" = {p}3"#,
+                                p = self.syntax().param_prefix(),
+                                ts = self.syntax().get_epoch_time_sql(),
+                            ),
+                            &values![
+                                &*format!("[{tables_param}]"),
+                                &*statement,
+                                &*format!("{params:?}"),
+                            ][..],
+                        )
+                        .await?;
+                }
+                false => (),
+            },
+        };
+        Ok(())
+    }
+
+    /// Update the last modified times of each of the given tables in the table cache.
+    async fn update_last_modified_times(&self, tables: &[&str]) -> Result<(), Error> {
+        match self.get_caching_strategy() {
+            CachingStrategy::Memory(_) => {
+                let mut cache = self.memory_table_cache.get_cache()?;
+                let epoch_now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map_err(|err| Error::DataError(format!("Error getting epoch time: {err}")))?;
+                for table in tables {
+                    cache.insert(table.to_string(), epoch_now.as_millis());
+                }
+            }
+            _ => {
+                if self.table_exists(TABLE_CACHE_TABLE).await? {
+                    for table in tables {
+                        let sql = format!(
+                            r#"INSERT INTO "{TABLE_CACHE_TABLE}" ("table", "last_modified")
+                               VALUES ({prefix}1, {ts})
+                               ON CONFLICT ("table") DO UPDATE SET "last_modified" = {ts}"#,
+                            prefix = self.syntax().param_prefix(),
+                            ts = self.syntax().get_epoch_time_sql(),
+                        );
+                        self.pool.execute(&sql, &values![*table]).await?;
+                    }
+                }
+            }
+        };
+        Ok(())
+    }
+
+    /// Delete the entries for the tables in the given list (independently of the current
+    /// caching strategy) from the query cache table, if it exists. If the given list is empty,
+    /// clear the entire query cache table.
+    async fn delete_query_cache_entries(&self, tables: &[&str]) -> Result<(), Error> {
+        if self.table_exists(QUERY_CACHE_TABLE).await? {
+            if tables.is_empty() {
+                self.pool
+                    .execute(&format!(r#"DELETE FROM "{QUERY_CACHE_TABLE}""#), &[])
+                    .await?;
+            } else {
+                for table in tables {
+                    let table_param = format!(r#"%"{table}"%"#);
+                    self.pool
+                        .execute(
+                            &format!(
+                                r#"DELETE FROM "{QUERY_CACHE_TABLE}" WHERE "tables" LIKE {}1"#,
+                                self.syntax().param_prefix()
+                            ),
+                            &values![table_param],
+                        )
+                        .await?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Uses the current caching strategy to clear the query cache for any of the given tables
+    /// that (a) are views and (b) have source tables that have been modified more recently than
+    /// the view. This function works both with database and memory cache strategies.
+    async fn update_cached_views(&self, tables: &[&str]) -> Result<(), Error> {
+        let views = self.which_are_views(tables).await?;
+        match self.get_caching_strategy() {
+            CachingStrategy::Memory(_) => {
+                for view in &views {
+                    let last_verified = {
+                        let mut last_verified = 0;
+                        for (key, value) in self.memory_query_cache.get_cache()?.iter() {
+                            if key.tables.contains(view) && value.last_verified > last_verified {
+                                last_verified = value.last_verified;
+                            }
+                        }
+                        last_verified
+                    };
+                    let view_sql = self.get_view_code(&view).await?;
+                    let view_tables = sql_parse::get_view_tables(&view_sql)?;
+                    let last_modified = {
+                        let mut latest_last_modified = 0;
+                        for view_table in &view_tables {
+                            match self.memory_table_cache.get_cache()?.get(view_table) {
+                                Some(lm) if *lm > latest_last_modified => {
+                                    latest_last_modified = *lm;
+                                }
+                                _ => (),
+                            };
+                        }
+                        latest_last_modified
+                    };
+                    if last_modified >= last_verified {
+                        self.memory_query_cache.clear(&[view])?;
+                    }
+                }
+            }
+            _ => {
+                for view in &views {
+                    let last_verified = self.last_verified(&view).await?;
+                    let view_sql = self.get_view_code(&view).await?;
+                    let view_tables = sql_parse::get_view_tables(&view_sql)?;
+                    let last_modified = self
+                        .get_latest_last_modified(
+                            &view_tables.iter().map(|t| t.as_str()).collect::<Vec<_>>(),
+                        )
+                        .await?;
+                    if last_modified >= last_verified {
+                        self.delete_query_cache_entries(&[&view]).await?;
+                    }
+                }
+            }
+        };
+        Ok(())
+    }
+
+    /// Returns the latest of the last modified times of the given tables in the table cache.
+    async fn get_latest_last_modified(&self, tables: &[&str]) -> Result<u64, Error> {
+        match self.table_exists(TABLE_CACHE_TABLE).await? {
+            true => {
+                let prefix = self.syntax().param_prefix().to_string();
+                let mut placeholders = vec![];
+                let mut parameters = vec![];
+                for (i, table) in tables.iter().enumerate() {
+                    let i = i + 1;
+                    placeholders.push(format!("{prefix}{i}"));
+                    parameters.push(Value::from(*table));
+                }
+                let placeholders = placeholders.join(",");
+
+                let sql = format!(
+                    r#"SELECT "last_modified"
+                       FROM "{TABLE_CACHE_TABLE}"
+                       WHERE "table" IN ({placeholders})
+                       ORDER BY "last_modified" DESC
+                       LIMIT 1"#,
+                );
+                let rows = self.pool.query(&sql, &parameters).await?;
+                match rows.len() {
+                    0 => Ok(0),
+                    1 => {
+                        let row = &rows[0];
+                        match row.get("last_modified") {
+                            Some(last_modified) => Ok(last_modified.try_into()?),
+                            None => Err(Error::DataError(format!(
+                                "No field 'last_modified' in row {row:?}"
+                            ))),
+                        }
+                    }
+                    too_many => Err(Error::DataError(format!(
+                        "Too many rows returned: {too_many} from table {TABLE_CACHE_TABLE}"
+                    ))),
+                }
+            }
+            false => Ok(0),
+        }
+    }
+
+    /// Gets the last time that the given table was verified, as read from the query cache table.
+    /// If there is no entry involving the given table in the query cache, or if the query cache
+    /// table doesn't exist, returns 0.
+    async fn last_verified(&self, table: &str) -> Result<u64, Error> {
+        match self.table_exists(QUERY_CACHE_TABLE).await? {
+            true => {
+                let sql = format!(
+                    r#"SELECT MAX("last_verified") AS "last_verified"
+                       FROM "{QUERY_CACHE_TABLE}"
+                       WHERE "tables" LIKE {p}1"#,
+                    p = self.syntax().param_prefix(),
+                );
+                let table_param = format!(r#"%"{table}"%"#);
+                let rows = self
+                    .pool
+                    .query(&sql, &values![table_param.as_str()])
+                    .await?;
+                match rows.first() {
+                    Some(row) => match row.get("last_verified") {
+                        Some(value) if *value == Value::Null => Ok(0),
+                        Some(value) => Ok(value.try_into()?),
+                        None => Err(Error::DataError(format!(
+                            "No 'last_verified' found in row: {row:?}"
+                        ))),
+                    },
+                    None => Ok(0),
+                }
+            }
+            false => Ok(0),
+        }
     }
 
     /// Generate a SQL UPDATE statement for the given table and columns using the given clauses
@@ -1342,413 +1752,5 @@ impl AnyPool {
             self.insert(table, &str_columns, db_row_refs).await?;
         }
         Ok(())
-    }
-
-    /// Ensure that caching triggers exist for the given table. Note that this function calls
-    /// ensure_cache_tables_exist() implicitly.
-    async fn ensure_caching_triggers_exist_for_table(&self, table: &str) -> Result<(), Error> {
-        let table_triggers_name = format!("{table}_triggers");
-        if !self.meta_cache.exists(&table_triggers_name)? {
-            self.ensure_cache_tables_exist().await?;
-            self.create_table_caching_triggers_for_table(&table).await?;
-            // Indicate that triggers exist for `table` in the meta-cache:
-            self.meta_cache.insert(&table_triggers_name)?;
-        }
-        Ok(())
-    }
-
-    /// Ensure that the query cache table and the table cache table exist (see
-    /// [QUERY_CACHE_TABLE] and [TABLE_CACHE_TABLE]).
-    async fn ensure_cache_tables_exist(&self) -> Result<(), Error> {
-        if !self.meta_cache.exists(QUERY_CACHE_TABLE)? {
-            self.create_query_cache_table().await?;
-            self.meta_cache.insert(QUERY_CACHE_TABLE)?;
-        }
-        if !self.meta_cache.exists(TABLE_CACHE_TABLE)? {
-            self.create_table_cache_table().await?;
-            self.meta_cache.insert(TABLE_CACHE_TABLE)?;
-        }
-        Ok(())
-    }
-
-    /// Ensure that caching triggers exist for the source tables of the given view. Note that
-    /// this function calls ensure_cache_tables_exist() implicitly.
-    async fn ensure_caching_triggers_exist_for_view(&self, view: &str) -> Result<(), Error> {
-        let view_triggers_name = format!("{view}_triggers");
-        if !self.meta_cache.exists(&view_triggers_name)? {
-            self.ensure_cache_tables_exist().await?;
-            let view_sql = self.get_view_sql(&view).await?;
-            let source_tables = sql_parse::get_view_tables(&view_sql)?;
-            for source_table in source_tables.iter() {
-                // Add a trigger to clean entries from the cache for the source table itself:
-                self.create_table_caching_triggers_for_table(source_table)
-                    .await?;
-                // Add a trigger to clean entries from the cache for the view:
-                self.create_table_caching_triggers_for_view(&source_table, &view)
-                    .await?;
-                // Add an entry for the source table triggers to the metacache. If there is another
-                // entry for this source table it will be overwritten, which is desirable in
-                // case it was not previously known if the table was the source table for a view.
-                self.meta_cache
-                    .insert(&format!("{source_table}_triggers"))?;
-            }
-            self.meta_cache.insert(&view_triggers_name)?;
-        }
-        Ok(())
-    }
-
-    /// Parse the given semi-colon-separated SQL commands and determine which tables will be
-    /// affected (either edited or dropped) by the commands, then ensure that there are no
-    /// entries for those tables in the cache in accordance with the current [CachingStrategy].
-    async fn clear_cache_for_affected_tables(&self, sql: &str) -> Result<(), Error> {
-        if self.get_caching_strategy() != CachingStrategy::None {
-            let (edited_tables, dropped_tables): (Vec<_>, Vec<_>) = {
-                let (edited_tables, dropped_tables) = sql_parse::get_affected_tables(sql)?;
-                (
-                    edited_tables.into_iter().collect(),
-                    dropped_tables.into_iter().collect(),
-                )
-            };
-            if !edited_tables.is_empty() {
-                let edited_tables: Vec<_> = edited_tables.iter().map(|t| t.as_str()).collect();
-                self.clear_cache_for_edited_tables(&edited_tables).await?;
-            }
-            if !dropped_tables.is_empty() {
-                let dropped_tables: Vec<_> = dropped_tables.iter().map(|t| t.as_str()).collect();
-                self.clear_cache_for_dropped_tables(&dropped_tables).await?;
-            }
-        }
-        Ok(())
-    }
-
-    // Triggers cannot apply to DROP commands, only to INSERT, UPDATE, DELETE, or TRUNCATE.
-    // See https://www.postgresql.org/docs/current/sql-createtrigger.html and
-    // https://sqlite.org/lang_createtrigger.html. Note that PostgreSQL has the concept
-    // of an "event trigger":
-    // https://www.pgtutorial.com/postgresql-tutorial/postgresql-event-triggers/ which could
-    // be used, but SQLite has no such capability. To workaround this limitation, we
-    // define two clear_cache_() functions, one for edited tables, and one for dropped tables.
-    // In the case of a dropped table, unlike an edit, we cannot rely on the caching trigger,
-    // when we are using the [CachingStategy::Trigger] strategy, to automatically delete the
-    // entries from the cache for those tables, since those triggers will have beeen dropped
-    // along with the table.
-    // Although strictly speaking, PostgreSQL (which has event triggers) is not subject to this
-    // limitation, for simplicity we will not be creating a PostgreSQL event trigger and we will
-    // use both functions below for both database types.
-
-    /// Update the cache tables, for the given list of tables, using the current [CachingStrategy],
-    /// under the assumption that the tables in the given list have all just been edited (i.e.,
-    /// truncated, deleted from, inserted to, or updated).
-    async fn clear_cache_for_edited_tables(&self, tables: &[&str]) -> Result<(), Error> {
-        match self.get_caching_strategy() {
-            CachingStrategy::None | CachingStrategy::Trigger => (),
-            CachingStrategy::TruncateAll => {
-                self.update_last_modified_times(tables).await?;
-                self.delete_query_cache_entries(&[]).await?
-            }
-            CachingStrategy::Truncate => {
-                self.update_last_modified_times(tables).await?;
-                self.delete_query_cache_entries(tables).await?
-            }
-            CachingStrategy::Memory(_) => {
-                self.update_last_modified_times(tables).await?;
-                self.memory_query_cache.clear(tables)?;
-            }
-        };
-        Ok(())
-    }
-
-    /// Update the cache tables for the given list of tables, using the current [CachingStrategy],
-    /// under the assumption that the tables in the given list have all just been dropped.
-    async fn clear_cache_for_dropped_tables(&self, tables: &[&str]) -> Result<(), Error> {
-        if let CachingStrategy::Memory(_) = self.get_caching_strategy() {
-            self.update_last_modified_times(tables).await?;
-            self.memory_query_cache.clear(&tables)?;
-        } else {
-            // Do not clear the cache if the dropped tables include the cache tables themselves:
-            if !tables
-                .iter()
-                .any(|table| [QUERY_CACHE_TABLE, TABLE_CACHE_TABLE].contains(table))
-            {
-                match self.get_caching_strategy() {
-                    CachingStrategy::Memory(_) => unreachable!(),
-                    CachingStrategy::None => (),
-                    CachingStrategy::TruncateAll => {
-                        self.update_last_modified_times(tables).await?;
-                        self.delete_query_cache_entries(&[]).await?;
-                    }
-                    CachingStrategy::Trigger | CachingStrategy::Truncate => {
-                        self.update_last_modified_times(tables).await?;
-                        self.delete_query_cache_entries(tables).await?;
-                    }
-                }
-            }
-        }
-        // Update the meta-cache to remove any entries associated with tables that no longer exist:
-        let mut meta_cache = self.meta_cache.get_cache()?;
-        for table in tables {
-            if *table == QUERY_CACHE_TABLE {
-                meta_cache.remove(QUERY_CACHE_TABLE);
-            } else if *table == TABLE_CACHE_TABLE {
-                meta_cache.remove(TABLE_CACHE_TABLE);
-            } else {
-                meta_cache.remove(&format!("{table}_triggers"));
-                meta_cache.remove(&format!("{table}_VIEW"));
-                meta_cache.remove(&format!("{table}_TABLE"));
-            }
-        }
-        Ok(())
-    }
-
-    /// Update the last verified time of the query cache entry identified by the triple:
-    /// (tables, statement, params).
-    async fn update_last_verified(
-        &self,
-        tables: &[&str],
-        statement: &str,
-        params: &[Value],
-    ) -> Result<(), Error> {
-        match self.get_caching_strategy() {
-            CachingStrategy::Memory(_) => {
-                let mut cache = self.memory_query_cache.get_cache()?;
-                let epoch_now = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .map_err(|err| Error::DataError(format!("Error getting epoch time: {err}")))?;
-                let mem_key = MemoryQueryCacheKey {
-                    tables: format!(
-                        "[{}]",
-                        tables
-                            .iter()
-                            .map(|table| format!("\"{table}\""))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ),
-                    statement: statement.to_string(),
-                    parameters: format!("{params:?}"),
-                };
-                match cache.get_mut(&mem_key) {
-                    Some(value) => value.last_verified = epoch_now.as_millis(),
-                    None => (),
-                };
-            }
-            _ => match self.table_exists(QUERY_CACHE_TABLE).await? {
-                true => {
-                    let tables_param = format!(
-                        "[{}]",
-                        tables
-                            .iter()
-                            .map(|table| format!("\"{table}\""))
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    );
-                    self.pool
-                        .execute(
-                            &format!(
-                                r#"UPDATE "{QUERY_CACHE_TABLE}"
-                               SET "last_verified" = {ts}
-                               WHERE "tables" = {p}1
-                               AND "statement" = {p}2
-                               AND "parameters" = {p}3"#,
-                                p = self.syntax().param_prefix(),
-                                ts = self.syntax().get_epoch_time_sql(),
-                            ),
-                            &values![
-                                &*format!("[{tables_param}]"),
-                                &*statement,
-                                &*format!("{params:?}"),
-                            ][..],
-                        )
-                        .await?;
-                }
-                false => (),
-            },
-        };
-        Ok(())
-    }
-
-    /// Update the last modified times of each of the given tables in the table cache.
-    async fn update_last_modified_times(&self, tables: &[&str]) -> Result<(), Error> {
-        match self.get_caching_strategy() {
-            CachingStrategy::Memory(_) => {
-                let mut cache = self.memory_table_cache.get_cache()?;
-                let epoch_now = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .map_err(|err| Error::DataError(format!("Error getting epoch time: {err}")))?;
-                for table in tables {
-                    cache.insert(table.to_string(), epoch_now.as_millis());
-                }
-            }
-            _ => {
-                if self.table_exists(TABLE_CACHE_TABLE).await? {
-                    for table in tables {
-                        let sql = format!(
-                            r#"INSERT INTO "{TABLE_CACHE_TABLE}" ("table", "last_modified")
-                               VALUES ({prefix}1, {ts})
-                               ON CONFLICT ("table") DO UPDATE SET "last_modified" = {ts}"#,
-                            prefix = self.syntax().param_prefix(),
-                            ts = self.syntax().get_epoch_time_sql(),
-                        );
-                        self.pool.execute(&sql, &values![*table]).await?;
-                    }
-                }
-            }
-        };
-        Ok(())
-    }
-
-    /// Delete the entries for the tables in the given list (independently of the current
-    /// caching strategy) from the query cache table, if it exists. If the given list is empty,
-    /// clear the entire query cache table.
-    async fn delete_query_cache_entries(&self, tables: &[&str]) -> Result<(), Error> {
-        if self.table_exists(QUERY_CACHE_TABLE).await? {
-            if tables.is_empty() {
-                self.pool
-                    .execute(&format!(r#"DELETE FROM "{QUERY_CACHE_TABLE}""#), &[])
-                    .await?;
-            } else {
-                for table in tables {
-                    let table_param = format!(r#"%"{table}"%"#);
-                    self.pool
-                        .execute(
-                            &format!(
-                                r#"DELETE FROM "{QUERY_CACHE_TABLE}" WHERE "tables" LIKE {}1"#,
-                                self.syntax().param_prefix()
-                            ),
-                            &values![table_param],
-                        )
-                        .await?;
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// Uses the current caching strategy to clear the query cache for any of the given tables
-    /// that (a) are views and (b) have source tables that have been modified more recently than
-    /// the view. This function works both with database and memory cache strategies.
-    async fn update_cached_views(&self, tables: &[&str]) -> Result<(), Error> {
-        let views = self.which_are_views(tables).await?;
-        match self.get_caching_strategy() {
-            CachingStrategy::Memory(_) => {
-                for view in &views {
-                    let last_verified = {
-                        let mut last_verified = 0;
-                        for (key, value) in self.memory_query_cache.get_cache()?.iter() {
-                            if key.tables.contains(view) && value.last_verified > last_verified {
-                                last_verified = value.last_verified;
-                            }
-                        }
-                        last_verified
-                    };
-                    let view_sql = self.get_view_sql(&view).await?;
-                    let view_tables = sql_parse::get_view_tables(&view_sql)?;
-                    let last_modified = {
-                        let mut latest_last_modified = 0;
-                        for view_table in &view_tables {
-                            match self.memory_table_cache.get_cache()?.get(view_table) {
-                                Some(lm) if *lm > latest_last_modified => {
-                                    latest_last_modified = *lm;
-                                }
-                                _ => (),
-                            };
-                        }
-                        latest_last_modified
-                    };
-                    if last_modified >= last_verified {
-                        self.memory_query_cache.clear(&[view])?;
-                    }
-                }
-            }
-            _ => {
-                for view in &views {
-                    let last_verified = self.last_verified(&view).await?;
-                    let view_sql = self.get_view_sql(&view).await?;
-                    let view_tables = sql_parse::get_view_tables(&view_sql)?;
-                    let last_modified = self
-                        .get_latest_last_modified(
-                            &view_tables.iter().map(|t| t.as_str()).collect::<Vec<_>>(),
-                        )
-                        .await?;
-                    if last_modified >= last_verified {
-                        self.delete_query_cache_entries(&[&view]).await?;
-                    }
-                }
-            }
-        };
-        Ok(())
-    }
-
-    /// Returns the latest of the last modified times of the given tables in the table cache.
-    async fn get_latest_last_modified(&self, tables: &[&str]) -> Result<u64, Error> {
-        match self.table_exists(TABLE_CACHE_TABLE).await? {
-            true => {
-                let prefix = self.syntax().param_prefix().to_string();
-                let mut placeholders = vec![];
-                let mut parameters = vec![];
-                for (i, table) in tables.iter().enumerate() {
-                    let i = i + 1;
-                    placeholders.push(format!("{prefix}{i}"));
-                    parameters.push(Value::from(*table));
-                }
-                let placeholders = placeholders.join(",");
-
-                let sql = format!(
-                    r#"SELECT "last_modified"
-                       FROM "{TABLE_CACHE_TABLE}"
-                       WHERE "table" IN ({placeholders})
-                       ORDER BY "last_modified" DESC
-                       LIMIT 1"#,
-                );
-                let rows = self.pool.query(&sql, &parameters).await?;
-                match rows.len() {
-                    0 => Ok(0),
-                    1 => {
-                        let row = &rows[0];
-                        match row.get("last_modified") {
-                            Some(last_modified) => Ok(last_modified.try_into()?),
-                            None => Err(Error::DataError(format!(
-                                "No field 'last_modified' in row {row:?}"
-                            ))),
-                        }
-                    }
-                    too_many => Err(Error::DataError(format!(
-                        "Too many rows returned: {too_many} from table {TABLE_CACHE_TABLE}"
-                    ))),
-                }
-            }
-            false => Ok(0),
-        }
-    }
-
-    /// Gets the last time that the given table was verified, as read from the query cache table.
-    /// If there is no entry involving the given table in the query cache, or if the query cache
-    /// table doesn't exist, returns 0.
-    async fn last_verified(&self, table: &str) -> Result<u64, Error> {
-        match self.table_exists(QUERY_CACHE_TABLE).await? {
-            true => {
-                let sql = format!(
-                    r#"SELECT MAX("last_verified") AS "last_verified"
-                       FROM "{QUERY_CACHE_TABLE}"
-                       WHERE "tables" LIKE {p}1"#,
-                    p = self.syntax().param_prefix(),
-                );
-                let table_param = format!(r#"%"{table}"%"#);
-                let rows = self
-                    .pool
-                    .query(&sql, &values![table_param.as_str()])
-                    .await?;
-                match rows.first() {
-                    Some(row) => match row.get("last_verified") {
-                        Some(value) if *value == Value::Null => Ok(0),
-                        Some(value) => Ok(value.try_into()?),
-                        None => Err(Error::DataError(format!(
-                            "No 'last_verified' found in row: {row:?}"
-                        ))),
-                    },
-                    None => Ok(0),
-                }
-            }
-            false => Ok(0),
-        }
     }
 }

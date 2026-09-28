@@ -102,7 +102,7 @@
 //!
 //! async fn tsv_example() -> Result<(), Error> {
 //!     let pool = AnyPool::connect(":memory:").await?;
-//!     pool.import_table("tests/input/table1.csv").await.unwrap();
+//!     pool.import_table("tests/data/table1.csv").await.unwrap();
 //!     let count: u64 = pool
 //!         .query("SELECT COUNT(1) FROM table1", ())
 //!         .await

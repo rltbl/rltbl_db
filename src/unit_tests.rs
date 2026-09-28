@@ -2557,7 +2557,7 @@ mod tests {
             .unwrap();
     }
 
-    // This test takes a few minutes to run and is ignored by default.
+    // This test is ignored by default.
     // Use `cargo test -- --ignored` or `cargo test -- --include-ignored` to run it.
     #[tokio::test]
     #[ignore]
@@ -2902,7 +2902,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn test_table_names() {
         // Valid table names:
         assert_eq!(
@@ -2959,7 +2958,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn test_sql_parsing() {
         let tables_read = get_accessed_tables(&format!(
             r#"SELECT t1.foo
@@ -3369,13 +3367,10 @@ mod tests {
         );
     }
 
-    /// This test is resource intensive and therefore ignored by default. It verifies that
+    /// This verifies that
     /// using [MAX_PARAMS_SQLITE] parameters in a query is indeed supported.
-    /// To run this and other ignored tests, use `cargo test -- --ignored` or
-    /// `cargo test -- --include-ignored`
     #[cfg(feature = "rusqlite")]
     #[tokio::test]
-    #[ignore]
     async fn test_rusqlite_max_params() {
         let pool = AnyPool::connect(":memory:").await.unwrap();
         pool.execute_batch(
@@ -3569,13 +3564,10 @@ mod tests {
         pool.drop_table("test_table_indirect").await.unwrap();
     }
 
-    /// This test is resource intensive and therefore ignored by default. It verifies that
+    /// This test verifies that
     /// using [MAX_PARAMS_POSTGRES] parameters in a query is indeed supported.
-    /// To run this and other ignored tests, use `cargo test -- --ignored` or
-    /// `cargo test -- --include-ignored`
     #[cfg(feature = "tokio-postgres")]
     #[tokio::test]
-    #[ignore]
     async fn test_postgres_max_params() {
         let pool = AnyPool::connect("postgresql:///rltbl_db").await.unwrap();
 
@@ -4656,7 +4648,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
     fn test_hashing() {
         let mut test_map = HashMap::new();
         for (i, value) in [
@@ -4681,6 +4672,8 @@ mod tests {
         }
     }
 
+    // This test is ignored by default.
+    // Use `cargo test -- --ignored` or `cargo test -- --include-ignored` to run it.
     #[tokio::test]
     #[ignore]
     async fn test_import_perf() {
@@ -5079,13 +5072,10 @@ mod tests {
         Ok(())
     }
 
-    /// This test is resource intensive and therefore ignored by default. It verifies that
+    /// This test verifies that
     /// using [MAX_PARAMS_SQLITE] parameters in a query is indeed supported.
-    /// To run this and other ignored tests, use `cargo test -- --ignored` or
-    /// `cargo test -- --include-ignored`
     #[cfg(feature = "libsql")]
     #[tokio::test]
-    #[ignore]
     async fn test_max_params() -> Result<(), Error> {
         let pool = LibSQLPool::connect(":memory:").await.unwrap();
         pool.execute_batch(

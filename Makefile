@@ -55,11 +55,11 @@ test_ignored: test_default_ignored test_libsql_ignored
 
 test_default_ignored:
 	@echo "Running all (including normally) ignored unit tests using default features."
-	cargo test -- --include-ignored
+	cargo test -- --no-capture --include-ignored
 
 test_libsql_ignored:
 	@echo "Running all (including normally) ignored unit tests using default features."
-	cargo test -- --include-ignored
+	cargo test -- --no-capture --include-ignored
 
 # Documentation
 
