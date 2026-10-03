@@ -3,3 +3,4 @@
 /target
 /test_*.db
 /.git-hooks/
+/rltbl_db_benchmarks/
