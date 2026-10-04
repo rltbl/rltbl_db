@@ -1,12 +1,15 @@
 name: Run integration and doc tests.
 
 on:
-  pull_request:
-    types:
-      - ready_for_review
   push:
     branches:
-      - main
+      - '*'
+  # pull_request:
+  #   types:
+  #     - ready_for_review
+  # push:
+  #   branches:
+  #     - main
 env:
   CARGO_TERM_COLOR: always
 jobs:
