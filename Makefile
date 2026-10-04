@@ -46,25 +46,6 @@ test_libsql_ignored:
 
 ## Performance tests
 
-###################################################
-# TODO: Replace these with as many of the benchmark tests as you can stabilize.
-.PHONY: old_test_caching_perf old_test_import_perf
-
-old_test_caching_perf:
-	@echo "Running caching performance test using default features."
-	cargo test -- --no-capture --ignored test_caching_perf
-	cargo test --no-default-features --features libsql \
-		-- --no-capture --ignored test_caching_perf
-	@echo "Tests succeeded."
-
-old_test_import_perf:
-	@echo "Running import performance test using default features."
-	cargo test -- --no-capture --ignored test_import_perf
-	cargo test --no-default-features --features libsql \
-		-- --no-capture --ignored test_import_perf
-	@echo "Tests succeeded."
-###################################################
-
 rltbl_db_benchmarks:
 	@echo -n "Please clone or copy the https://github.com/lmcmicu/rltbl_db_benchmarks "
 	@echo "repository into the current directory."
@@ -79,7 +60,6 @@ test_driver_perf: | rltbl_db_benchmarks
 	cd $| && make rltbl_rusqlite
 	cd $| && make rusqlite_raw
 	cd $| && make libsql_raw
-
 
 # Documentation
 

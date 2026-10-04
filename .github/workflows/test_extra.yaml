@@ -30,6 +30,6 @@ jobs:
         run: |
           make crate_docs
           git clone https://github.com/lmcmicu/rltbl_db_benchmarks.git
-          # TODO: Remove this next step:
-          cd rltbl_db_benchmarks && git checkout rewrite-api 
+          # TODO: Remove this next step before merging this PR to main:
+          cd rltbl_db_benchmarks && git checkout $(git branch --show-current)
           make test_driver_perf
