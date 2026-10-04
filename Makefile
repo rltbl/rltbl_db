@@ -73,8 +73,12 @@ rltbl_db_benchmarks:
 	@test -d $@ && test -f $@/Cargo.toml || \
 		(echo "Failed to detect $@ repository. Did you clone/copy it?" && false)
 
-test_perf: | rltbl_db_benchmarks
-	true
+test_driver_perf: | rltbl_db_benchmarks
+	cd $| && make rltbl_tokio
+	cd $| && make tokio_raw
+	cd $| && make rltbl_rusqlite
+	cd $| && make rusqlite_raw
+	cd $| && make libsql_raw
 
 
 # Documentation
