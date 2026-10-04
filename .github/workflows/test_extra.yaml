@@ -32,7 +32,6 @@ jobs:
       - name: Run tests
         run: |
           # make crate_docs
-          git clone https://github.com/lmcmicu/rltbl_db_benchmarks.git
-          # TODO: Remove this next step before merging this PR to main:
-          cd rltbl_db_benchmarks && git checkout $(git branch --show-current)
-          cd .. && make test_driver_perf
+          # TODO: Remove the branch specification:
+          git clone -b $(git branch --show-current) https://github.com/lmcmicu/rltbl_db_benchmarks.git
+          make test_driver_perf
