@@ -29,4 +29,5 @@ jobs:
       - name: Run tests
         run: |
           make crate_docs
-          make test_ignored
+          git clone git@github.com:rltbl/rltbl_db.git
+          make test_perf

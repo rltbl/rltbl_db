@@ -29,24 +29,7 @@ test_libsql: | tests/data/table1.csv
 tests/data/table1.csv: tests/data/table1.tsv
 	csvtool -t TAB -u COMMA cat $< > $@
 
-##### TODO: Replace these with the rltbl_db_benchmark tests:
-.PHONY: test_caching_perf test_import_perf
-
-test_caching_perf:
-	@echo "Running caching performance test using default features."
-	cargo test -- --no-capture --ignored test_caching_perf
-	cargo test --no-default-features --features libsql \
-		-- --no-capture --ignored test_caching_perf
-	@echo "Tests succeeded."
-
-test_import_perf:
-	@echo "Running import performance test using default features."
-	cargo test -- --no-capture --ignored test_import_perf
-	cargo test --no-default-features --features libsql \
-		-- --no-capture --ignored test_import_perf
-	@echo "Tests succeeded."
-
-## All ignored tests:
+## Tests that are normally ignored
 
 .PHONY: test_ignored test_default_ignored test_libsql_ignored
 
@@ -60,6 +43,39 @@ test_libsql_ignored:
 	@echo "Running all (including normally) ignored unit tests using default features."
 	cargo test --no-default-features --features libsql \
 		-- --no-capture --include-ignored
+
+## Performance tests
+
+###################################################
+# TODO: Replace these with as many of the benchmark tests as you can stabilize.
+.PHONY: old_test_caching_perf old_test_import_perf
+
+old_test_caching_perf:
+	@echo "Running caching performance test using default features."
+	cargo test -- --no-capture --ignored test_caching_perf
+	cargo test --no-default-features --features libsql \
+		-- --no-capture --ignored test_caching_perf
+	@echo "Tests succeeded."
+
+old_test_import_perf:
+	@echo "Running import performance test using default features."
+	cargo test -- --no-capture --ignored test_import_perf
+	cargo test --no-default-features --features libsql \
+		-- --no-capture --ignored test_import_perf
+	@echo "Tests succeeded."
+###################################################
+
+rltbl_db_benchmarks:
+	@echo -n "Please clone or copy the https://github.com/lmcmicu/rltbl_db_benchmarks "
+	@echo "repository into the current directory."
+	@echo "Press enter when this has been done. "
+	@read enter
+	@test -d $@ && test -f $@/Cargo.toml || \
+		(echo "Failed to detect $@ repository. Did you clone/copy it?" && false)
+
+test_perf: | rltbl_db_benchmarks
+	true
+
 
 # Documentation
 
