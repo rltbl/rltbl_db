@@ -1,15 +1,12 @@
 name: Run integration and doc tests.
 
 on:
+  pull_request:
+    types:
+      - ready_for_review
   push:
     branches:
-      - '*'
-  # pull_request:
-  #   types:
-  #     - ready_for_review
-  # push:
-  #   branches:
-  #     - main
+      - main
 env:
   CARGO_TERM_COLOR: always
 jobs:
@@ -31,7 +28,6 @@ jobs:
         uses: actions/checkout@v3
       - name: Run tests
         run: |
-          # make crate_docs
-          # TODO: Remove the branch specification:
+          make crate_docs
           git clone -b $(git branch --show-current) https://github.com/lmcmicu/rltbl_db_benchmarks.git
           make test_driver_perf
