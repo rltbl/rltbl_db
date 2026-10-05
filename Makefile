@@ -8,7 +8,7 @@ SHELL := bash
 
 ## Standard tests
 
-.PHONY: test test_default test_libsql
+.PHONY: check test test_default test_libsql
 
 check:
 	cargo check
@@ -31,6 +31,8 @@ tests/data/table1.csv: tests/data/table1.tsv
 
 ## Performance tests
 
+.PHONY: test_driver_perf
+
 rltbl_db_benchmarks:
 	@echo -n "Please clone or copy the https://github.com/lmcmicu/rltbl_db_benchmarks "
 	@echo "repository into the current directory."
@@ -45,6 +47,7 @@ test_driver_perf: | rltbl_db_benchmarks
 	cd $| && make rltbl_rusqlite
 	cd $| && make rusqlite_raw
 	cd $| && make libsql_raw
+	cd $| && make caching
 
 # Documentation
 
