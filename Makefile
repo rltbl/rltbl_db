@@ -47,7 +47,6 @@ test_driver_perf: | rltbl_db_benchmarks
 	cd $| && make rltbl_rusqlite
 	cd $| && make rusqlite_raw
 	cd $| && make libsql_raw
-	cd $| && make caching
 
 # Documentation
 
