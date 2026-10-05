@@ -29,20 +29,6 @@ test_libsql: | tests/data/table1.csv
 tests/data/table1.csv: tests/data/table1.tsv
 	csvtool -t TAB -u COMMA cat $< > $@
 
-## Tests that are normally ignored
-
-.PHONY: test_ignored test_default_ignored test_libsql_ignored
-
-test_ignored: test_default_ignored test_libsql_ignored
-
-test_default_ignored:
-	@echo "Running all (including normally) ignored unit tests using default features."
-	cargo test -- --no-capture --ignored
-
-test_libsql_ignored:
-	@echo "Running all (including normally) ignored unit tests using default features."
-	cargo test --no-default-features --features libsql -- --no-capture --ignored
-
 ## Performance tests
 
 rltbl_db_benchmarks:

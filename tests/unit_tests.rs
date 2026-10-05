@@ -3,16 +3,13 @@
 #![recursion_limit = "2000"]
 
 use indexmap::{IndexMap, indexmap};
-use rand::{SeedableRng, distr::Distribution, distr::Uniform, rngs::StdRng};
 use rust_decimal::{Decimal, dec};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use serde_unit_struct::{Deserialize_unit_struct, Serialize_unit_struct};
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{HashMap, HashSet},
     str::FromStr,
-    thread,
-    time::{Duration, Instant},
 };
 
 use rltbl_db::{
@@ -2556,191 +2553,6 @@ async fn view_caching(pool: &mut AnyPool, strategy: &CachingStrategy) {
         .unwrap();
 }
 
-// This test is ignored by default.
-// Use `cargo test -- --ignored` or `cargo test -- --include-ignored` to run it.
-#[tokio::test]
-#[ignore]
-async fn test_caching_perf() {
-    let runs = 1000;
-    let edit_rate = 25;
-    let fail_after = 60;
-    #[cfg(feature = "rusqlite")]
-    perform_caching(":memory:", runs, edit_rate, fail_after).await;
-    #[cfg(feature = "tokio-postgres")]
-    perform_caching("postgresql:///rltbl_db", runs, edit_rate, fail_after).await;
-    #[cfg(feature = "libsql")]
-    perform_caching(":memory:", runs, edit_rate, fail_after).await;
-}
-
-// Performs the caching performance test on the database located at the given url, using
-// the given number of runs and edit rate. The latter represents the rate at which the
-// tables in the simulation are edited (e.g., a value of 25 means that a table will be edited
-// in one out every 25th run, on average), which causes the cache to become out of date and
-// require maintenance in accordance with the current caching strategy. The test is run
-// for the given number of runs for each of the supported caching strategies. The running
-// time for each strategy is then summarized and reported via STDOUT.
-async fn perform_caching(url: &str, runs: usize, edit_rate: usize, fail_after: usize) {
-    let mut pool = AnyPool::connect(url).await.unwrap();
-    let all_strategies = ["none", "truncate_all", "truncate", "trigger", "memory:1000"]
-        .iter()
-        .map(|strategy| CachingStrategy::from_str(strategy).unwrap())
-        .collect::<Vec<_>>();
-
-    pool.set_cache_aware_query(true);
-    let this_test = "Caching Performance Test -";
-    let syntax = pool.syntax().name().to_string();
-    println!(
-        "{this_test} Starting test for {} connection '{}' with cache_aware_query {}.",
-        syntax,
-        url,
-        match pool.get_cache_aware_query() {
-            true => "on",
-            false => "off",
-        }
-    );
-    let mut times = BTreeMap::new();
-    let mut elapsed_none: u64 = 0;
-    let mut actual_edits_none: usize = 0;
-    for strategy in &all_strategies {
-        println!("{this_test} Using strategy: {strategy}.");
-        pool.set_caching_strategy(&strategy);
-        pool.clear_meta_cache().unwrap();
-        let fail_after = match strategy {
-            CachingStrategy::None => 0,
-            _ => fail_after,
-        };
-        let (elapsed, actual_edits) =
-            perform_caching_detail(&pool, runs, fail_after, edit_rate).await;
-        times.insert(format!("{strategy}"), elapsed);
-        if *strategy == CachingStrategy::None {
-            elapsed_none = elapsed;
-            actual_edits_none = actual_edits;
-        } else {
-            // The elapsed time for strategy 'none' should always be greater than for the
-            // other caching strategies. Note that it is assumed that the None strategy
-            // is always tested before any of the other strategies (otherwise this assertion
-            // is certain to fail).
-            //
-            if actual_edits <= actual_edits_none {
-                assert!(elapsed_none > elapsed);
-            } else {
-                if elapsed >= elapsed_none {
-                    println!(
-                        "WARNING: elapsed time for {strategy} took longer or just as long \
-                         as none, but there were more edits for {strategy}: \
-                         {actual_edits} vs. {actual_edits_none}."
-                    );
-                }
-            }
-        }
-    }
-
-    println!("{this_test} Elapsed times for {} (summary):", syntax);
-    for (strategy, elapsed) in times.iter() {
-        println!("  Strategy: {strategy}, elapsed time: {elapsed}s");
-    }
-}
-
-async fn perform_caching_detail(
-    pool: &AnyPool,
-    runs: usize,
-    fail_after: usize,
-    edit_rate: usize,
-) -> (u64, usize) {
-    fn random_between(min: usize, max: usize, seed: &mut i64) -> usize {
-        let between = Uniform::try_from(min..max).unwrap();
-        let mut rng = if *seed < 0 {
-            StdRng::from_rng(&mut rand::rng())
-        } else {
-            *seed += 10;
-            StdRng::seed_from_u64(*seed as u64)
-        };
-        between.sample(&mut rng)
-    }
-
-    fn random_table<'a>(tables_to_choose_from: &'a Vec<&str>) -> &'a str {
-        match random_between(0, 4, &mut -1) {
-            0 => tables_to_choose_from[0],
-            1 => tables_to_choose_from[1],
-            2 => tables_to_choose_from[2],
-            3 => tables_to_choose_from[3],
-            _ => unreachable!(),
-        }
-    }
-
-    let tables_to_choose_from = vec!["alpha", "beta", "gamma", "delta"];
-    for table in tables_to_choose_from.iter() {
-        pool.drop_table(table).await.unwrap();
-        pool.drop_view(&format!("{table}_view")).await.unwrap();
-        pool.execute(&format!("CREATE TABLE {table} ( foo INT, bar INT )"), ())
-            .await
-            .unwrap();
-        pool.execute(
-            &format!("CREATE VIEW {table}_view AS SELECT * FROM {table}"),
-            (),
-        )
-        .await
-        .unwrap();
-
-        // Add a few tens of thousands of values to the table:
-        let mut values = vec![];
-        for i in 0..5 {
-            for j in 0..random_between(34000, 35000, &mut -1) {
-                values.push(format!("({i}, {j})"));
-            }
-        }
-        let values = values.join(", ");
-        pool.execute(
-            &format!("INSERT INTO {table} (foo, bar) VALUES {}", values),
-            (),
-        )
-        .await
-        .unwrap();
-    }
-
-    let now = Instant::now();
-    let mut i = 0;
-    let mut elapsed;
-    let mut actual_edits = 0;
-    while i < runs {
-        let select_table = random_table(&tables_to_choose_from);
-        pool.cache(
-            &format!("SELECT foo, SUM(bar) FROM {select_table}_view GROUP BY foo ORDER BY foo"),
-            (),
-        )
-        .await
-        .unwrap();
-        elapsed = now.elapsed().as_secs();
-        if fail_after != 0 && elapsed > fail_after as u64 {
-            panic!("Taking longer than {fail_after}s. Timing out.");
-        }
-        if edit_rate != 0 && random_between(0, edit_rate, &mut -1) == 0 {
-            actual_edits += 1;
-            let table_to_edit = random_table(&tables_to_choose_from);
-            pool.execute(
-                &format!("INSERT INTO {table_to_edit} (foo) VALUES (1), (1)"),
-                (),
-            )
-            .await
-            .unwrap();
-        }
-
-        // A small sleep to prevent over-taxing the CPU:
-        thread::sleep(Duration::from_millis(5));
-        i += 1;
-    }
-    elapsed = now.elapsed().as_secs();
-    println!(
-        "Caching Performance Test - Elapsed time for strategy {}: {elapsed}s \
-         ({actual_edits} edits in {runs} runs)",
-        pool.get_caching_strategy()
-    );
-    for table in tables_to_choose_from.iter() {
-        pool.drop_table(table).await.unwrap();
-    }
-    (elapsed, actual_edits)
-}
-
 #[tokio::test]
 async fn test_json_values() {
     #[cfg(feature = "rusqlite")]
@@ -4667,58 +4479,6 @@ fn test_hashing() {
         test_map.insert(value.clone(), i);
         assert_eq!(*test_map.get(&value).unwrap(), i);
     }
-}
-
-// This test is ignored by default.
-// Use `cargo test -- --ignored` or `cargo test -- --include-ignored` to run it.
-#[tokio::test]
-#[ignore]
-async fn test_import_perf() {
-    #[cfg(feature = "rusqlite")]
-    import_perf(":memory:").await;
-    #[cfg(feature = "tokio-postgres")]
-    import_perf("postgresql:///rltbl_db").await;
-    #[cfg(feature = "libsql")]
-    import_perf(":memory:").await;
-}
-
-async fn import_perf(url: &str) {
-    let pool = AnyPool::connect(url).await.unwrap();
-
-    eprintln!("Import performance test for {}.", pool.syntax().name());
-    eprintln!("---");
-
-    let filename = match pool.syntax().name() {
-        "sqlite" => "tests/data/penguin.csv",
-        "postgres" => "tests/data/penguin.tsv",
-        _ => unreachable!(),
-    };
-    let now = Instant::now();
-    pool.import_table(filename).await.unwrap();
-    let elapsed = now.elapsed().as_secs();
-    let count: u64 = pool
-        .query("SELECT COUNT(1) FROM penguin", ())
-        .await
-        .unwrap()
-        .try_into_value()
-        .unwrap();
-    assert_eq!(count, 9);
-    eprintln!("Importing the data in '{filename}; using import_table() took {elapsed}s.");
-
-    let filename = "tests/data/penguin.tsv";
-    let now = Instant::now();
-    pool.import_table_using_batch_insert(filename)
-        .await
-        .unwrap();
-    let elapsed = now.elapsed().as_secs();
-    let count: u64 = pool
-        .query("SELECT COUNT(1) FROM PENGUIN", ())
-        .await
-        .unwrap()
-        .try_into_value()
-        .unwrap();
-    assert_eq!(count, 9);
-    eprintln!("Importing the data in '{filename}' import_table_using_insert() took {elapsed}s.");
 }
 
 #[tokio::test]
