@@ -34,7 +34,7 @@ tests/data/table1.csv: tests/data/table1.tsv
 .PHONY: test_driver_perf
 
 rltbl_db_benchmarks:
-	@echo -n "Please clone or copy the https://github.com/lmcmicu/rltbl_db_benchmarks "
+	@echo -n "Please clone or copy the https://github.com/rltbl/rltbl_db_benchmarks "
 	@echo "repository into the current directory."
 	@echo "Press enter when this has been done. "
 	@read enter

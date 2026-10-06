@@ -29,5 +29,5 @@ jobs:
       - name: Run tests
         run: |
           make crate_docs
-          git clone -b $(git branch --show-current) https://github.com/lmcmicu/rltbl_db_benchmarks.git
+          git clone https://github.com/rltbl/rltbl_db_benchmarks.git
           make test_driver_perf
