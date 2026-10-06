@@ -46,7 +46,6 @@ test_driver_perf: | rltbl_db_benchmarks
 	cd $| && make tokio_raw
 	cd $| && make rltbl_rusqlite
 	cd $| && make rusqlite_raw
-	cd $| && make libsql_raw
 
 # Documentation
 
