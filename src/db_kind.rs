@@ -871,6 +871,10 @@ impl DbType {
                     )));
                 }
             },
+            DbType::Text(_) => match value {
+                DbValue::Text(_) => return Ok(value.clone()),
+                _ => return Ok(DbValue::Text(value.to_string())),
+            },
             _ => {
                 if let DbValue::Text(value) = value {
                     return Ok(self.parse_str(value)?);
@@ -918,7 +922,7 @@ impl DbType {
                 let value = value.as_decimal().ok_or(err_template(value))?;
                 Ok(DbValue::Numeric(value))
             }
-            DbType::Text(_) => Ok(DbValue::Text(value.to_string())),
+            DbType::Text(_) => unreachable!(), // Handled above
         }
     }
 }
