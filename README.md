@@ -80,7 +80,7 @@ e.g.,
 
 # Incompatibility of `rusqlite` and `libsql`
 
-Note that the two SQLite drivers, `rusqlite` and `libsql`, are not
+Note that the two built-in SQLite drivers, `rusqlite` and `libsql`, are not
 compatible with one another and cannot both be activated simultaneously. Our
 default SQLite implementation uses `rusqlite`. If you would like to use
 `libsql` instead, **rltbl_db** must be compiled as follows:
