@@ -1,143 +1,393 @@
-//! [rusqlite](<https://crates.io/crates/deadpool-sqlite>) implementation for rltbl_db.
+//! Driver using deadpool-sqlite (rusqlite).
 
-use crate::{
-    any::AnyPool,
-    cache::{CachingStrategy, clear_cache_for_affected_tables, clear_cache_for_dropped_tables},
-    core::{DbError, DbQuery},
-    db_kind::{DbKind, MAX_PARAMS_SQLITE, SQLiteKind},
-    db_value::{DbColumn, DbParams, DbRow, DbRows, DbValue, IntoDbParams, IntoDbRows, JsonValue},
-    parse::validate_table_name,
-    shared::{EditType, batch_insert, edit},
-};
-
+use async_trait::async_trait;
 use deadpool_sqlite::{
-    Config, Hook, Pool, Runtime,
+    self, Config, Hook, HookError, Runtime,
     rusqlite::{
-        Connection as RusqliteConnection, Error as RusqliteError, Result as RusqliteResult,
-        Statement,
+        self, Statement,
         fallible_iterator::FallibleIterator,
         functions::FunctionFlags,
         types::{Null, ValueRef},
         vtab::csvtab,
     },
 };
-use indexmap::IndexMap;
+use indexmap::indexmap;
 use regex::Regex;
 use rust_decimal::Decimal;
-use std::sync::Arc;
-use std::{env, str::from_utf8};
+use std::{env, str::from_utf8, sync::Arc};
 
-type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
+use crate::{
+    Error, JsonValue, Pool, Query, Row, Rows, Syntax, Transaction, Value, error::DatabaseError,
+    sql_parse::validate_table_name, sqlite::SqliteSyntax,
+};
 
-/// Query a database using the given prepared statement and parameters.
-fn query_prepared(
-    stmt: &mut Statement<'_>,
-    params: impl IntoDbParams + Send,
-) -> Result<Vec<DbRow>, DbError> {
-    match params.into_db_params() {
-        DbParams::None => (),
-        DbParams::Positional(params) => {
-            for (i, param) in params.iter().enumerate() {
-                match param {
-                    DbValue::Text(text) => {
-                        stmt.raw_bind_parameter(i + 1, text).map_err(|err| {
-                            DbError::InputError(format!(
-                                "Error binding parameter '{param:?}': {err}"
-                            ))
-                        })?;
-                    }
-                    DbValue::SmallInteger(num) => {
-                        stmt.raw_bind_parameter(i + 1, num.to_string())
-                            .map_err(|err| {
-                                DbError::InputError(format!(
-                                    "Error binding parameter '{param:?}': {err}"
-                                ))
-                            })?;
-                    }
-                    DbValue::Integer(num) => {
-                        stmt.raw_bind_parameter(i + 1, num.to_string())
-                            .map_err(|err| {
-                                DbError::InputError(format!(
-                                    "Error binding parameter '{param:?}': {err}"
-                                ))
-                            })?;
-                    }
-                    DbValue::BigInteger(num) => {
-                        stmt.raw_bind_parameter(i + 1, num.to_string())
-                            .map_err(|err| {
-                                DbError::InputError(format!(
-                                    "Error binding parameter '{param:?}': {err}"
-                                ))
-                            })?;
-                    }
-                    DbValue::Real(num) => {
-                        stmt.raw_bind_parameter(i + 1, num.to_string())
-                            .map_err(|err| {
-                                DbError::InputError(format!(
-                                    "Error binding parameter '{param:?}': {err}"
-                                ))
-                            })?;
-                    }
-                    DbValue::BigReal(num) => {
-                        stmt.raw_bind_parameter(i + 1, num.to_string())
-                            .map_err(|err| {
-                                DbError::InputError(format!(
-                                    "Error binding parameter '{param:?}': {err}"
-                                ))
-                            })?;
-                    }
-                    DbValue::Numeric(num) => {
-                        stmt.raw_bind_parameter(i + 1, num.to_string())
-                            .map_err(|err| {
-                                DbError::InputError(format!(
-                                    "Error binding parameter '{param:?}': {err}"
-                                ))
-                            })?;
-                    }
-                    DbValue::Boolean(flag) => {
-                        // Note that SQLite's type affinity means that booleans are actually
-                        // implemented as numbers (see https://sqlite.org/datatype3.html).
-                        let num = match flag {
-                            true => 1,
-                            false => 0,
-                        };
-                        stmt.raw_bind_parameter(i + 1, num.to_string())
-                            .map_err(|err| {
-                                DbError::InputError(format!(
-                                    "Error binding parameter '{param:?}': {err}"
-                                ))
-                            })?;
-                    }
-                    DbValue::Null => {
-                        stmt.raw_bind_parameter(i + 1, &Null).map_err(|err| {
-                            DbError::InputError(format!(
-                                "Error binding parameter '{param:?}': {err}"
-                            ))
-                        })?;
-                    }
-                    DbValue::Json(value) => {
-                        let value = match value {
-                            JsonValue::String(value) => value.to_string(),
-                            _ => value.to_string(),
-                        };
-                        stmt.raw_bind_parameter(i + 1, value).map_err(|err| {
-                            DbError::InputError(format!(
-                                "Error binding parameter '{param:?}': {err}"
-                            ))
-                        })?;
-                    }
-                    DbValue::Other(type_name, bytes, string_opt) => {
-                        return Err(DbError::InputError(format!(
-                            "Not supported for SQLite: \
-                             DbValue::Other({type_name}, {bytes:?}, {string_opt:?})"
-                        )));
-                    }
-                };
+// DatabaseError implementations:
+
+impl From<deadpool_sqlite::rusqlite::Error> for DatabaseError {
+    fn from(err: deadpool_sqlite::rusqlite::Error) -> DatabaseError {
+        DatabaseError::Error(err.to_string())
+    }
+}
+
+impl From<deadpool_sqlite::BuildError> for DatabaseError {
+    fn from(err: deadpool_sqlite::BuildError) -> DatabaseError {
+        DatabaseError::BuildError(err.to_string())
+    }
+}
+
+impl From<deadpool_sqlite::CreatePoolError> for DatabaseError {
+    fn from(err: deadpool_sqlite::CreatePoolError) -> DatabaseError {
+        DatabaseError::CreatePoolError(err.to_string())
+    }
+}
+
+impl From<deadpool_sqlite::PoolError> for DatabaseError {
+    fn from(err: deadpool_sqlite::PoolError) -> DatabaseError {
+        DatabaseError::PoolError(err.to_string())
+    }
+}
+
+impl From<deadpool_sqlite::InteractError> for DatabaseError {
+    fn from(err: deadpool_sqlite::InteractError) -> DatabaseError {
+        DatabaseError::InteractError(err.to_string())
+    }
+}
+
+/// Represents a deadpool-sqlite database connection pool.
+#[derive(Debug)]
+pub struct RusqlitePool {
+    syntax: SqliteSyntax,
+    pub pool: deadpool_sqlite::Pool,
+}
+
+#[async_trait]
+impl Query for RusqlitePool {
+    /// Implements [Query::syntax()].
+    fn syntax(&self) -> &dyn Syntax {
+        &self.syntax
+    }
+
+    /// Implements [Query::execute_batch()].
+    async fn execute_batch(&self, sql: &str) -> Result<(), Error> {
+        let conn = self.pool.get().await?;
+        let sql_string = sql.to_string();
+        match conn
+            .interact(move |conn| match conn.execute_batch(&sql_string) {
+                Err(err) => {
+                    return Err(DatabaseError::InteractError(err.to_string()));
+                }
+                Ok(_) => Ok(()),
+            })
+            .await
+        {
+            Err(err) => Err(err.into()),
+            Ok(_) => {
+                // We need to drop conn here to ensure that any changes to the db are persisted.
+                drop(conn);
+                Ok(())
             }
         }
-    };
+    }
 
-    // Define the struct that we will use to represent information about a given column:
+    /// Implements [Query::query()].
+    async fn query(&self, sql: &str, params: &[Value]) -> Result<Rows, Error> {
+        let conn = self.pool.get().await?;
+        let sql_string = sql.to_string();
+        let params = params.to_vec();
+        conn.interact(move |conn| {
+            let mut stmt = conn.prepare(&sql_string)?;
+            for (i, param) in params.iter().enumerate() {
+                stmt.raw_bind_parameter(i + 1, param.to_string())?;
+            }
+            let rows: Vec<Row> = query_prepared(&mut stmt, &params)?
+                .into_iter()
+                .map(|row| {
+                    row.map
+                        .into_iter()
+                        .map(|(key, val)| (key, Value::from(val)))
+                        .collect()
+                })
+                .collect();
+
+            Ok(Rows { rows })
+        })
+        .await?
+    }
+
+    /// Implements [Query::can_load()]. Returns true if the given filename ends
+    /// (case-insensitively) with '.csv'.
+    fn can_load(&self, filename: &str) -> bool {
+        filename.to_lowercase().ends_with(".csv")
+    }
+
+    /// Implements [Query::load_table()]
+    async fn load_table(&self, table: &str, filename: &str) -> Result<(), Error> {
+        if !self.can_load(filename) {
+            return Err(Error::InputError(format!(
+                "Filename: '{filename}' must end with .csv"
+            )));
+        }
+
+        eprintln!("Loading table '{table}' from '{filename}' using SQLite's CSV load extension.");
+        let current_dir = env::current_dir()?;
+        let current_dir = current_dir.display();
+        let sql = format!(
+            r#"CREATE VIRTUAL TABLE temp.t1
+               USING CSV(filename='{current_dir}/{filename}', header=true)"#
+        );
+        self.execute(&sql, &[]).await?;
+        let sql = format!("INSERT INTO {table} SELECT * FROM temp.t1");
+        self.execute(&sql, &[]).await?;
+        Ok(())
+    }
+
+    /// Implements [Query::drop_table()].
+    async fn drop_table(&self, table: &str) -> Result<(), Error> {
+        let table = validate_table_name(table)?;
+
+        // Drop the table:
+        self.execute(&format!(r#"DROP TABLE IF EXISTS "{table}""#), &[])
+            .await?;
+
+        Ok(())
+    }
+
+    /// Implements [Query::drop_view()]
+    async fn drop_view(&self, view: &str) -> Result<(), Error> {
+        let view = validate_table_name(view)?;
+
+        // Drop the view:
+        self.execute(&format!(r#"DROP VIEW IF EXISTS "{view}""#), &[])
+            .await?;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl Pool for RusqlitePool {
+    /// Begins a new [Transaction].
+    async fn transaction(&self) -> Result<Box<dyn Transaction>, Error> {
+        match RusqliteTransaction::begin(self.pool.clone()).await {
+            Ok(tx) => Ok(Box::new(tx)),
+            Err(err) => Err(err),
+        }
+    }
+}
+
+impl RusqlitePool {
+    /// Connect to the database at the given URL using rusqlite.
+    pub async fn connect(url: &str) -> Result<Self, Error> {
+        let cfg = Config::new(url);
+        let pool =
+            cfg.builder(Runtime::Tokio1)?
+                .post_create(Hook::Fn(Box::new(|conn, _metrics| {
+                    let guard = conn
+                        .lock()
+                        .map_err(|err| HookError::message(err.to_string()))?;
+                    csvtab::load_module(&guard)
+                        .map_err(|err| HookError::message(err.to_string()))?;
+                    add_rusqlite_regexp_function(&guard)
+                        .map_err(|err| HookError::message(err.to_string()))?;
+                    Ok(())
+                })));
+        let pool = match url {
+            ":memory:" => pool.max_size(1).build()?,
+            _ => pool.build()?,
+        };
+        Ok(Self {
+            syntax: SqliteSyntax,
+            pool,
+        })
+    }
+}
+
+/// Represents a SQLite transaction.
+#[derive(Debug)]
+pub struct RusqliteTransaction {
+    pub pool: deadpool_sqlite::Pool,
+    /// The syntax used for this transaction.
+    syntax: SqliteSyntax,
+    conn: Option<deadpool_sqlite::Connection>,
+}
+
+/// [Drop] implements the destruction operation for rust objects.
+impl Drop for RusqliteTransaction {
+    /// Called whenever the object representing the RusqliteTransaction is dropped.
+    /// Executes a ROLLBACK of the transaction.
+    fn drop(&mut self) {
+        match &self.conn {
+            Some(conn) => match conn.lock() {
+                Ok(guard) => {
+                    // TODO: Remove this println! or replace it with a logger.
+                    println!("ROLLING BACK!");
+                    let _ = guard.execute("ROLLBACK;", []);
+                }
+                Err(_) => (),
+            },
+            None => (),
+        }
+    }
+}
+
+#[async_trait]
+impl Query for RusqliteTransaction {
+    /// Implements [Query::syntax()] for [RusqliteTransaction]
+    fn syntax(&self) -> &dyn Syntax {
+        &self.syntax
+    }
+
+    /// Implements [Query::execute_batch()] for [RusqliteTransaction]
+    async fn execute_batch(&self, _sql: &str) -> Result<(), Error> {
+        todo!()
+    }
+
+    /// Implements [Query::query()] for [RusqliteTransaction]
+    async fn query(&self, sql: &str, params: &[Value]) -> Result<Rows, Error> {
+        match &self.conn {
+            Some(conn) => {
+                let sql_string = sql.to_string();
+                let params = params.to_vec();
+                conn.interact(move |conn| {
+                    let mut stmt = conn.prepare(&sql_string)?;
+                    for (i, param) in params.iter().enumerate() {
+                        stmt.raw_bind_parameter(i + 1, param.to_string())?;
+                    }
+                    let rows: Vec<Row> = stmt
+                        .raw_query()
+                        .map(|row| {
+                            let string: String = row.get(0)?;
+                            Ok(Row {
+                                map: indexmap! { "a".to_string() => Value::from(string)},
+                            })
+                        })
+                        .collect()?;
+                    Ok(Rows { rows })
+                })
+                .await?
+            }
+            None => Err(Error::DatabaseError("transaction already complete".into())),
+        }
+    }
+
+    fn can_load(&self, _filename: &str) -> bool {
+        todo!()
+    }
+
+    async fn load_table(&self, _table: &str, _filename: &str) -> Result<(), Error> {
+        todo!()
+    }
+
+    /// Implements [Query::drop_table()] for [RusqliteTransaction]
+    async fn drop_table(&self, _table: &str) -> Result<(), Error> {
+        todo!()
+    }
+
+    async fn drop_view(&self, _view: &str) -> Result<(), Error> {
+        todo!()
+    }
+}
+
+#[async_trait]
+impl Transaction for RusqliteTransaction {
+    /// Rolls back this transaction.
+    async fn rollback(&mut self) -> Result<(), Error> {
+        match &self.conn {
+            Some(conn) => {
+                conn.interact(move |conn| conn.execute("ROLLBACK;", []).unwrap())
+                    .await
+                    .unwrap();
+                self.conn = None;
+                Ok(())
+            }
+            None => Err(Error::DatabaseError("transaction already complete".into())),
+        }
+    }
+
+    /// Commits this transaction.
+    async fn commit(&mut self) -> Result<(), Error> {
+        match &self.conn {
+            Some(conn) => {
+                conn.interact(move |conn| conn.execute("COMMIT;", []).unwrap())
+                    .await
+                    .unwrap();
+                self.conn = None;
+                Ok(())
+            }
+            None => Err(Error::DatabaseError("transaction already complete".into())),
+        }
+    }
+}
+
+impl RusqliteTransaction {
+    /// Creates a new [RusqliteTransaction].
+    pub async fn begin(pool: deadpool_sqlite::Pool) -> Result<Self, Error> {
+        let conn = pool.get().await.unwrap();
+        conn.interact(move |conn| conn.execute("BEGIN TRANSACTION;", []).unwrap())
+            .await
+            .unwrap();
+        let conn = Some(conn);
+        let syntax = SqliteSyntax;
+        Ok(RusqliteTransaction { syntax, pool, conn })
+    }
+}
+
+/// Uses the rusqlite driver directly to query a database using the given prepared [Statement]
+/// and parameters.
+fn query_prepared(stmt: &mut Statement<'_>, params: &[Value]) -> Result<Vec<Row>, Error> {
+    // Begin by binding all of the parameters to the statement:
+    for (i, param) in params.iter().enumerate() {
+        match param {
+            Value::Text(text) => {
+                stmt.raw_bind_parameter(i + 1, text)?;
+            }
+            Value::SmallInteger(num) => {
+                stmt.raw_bind_parameter(i + 1, num.to_string())?;
+            }
+            Value::Integer(num) => {
+                stmt.raw_bind_parameter(i + 1, num.to_string())?;
+            }
+            Value::BigInteger(num) => {
+                stmt.raw_bind_parameter(i + 1, num.to_string())?;
+            }
+            Value::Real(num) => {
+                stmt.raw_bind_parameter(i + 1, num.to_string())?;
+            }
+            Value::BigReal(num) => {
+                stmt.raw_bind_parameter(i + 1, num.to_string())?;
+            }
+            Value::Numeric(num) => {
+                stmt.raw_bind_parameter(i + 1, num.to_string())?;
+            }
+            Value::Boolean(flag) => {
+                // Note that SQLite's type affinity means that booleans are actually
+                // implemented as numbers (see https://sqlite.org/datatype3.html).
+                let num = match flag {
+                    true => 1,
+                    false => 0,
+                };
+                stmt.raw_bind_parameter(i + 1, num.to_string())?;
+            }
+            Value::Null => {
+                stmt.raw_bind_parameter(i + 1, &Null)?;
+            }
+            Value::Json(value) => {
+                let value = match value {
+                    JsonValue::String(value) => value.to_string(),
+                    _ => value.to_string(),
+                };
+                stmt.raw_bind_parameter(i + 1, value)?;
+            }
+            Value::Other(type_name, bytes, string_opt) => {
+                return Err(Error::InputError(format!(
+                    "Not supported for SQLite: \
+                             Value::Other({type_name}, {bytes:?}, {string_opt:?})"
+                )));
+            }
+        };
+    }
+
+    // Define the struct that we will use (internally to this function) to represent information
+    // about a given column:
     struct ColumnConfig {
         name: String,
         datatype: Option<String>,
@@ -157,35 +407,48 @@ fn query_prepared(
     let results = stmt
         .raw_query()
         .map(|row| {
-            let mut db_row = DbRow::new();
+            let mut db_row = Row::new();
             for column in &columns {
                 let column_name = &column.name;
                 let column_type = &column.datatype;
                 let value = row.get_ref(column_name.as_str())?;
                 let value = match value {
-                    ValueRef::Null => DbValue::Null,
+                    ValueRef::Null => Value::Null,
                     ValueRef::Integer(value) => match column_type {
-                        Some(ctype) if ctype.to_lowercase() == "bool" => {
-                            DbValue::Boolean(value != 0)
-                        }
+                        Some(ctype) if ctype.to_lowercase() == "bool" => Value::Boolean(value != 0),
                         // The remaining cases are (a) the column's datatype is integer, and
                         // (b) the column is an expression. In the latter case it doesn't seem
                         // possible to get the datatype of the expression from the metadata.
                         // So the only thing to do here is just to convert the value
                         // using the default method, and since we already know that it
                         // is an integer, the result of the conversion will be a number.
-                        _ => DbValue::from(value),
+                        _ => Value::from(value),
                     },
-                    ValueRef::Real(value) => DbValue::from(value),
+                    ValueRef::Real(value) => Value::BigReal(value),
                     ValueRef::Text(value) | ValueRef::Blob(value) => match column_type {
                         Some(ctype) if ctype.to_lowercase() == "numeric" => {
-                            let value = from_utf8(value).unwrap_or_default();
-                            let value = value.parse::<Decimal>().unwrap();
-                            DbValue::Numeric(value)
+                            let value = match from_utf8(value) {
+                                Ok(value) => value,
+                                Err(_err) => {
+                                    return Err(deadpool_sqlite::rusqlite::Error::InvalidQuery);
+                                }
+                            };
+                            let value = match value.parse::<Decimal>() {
+                                Ok(value) => value,
+                                Err(_err) => {
+                                    return Err(deadpool_sqlite::rusqlite::Error::InvalidQuery);
+                                }
+                            };
+                            Value::Numeric(value)
                         }
                         _ => {
-                            let value = from_utf8(value).unwrap_or_default();
-                            DbValue::Text(value.to_string())
+                            let value = match from_utf8(value) {
+                                Ok(value) => value,
+                                Err(_err) => {
+                                    return Err(deadpool_sqlite::rusqlite::Error::InvalidQuery);
+                                }
+                            };
+                            Value::Text(value.to_string())
                         }
                     },
                 };
@@ -194,337 +457,23 @@ fn query_prepared(
             Ok(db_row)
         })
         .collect::<Vec<_>>();
-    results.map_err(|err| DbError::DatabaseError(err.to_string()))
+    Ok(results?)
 }
 
-/// Represents a SQLite database connection pool
-#[derive(Clone, Debug)]
-pub struct RusqlitePool {
-    pool: Pool,
-    caching_strategy: CachingStrategy,
-    /// When set to true, SQL statements sent to the [DbQuery::query()] and [DbQuery::execute()]
-    /// functions will be parsed and if they will result in tables being edited and/or dropped,
-    /// the cache will be maintained in accordance with the given [CachingStrategy].
-    /// For further information, see [DbQuery::set_cache_aware_query()].
-    cache_aware_query: bool,
-}
+/// Define a regular expression matching function and add it to the database.
+fn add_rusqlite_regexp_function(db: &rusqlite::Connection) -> Result<(), Error> {
+    type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
-impl RusqlitePool {
-    /// Connect to a SQLite database using the given url.
-    pub async fn connect(url: &str) -> Result<Self, DbError> {
-        let pool = Config::new(url)
-            .builder(Runtime::Tokio1)
-            .map_err(|err| DbError::ConnectError(format!("Error creating pool: {err}")))?
-            .post_create(Hook::Fn(Box::new(|conn, _metrics| {
-                let guard = conn.lock().expect("lock this connection");
-                csvtab::load_module(&guard).unwrap();
-                add_rusqlite_regexp_function(&guard).expect("add regex_match function");
-                Ok(())
-            })))
-            .build()
-            .map_err(|err| DbError::ConnectError(format!("Error creating pool: {err}")))?;
-
-        Ok(Self {
-            pool: pool,
-            caching_strategy: CachingStrategy::None,
-            cache_aware_query: false,
-        })
-    }
-}
-
-impl DbQuery for RusqlitePool {
-    /// Implements [DbQuery::kind()] for SQLite.
-    fn kind(&self) -> Box<dyn DbKind> {
-        Box::new(SQLiteKind)
-    }
-
-    /// Implements [DbQuery::pool()] for SQLite.
-    fn pool(&self) -> AnyPool {
-        AnyPool::Rusqlite(RusqlitePool {
-            pool: self.pool.clone(),
-            caching_strategy: self.caching_strategy,
-            cache_aware_query: self.cache_aware_query,
-        })
-    }
-
-    /// Implements [DbQuery::set_caching_strategy()] for SQLite.
-    fn set_caching_strategy(&mut self, strategy: &CachingStrategy) {
-        self.caching_strategy = *strategy;
-    }
-
-    /// Implements [DbQuery::get_caching_strategy()] for SQLite.
-    fn get_caching_strategy(&self) -> CachingStrategy {
-        self.caching_strategy
-    }
-
-    /// Implements [DbQuery::set_cache_aware_query()] for SQLite.
-    fn set_cache_aware_query(&mut self, flag: bool) {
-        self.cache_aware_query = flag;
-    }
-
-    /// Implements [DbQuery::get_cache_aware_query()] for SQLite.
-    fn get_cache_aware_query(&self) -> bool {
-        self.cache_aware_query
-    }
-
-    /// Implements [DbQuery::execute_batch()] for SQLite.
-    async fn execute_batch(&self, sql: &str) -> Result<(), DbError> {
-        let conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|err| DbError::ConnectError(format!("Unable to get from pool: {err}")))?;
-        let sql_string = sql.to_string();
-        match conn
-            .interact(move |conn| match conn.execute_batch(&sql_string) {
-                Err(err) => {
-                    return Err(DbError::DatabaseError(format!("Error during query: {err}")));
-                }
-                Ok(_) => Ok(()),
-            })
-            .await
-        {
-            Err(err) => Err(DbError::DatabaseError(format!("Error during query: {err}"))),
-            Ok(_) => {
-                // We need to drop conn here to ensure that any changes to the db are persisted.
-                drop(conn);
-                clear_cache_for_affected_tables(&self.pool(), sql).await?;
-                Ok(())
-            }
-        }
-    }
-
-    /// Implements [DbQuery::query_no_cache_clean()] for SQLite.
-    async fn query_no_cache_clean(
-        &self,
-        sql: &str,
-        params: impl IntoDbParams + Send,
-    ) -> Result<DbRows, DbError> {
-        let rows = {
-            let conn =
-                self.pool.get().await.map_err(|err| {
-                    DbError::ConnectError(format!("Error getting from pool: {err}"))
-                })?;
-            let sql_string = sql.to_string();
-            let params: DbParams = params.into_db_params();
-            conn.interact(move |conn| {
-                let mut stmt = conn.prepare(&sql_string).map_err(|err| {
-                    DbError::DatabaseError(format!("Error preparing statement: {err}"))
-                })?;
-                let rows: Vec<DbRow> = query_prepared(&mut stmt, params)
-                    .map_err(|err: DbError| {
-                        DbError::DatabaseError(format!("Error querying prepared statement: {err}"))
-                    })?
-                    .into_iter()
-                    .map(|row| {
-                        row.into_iter()
-                            .map(|(key, val)| (key, DbValue::from(val)))
-                            .collect()
-                    })
-                    .collect();
-                Ok(DbRows { rows })
-            })
-            .await
-            .map_err(|err| DbError::DatabaseError(err.to_string()))??
-        };
-        Ok(rows)
-    }
-
-    /// Implements [DbQuery::insert()] for SQLite.
-    async fn insert(
-        &self,
-        table: &str,
-        columns: &[&str],
-        rows: impl IntoDbRows,
-    ) -> Result<(), DbError> {
-        edit(
-            self,
-            &EditType::Insert,
-            &MAX_PARAMS_SQLITE,
-            table,
-            columns,
-            rows,
-            false,
-            &[],
-        )
-        .await?;
-        Ok(())
-    }
-
-    /// Implements [DbQuery::insert_returning()] for SQLite.
-    async fn insert_returning(
-        &self,
-        table: &str,
-        columns: &[&str],
-        rows: impl IntoDbRows,
-        returning: &[&str],
-    ) -> Result<DbRows, DbError> {
-        edit(
-            self,
-            &EditType::Insert,
-            &MAX_PARAMS_SQLITE,
-            table,
-            columns,
-            rows,
-            true,
-            returning,
-        )
-        .await
-    }
-
-    /// Implements [DbQuery::update()] for SQLite.
-    async fn update(
-        &self,
-        table: &str,
-        columns: &[&str],
-        rows: impl IntoDbRows,
-    ) -> Result<(), DbError> {
-        edit(
-            self,
-            &EditType::Update,
-            &MAX_PARAMS_SQLITE,
-            table,
-            columns,
-            rows,
-            false,
-            &[],
-        )
-        .await?;
-        Ok(())
-    }
-
-    /// Implements [DbQuery::update_returning()] for SQLite.
-    async fn update_returning(
-        &self,
-        table: &str,
-        columns: &[&str],
-        rows: impl IntoDbRows,
-        returning: &[&str],
-    ) -> Result<DbRows, DbError> {
-        edit(
-            self,
-            &EditType::Update,
-            &MAX_PARAMS_SQLITE,
-            table,
-            columns,
-            rows,
-            true,
-            returning,
-        )
-        .await
-    }
-
-    /// Implements [DbQuery::upsert()] for SQLite.
-    async fn upsert(
-        &self,
-        table: &str,
-        columns: &[&str],
-        rows: impl IntoDbRows,
-    ) -> Result<(), DbError> {
-        edit(
-            self,
-            &EditType::Upsert,
-            &MAX_PARAMS_SQLITE,
-            table,
-            columns,
-            rows,
-            false,
-            &[],
-        )
-        .await?;
-        Ok(())
-    }
-
-    /// Implements [DbQuery::upsert_returning()] for SQLite.
-    async fn upsert_returning(
-        &self,
-        table: &str,
-        columns: &[&str],
-        rows: impl IntoDbRows,
-        returning: &[&str],
-    ) -> Result<DbRows, DbError> {
-        edit(
-            self,
-            &EditType::Upsert,
-            &MAX_PARAMS_SQLITE,
-            table,
-            columns,
-            rows,
-            true,
-            returning,
-        )
-        .await
-    }
-
-    /// Implements [DbQuery::load_table()] for SQLite.
-    async fn load_table(
-        &self,
-        table: &str,
-        columns: &IndexMap<String, DbColumn>,
-        filename: &str,
-    ) -> Result<(), DbError> {
-        if filename.to_lowercase().ends_with(".csv") {
-            eprintln!(
-                "Loading table '{table}' from '{filename}' using SQLite's CSV load extension."
-            );
-            let current_dir = env::current_dir().map_err(|err| {
-                DbError::ConnectError(format!("Error getting current directory: {err}"))
-            })?;
-            let current_dir = current_dir.display();
-            let sql = format!(
-                r#"CREATE VIRTUAL TABLE temp.t1
-                   USING CSV(filename='{current_dir}/{filename}', header=true)"#
-            );
-            self.execute(&sql, ()).await?;
-            let sql = format!("INSERT INTO {table} SELECT * FROM temp.t1");
-            self.execute(&sql, ()).await?;
-            Ok(())
-        } else if filename.to_lowercase().ends_with(".tsv") {
-            eprintln!("Loading table '{table}' from '{filename}' using batch_insert().");
-            batch_insert(self, table, columns, filename).await
-        } else {
-            return Err(DbError::InputError(format!(
-                "Filename: '{filename}' must end with .tsv or .csv"
-            )));
-        }
-    }
-
-    /// Implements [DbQuery::drop_table()] for SQLite.
-    async fn drop_table(&self, table: &str) -> Result<(), DbError> {
-        let table = validate_table_name(table)?;
-        // Drop the table:
-        self.execute_no_cache_clean(&format!(r#"DROP TABLE IF EXISTS "{table}""#), ())
-            .await?;
-
-        // Delete dirty entries from the cache in accordance with our caching strategy:
-        clear_cache_for_dropped_tables(&self.pool(), &[&table]).await?;
-        Ok(())
-    }
-
-    /// Implements [DbQuery::drop_table()] for SQLite.
-    async fn drop_view(&self, view: &str) -> Result<(), DbError> {
-        let view = validate_table_name(view)?;
-        // Drop the view:
-        self.execute_no_cache_clean(&format!(r#"DROP VIEW IF EXISTS "{view}""#), ())
-            .await?;
-
-        // Delete dirty entries from the cache in accordance with our caching strategy:
-        clear_cache_for_dropped_tables(&self.pool(), &[&view]).await?;
-        Ok(())
-    }
-}
-
-fn add_rusqlite_regexp_function(db: &RusqliteConnection) -> RusqliteResult<()> {
     // This function has been adapted from:
     // https://docs.rs/rusqlite/0.32.1/rusqlite/functions/index.html
-    db.create_scalar_function(
+    Ok(db.create_scalar_function(
         "regexp_match",
         2,
         FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
         move |ctx| {
             let num_args = ctx.len();
             if num_args != 2 {
-                return Err(RusqliteError::UserFunctionError(
+                return Err(rusqlite::Error::UserFunctionError(
                     format!("Expected 2 arguments but got {num_args}").into(),
                 ));
             }
@@ -536,227 +485,10 @@ fn add_rusqlite_regexp_function(db: &RusqliteConnection) -> RusqliteResult<()> {
                 // If the text to match is NULL then the condition is vacuously true:
                 ValueRef::Null => Ok(true),
                 _ => {
-                    let text = text
-                        .as_str()
-                        .map_err(|e| RusqliteError::UserFunctionError(e.into()))?;
+                    let text = text.as_str()?;
                     Ok(regexp.is_match(text))
                 }
             }
         },
-    )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{db_row, params};
-
-    use serde_json::json;
-    use std::ops::Deref;
-
-    #[tokio::test]
-    async fn test_aliases_and_builtin_functions() {
-        let pool = RusqlitePool::connect(":memory:").await.unwrap();
-        pool.execute_batch(
-            "DROP TABLE IF EXISTS test_table_indirect;\
-             CREATE TABLE test_table_indirect (\
-                 text_value TEXT,\
-                 alt_text_value TEXT,\
-                 float_value FLOAT8,\
-                 int_value INT8,\
-                 bool_value BOOL\
-             )",
-        )
-        .await
-        .unwrap();
-        pool.execute(
-            r#"INSERT INTO test_table_indirect
-               (text_value, alt_text_value, float_value, int_value, bool_value)
-               VALUES (?1, ?2, ?3, ?4, ?5)"#,
-            params!["foo", (), 1.05_f64, 1_i64, true],
-        )
-        .await
-        .unwrap();
-
-        // Test aggregate:
-        let rows = pool
-            .query("SELECT MAX(int_value) FROM test_table_indirect", ())
-            .await
-            .unwrap();
-        assert_eq!(
-            *rows.deref(),
-            [db_row! {
-                "MAX(int_value)" => 1_i64,
-            }]
-        );
-
-        // Test alias:
-        let rows = pool
-            .query(
-                "SELECT bool_value AS bool_value_alias FROM test_table_indirect",
-                (),
-            )
-            .await
-            .unwrap();
-        assert_eq!(*rows.deref(), [db_row! {"bool_value_alias" => 1_i64,}]);
-
-        // Test aggregate with alias:
-        let rows = pool
-            .query(
-                "SELECT MAX(int_value) AS max_int_value FROM test_table_indirect",
-                (),
-            )
-            .await
-            .unwrap();
-        // Note that the alias is not shown in the results:
-        assert_eq!(*rows.deref(), [db_row! {"max_int_value" => 1_i64,}]);
-
-        // Test non-aggregate function:
-        let rows = pool
-            .query(
-                "SELECT CAST(int_value AS TEXT) FROM test_table_indirect",
-                (),
-            )
-            .await
-            .unwrap();
-        assert_eq!(
-            *rows.deref(),
-            [db_row! {
-                "CAST(int_value AS TEXT)" => "1",
-            }]
-        );
-
-        // Test non-aggregate function with alias:
-        let rows = pool
-            .query(
-                "SELECT CAST(int_value AS TEXT) AS int_value_cast FROM test_table_indirect",
-                (),
-            )
-            .await
-            .unwrap();
-        assert_eq!(
-            *rows.deref(),
-            [db_row! {
-                "int_value_cast" => "1",
-            }]
-        );
-
-        // Test functions over booleans:
-        let rows = pool
-            .query("SELECT MAX(bool_value) FROM test_table_indirect", ())
-            .await
-            .unwrap();
-        // It is not possible to represent the boolean result of an aggregate function as a
-        // boolean, since internally to sqlite it is stored as an integer, and we can't query
-        // the metadata to get the datatype of an expression. If we want to represent it as a
-        // boolean, we will need to parse the expression. Note that PostgreSQL does not support
-        // MAX(bool_value) - it gives the error:
-        //   ERROR: function max(boolean) does not exist\nHINT: No function matches the given
-        //          name and argument types. You might need to add explicit type casts.
-        // So, perhaps, this is tu quoque an argument that the behaviour below is acceptable for
-        // sqlite.
-        assert_eq!(
-            *rows.deref(),
-            [db_row! {
-                "MAX(bool_value)" => 1_i64,
-            }]
-        );
-    }
-
-    /// This test is resource intensive and therefore ignored by default. It verifies that
-    /// using [MAX_PARAMS_SQLITE] parameters in a query is indeed supported.
-    /// To run this and other ignored tests, use `cargo test -- --ignored` or
-    /// `cargo test -- --include-ignored`
-    #[tokio::test]
-    #[ignore]
-    async fn test_max_params() {
-        let pool = RusqlitePool::connect(":memory:").await.unwrap();
-        pool.execute_batch(
-            "DROP TABLE IF EXISTS test_max_params;\
-             CREATE TABLE test_max_params (\
-                 column1 INT,\
-                 column2 INT,\
-                 column3 INT,\
-                 column4 INT,\
-                 column5 INT,\
-                 column6 INT\
-             )",
-        )
-        .await
-        .unwrap();
-
-        let mut sql = "INSERT INTO test_max_params VALUES ".to_string();
-        let mut values = vec![];
-        let mut params = vec![];
-        let mut n = 1;
-        while n <= MAX_PARAMS_SQLITE {
-            values.push(format!(
-                "(?{}, ?{}, ?{}, ?{}, ?{}, ?{})",
-                n,
-                n + 1,
-                n + 2,
-                n + 3,
-                n + 4,
-                n + 5
-            ));
-            params.push(1);
-            params.push(1);
-            params.push(1);
-            params.push(1);
-            params.push(1);
-            params.push(1);
-            n += 6;
-        }
-        sql.push_str(&values.join(", "));
-        pool.execute(&sql, params).await.unwrap();
-        pool.drop_table("text_max_params").await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_match() {
-        let conn = RusqlitePool::connect("test_match_columns.db")
-            .await
-            .unwrap();
-        conn.execute_batch(
-            "DROP TABLE IF EXISTS test_table_match;\
-             CREATE TABLE test_table_match (\
-                 text_value TEXT,\
-                 alt_text_value TEXT\
-             )",
-        )
-        .await
-        .unwrap();
-        conn.execute(
-            r#"INSERT INTO test_table_match
-               (text_value, alt_text_value)
-               VALUES ($1, $2)"#,
-            &[json!("foo"), json!("123")],
-        )
-        .await
-        .unwrap();
-
-        let value: String = conn
-            .query(
-                "SELECT text_value from test_table_match WHERE regexp_match(text_value, $1) = 1",
-                params!["foo"],
-            )
-            .await
-            .unwrap()
-            .try_into()
-            .unwrap();
-
-        assert_eq!(value, "foo");
-
-        let value: String = conn
-            .query(
-                r#"SELECT alt_text_value from test_table_match WHERE regexp_match(alt_text_value, '\d+') = 1"#,
-                ()
-            )
-            .await
-            .unwrap()
-            .try_into()
-            .unwrap();
-
-        assert_eq!(value, "123");
-    }
+    )?)
 }

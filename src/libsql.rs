@@ -1,581 +1,294 @@
-//! [libsql](<https://crates.io/crates/deadpool-libsql>) implementation for rltbl_db.
+//! Driver using deadpool-sqlite (libsql).
+
+use async_trait::async_trait;
+use deadpool_libsql::{self, Manager, libsql, libsql::Builder};
+use rust_decimal::prelude::ToPrimitive;
+use std::env;
 
 use crate::{
-    any::AnyPool,
-    cache::{CachingStrategy, clear_cache_for_dropped_tables},
-    core::{DbError, DbQuery},
-    db_kind::{DbKind, MAX_PARAMS_SQLITE, SQLiteKind},
-    db_value::{DbColumn, DbParams, DbRow, DbRows, DbValue, IntoDbParams, IntoDbRows, JsonValue},
-    parse::validate_table_name,
-    shared::{EditType, batch_insert, edit},
+    Error, JsonValue, Pool, Query, Row, Rows, Syntax, Transaction, Value, error::DatabaseError,
+    sql_parse::validate_table_name, sqlite::SqliteSyntax,
 };
 
-use deadpool_libsql::{
-    Manager, Pool,
-    libsql::{Builder, Value},
-};
-use indexmap::IndexMap;
-use rust_decimal::prelude::ToPrimitive;
-use std::{env, str::from_utf8};
+// DatabaseError implementations.
+impl From<deadpool_libsql::libsql::Error> for DatabaseError {
+    fn from(err: deadpool_libsql::libsql::Error) -> DatabaseError {
+        DatabaseError::Error(err.to_string())
+    }
+}
 
-impl TryFrom<Value> for DbValue {
-    type Error = DbError;
+impl From<deadpool_libsql::BuildError> for DatabaseError {
+    fn from(err: deadpool_libsql::BuildError) -> DatabaseError {
+        DatabaseError::BuildError(err.to_string())
+    }
+}
 
-    fn try_from(item: Value) -> Result<Self, DbError> {
+impl From<deadpool_libsql::CreatePoolError> for DatabaseError {
+    fn from(err: deadpool_libsql::CreatePoolError) -> DatabaseError {
+        DatabaseError::CreatePoolError(err.to_string())
+    }
+}
+
+impl From<deadpool_libsql::PoolError> for DatabaseError {
+    fn from(err: deadpool_libsql::PoolError) -> DatabaseError {
+        DatabaseError::PoolError(err.to_string())
+    }
+}
+
+// Conversions from Values to libsql::Values and vice versa.
+impl TryFrom<libsql::Value> for Value {
+    type Error = Error;
+
+    fn try_from(item: libsql::Value) -> Result<Self, Error> {
         match &item {
-            Value::Null => Ok(Self::Null),
-            Value::Integer(number) => Ok(Self::from(*number)),
-            Value::Real(number) => Ok(Self::from(*number)),
-            Value::Text(string) => Ok(Self::Text(string.to_string())),
-            Value::Blob(blob) => {
-                let text_blob = from_utf8(blob).map_err(|err| {
-                    DbError::DatatypeError(format!("Error converting blob to text: {err}"))
-                })?;
-                Ok(Self::Text(text_blob.to_string()))
-            }
+            libsql::Value::Null => Ok(Self::Null),
+            libsql::Value::Integer(number) => Ok(Self::from(*number)),
+            libsql::Value::Real(number) => Ok(Self::from(*number)),
+            libsql::Value::Text(string) => Ok(Self::Text(string.to_string())),
+            libsql::Value::Blob(blob) => Ok(Self::Other("".to_string(), blob.to_vec(), None)),
         }
     }
 }
 
-impl TryFrom<DbParams> for Vec<Value> {
-    type Error = DbError;
+impl TryInto<libsql::Value> for Value {
+    type Error = Error;
 
-    fn try_from(item: DbParams) -> Result<Self, DbError> {
-        match item {
-            DbParams::None => Ok(vec![]),
-            DbParams::Positional(pvalues) => {
-                let mut values = vec![];
-                for pvalue in pvalues {
-                    match pvalue {
-                        DbValue::Null => values.push(Value::Null),
-                        // Libsql does not support booleans.
-                        // See: https://docs.rs/libsql/0.9.29/libsql/enum.Value.html,
-                        DbValue::Boolean(pvalue) => values.push(Value::Integer(pvalue.into())),
-                        DbValue::SmallInteger(pvalue) => values.push(Value::Integer(pvalue.into())),
-                        DbValue::Integer(pvalue) => values.push(Value::Integer(pvalue.into())),
-                        DbValue::BigInteger(pvalue) => values.push(Value::Integer(pvalue.into())),
-                        DbValue::Real(pvalue) => values.push(Value::Real(pvalue.into())),
-                        DbValue::BigReal(pvalue) => values.push(Value::Real(pvalue.into())),
-                        DbValue::Numeric(pvalue) => {
-                            let pvalue = pvalue.to_f64().ok_or(DbError::DatatypeError(format!(
-                                "Error converting value '{pvalue}' to f64"
-                            )))?;
-                            values.push(Value::Real(pvalue.into()))
-                        }
-                        DbValue::Text(pvalue) => values.push(Value::Text(pvalue)),
-                        DbValue::Json(value) => {
-                            let value = match value {
-                                JsonValue::String(value) => value.to_string(),
-                                _ => value.to_string(),
-                            };
-                            values.push(Value::Text(value))
-                        }
-                        DbValue::Other(type_name, bytes, string_opt) => {
-                            return Err(DbError::InputError(format!(
-                                "Not supported for SQLite: \
-                                 DbValue::Other({type_name}, {bytes:?}, {string_opt:?})"
-                            )));
-                        }
-                    };
-                }
-                Ok(values)
+    fn try_into(self) -> Result<libsql::Value, Error> {
+        match self {
+            Value::Null => Ok(libsql::Value::Null),
+            // Libsql does not support booleans.
+            // See: https://docs.rs/libsql/0.9.29/libsql/enum.Value.html,
+            Value::Boolean(val) => Ok(libsql::Value::Integer(val.into())),
+            Value::BigInteger(val) => Ok(libsql::Value::Integer(val.into())),
+            Value::Integer(val) => Ok(libsql::Value::Integer(val.into())),
+            Value::SmallInteger(val) => Ok(libsql::Value::Integer(val.into())),
+            Value::Real(val) => Ok(libsql::Value::Real(val.into())),
+            Value::BigReal(val) => Ok(libsql::Value::Real(val.into())),
+            Value::Numeric(val) => {
+                let val = val.to_f64().ok_or(Error::DatatypeError(format!(
+                    "Error converting value '{val}' to f64"
+                )))?;
+                Ok(libsql::Value::Real(val.into()))
             }
+            Value::Text(val) => Ok(libsql::Value::Text(val)),
+            Value::Json(val) => {
+                let val = match val {
+                    JsonValue::String(val) => val.to_string(),
+                    _ => val.to_string(),
+                };
+                Ok(libsql::Value::Text(val))
+            }
+            Value::Other(_, val, _) => Ok(libsql::Value::Blob(val)),
         }
     }
 }
 
-/// Represents a SQLite database connection pool
-#[derive(Clone, Debug)]
+/// Represents a deadpool-sqlite database connection pool.
+#[derive(Debug)]
 pub struct LibSQLPool {
-    pool: Pool,
-    caching_strategy: CachingStrategy,
-    /// When set to true, SQL statements sent to the [DbQuery::query()] and [DbQuery::execute()]
-    /// functions will be parsed and if they will result in tables being edited and/or dropped,
-    /// the cache will be maintained in accordance with the given [CachingStrategy].
-    /// For further information, see [DbQuery::set_cache_aware_query()].
-    cache_aware_query: bool,
-    load_extensions_enabled: bool,
+    pub pool: deadpool_libsql::Pool,
+    syntax: SqliteSyntax,
+    csv_extension_enabled: bool,
+}
+
+#[async_trait]
+impl Query for LibSQLPool {
+    /// Implements [Query::syntax()].
+    fn syntax(&self) -> &dyn Syntax {
+        &self.syntax
+    }
+
+    /// Implements [Query::execute_batch()].
+    async fn execute_batch(&self, sql: &str) -> Result<(), Error> {
+        let conn = self.pool.get().await?;
+        conn.execute_batch(sql).await?;
+        Ok(())
+    }
+
+    /// Implements [Query::query()].
+    async fn query(&self, sql: &str, params: &[Value]) -> Result<Rows, Error> {
+        let conn = self.pool.get().await?;
+        let params = params.to_vec();
+        let mut rows = conn.query(sql, params).await?;
+
+        let mut db_rows = vec![];
+        while let Some(row) = rows.next().await? {
+            let mut db_row = Row::new();
+            for i in 0..row.column_count() {
+                let column = row.column_name(i).ok_or(Error::DatabaseError(
+                    format!("Error getting name of column {i} of row.").into(),
+                ))?;
+                let value = row.get_value(i)?;
+                db_row.insert(column.to_string(), value.try_into()?);
+            }
+            db_rows.push(db_row);
+        }
+
+        Ok(Rows { rows: db_rows })
+    }
+
+    /// Implements [Query::can_load()]. Returns true if the CSV load extension is enabled for
+    /// the connection pool and the given filename ends (case-insensitively) with '.csv'. The
+    /// CSV load extension will be enabled if the shared object file `csv.so` exists in the
+    /// current directory when the connection pool is created.
+    fn can_load(&self, filename: &str) -> bool {
+        self.csv_extension_enabled && filename.to_lowercase().ends_with(".csv")
+    }
+
+    /// Implements [Query::load_table()]
+    async fn load_table(&self, table: &str, filename: &str) -> Result<(), Error> {
+        if !self.can_load(filename) {
+            return Err(Error::InputError(format!(
+                "Filename: '{filename}' must end with .csv and load extensions must be enabled \
+                 for direct loading."
+            )));
+        }
+
+        eprintln!("Loading table '{table}' from '{filename}' using SQLite's CSV load extension.");
+        let current_dir = env::current_dir()?;
+        let current_dir = current_dir.display();
+        let sql = format!(
+            r#"CREATE VIRTUAL TABLE temp.t1
+               USING CSV(filename='{current_dir}/{filename}', header=true)"#
+        );
+        self.execute(&sql, &[]).await?;
+        let sql = format!("INSERT INTO {table} SELECT * FROM temp.t1");
+        self.execute(&sql, &[]).await?;
+        Ok(())
+    }
+
+    /// Implements [Query::drop_table()].
+    async fn drop_table(&self, table: &str) -> Result<(), Error> {
+        let table = validate_table_name(table)?;
+
+        // Drop the table:
+        self.execute(&format!(r#"DROP TABLE IF EXISTS "{table}""#), &[])
+            .await?;
+
+        Ok(())
+    }
+
+    /// Implements [Query::drop_view()]
+    async fn drop_view(&self, view: &str) -> Result<(), Error> {
+        let view = validate_table_name(view)?;
+
+        // Drop the view:
+        self.execute(&format!(r#"DROP VIEW IF EXISTS "{view}""#), &[])
+            .await?;
+        Ok(())
+    }
 }
 
 impl LibSQLPool {
-    /// Connect to a SQLite database using the given url.
-    pub async fn connect(url: &str) -> Result<Self, DbError> {
-        let db = Builder::new_local(url).build().await.map_err(|err| {
-            DbError::ConnectError(format!("Error creating pool from URL: '{url}': {err}"))
-        })?;
+    /// Connects to the database at the given URL. If the file shared object file `csv.so` is in
+    /// the current directory, enables the CSV load extension.
+    pub async fn connect(url: &str) -> Result<Self, Error> {
+        let db = Builder::new_local(url).build().await?;
         let manager = Manager::from_libsql_database(db);
-        let pool = Pool::builder(manager).build().map_err(|err| {
-            DbError::ConnectError(format!("Error creating pool from URL: '{url}': {err}"))
-        })?;
+        let pool = deadpool_libsql::Pool::builder(manager).build()?;
+        let conn = pool.get().await?;
 
-        let conn = pool
-            .get()
-            .await
-            .map_err(|err| DbError::ConnectError(format!("Error getting from pool: {err}")))?;
-
-        // Enable the CSV load extension.
-        // Note that this requires that csv.so be in the current directory.
-        conn.load_extension_enable().map_err(|err| {
-            DbError::ConnectError(format!("Error creating pool from URL: '{url}': {err}"))
-        })?;
-        let current_dir = env::current_dir().map_err(|err| {
-            DbError::ConnectError(format!("Error creating pool from URL: '{url}': {err}"))
-        })?;
+        // Enable the CSV load extension if possible. This requires that the file `csv.so` is in
+        // the current directory.
+        conn.load_extension_enable()?;
+        let current_dir = env::current_dir()?;
         let current_dir = current_dir.display();
         match conn.load_extension(&format!("{current_dir}/csv"), None) {
             Ok(_) => Ok(Self {
                 pool: pool,
-                caching_strategy: CachingStrategy::None,
-                cache_aware_query: false,
-                load_extensions_enabled: true,
+                syntax: SqliteSyntax,
+                csv_extension_enabled: true,
             }),
             Err(err) => {
-                eprintln!("WARNING Unable to load extension 'csv': {err}");
-                conn.load_extension_disable().map_err(|err| {
-                    DbError::ConnectError(format!("Error creating pool from URL: '{url}': {err}"))
-                })?;
+                eprintln!("INFO Unable to CSV load extension: '{err}'. Disabling.");
+                conn.load_extension_disable()?;
                 Ok(Self {
                     pool: pool,
-                    caching_strategy: CachingStrategy::None,
-                    cache_aware_query: false,
-                    load_extensions_enabled: false,
+                    syntax: SqliteSyntax,
+                    csv_extension_enabled: false,
                 })
             }
         }
     }
 }
 
-impl DbQuery for LibSQLPool {
-    /// Implements [DbQuery::kind()] for SQLite.
-    fn kind(&self) -> Box<dyn DbKind> {
-        Box::new(SQLiteKind)
-    }
-
-    /// Implements [DbQuery::pool()] for SQLite.
-    fn pool(&self) -> AnyPool {
-        AnyPool::LibSQL(LibSQLPool {
-            pool: self.pool.clone(),
-            caching_strategy: self.caching_strategy,
-            cache_aware_query: self.cache_aware_query,
-            load_extensions_enabled: self.load_extensions_enabled,
-        })
-    }
-
-    /// Implements [DbQuery::set_caching_strategy()] for SQLite.
-    fn set_caching_strategy(&mut self, strategy: &CachingStrategy) {
-        self.caching_strategy = *strategy;
-    }
-
-    /// Implements [DbQuery::get_caching_strategy()] for SQLite.
-    fn get_caching_strategy(&self) -> CachingStrategy {
-        self.caching_strategy
-    }
-
-    /// Implements [DbQuery::set_cache_aware_query()] for SQLite.
-    fn set_cache_aware_query(&mut self, flag: bool) {
-        self.cache_aware_query = flag;
-    }
-
-    /// Implements [DbQuery::get_cache_aware_query()] for SQLite.
-    fn get_cache_aware_query(&self) -> bool {
-        self.cache_aware_query
-    }
-
-    /// Implements [DbQuery::execute_batch()] for SQLite
-    async fn execute_batch(&self, sql: &str) -> Result<(), DbError> {
-        let conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|err| DbError::ConnectError(format!("Error getting from pool: {err}")))?;
-        match conn.execute_batch(sql).await {
-            Err(err) => {
-                return Err(DbError::DatabaseError(format!("Error during query: {err}")));
-            }
-            Ok(_) => Ok(()),
-        }
-    }
-
-    /// Implements [DbQuery::query_no_cache_clean()] for SQLite.
-    async fn query_no_cache_clean(
-        &self,
-        sql: &str,
-        params: impl IntoDbParams + Send,
-    ) -> Result<DbRows, DbError> {
-        let conn = self
-            .pool
-            .get()
-            .await
-            .map_err(|err| DbError::ConnectError(format!("Error getting from pool: {err}")))?;
-
-        let params: Vec<Value> = params.into_db_params().try_into()?;
-        let mut rows = conn
-            .query(sql, params)
-            .await
-            .map_err(|err| DbError::ConnectError(format!("Query error: {err}")))?;
-
-        let mut db_rows = vec![];
-        while let Some(row) = rows
-            .next()
-            .await
-            .map_err(|err| DbError::DataError(err.to_string()))?
-        {
-            let mut db_row = DbRow::new();
-            for i in 0..row.column_count() {
-                let column = row.column_name(i).ok_or(DbError::DataError(format!(
-                    "Error getting name of column {i} of row."
-                )))?;
-                let value = row.get_value(i).map_err(|err| {
-                    DbError::DataError(format!("Error getting value of column {i} of row: {err}"))
-                })?;
-                db_row.insert(column.to_string(), value.try_into()?);
-            }
-            db_rows.push(db_row);
-        }
-
-        Ok(DbRows { rows: db_rows })
-    }
-
-    /// Implements [DbQuery::insert()] for SQLite.
-    async fn insert(
-        &self,
-        table: &str,
-        columns: &[&str],
-        rows: impl IntoDbRows,
-    ) -> Result<(), DbError> {
-        edit(
-            self,
-            &EditType::Insert,
-            &MAX_PARAMS_SQLITE,
-            table,
-            columns,
-            rows,
-            false,
-            &[],
-        )
-        .await?;
-        Ok(())
-    }
-
-    /// Implements [DbQuery::insert_returning()] for SQLite.
-    async fn insert_returning(
-        &self,
-        table: &str,
-        columns: &[&str],
-        rows: impl IntoDbRows,
-        returning: &[&str],
-    ) -> Result<DbRows, DbError> {
-        edit(
-            self,
-            &EditType::Insert,
-            &MAX_PARAMS_SQLITE,
-            table,
-            columns,
-            rows,
-            true,
-            returning,
-        )
-        .await
-    }
-
-    /// Implements [DbQuery::update()] for SQLite.
-    async fn update(
-        &self,
-        table: &str,
-        columns: &[&str],
-        rows: impl IntoDbRows,
-    ) -> Result<(), DbError> {
-        edit(
-            self,
-            &EditType::Update,
-            &MAX_PARAMS_SQLITE,
-            table,
-            columns,
-            rows,
-            false,
-            &[],
-        )
-        .await?;
-        Ok(())
-    }
-
-    /// Implements [DbQuery::update_returning()] for SQLite.
-    async fn update_returning(
-        &self,
-        table: &str,
-        columns: &[&str],
-        rows: impl IntoDbRows,
-        returning: &[&str],
-    ) -> Result<DbRows, DbError> {
-        edit(
-            self,
-            &EditType::Update,
-            &MAX_PARAMS_SQLITE,
-            table,
-            columns,
-            rows,
-            true,
-            returning,
-        )
-        .await
-    }
-
-    /// Implements [DbQuery::upsert()] for SQLite.
-    async fn upsert(
-        &self,
-        table: &str,
-        columns: &[&str],
-        rows: impl IntoDbRows,
-    ) -> Result<(), DbError> {
-        edit(
-            self,
-            &EditType::Upsert,
-            &MAX_PARAMS_SQLITE,
-            table,
-            columns,
-            rows,
-            false,
-            &[],
-        )
-        .await?;
-        Ok(())
-    }
-
-    /// Implements [DbQuery::upsert_returning()] for SQLite.
-    async fn upsert_returning(
-        &self,
-        table: &str,
-        columns: &[&str],
-        rows: impl IntoDbRows,
-        returning: &[&str],
-    ) -> Result<DbRows, DbError> {
-        edit(
-            self,
-            &EditType::Upsert,
-            &MAX_PARAMS_SQLITE,
-            table,
-            columns,
-            rows,
-            true,
-            returning,
-        )
-        .await
-    }
-
-    /// Implements [DbQuery::load_table()] for SQLite.
-    async fn load_table(
-        &self,
-        table: &str,
-        columns: &IndexMap<String, DbColumn>,
-        filename: &str,
-    ) -> Result<(), DbError> {
-        if !self.load_extensions_enabled || filename.to_lowercase().ends_with(".tsv") {
-            eprintln!("Loading table '{table}' from '{filename}' using batch_insert().");
-            batch_insert(self, table, columns, filename).await
-        } else if filename.to_lowercase().ends_with(".csv") {
-            eprintln!(
-                "Loading table '{table}' from '{filename}' using SQLite's CSV load extension."
-            );
-            let current_dir = env::current_dir().map_err(|err| {
-                DbError::ConnectError(format!("Error getting current directory: {err}"))
-            })?;
-            let current_dir = current_dir.display();
-            let sql = format!(
-                r#"CREATE VIRTUAL TABLE temp.t1
-                   USING CSV(filename='{current_dir}/{filename}', header=true)"#
-            );
-            self.execute(&sql, ()).await?;
-            let sql = format!("INSERT INTO {table} SELECT * FROM temp.t1");
-            self.execute(&sql, ()).await?;
-            Ok(())
-        } else {
-            return Err(DbError::InputError(format!(
-                "Filename: '{filename}' must end with .tsv or .csv"
-            )));
-        }
-    }
-
-    /// Implements [DbQuery::drop_table()] for SQLite.
-    async fn drop_table(&self, table: &str) -> Result<(), DbError> {
-        let table = validate_table_name(table)?;
-        // Drop the table:
-        self.execute_no_cache_clean(&format!(r#"DROP TABLE IF EXISTS "{table}""#), ())
-            .await?;
-
-        // Delete dirty entries from the cache in accordance with our caching strategy:
-        clear_cache_for_dropped_tables(&self.pool(), &[&table]).await?;
-        Ok(())
-    }
-
-    /// Implements [DbQuery::drop_table()] for SQLite.
-    async fn drop_view(&self, view: &str) -> Result<(), DbError> {
-        let view = validate_table_name(view)?;
-        // Drop the view:
-        self.execute_no_cache_clean(&format!(r#"DROP VIEW IF EXISTS "{view}""#), ())
-            .await?;
-
-        // Delete dirty entries from the cache in accordance with our caching strategy:
-        clear_cache_for_dropped_tables(&self.pool(), &[&view]).await?;
-        Ok(())
+#[async_trait]
+impl Pool for LibSQLPool {
+    /// Begins a new [Transaction].
+    async fn transaction(&self) -> Result<Box<dyn Transaction>, Error> {
+        todo!()
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{db_row, params};
-    use std::ops::Deref;
+/// Represents a SQLite transaction.
+#[derive(Debug)]
+pub struct LibSQLTransaction {
+    /// The syntax used for this transaction.
+    _syntax: SqliteSyntax,
+    _pool: deadpool_libsql::Pool,
+    _conn: Option<deadpool_libsql::Connection>,
+}
 
-    #[tokio::test]
-    async fn test_aliases_and_builtin_functions() {
-        let pool = LibSQLPool::connect(":memory:").await.unwrap();
-        pool.execute_batch(
-            "DROP TABLE IF EXISTS test_table_indirect;\
-             CREATE TABLE test_table_indirect (\
-                 text_value TEXT,\
-                 alt_text_value TEXT,\
-                 float_value FLOAT8,\
-                 int_value INT8,\
-                 bool_value BOOL\
-             )",
-        )
-        .await
-        .unwrap();
-        pool.execute(
-            r#"INSERT INTO test_table_indirect
-               (text_value, alt_text_value, float_value, int_value, bool_value)
-               VALUES (?1, ?2, ?3, ?4, ?5)"#,
-            params!["foo", (), 1.05_f64, 1_i64, true],
-        )
-        .await
-        .unwrap();
+/// [Drop] implements the destruction operation for rust objects.
+impl Drop for LibSQLTransaction {
+    /// Called whenever the object representing the LibSQLTransaction is dropped.
+    /// Executes a ROLLBACK of the transaction.
+    fn drop(&mut self) {
+        todo!()
+    }
+}
 
-        // Test aggregate:
-        let rows = pool
-            .query("SELECT MAX(int_value) FROM test_table_indirect", ())
-            .await
-            .unwrap();
-        assert_eq!(
-            *rows.deref(),
-            [db_row! {
-                "MAX(int_value)" => 1_i64,
-            }]
-        );
-
-        // Test alias:
-        let rows = pool
-            .query(
-                "SELECT bool_value AS bool_value_alias FROM test_table_indirect",
-                (),
-            )
-            .await
-            .unwrap();
-        assert_eq!(
-            *rows.deref(),
-            [db_row! {
-                "bool_value_alias" => 1_i64,
-            }]
-        );
-
-        // Test aggregate with alias:
-        let rows = pool
-            .query(
-                "SELECT MAX(int_value) AS max_int_value FROM test_table_indirect",
-                (),
-            )
-            .await
-            .unwrap();
-        // Note that the alias is not shown in the results:
-        assert_eq!(
-            *rows.deref(),
-            [db_row! {
-                "max_int_value" => 1_i64,
-            }]
-        );
-
-        // Test non-aggregate function:
-        let rows = pool
-            .query(
-                "SELECT CAST(int_value AS TEXT) FROM test_table_indirect",
-                (),
-            )
-            .await
-            .unwrap();
-        assert_eq!(*rows.deref(), [db_row! {"CAST(int_value AS TEXT)" => "1",}]);
-
-        // Test non-aggregate function with alias:
-        let rows = pool
-            .query(
-                "SELECT CAST(int_value AS TEXT) AS int_value_cast FROM test_table_indirect",
-                (),
-            )
-            .await
-            .unwrap();
-        assert_eq!(*rows.deref(), [db_row! {"int_value_cast" => "1",}]);
-
-        // Test functions over booleans:
-        let rows = pool
-            .query("SELECT MAX(bool_value) FROM test_table_indirect", ())
-            .await
-            .unwrap();
-        // It is not possible to represent the boolean result of an aggregate function as a
-        // boolean, since internally to sqlite it is stored as an integer, and we can't query
-        // the metadata to get the datatype of an expression. If we want to represent it as a
-        // boolean, we will need to parse the expression. Note that PostgreSQL does not support
-        // MAX(bool_value) - it gives the error:
-        //   ERROR: function max(boolean) does not exist\nHINT: No function matches the given
-        //          name and argument types. You might need to add explicit type casts.
-        // So, perhaps, this is tu quoque an argument that the behaviour below is acceptable for
-        // sqlite.
-        assert_eq!(*rows.deref(), [db_row! {"MAX(bool_value)" => 1_i64,}]);
+#[async_trait]
+impl Query for LibSQLTransaction {
+    /// Implements [Query::syntax()] for [LibSQLTransaction]
+    fn syntax(&self) -> &dyn Syntax {
+        todo!()
     }
 
-    /// This test is resource intensive and therefore ignored by default. It verifies that
-    /// using [MAX_PARAMS_SQLITE] parameters in a query is indeed supported.
-    /// To run this and other ignored tests, use `cargo test -- --ignored` or
-    /// `cargo test -- --include-ignored`
-    #[tokio::test]
-    #[ignore]
-    async fn test_max_params() {
-        let pool = LibSQLPool::connect(":memory:").await.unwrap();
-        pool.execute_batch(
-            "DROP TABLE IF EXISTS test_max_params;\
-             CREATE TABLE test_max_params (\
-                 column1 INT,\
-                 column2 INT,\
-                 column3 INT,\
-                 column4 INT,\
-                 column5 INT,\
-                 column6 INT\
-             )",
-        )
-        .await
-        .unwrap();
+    /// Implements [Query::execute_batch()] for [LibSQLTransaction]
+    async fn execute_batch(&self, _sql: &str) -> Result<(), Error> {
+        todo!()
+    }
 
-        let mut sql = "INSERT INTO test_max_params VALUES ".to_string();
-        let mut values = vec![];
-        let mut params = vec![];
-        let mut n = 1;
-        while n <= MAX_PARAMS_SQLITE {
-            values.push(format!(
-                "(?{}, ?{}, ?{}, ?{}, ?{}, ?{})",
-                n,
-                n + 1,
-                n + 2,
-                n + 3,
-                n + 4,
-                n + 5
-            ));
-            params.push(1);
-            params.push(1);
-            params.push(1);
-            params.push(1);
-            params.push(1);
-            params.push(1);
-            n += 6;
-        }
-        sql.push_str(&values.join(", "));
-        pool.execute(&sql, params).await.unwrap();
-        pool.drop_table("text_max_params").await.unwrap();
+    /// Implements [Query::query()] for [LibSQLTransaction]
+    async fn query(&self, _sql: &str, _params: &[Value]) -> Result<Rows, Error> {
+        todo!()
+    }
+
+    fn can_load(&self, _filename: &str) -> bool {
+        todo!()
+    }
+
+    async fn load_table(&self, _table: &str, _filename: &str) -> Result<(), Error> {
+        todo!()
+    }
+
+    /// Implements [Query::drop_table()] for [LibSQLTransaction]
+    async fn drop_table(&self, _table: &str) -> Result<(), Error> {
+        todo!()
+    }
+
+    async fn drop_view(&self, _view: &str) -> Result<(), Error> {
+        todo!()
+    }
+}
+
+#[async_trait]
+impl Transaction for LibSQLTransaction {
+    /// Rolls back this transaction.
+    async fn rollback(&mut self) -> Result<(), Error> {
+        todo!()
+    }
+
+    /// Commits this transaction.
+    async fn commit(&mut self) -> Result<(), Error> {
+        todo!()
+    }
+}
+
+impl LibSQLTransaction {
+    /// Creates a new [LibSQLTransaction].
+    pub async fn _begin(_pool: deadpool_libsql::Pool) -> Result<Self, Error> {
+        todo!()
     }
 }

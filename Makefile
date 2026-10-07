@@ -4,44 +4,62 @@ SHELL := bash
 .DELETE_ON_ERROR:
 .SUFFIXES:
 
-.PHONY: check crate_docs build build_libsql
-.PHONY: test test_default test_libsql
-.PHONY: test_caching_perf_and_max_params
+# Tests
 
-# Main test
+## Standard tests
 
-tests/input/table1.csv: tests/input/table1.tsv
-	csvtool -t TAB -u COMMA cat $< > $@
+.PHONY: check test test_default test_libsql
+
+check:
+	cargo check
+	cargo check --no-default-features --features libsql
 
 test: test_default test_libsql
 
-test_default: | tests/input/table1.csv
+test_default: | tests/data/table1.csv
 	@echo "Running unit tests using default features."
 	cargo test
 	@echo "Default unit tests succeeded."
 
-test_libsql: | tests/input/table1.csv
+test_libsql: | tests/data/table1.csv
 	@echo "Running unit tests using Libsql."
 	cargo test --no-default-features --features libsql
 	@echo "Libsql unit tests succeeded."
 
-# Caching performance test
+tests/data/table1.csv: tests/data/table1.tsv
+	csvtool -t TAB -u COMMA cat $< > $@
 
-test_caching_perf_and_max_params:
-	@echo "Running caching_performance and max_params tests using default features."
-	cargo test -- --no-capture --ignored test_max_params test_caching_performance
-	cargo test --no-default-features --features libsql \
-		-- --no-capture --ignored test_max_params test_caching_performance
-	@echo "Tests succeeded."
+## Performance tests
+
+.PHONY: test_driver_perf
+
+rltbl_db_benchmarks:
+	@echo -n "Please clone or copy the https://github.com/rltbl/rltbl_db_benchmarks "
+	@echo "repository into the current directory."
+	@echo "Press enter when this has been done. "
+	@read enter
+	@test -d $@ && test -f $@/Cargo.toml || \
+		(echo "Failed to detect $@ repository. Did you clone/copy it?" && false)
+
+test_driver_perf: | rltbl_db_benchmarks
+	cd $| && make rltbl_tokio
+	cd $| && make tokio_raw
+	cd $| && make rltbl_rusqlite
+	cd $| && make rusqlite_raw
 
 # Documentation
 
+.PHONY: crate_docs
+
 crate_docs:
 	@echo "Testing documentation comments."
-	RUSTDOCFLAGS="-D warnings" cargo doc --features libsql
+	RUSTDOCFLAGS="-D warnings" cargo doc
+	RUSTDOCFLAGS="-D warnings" cargo doc --no-default-features --features libsql
 	@echo "Documentation comments are ok."
 
 # Build
+
+.PHONY: build build_libsql
 
 build:
 	cargo build
