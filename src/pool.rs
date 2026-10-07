@@ -19,7 +19,7 @@
 /// }
 /// ```
 use async_trait::async_trait;
-use csv::ReaderBuilder;
+use csv::{QuoteStyle, ReaderBuilder, WriterBuilder};
 use indexmap::IndexMap;
 use std::{
     collections::HashSet,
@@ -421,6 +421,57 @@ impl AnyPool {
         let columns = Column::from_table_file(filename)?;
         self.recreate_table(&table, &columns).await?;
         self.batch_insert(table, &columns, filename).await
+    }
+
+    /// Export the given table to a TSV file with the same name in the given directory.
+    pub async fn export_table(&self, table: &str, dir: &str) -> Result<(), Error> {
+        // Validate the given table name and directory:
+        let table = validate_table_name(table)?;
+        let dir = Path::new(dir);
+        let str_dir = dir.to_str().ok_or(Error::InputError(format!(
+            "Unable to convert {dir:?} to a string."
+        )))?;
+        let save_file;
+        if dir.is_dir() {
+            save_file = format!("{str_dir}/{table}.tsv");
+        } else {
+            return Err(Error::InputError(format!("No such directory: {dir:?}.")));
+        }
+
+        // Collect the column names and write a header to the save_file:
+        let mut writer = WriterBuilder::new()
+            .delimiter(b'\t')
+            .quote_style(QuoteStyle::Never)
+            .from_path(save_file)?;
+        let header_row = self
+            .columns(&table)
+            .await?
+            .iter()
+            .map(|(key, _value)| key.to_string())
+            .collect::<Vec<_>>();
+        writer.write_record(header_row.clone())?;
+
+        // Query the data from the table:
+        let sql = format!(
+            r#"SELECT {columns} FROM "{table}""#,
+            columns = header_row
+                .iter()
+                .map(|c| format!(r#""{c}""#))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        let data_rows = self.query(&sql, ()).await?;
+
+        // Write the data to the save_file:
+        for row in data_rows.iter() {
+            let values = row
+                .iter()
+                .map(|(_column, value)| value.to_string())
+                .collect::<Vec<_>>();
+            writer.write_record(values)?;
+        }
+
+        Ok(())
     }
 
     /// Determine whether the given table exists in the database.

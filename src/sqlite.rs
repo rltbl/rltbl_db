@@ -55,7 +55,7 @@ impl Syntax for SqliteSyntax {
         (
             r#"SELECT "name" AS "column_name", "type" AS "data_type"
                FROM pragma_table_info(?1)
-               ORDER BY "column_name""#
+               ORDER BY "cid""#
                 .to_string(),
             values![table],
         )

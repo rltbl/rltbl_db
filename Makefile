@@ -14,14 +14,17 @@ check:
 	cargo check
 	cargo check --no-default-features --features libsql
 
+tests/output:
+	mkdir -p $@
+
 test: test_default test_libsql
 
-test_default: | tests/data/table1.csv
+test_default: | tests/data/table1.csv tests/output
 	@echo "Running unit tests using default features."
 	cargo test
 	@echo "Default unit tests succeeded."
 
-test_libsql: | tests/data/table1.csv
+test_libsql: | tests/data/table1.csv tests/output
 	@echo "Running unit tests using Libsql."
 	cargo test --no-default-features --features libsql
 	@echo "Libsql unit tests succeeded."
@@ -66,3 +69,10 @@ build:
 
 build_libsql:
 	cargo build --no-default-features --features libsql
+
+# Clean
+
+.PHONY: clean
+
+clean:
+	rm -Rf tests/output

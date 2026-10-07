@@ -658,51 +658,6 @@ impl From<()> for Value {
     }
 }
 
-// String and &str conversions:
-impl Into<String> for Value {
-    fn into(self) -> String {
-        match self {
-            Value::BigInteger(val) => val.to_string(),
-            Value::Integer(val) => val.to_string(),
-            Value::SmallInteger(val) => val.to_string(),
-            Value::Text(val) => val.to_string(),
-            Value::Null => String::new(),
-            Value::Boolean(val) => val.to_string(),
-            Value::Real(val) => val.to_string(),
-            Value::BigReal(val) => val.to_string(),
-            Value::Numeric(val) => val.to_string(),
-            Value::Json(value) => value.to_string(),
-            Value::Other(_, _, _) => {
-                format!("{self:?}")
-            }
-        }
-    }
-}
-
-impl Into<String> for &Value {
-    fn into(self) -> String {
-        self.clone().into()
-    }
-}
-
-impl From<&str> for Value {
-    fn from(value: &str) -> Self {
-        Self::Text(value.to_string())
-    }
-}
-
-impl From<char> for Value {
-    fn from(value: char) -> Self {
-        Self::Text(value.to_string())
-    }
-}
-
-impl From<String> for Value {
-    fn from(value: String) -> Self {
-        Self::Text(value)
-    }
-}
-
 // JSON conversions.
 impl From<JsonValue> for Value {
     fn from(item: JsonValue) -> Self {
@@ -789,7 +744,52 @@ impl TryInto<Row> for Value {
     }
 }
 
-// Primitive type conversions.
+// String and &str conversions:
+impl Into<String> for Value {
+    fn into(self) -> String {
+        match self {
+            Value::BigInteger(val) => val.to_string(),
+            Value::Integer(val) => val.to_string(),
+            Value::SmallInteger(val) => val.to_string(),
+            Value::Text(val) => val.to_string(),
+            Value::Null => String::new(),
+            Value::Boolean(val) => val.to_string(),
+            Value::Real(val) => val.to_string(),
+            Value::BigReal(val) => val.to_string(),
+            Value::Numeric(val) => val.to_string(),
+            Value::Json(value) => value.to_string(),
+            Value::Other(_, _, _) => {
+                format!("{self:?}")
+            }
+        }
+    }
+}
+
+impl Into<String> for &Value {
+    fn into(self) -> String {
+        self.clone().into()
+    }
+}
+
+impl From<&str> for Value {
+    fn from(value: &str) -> Self {
+        Self::Text(value.to_string())
+    }
+}
+
+impl From<char> for Value {
+    fn from(value: char) -> Self {
+        Self::Text(value.to_string())
+    }
+}
+
+impl From<String> for Value {
+    fn from(value: String) -> Self {
+        Self::Text(value)
+    }
+}
+
+// Other primitive type conversions.
 
 impl From<bool> for Value {
     fn from(item: bool) -> Self {
