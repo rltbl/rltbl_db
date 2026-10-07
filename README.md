@@ -1,9 +1,13 @@
 # rltbl_db
 
 `rltbl_db` is the database layer for [`rltbl`](https://github.com/rltbl/relatable).
-It provides an async abstraction over multiple database libraries, currently
-[`tokio-postgres`](https://github.com/rust-postgres/rust-postgres)
-and [`rusqlite`](https://github.com/rusqlite/rusqlite).
+It uses [`deadpool`](https://crates.io/crates/deadpool) to provide an
+asynchronous abstraction over multiple database libraries. We provide built-in
+support for the [`tokio-postgres`](https://crates.io/crates/deadpool-postgres),
+[`rusqlite`](https://crates.io/crates/deadpool-sqlite), and
+[`libsql`](https://crates.io/crates/deadpool-libsql) libraries, and the
+capability for users to extend `rltbl_db` using custom libraries if desired.
+
 Our goal is to be able to switch databases at runtime,
 and query arbitrary tables using dynamically generated SQL.
 
@@ -21,22 +25,30 @@ Add to your `Cargo.toml` using this GitHub repo:
 
 ```sh
 cargo add rltbl_db --git 'https://github.com/rltbl/rltbl_db'
+cargo add tokio --features full
 ```
 
 # Usage
 
 ```rust
-use rltbl_db::{any::AnyPool, core::{DbError, DbQuery}};
+use rltbl_db::{AnyPool, Error, Rows};
 
-async fn example() -> Result<String, DbError> {
+async fn example() -> Result<Rows, Error> {
     let pool = AnyPool::connect("test.db").await?;
     pool.execute_batch(
         "DROP TABLE IF EXISTS test;\
          CREATE TABLE test ( value TEXT );\
          INSERT INTO test VALUES ('foo');",
     ).await?;
-    let value = pool.query_string("SELECT value FROM test;", &[]).await?;
+    let value = pool.query("SELECT value FROM test;", ()).await?;
     Ok(value)
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Error> {
+    let rows = example().await?;
+    println!("Rows: {rows:?}");
+    Ok(())
 }
 ```
 
@@ -54,3 +66,12 @@ special values as parameters, e.g.,
             )
             .await
             .unwrap();
+
+# Incompatibility of `rusqlite` and `libsql`
+
+Note that the two **sqlite** drivers, `rusqlite` and `libsql`, are not
+compatible with one another and cannot both be activated simultaneously. Our
+default **sqlite** implementation uses `rusqlite`. If you would like to use
+`libsql` instead, **rltbl_db** must be compiled as follows:
+
+    cargo build --no-default-features --features libsql,tokio-postgres
