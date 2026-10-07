@@ -54,10 +54,21 @@ async fn main() -> Result<(), Error> {
 
 # Differences between PostgreSQL and SQLite
 
-The [libsql](https://crates.io/crates/libsql) and [deadpool-sqlite](https://crates.io/crates/deadpool-sqlite) drivers do not fully support querying special floating point types such as "NaN", "-Infinity", "Infinity", etc. If one tries to query from a column that contains such values the results will be returned as TEXT. It is, possible, however, to insert these special values into a table by hard coding them into the submitted query text (rather than by using dynammic query parameters), by double quoting them. E.g., `INSERT INTO foo VALUES ("NaN")`.
+The [libsql](https://crates.io/crates/libsql) and
+[deadpool-sqlite](https://crates.io/crates/deadpool-sqlite) drivers do not
+fully support querying special floating point types such as "NaN", "-Infinity",
+"Infinity", etc. If one tries to query from a column that contains such values
+the results will be returned as TEXT. It is, possible, however, to insert these
+special values into a table by hard coding them into the submitted query text
+(rather than by using dynammic query parameters), by single-quoting them. E.g.,
+`INSERT INTO foo VALUES ('NaN')`. Notet that sqlite is permissive enough to
+accept double-quotes for values instead.
 
-There are no such issues with PostgreSQL. The following will work irrespective of whether the column `bar` is of floating point or text type (postgresql will be able to determine this implicitly): `INSERT INTO foo (bar) VALUES ('-Infinity')`. Note that one must use single- rather than double-quotes for postgresql. It is also possible to use these
-special values as parameters, e.g.,
+There are no such issues with PostgreSQL. The following will work irrespective
+of whether the column `bar` is of floating point or text type (postgresql will
+be able to determine this implicitly): `INSERT INTO foo (bar) VALUES
+('-Infinity')`. It is also possible to use these special values as parameters,
+e.g.,
 
             let float_param = std::f64::from_str("-Infinity").unwrap();
             pool.execute(
@@ -69,9 +80,9 @@ special values as parameters, e.g.,
 
 # Incompatibility of `rusqlite` and `libsql`
 
-Note that the two **sqlite** drivers, `rusqlite` and `libsql`, are not
+Note that the two SQLite drivers, `rusqlite` and `libsql`, are not
 compatible with one another and cannot both be activated simultaneously. Our
-default **sqlite** implementation uses `rusqlite`. If you would like to use
+default SQLite implementation uses `rusqlite`. If you would like to use
 `libsql` instead, **rltbl_db** must be compiled as follows:
 
     cargo build --no-default-features --features libsql,tokio-postgres
