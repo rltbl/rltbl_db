@@ -86,3 +86,13 @@ default SQLite implementation uses `rusqlite`. If you would like to use
 `libsql` instead, **rltbl_db** must be compiled as follows:
 
     cargo build --no-default-features --features libsql,tokio-postgres
+
+# Regression tests
+
+To install the regression tests, clone the repository
+[rltbl_db_benchmarks](https://github.com/rltbl/rltbl_db_benchmarks) into a
+subdirectory of the root directory.
+
+To run the regression tests, use
+
+    make test_driver_perf
