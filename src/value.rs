@@ -310,6 +310,10 @@ impl ValueType {
                     )));
                 }
             },
+            ValueType::Text(_) => match value {
+                Value::Text(_) => return Ok(value.clone()),
+                _ => return Ok(Value::Text(value.to_string())),
+            },
             _ => {
                 if let Value::Text(value) = value {
                     return Ok(self.parse_str(value)?);
@@ -353,7 +357,8 @@ impl ValueType {
                 let value = value.as_decimal().ok_or(err_template(value))?;
                 Ok(Value::Numeric(value))
             }
-            ValueType::Text(_) => Ok(Value::Text(value.to_string())),
+            // Handled above:
+            ValueType::Text(_) => unreachable!(),
         }
     }
 }
