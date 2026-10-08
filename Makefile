@@ -8,10 +8,14 @@ SHELL := bash
 
 ## Standard tests
 
-.PHONY: check test test_default test_libsql
+.PHONY: check check_default check_libsql test test_default test_libsql
 
-check:
+check: check_default check_libsql
+
+check_default:
 	cargo check
+
+check_libsql:
 	cargo check --no-default-features --features libsql
 
 tests/output:

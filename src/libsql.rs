@@ -127,17 +127,17 @@ impl Query for LibSQLPool {
         Ok(Rows { rows: db_rows })
     }
 
-    /// Implements [Query::can_load()]. Returns true if the CSV load extension is enabled for
+    /// Implements [Query::can_copy()]. Returns true if the CSV load extension is enabled for
     /// the connection pool and the given filename ends (case-insensitively) with '.csv'. The
     /// CSV load extension will be enabled if the shared object file `csv.so` exists in the
     /// current directory when the connection pool is created.
-    fn can_load(&self, filename: &str) -> bool {
+    fn can_copy(&self, filename: &str) -> bool {
         self.csv_extension_enabled && filename.to_lowercase().ends_with(".csv")
     }
 
-    /// Implements [Query::load_table()]
-    async fn load_table(&self, table: &str, filename: &str) -> Result<(), Error> {
-        if !self.can_load(filename) {
+    /// Implements [Query::copy_in()]
+    async fn copy_in(&self, table: &str, filename: &str) -> Result<(), Error> {
+        if !self.can_copy(filename) {
             return Err(Error::InputError(format!(
                 "Filename: '{filename}' must end with .csv and load extensions must be enabled \
                  for direct loading."
@@ -155,6 +155,11 @@ impl Query for LibSQLPool {
         let sql = format!("INSERT INTO {table} SELECT * FROM temp.t1");
         self.execute(&sql, &[]).await?;
         Ok(())
+    }
+
+    /// Implements [Query::copy_out()]
+    async fn copy_out(&self, _table: &str, _filename: &str) -> Result<(), Error> {
+        todo!()
     }
 
     /// Implements [Query::drop_table()].
@@ -255,11 +260,15 @@ impl Query for LibSQLTransaction {
         todo!()
     }
 
-    fn can_load(&self, _filename: &str) -> bool {
+    fn can_copy(&self, _filename: &str) -> bool {
         todo!()
     }
 
-    async fn load_table(&self, _table: &str, _filename: &str) -> Result<(), Error> {
+    async fn copy_in(&self, _table: &str, _filename: &str) -> Result<(), Error> {
+        todo!()
+    }
+
+    async fn copy_out(&self, _table: &str, _filename: &str) -> Result<(), Error> {
         todo!()
     }
 

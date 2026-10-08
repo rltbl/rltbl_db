@@ -400,8 +400,8 @@ impl AnyPool {
         self.recreate_table(&table, &columns).await?;
 
         // Fill the table with the data from the file:
-        if self.can_load(filename) {
-            self.load_table(table, filename).await
+        if self.can_copy(filename) {
+            self.copy_in(table, filename).await
         } else {
             self.batch_insert(table, &columns, filename).await
         }
@@ -423,8 +423,8 @@ impl AnyPool {
         self.batch_insert(table, &columns, filename).await
     }
 
-    /// Export the given table to a TSV file with the same name in the given directory.
-    pub async fn export_table(&self, table: &str, dir: &str) -> Result<(), Error> {
+    /// Save the given table to a TSV file with the same name in the given directory.
+    pub async fn save_table(&self, table: &str, dir: &str) -> Result<(), Error> {
         // Validate the given table name and directory:
         let table = validate_table_name(table)?;
         let dir = Path::new(dir);
@@ -438,11 +438,20 @@ impl AnyPool {
             return Err(Error::InputError(format!("No such directory: {dir:?}.")));
         }
 
-        // Collect the column names and write a header to the save_file:
+        if self.can_copy(&save_file) {
+            self.copy_out(&table, &save_file).await
+        } else {
+            self.save_table_using_select(&table, &save_file).await
+        }
+    }
+
+    pub async fn save_table_using_select(&self, table: &str, filename: &str) -> Result<(), Error> {
+        eprintln!("Saving table '{table}' to file '{filename}' using SELECT");
+        // Collect the column names and write a header to the filename:
         let mut writer = WriterBuilder::new()
             .delimiter(b'\t')
             .quote_style(QuoteStyle::Never)
-            .from_path(save_file)?;
+            .from_path(filename)?;
         let header_row = self
             .columns(&table)
             .await?
@@ -462,7 +471,7 @@ impl AnyPool {
         );
         let data_rows = self.query(&sql, ()).await?;
 
-        // Write the data to the save_file:
+        // Write the data to the filename:
         for row in data_rows.iter() {
             let values = row
                 .iter()
@@ -598,13 +607,18 @@ impl AnyPool {
     ////////// Private functions //////////
 
     /// Returns true if the database driver is capable of bulk loading this file.
-    fn can_load(&self, filename: &str) -> bool {
-        self.pool.can_load(filename)
+    fn can_copy(&self, filename: &str) -> bool {
+        self.pool.can_copy(filename)
     }
 
     /// Load the given table using the data from the given file.
-    async fn load_table(&self, table: &str, filename: &str) -> Result<(), Error> {
-        self.pool.load_table(table, filename).await
+    async fn copy_in(&self, table: &str, filename: &str) -> Result<(), Error> {
+        self.pool.copy_in(table, filename).await
+    }
+
+    /// Copy the data from the given table into the given file.
+    async fn copy_out(&self, table: &str, filename: &str) -> Result<(), Error> {
+        self.pool.copy_out(table, filename).await
     }
 
     /// Create a given table with the given columns in the database. If a table with the

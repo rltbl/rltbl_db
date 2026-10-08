@@ -114,15 +114,15 @@ impl Query for RusqlitePool {
         .await?
     }
 
-    /// Implements [Query::can_load()]. Returns true if the given filename ends
+    /// Implements [Query::can_copy()]. Returns true if the given filename ends
     /// (case-insensitively) with '.csv'.
-    fn can_load(&self, filename: &str) -> bool {
+    fn can_copy(&self, filename: &str) -> bool {
         filename.to_lowercase().ends_with(".csv")
     }
 
-    /// Implements [Query::load_table()]
-    async fn load_table(&self, table: &str, filename: &str) -> Result<(), Error> {
-        if !self.can_load(filename) {
+    /// Implements [Query::copy_in()]
+    async fn copy_in(&self, table: &str, filename: &str) -> Result<(), Error> {
+        if !self.can_copy(filename) {
             return Err(Error::InputError(format!(
                 "Filename: '{filename}' must end with .csv"
             )));
@@ -139,6 +139,11 @@ impl Query for RusqlitePool {
         let sql = format!("INSERT INTO {table} SELECT * FROM temp.t1");
         self.execute(&sql, &[]).await?;
         Ok(())
+    }
+
+    /// Implements [Query::copy_out()]
+    async fn copy_out(&self, _table: &str, _filename: &str) -> Result<(), Error> {
+        todo!()
     }
 
     /// Implements [Query::drop_table()].
@@ -269,11 +274,15 @@ impl Query for RusqliteTransaction {
         }
     }
 
-    fn can_load(&self, _filename: &str) -> bool {
+    fn can_copy(&self, _filename: &str) -> bool {
         todo!()
     }
 
-    async fn load_table(&self, _table: &str, _filename: &str) -> Result<(), Error> {
+    async fn copy_in(&self, _table: &str, _filename: &str) -> Result<(), Error> {
+        todo!()
+    }
+
+    async fn copy_out(&self, _table: &str, _filename: &str) -> Result<(), Error> {
         todo!()
     }
 

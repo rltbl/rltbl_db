@@ -71,16 +71,20 @@ pub trait Query: std::fmt::Debug + Sync + Send {
     async fn query(&self, sql: &str, params: &[Value]) -> Result<Rows, Error>;
 
     /// Returns true if this [Query]-able is capable of bulk loading this file.
-    fn can_load(&self, _filename: &str) -> bool {
-        // The default implementation is for bulk loading to be unsupported. Implementations
+    fn can_copy(&self, _filename: &str) -> bool {
+        // The default implementation is for bulk copying to be unsupported. Implementations
         // for specific drivers (libsql, tokio-postgresql, rusqlite, etc.) will have their
-        // own criteria.
+        // own criteria for determining the return value of this function.
         false
     }
 
-    /// Bulk-load the contents of the given file into a table with the given name. If the
+    /// Bulk-copy the contents of the given file into a table with the given name. If the
     /// table already exists it will be dropped first and recreated.
-    async fn load_table(&self, table: &str, filename: &str) -> Result<(), Error>;
+    async fn copy_in(&self, table: &str, filename: &str) -> Result<(), Error>;
+
+    /// Bulk-copy the contents of the given table into the given file. If the file already
+    /// exists, it will be overwritten.
+    async fn copy_out(&self, table: &str, filename: &str) -> Result<(), Error>;
 
     /// Drop the given table from the database.
     async fn drop_table(&self, table: &str) -> Result<(), Error>;

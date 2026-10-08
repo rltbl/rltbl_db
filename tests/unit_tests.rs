@@ -4876,22 +4876,25 @@ async fn test_max_params() -> Result<(), Error> {
     Ok(())
 }
 
-/// Tests the ability to export a table to a TSV file.
+/// Tests the ability to save a table to a TSV file.
 #[tokio::test]
-async fn test_export() {
+async fn test_save() {
     #[cfg(feature = "rusqlite")]
-    export(":memory:").await.unwrap();
+    save(":memory:").await.unwrap();
     #[cfg(feature = "tokio-postgres")]
-    export("postgresql:///rltbl_db").await.unwrap();
+    save("postgresql:///rltbl_db").await.unwrap();
     #[cfg(feature = "libsql")]
-    export(":memory:").await.unwrap();
+    save(":memory:").await.unwrap();
 }
 
-async fn export(url: &str) -> Result<(), Error> {
+async fn save(url: &str) -> Result<(), Error> {
     let pool = AnyPool::connect(url).await.unwrap();
     let syntax = pool.syntax();
     let pp = syntax.param_prefix().to_string();
-    let table = format!("test_export_{}", pool.syntax().name());
+    let table = format!("test_save_{}", pool.syntax().name());
+
+    // Remove any previous test file:
+    std::fs::remove_file(&format!("tests/output/{table}.tsv")).unwrap_or(());
 
     pool.execute_batch(&format!(
         "DROP TABLE IF EXISTS {table}{cascade};\
@@ -4961,22 +4964,22 @@ async fn export(url: &str) -> Result<(), Error> {
     .await
     .unwrap();
 
-    pool.export_table(&table, "tests/output/").await.unwrap();
+    pool.save_table(&table, "tests/output/").await.unwrap();
 
-    let exported = std::fs::read_to_string(format!("tests/output/{table}.tsv")).unwrap();
+    let saveed = std::fs::read_to_string(format!("tests/output/{table}.tsv")).unwrap();
     assert_eq!(
-        exported,
+        saveed,
         match syntax.name() {
             "sqlite" =>
                 "text_value\talt_text_value\tfloat_value\talt_float_value\tint_value\
-                         \talt_int_value\tbool_value\talt_bool_value\tnumeric_value\
-                         \talt_numeric_value\nfoo\t\t1.05\t\t1\t\t1\t\t1\t\ngoo\t\t2.05\t\
-                         \t2\t\t0\t\t2\t\n",
+                 \talt_int_value\tbool_value\talt_bool_value\tnumeric_value\
+                 \talt_numeric_value\nfoo\t\t1.05\t\t1\t\t1\t\t1\t\ngoo\t\t2.05\t\
+                 \t2\t\t0\t\t2\t\n",
             "postgres" =>
-                "text_value\talt_text_value\tfloat_value\talt_float_value\t\
-                           int_value\talt_int_value\tbool_value\talt_bool_value\t\
-                           numeric_value\talt_numeric_value\nfoo\t\t1.05\t\t1\t\ttrue\t\
-                           \t1\t\ngoo\t\t2.05\t\t2\t\tfalse\t\t2\t\n",
+                "text_value\talt_text_value\tfloat_value\talt_float_value\tint_value\t\
+                 alt_int_value\tbool_value\talt_bool_value\tnumeric_value\t\
+                 alt_numeric_valuefoo\t\\N\t1.05\t\\N\t1\t\\N\tt\t\\N\t1\t\\N\ngoo\t\\N\
+                 \t2.05\t\\N\t2\t\\N\tf\t\\N\t2\t\\N\n",
             _ => panic!("Invalid syntax: {}", syntax.name()),
         }
     );
