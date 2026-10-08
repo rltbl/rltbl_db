@@ -83,7 +83,7 @@ pub trait Query: std::fmt::Debug + Sync + Send {
     async fn copy_in(&self, table: &str, filename: &str) -> Result<(), Error>;
 
     /// Bulk-copy the contents of the given table into the given file. If the file already
-    /// exists, it will be overwritten.
+    /// exists, this function will return an error.
     async fn copy_out(&self, table: &str, filename: &str) -> Result<(), Error>;
 
     /// Drop the given table from the database.
