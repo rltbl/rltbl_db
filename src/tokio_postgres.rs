@@ -317,7 +317,7 @@ impl Query for PostgresPool {
     /// Implements [Query::copy_out()]
     async fn copy_out(&self, table: &str, filename: &str) -> Result<(), Error> {
         eprintln!("Saving table '{table}' to '{filename}' using COPY.");
-        if !self.can_copy_in(filename) {
+        if !self.can_copy_out(filename) {
             return Err(Error::InputError(format!(
                 "Filename: '{filename}' must end with .tsv or .csv"
             )));
