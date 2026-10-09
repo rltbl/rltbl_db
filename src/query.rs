@@ -88,7 +88,7 @@ pub trait Query: std::fmt::Debug + Sync + Send {
 
     /// Bulk-copy the contents of the given file into a table with the given name. If the
     /// table already exists it will be dropped first and recreated. Note that the default
-    /// implementation does not support bulk-copying in and will invariably return an error.
+    /// implementation does not support bulk-copying and will invariably return an error.
     /// Implementations for specific drivers (libsql, tokio-postgresql, rusqlite, etc.)
     /// need to define their own versions of this function if they want to support bulk-copying
     /// from a file to a table.
@@ -97,7 +97,7 @@ pub trait Query: std::fmt::Debug + Sync + Send {
     }
 
     /// Bulk-copy the contents of the given table into the given file if it does not already
-    /// exist. Note that the default implementation does not support bulk-copying in and will
+    /// exist. Note that the default implementation does not support bulk-copying and will
     /// invariably return an error. Implementations for specific drivers (libsql,
     /// tokio-postgresql, rusqlite, etc.) need to define their own versions of this function
     /// if they want to support bulk-copying from a table to a file.
