@@ -4879,12 +4879,12 @@ async fn test_max_params() -> Result<(), Error> {
 /// Tests the ability to save a table to a TSV file.
 #[tokio::test]
 async fn test_save() {
-    //#[cfg(feature = "rusqlite")]
-    //save(":memory:").await.unwrap();
+    #[cfg(feature = "rusqlite")]
+    save(":memory:").await.unwrap();
     #[cfg(feature = "tokio-postgres")]
     save("postgresql:///rltbl_db").await.unwrap();
-    //#[cfg(feature = "libsql")]
-    //save(":memory:").await.unwrap();
+    #[cfg(feature = "libsql")]
+    save(":memory:").await.unwrap();
 }
 
 async fn save(url: &str) -> Result<(), Error> {
@@ -4893,8 +4893,9 @@ async fn save(url: &str) -> Result<(), Error> {
     let pp = syntax.param_prefix().to_string();
     let table = format!("test_save_{}", pool.syntax().name());
 
-    // Remove any previous test file:
+    // Remove any previous test files:
     std::fs::remove_file(&format!("tests/output/{table}.tsv")).unwrap_or(());
+    std::fs::remove_file(&format!("tests/output/{table}.csv")).unwrap_or(());
 
     pool.execute_batch(&format!(
         "DROP TABLE IF EXISTS {table}{cascade};\

@@ -400,7 +400,7 @@ impl AnyPool {
         self.recreate_table(&table, &columns).await?;
 
         // Fill the table with the data from the file:
-        if self.can_copy(filename) {
+        if self.can_copy_in(filename) {
             self.copy_in(table, filename).await
         } else {
             self.batch_insert(table, &columns, filename).await
@@ -452,7 +452,7 @@ impl AnyPool {
         }
 
         // Save the file:
-        if self.can_copy(&save_file) {
+        if self.can_copy_out(&save_file) {
             self.copy_out(&table, &save_file).await
         } else {
             self.save_table_using_select(&table, &save_file).await
@@ -631,9 +631,14 @@ impl AnyPool {
 
     ////////// Private functions //////////
 
-    /// Returns true if the database driver is capable of bulk loading this file.
-    fn can_copy(&self, filename: &str) -> bool {
-        self.pool.can_copy(filename)
+    /// Returns true if the database driver is capable of bulk-copying this file into a table.
+    fn can_copy_in(&self, filename: &str) -> bool {
+        self.pool.can_copy_in(filename)
+    }
+
+    /// Returns true if the database driver is capable of bulk-copying this table into a file.
+    fn can_copy_out(&self, filename: &str) -> bool {
+        self.pool.can_copy_out(filename)
     }
 
     /// Load the given table using the data from the given file.

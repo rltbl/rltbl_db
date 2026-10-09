@@ -260,9 +260,16 @@ impl Query for PostgresPool {
         Ok(Rows { rows: db_rows })
     }
 
-    /// Implements [Query::can_copy()]. Returns true if the given filename ends
+    /// Implements [Query::can_copy_in()]. Returns true if the given filename ends
     /// (case-insensitively) with either '.csv' or '.tsv'.
-    fn can_copy(&self, filename: &str) -> bool {
+    fn can_copy_in(&self, filename: &str) -> bool {
+        let filename = filename.to_lowercase();
+        filename.ends_with("tsv") || filename.ends_with(".csv")
+    }
+
+    /// Implements [Query::can_copy_out()]. Returns true if the given filename ends
+    /// (case-insensitively) with either '.csv' or '.tsv'.
+    fn can_copy_out(&self, filename: &str) -> bool {
         let filename = filename.to_lowercase();
         filename.ends_with("tsv") || filename.ends_with(".csv")
     }
@@ -270,7 +277,7 @@ impl Query for PostgresPool {
     /// Load the given table using the data from the given file.
     async fn copy_in(&self, table: &str, filename: &str) -> Result<(), Error> {
         eprintln!("Loading table '{table}' from '{filename}' using COPY.");
-        if !self.can_copy(filename) {
+        if !self.can_copy_in(filename) {
             return Err(Error::InputError(format!(
                 "Filename: '{filename}' must end with .tsv or .csv"
             )));
@@ -310,7 +317,7 @@ impl Query for PostgresPool {
     /// Implements [Query::copy_out()]
     async fn copy_out(&self, table: &str, filename: &str) -> Result<(), Error> {
         eprintln!("Saving table '{table}' to '{filename}' using COPY.");
-        if !self.can_copy(filename) {
+        if !self.can_copy_in(filename) {
             return Err(Error::InputError(format!(
                 "Filename: '{filename}' must end with .tsv or .csv"
             )));

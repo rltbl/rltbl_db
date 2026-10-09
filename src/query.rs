@@ -70,21 +70,41 @@ pub trait Query: std::fmt::Debug + Sync + Send {
     /// Execute a query returning a collection of [Rows].
     async fn query(&self, sql: &str, params: &[Value]) -> Result<Rows, Error>;
 
-    /// Returns true if this [Query]-able is capable of bulk loading this file.
-    fn can_copy(&self, _filename: &str) -> bool {
-        // The default implementation is for bulk copying to be unsupported. Implementations
-        // for specific drivers (libsql, tokio-postgresql, rusqlite, etc.) will have their
-        // own criteria for determining the return value of this function.
+    /// Returns true if this [Query]-able is capable of bulk copying this file into a table.
+    /// Note that the default implementation is for bulk copying to be unsupported.
+    /// Implementations for specific drivers (libsql, tokio-postgresql, rusqlite, etc.)
+    /// need to define their own criteria for determining the return value of this function.
+    fn can_copy_in(&self, _filename: &str) -> bool {
+        false
+    }
+
+    /// Returns true if this [Query]-able is capable of bulk copying this table into a file.
+    /// Note that the default implementation is for bulk copying to be unsupported.
+    /// Implementations for specific drivers (libsql, tokio-postgresql, rusqlite, etc.)
+    /// need to define their own criteria for determining the return value of this function.
+    fn can_copy_out(&self, _filename: &str) -> bool {
         false
     }
 
     /// Bulk-copy the contents of the given file into a table with the given name. If the
-    /// table already exists it will be dropped first and recreated.
-    async fn copy_in(&self, table: &str, filename: &str) -> Result<(), Error>;
+    /// table already exists it will be dropped first and recreated. Note that the default
+    /// implementation does not support bulk-copying in and will invariably return an error.
+    /// Implementations for specific drivers (libsql, tokio-postgresql, rusqlite, etc.)
+    /// need to define their own versions of this function if they want to support bulk-copying
+    /// from a file to a table.
+    async fn copy_in(&self, _table: &str, _filename: &str) -> Result<(), Error> {
+        return Err(Error::DatabaseError("Bulk-copying is unsupported.".into()));
+    }
 
-    /// Bulk-copy the contents of the given table into the given file. If the file already
-    /// exists, this function will return an error.
-    async fn copy_out(&self, table: &str, filename: &str) -> Result<(), Error>;
+    /// Bulk-copy the contents of the given table into the given file if it does not already
+    /// exist. Note that the default implementation does not support bulk-copying in and will
+    /// invariably return an error. Implementations for specific drivers (libsql,
+    /// tokio-postgresql, rusqlite, etc.) need to define their own versions of this function
+    /// if they want to support bulk-copying from a table to a file.
+    async fn copy_out(&self, _table: &str, _filename: &str) -> Result<(), Error> {
+        // The default implementation does not support bulk-copying out.
+        return Err(Error::DatabaseError("Bulk-copying is unsupported.".into()));
+    }
 
     /// Drop the given table from the database.
     async fn drop_table(&self, table: &str) -> Result<(), Error>;
