@@ -80,7 +80,7 @@ pub trait Query: std::fmt::Debug + Sync + Send {
 
     /// Returns true if this [Query]-able is capable of bulk copying this table into a file.
     /// Note that the default implementation is for bulk copying to be unsupported.
-    /// Implementations for specific drivers (libsql, tokio-postgresql, rusqlite, etc.)
+    /// Implementations for specific pool types (libsql, tokio-postgresql, rusqlite, etc.)
     /// need to define their own criteria for determining the return value of this function.
     fn can_copy_out(&self, _filename: &str) -> bool {
         false
@@ -89,7 +89,7 @@ pub trait Query: std::fmt::Debug + Sync + Send {
     /// Bulk-copy the contents of the given file into a table with the given name. If the
     /// table already exists it will be dropped first and recreated. Note that the default
     /// implementation does not support bulk-copying and will invariably return an error.
-    /// Implementations for specific drivers (libsql, tokio-postgresql, rusqlite, etc.)
+    /// Implementations for specific pool types (libsql, tokio-postgresql, rusqlite, etc.)
     /// need to define their own versions of this function if they want to support bulk-copying
     /// from a file to a table.
     async fn copy_in(&self, _table: &str, _filename: &str) -> Result<(), Error> {
@@ -98,7 +98,7 @@ pub trait Query: std::fmt::Debug + Sync + Send {
 
     /// Bulk-copy the contents of the given table into the given file if it does not already
     /// exist. Note that the default implementation does not support bulk-copying and will
-    /// invariably return an error. Implementations for specific drivers (libsql,
+    /// invariably return an error. Implementations for specific pool types (libsql,
     /// tokio-postgresql, rusqlite, etc.) need to define their own versions of this function
     /// if they want to support bulk-copying from a table to a file.
     async fn copy_out(&self, _table: &str, _filename: &str) -> Result<(), Error> {

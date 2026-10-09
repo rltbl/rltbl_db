@@ -337,7 +337,13 @@ impl Query for PostgresPool {
             .columns(&table)
             .await?
             .iter()
-            .map(|(key, _value)| key.to_string())
+            .map(|(key, _value)| {
+                if key.contains(",") {
+                    format!(r#""{key}""#)
+                } else {
+                    key.to_string()
+                }
+            })
             .collect::<Vec<_>>()
             .join(delimiter);
         let mut data_to_write = BytesMut::new();

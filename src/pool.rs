@@ -477,7 +477,11 @@ impl AnyPool {
         }
         let mut writer = WriterBuilder::new()
             .delimiter(delimiter)
-            .quote_style(QuoteStyle::Never)
+            .quote_style(match delimiter {
+                b'\t' => QuoteStyle::Never,
+                b',' => QuoteStyle::Necessary,
+                _ => unreachable!(),
+            })
             .from_path(filename)?;
         let header_row = self
             .columns(&table)
