@@ -255,10 +255,12 @@ impl Query for LibSQLTransaction {
         todo!()
     }
 
+    /// Implements [Query::can_copy_in()] for [LibSQLTransaction]
     fn can_copy_in(&self, _filename: &str) -> bool {
         todo!()
     }
 
+    /// Implements [Query::copy_in()] for [LibSQLTransaction]
     async fn copy_in(&self, _table: &str, _filename: &str) -> Result<(), Error> {
         todo!()
     }

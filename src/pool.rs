@@ -459,6 +459,8 @@ impl AnyPool {
         }
     }
 
+    /// The same as [AnyPool::save_table()], but whereas `save_table()` will save using
+    /// bulk-copying if that feature is available, this function will never use bulk-copying.
     pub async fn save_table_using_select(&self, table: &str, filename: &str) -> Result<(), Error> {
         eprintln!("Saving table '{table}' to file '{filename}' using SELECT");
 
