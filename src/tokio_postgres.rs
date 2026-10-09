@@ -10,11 +10,11 @@ use deadpool_postgres::{
         types::{FromSql, IsNull, ToSql, Type, to_sql_checked},
     },
 };
-use futures_util::{SinkExt, stream};
+use futures_util::{SinkExt, TryStreamExt, stream};
 use rust_decimal::Decimal;
 use std::{
     fs::File,
-    io::{BufRead, BufReader},
+    io::{BufRead, BufReader, Write},
     pin::pin,
 };
 
@@ -260,23 +260,29 @@ impl Query for PostgresPool {
         Ok(Rows { rows: db_rows })
     }
 
-    /// Implements [Query::can_load()]. Returns true if the given filename ends
+    /// Implements [Query::can_copy_in()]. Returns true if the given filename ends
     /// (case-insensitively) with either '.csv' or '.tsv'.
-    fn can_load(&self, filename: &str) -> bool {
+    fn can_copy_in(&self, filename: &str) -> bool {
+        let filename = filename.to_lowercase();
+        filename.ends_with("tsv") || filename.ends_with(".csv")
+    }
+
+    /// Implements [Query::can_copy_out()]. Returns true if the given filename ends
+    /// (case-insensitively) with either '.csv' or '.tsv'.
+    fn can_copy_out(&self, filename: &str) -> bool {
         let filename = filename.to_lowercase();
         filename.ends_with("tsv") || filename.ends_with(".csv")
     }
 
     /// Load the given table using the data from the given file.
-    async fn load_table(&self, table: &str, filename: &str) -> Result<(), Error> {
-        if !self.can_load(filename) {
+    async fn copy_in(&self, table: &str, filename: &str) -> Result<(), Error> {
+        eprintln!("Loading table '{table}' from '{filename}' using COPY.");
+        if !self.can_copy_in(filename) {
             return Err(Error::InputError(format!(
                 "Filename: '{filename}' must end with .tsv or .csv"
             )));
         }
-        eprintln!("Loading table '{table}' from '{filename}' using PostgreSQL's COPY IN command.");
-        let file = File::open(filename)
-            .map_err(|err| Error::InputError(format!("Unable to open '{filename}': {err}")))?;
+        let file = File::open(filename)?;
         let buf_reader = BufReader::new(file);
 
         let mut stream = buf_reader.split(b'\n').map(|line| {
@@ -288,18 +294,11 @@ impl Query for PostgresPool {
         });
 
         // Send the input stream to the tokio-postgres client which is executing a copy_in():
-        let client = self
-            .pool
-            .get()
-            .await
-            .map_err(|err| Error::ConnectError(format!("Unable to get from pool: {err:?}")))?;
-        let mut sink = pin!(
+        let client = self.pool.get().await?;
+        let mut copy_sink = pin!(
             client
                 .copy_in(&format!(r#"COPY "{table}" FROM STDIN WITH NULL ''"#))
-                .await
-                .map_err(|err| {
-                    Error::InputError(format!("Unable to COPY IN to '{table}': {err}"))
-                })?
+                .await?
         );
 
         // Ignore the header line:
@@ -309,14 +308,65 @@ impl Query for PostgresPool {
         let mut stream =
             stream::iter(stream.map(Ok::<_, deadpool_postgres::tokio_postgres::Error>));
 
-        sink.send_all(&mut stream)
-            .await
-            .map_err(|err| Error::InputError(format!("Unable to COPY IN to '{table}': {err}")))?;
-        let _num_written = sink
-            .finish()
-            .await
-            .map_err(|err| Error::InputError(format!("Unable to COPY IN to '{table}': {err}")))?;
+        copy_sink.send_all(&mut stream).await?;
+        let _num_written = copy_sink.finish().await?;
 
+        Ok(())
+    }
+
+    /// Implements [Query::copy_out()]
+    async fn copy_out(&self, table: &str, filename: &str) -> Result<(), Error> {
+        eprintln!("Saving table '{table}' to '{filename}' using COPY.");
+        if !self.can_copy_out(filename) {
+            return Err(Error::InputError(format!(
+                "Filename: '{filename}' must end with .tsv or .csv"
+            )));
+        }
+        let delimiter;
+        if filename.to_lowercase().ends_with(".tsv") {
+            delimiter = "\t";
+        } else if filename.to_lowercase().ends_with(".csv") {
+            delimiter = ",";
+        } else {
+            return Err(Error::InputError(format!(
+                "Does not end in .tsv or .csv: {filename}"
+            )));
+        }
+        // Get the column names for the header row:
+        let header_row = self
+            .columns(&table)
+            .await?
+            .iter()
+            .map(|(key, _value)| {
+                if key.contains(",") {
+                    format!(r#""{key}""#)
+                } else {
+                    key.to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(delimiter);
+        let mut data_to_write = BytesMut::new();
+        data_to_write.put(header_row.as_bytes());
+
+        let client = self.pool.get().await?;
+        let stmt = client
+            .prepare(&format!(
+                r#"COPY "{table}" TO STDOUT WITH DELIMITER '{delimiter}'"#
+            ))
+            .await?;
+        let table_contents = client
+            .copy_out(&stmt)
+            .await?
+            .try_fold(BytesMut::new(), |mut buf, chunk| async move {
+                buf.extend_from_slice(&chunk);
+                Ok(buf)
+            })
+            .await?;
+
+        data_to_write.put(table_contents);
+        let mut output_file = File::create_new(filename)?;
+        output_file.write_all(&data_to_write[..])?;
         Ok(())
     }
 

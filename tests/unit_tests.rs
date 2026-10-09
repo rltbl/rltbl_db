@@ -4875,3 +4875,137 @@ async fn test_max_params() -> Result<(), Error> {
 
     Ok(())
 }
+
+/// Tests the ability to save a table to a TSV file.
+#[tokio::test]
+async fn test_save() {
+    #[cfg(feature = "rusqlite")]
+    save(":memory:").await.unwrap();
+    #[cfg(feature = "tokio-postgres")]
+    save("postgresql:///rltbl_db").await.unwrap();
+    #[cfg(feature = "libsql")]
+    save(":memory:").await.unwrap();
+}
+
+async fn save(url: &str) -> Result<(), Error> {
+    let pool = AnyPool::connect(url).await.unwrap();
+    let syntax = pool.syntax();
+    let pp = syntax.param_prefix().to_string();
+    let table = format!("test_save_{}", pool.syntax().name());
+
+    // Remove any previous test files:
+    std::fs::remove_file(&format!("tests/output/{table}.tsv")).unwrap_or(());
+    std::fs::remove_file(&format!("tests/output/{table}.csv")).unwrap_or(());
+
+    pool.execute_batch(&format!(
+        "DROP TABLE IF EXISTS {table}{cascade};\
+         CREATE TABLE {table} (\
+           text_value TEXT,\
+           alt_text_value TEXT,\
+           float_value FLOAT8,\
+           alt_float_value FLOAT8,\
+           int_value INT8,\
+           alt_int_value INT8,\
+           bool_value BOOL,\
+           alt_bool_value BOOL,\
+           numeric_value NUMERIC,\
+           alt_numeric_value NUMERIC\
+         )",
+        cascade = match syntax.name() {
+            "postgres" => " CASCADE",
+            "sqlite" => "",
+            _ => panic!("Invalid syntax '{}'", syntax.name()),
+        }
+    ))
+    .await
+    .unwrap();
+
+    pool.execute(
+        &format!(
+            r#"INSERT INTO {table}
+               (
+                 text_value,
+                 alt_text_value,
+                 float_value,
+                 alt_float_value,
+                 int_value,
+                 alt_int_value,
+                 bool_value,
+                 alt_bool_value,
+                 numeric_value,
+                 alt_numeric_value
+               )
+               VALUES
+                 ({pp}1, {pp}2, {pp}3, {pp}4, {pp}5, {pp}6, {pp}7, {pp}8, {pp}9, {pp}10),
+                 ({pp}11, {pp}12, {pp}13, {pp}14, {pp}15, {pp}16, {pp}17, {pp}18, {pp}19, {pp}20)"#,
+        ),
+        &values![
+            "foo",
+            (),
+            1.05_f64,
+            (),
+            1_i64,
+            (),
+            true,
+            (),
+            dec!(1),
+            (),
+            "goo",
+            (),
+            2.05_f64,
+            (),
+            2_i64,
+            (),
+            false,
+            (),
+            dec!(2),
+            (),
+        ],
+    )
+    .await
+    .unwrap();
+
+    let tsv_path = format!("tests/output/{table}.tsv");
+    pool.save_table(&table, &tsv_path).await.unwrap();
+    let saved = std::fs::read_to_string(&tsv_path).unwrap();
+    assert_eq!(
+        saved,
+        match syntax.name() {
+            "sqlite" =>
+                "text_value\talt_text_value\tfloat_value\talt_float_value\tint_value\
+                 \talt_int_value\tbool_value\talt_bool_value\tnumeric_value\
+                 \talt_numeric_value\nfoo\t\t1.05\t\t1\t\t1\t\t1\t\ngoo\t\t2.05\t\
+                 \t2\t\t0\t\t2\t\n",
+            "postgres" =>
+                "text_value\talt_text_value\tfloat_value\talt_float_value\tint_value\t\
+                 alt_int_value\tbool_value\talt_bool_value\tnumeric_value\t\
+                 alt_numeric_valuefoo\t\\N\t1.05\t\\N\t1\t\\N\tt\t\\N\t1\t\\N\ngoo\t\\N\
+                 \t2.05\t\\N\t2\t\\N\tf\t\\N\t2\t\\N\n",
+            _ => panic!("Invalid syntax: {}", syntax.name()),
+        }
+    );
+
+    let csv_path = format!("tests/output/{table}.csv");
+    pool.save_table(&table, &csv_path).await.unwrap();
+    let saved = std::fs::read_to_string(&csv_path).unwrap();
+    assert_eq!(
+        saved,
+        match syntax.name() {
+            "sqlite" =>
+                "text_value,alt_text_value,float_value,alt_float_value,int_value\
+                 ,alt_int_value,bool_value,alt_bool_value,numeric_value\
+                 ,alt_numeric_value\nfoo,,1.05,,1,,1,,1,\ngoo,,2.05,\
+                 ,2,,0,,2,\n",
+            "postgres" =>
+                "text_value,alt_text_value,float_value,alt_float_value,int_value,\
+                 alt_int_value,bool_value,alt_bool_value,numeric_value,\
+                 alt_numeric_valuefoo,\\N,1.05,\\N,1,\\N,t,\\N,1,\\N\ngoo,\\N\
+                 ,2.05,\\N,2,\\N,f,\\N,2,\\N\n",
+            _ => panic!("Invalid syntax: {}", syntax.name()),
+        }
+    );
+
+    // Clean up:
+    pool.drop_table(&table).await.unwrap();
+    Ok(())
+}

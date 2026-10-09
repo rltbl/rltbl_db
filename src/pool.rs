@@ -19,7 +19,7 @@
 /// }
 /// ```
 use async_trait::async_trait;
-use csv::ReaderBuilder;
+use csv::{QuoteStyle, ReaderBuilder, WriterBuilder};
 use indexmap::IndexMap;
 use std::{
     collections::HashSet,
@@ -400,8 +400,8 @@ impl AnyPool {
         self.recreate_table(&table, &columns).await?;
 
         // Fill the table with the data from the file:
-        if self.can_load(filename) {
-            self.load_table(table, filename).await
+        if self.can_copy_in(filename) {
+            self.copy_in(table, filename).await
         } else {
             self.batch_insert(table, &columns, filename).await
         }
@@ -421,6 +421,93 @@ impl AnyPool {
         let columns = Column::from_table_file(filename)?;
         self.recreate_table(&table, &columns).await?;
         self.batch_insert(table, &columns, filename).await
+    }
+
+    /// Save the given table using the given path, which can be either a file or a directory.
+    /// If `path` is a file, note that only CSV and TSV files are supported.
+    /// If `path` is a directory, the table will be saved into a TSV file of the same name as
+    /// the table in the given directory.
+    pub async fn save_table(&self, table: &str, path: &str) -> Result<(), Error> {
+        // Validate the table name:
+        let table = validate_table_name(table)?;
+
+        // Validate the path:
+        let str_path = path;
+        let path = Path::new(path);
+        let save_file;
+        if path.is_dir() {
+            save_file = format!("{str_path}/{table}.tsv");
+        } else {
+            match path.parent() {
+                Some(parent_dir) if parent_dir.is_dir() => {
+                    save_file = str_path.to_string();
+                }
+                Some(_) => {
+                    return Err(Error::InputError(format!("Invalid path: {path:?}.")));
+                }
+                None => {
+                    return Err(Error::InputError(format!("No such directory: {path:?}.")));
+                }
+            }
+        }
+
+        // Save the file:
+        if self.can_copy_out(&save_file) {
+            self.copy_out(&table, &save_file).await
+        } else {
+            self.save_table_using_select(&table, &save_file).await
+        }
+    }
+
+    /// The same as [AnyPool::save_table()], but whereas `save_table()` will save using
+    /// bulk-copying if that feature is available, this function will never use bulk-copying.
+    pub async fn save_table_using_select(&self, table: &str, filename: &str) -> Result<(), Error> {
+        eprintln!("Saving table '{table}' to file '{filename}' using SELECT");
+
+        // Collect the column names and write a header to the filename:
+        let delimiter;
+        if filename.to_lowercase().ends_with(".tsv") {
+            delimiter = b'\t';
+        } else if filename.to_lowercase().ends_with(".csv") {
+            delimiter = b',';
+        } else {
+            return Err(Error::InputError(format!(
+                "Does not end in .tsv or .csv: {filename}"
+            )));
+        }
+        let mut writer = WriterBuilder::new()
+            .delimiter(delimiter)
+            .quote_style(QuoteStyle::Necessary)
+            .from_path(filename)?;
+        let header_row = self
+            .columns(&table)
+            .await?
+            .iter()
+            .map(|(key, _value)| key.to_string())
+            .collect::<Vec<_>>();
+        writer.write_record(header_row.clone())?;
+
+        // Query the data from the table:
+        let sql = format!(
+            r#"SELECT {columns} FROM "{table}""#,
+            columns = header_row
+                .iter()
+                .map(|c| format!(r#""{c}""#))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        let data_rows = self.query(&sql, ()).await?;
+
+        // Write the data to the filename:
+        for row in data_rows.iter() {
+            let values = row
+                .iter()
+                .map(|(_column, value)| value.to_string())
+                .collect::<Vec<_>>();
+            writer.write_record(values)?;
+        }
+
+        Ok(())
     }
 
     /// Determine whether the given table exists in the database.
@@ -546,14 +633,24 @@ impl AnyPool {
 
     ////////// Private functions //////////
 
-    /// Returns true if the database driver is capable of bulk loading this file.
-    fn can_load(&self, filename: &str) -> bool {
-        self.pool.can_load(filename)
+    /// Returns true if the database driver is capable of bulk-copying this file into a table.
+    fn can_copy_in(&self, filename: &str) -> bool {
+        self.pool.can_copy_in(filename)
+    }
+
+    /// Returns true if the database driver is capable of bulk-copying this table into a file.
+    fn can_copy_out(&self, filename: &str) -> bool {
+        self.pool.can_copy_out(filename)
     }
 
     /// Load the given table using the data from the given file.
-    async fn load_table(&self, table: &str, filename: &str) -> Result<(), Error> {
-        self.pool.load_table(table, filename).await
+    async fn copy_in(&self, table: &str, filename: &str) -> Result<(), Error> {
+        self.pool.copy_in(table, filename).await
+    }
+
+    /// Copy the data from the given table into the given file.
+    async fn copy_out(&self, table: &str, filename: &str) -> Result<(), Error> {
+        self.pool.copy_out(table, filename).await
     }
 
     /// Create a given table with the given columns in the database. If a table with the
