@@ -344,7 +344,6 @@ impl Query for PostgresPool {
         data_to_write.put(header_row.as_bytes());
 
         let client = self.pool.get().await?;
-
         let stmt = client
             .prepare(&format!(
                 r#"COPY "{table}" TO STDOUT WITH DELIMITER '{delimiter}'"#
@@ -361,9 +360,7 @@ impl Query for PostgresPool {
 
         data_to_write.put(table_contents);
         let mut output_file = File::create_new(filename)?;
-
         output_file.write_all(&data_to_write[..])?;
-
         Ok(())
     }
 
