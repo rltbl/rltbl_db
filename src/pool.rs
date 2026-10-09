@@ -423,21 +423,35 @@ impl AnyPool {
         self.batch_insert(table, &columns, filename).await
     }
 
-    /// Save the given table to a TSV file with the same name in the given directory.
-    pub async fn save_table(&self, table: &str, dir: &str) -> Result<(), Error> {
-        // Validate the given table name and directory:
+    /// Save the given table using the given path, which can be either a file or a directory.
+    /// If `path` is a file, note that only CSV and TSV files are supported.
+    /// If `path` is a directory, the table will be saved into a TSV file of the same name as
+    /// the table in the given directory.
+    pub async fn save_table(&self, table: &str, path: &str) -> Result<(), Error> {
+        // Validate the table name:
         let table = validate_table_name(table)?;
-        let dir = Path::new(dir);
-        let str_dir = dir.to_str().ok_or(Error::InputError(format!(
-            "Unable to convert {dir:?} to a string."
-        )))?;
+
+        // Validate the path:
+        let str_path = path;
+        let path = Path::new(path);
         let save_file;
-        if dir.is_dir() {
-            save_file = format!("{str_dir}/{table}.tsv");
+        if path.is_dir() {
+            save_file = format!("{str_path}/{table}.tsv");
         } else {
-            return Err(Error::InputError(format!("No such directory: {dir:?}.")));
+            match path.parent() {
+                Some(parent_dir) if parent_dir.is_dir() => {
+                    save_file = str_path.to_string();
+                }
+                Some(_) => {
+                    return Err(Error::InputError(format!("Invalid path: {path:?}.")));
+                }
+                None => {
+                    return Err(Error::InputError(format!("No such directory: {path:?}.")));
+                }
+            }
         }
 
+        // Save the file:
         if self.can_copy(&save_file) {
             self.copy_out(&table, &save_file).await
         } else {
@@ -447,9 +461,20 @@ impl AnyPool {
 
     pub async fn save_table_using_select(&self, table: &str, filename: &str) -> Result<(), Error> {
         eprintln!("Saving table '{table}' to file '{filename}' using SELECT");
+
         // Collect the column names and write a header to the filename:
+        let delimiter;
+        if filename.to_lowercase().ends_with(".tsv") {
+            delimiter = b'\t';
+        } else if filename.to_lowercase().ends_with(".csv") {
+            delimiter = b',';
+        } else {
+            return Err(Error::InputError(format!(
+                "Does not end in .tsv or .csv: {filename}"
+            )));
+        }
         let mut writer = WriterBuilder::new()
-            .delimiter(b'\t')
+            .delimiter(delimiter)
             .quote_style(QuoteStyle::Never)
             .from_path(filename)?;
         let header_row = self

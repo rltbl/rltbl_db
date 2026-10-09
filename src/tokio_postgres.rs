@@ -269,12 +269,12 @@ impl Query for PostgresPool {
 
     /// Load the given table using the data from the given file.
     async fn copy_in(&self, table: &str, filename: &str) -> Result<(), Error> {
+        eprintln!("Loading table '{table}' from '{filename}' using COPY.");
         if !self.can_copy(filename) {
             return Err(Error::InputError(format!(
                 "Filename: '{filename}' must end with .tsv or .csv"
             )));
         }
-        eprintln!("Loading table '{table}' from '{filename}' using COPY.");
         let file = File::open(filename)?;
         let buf_reader = BufReader::new(file);
 
@@ -309,13 +309,22 @@ impl Query for PostgresPool {
 
     /// Implements [Query::copy_out()]
     async fn copy_out(&self, table: &str, filename: &str) -> Result<(), Error> {
+        eprintln!("Saving table '{table}' to '{filename}' using COPY.");
         if !self.can_copy(filename) {
             return Err(Error::InputError(format!(
                 "Filename: '{filename}' must end with .tsv or .csv"
             )));
         }
-        eprintln!("Saving table '{table}' to '{filename}' using COPY.");
-
+        let delimiter;
+        if filename.to_lowercase().ends_with(".tsv") {
+            delimiter = "\t";
+        } else if filename.to_lowercase().ends_with(".csv") {
+            delimiter = ",";
+        } else {
+            return Err(Error::InputError(format!(
+                "Does not end in .tsv or .csv: {filename}"
+            )));
+        }
         // Get the column names for the header row:
         let header_row = self
             .columns(&table)
@@ -323,14 +332,16 @@ impl Query for PostgresPool {
             .iter()
             .map(|(key, _value)| key.to_string())
             .collect::<Vec<_>>()
-            .join("\t");
+            .join(delimiter);
         let mut data_to_write = BytesMut::new();
         data_to_write.put(header_row.as_bytes());
 
         let client = self.pool.get().await?;
 
         let stmt = client
-            .prepare(&format!(r#"COPY "{table}" TO STDOUT"#))
+            .prepare(&format!(
+                r#"COPY "{table}" TO STDOUT WITH DELIMITER '{delimiter}'"#
+            ))
             .await?;
         let table_contents = client
             .copy_out(&stmt)
