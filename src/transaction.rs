@@ -1,4 +1,5 @@
-//! A trait for using database transactions
+//! Provides the [Transaction] trait for using database transactions, and the [AnyTransaction]
+//! struct, providing a handy generic wrapper around [Transaction] implementations.
 
 use async_trait::async_trait;
 

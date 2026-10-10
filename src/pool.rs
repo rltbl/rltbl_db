@@ -1,4 +1,5 @@
-//! The Pool Trait, for implementing a database connection pool
+//! Provides the [Pool] Trait, for implementing a database connection pool, and the [AnyPool]
+//! struct, a handy generic wrapper around [Pool] implementations.
 
 /// To connect to any supported database using a URL:
 ///
