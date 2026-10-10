@@ -13,7 +13,8 @@ pub static MAX_PARAMS_POSTGRES: usize = 32765;
 /// The identifying name of [this syntax](PostgresSyntax).
 pub static POSTGRES_SYNTAX_NAME: &str = "postgres";
 
-#[derive(Clone, Debug)]
+// It is convenient to implement Copy and also cheap because this is a unit struct.
+#[derive(Copy, Clone, Debug)]
 pub struct PostgresSyntax;
 
 impl Syntax for PostgresSyntax {

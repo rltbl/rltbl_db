@@ -72,7 +72,7 @@ impl Query for RusqlitePool {
         let connection = self.pool.get().await?;
         let connection = RusqliteConnection {
             connection,
-            syntax: self.syntax.clone(),
+            syntax: self.syntax,
         };
         connection.execute_batch(sql).await?;
         // TODO: Not sure if this is still needed. Seems ok without it ...
@@ -86,7 +86,7 @@ impl Query for RusqlitePool {
         let connection = self.pool.get().await?;
         let connection = RusqliteConnection {
             connection,
-            syntax: self.syntax.clone(),
+            syntax: self.syntax,
         };
         Ok(connection.query(sql, params).await?)
     }
@@ -102,7 +102,7 @@ impl Query for RusqlitePool {
         let connection = self.pool.get().await?;
         let connection = RusqliteConnection {
             connection,
-            syntax: self.syntax.clone(),
+            syntax: self.syntax,
         };
         Ok(connection.copy_in(table, filename).await?)
     }
@@ -112,7 +112,7 @@ impl Query for RusqlitePool {
         let connection = self.pool.get().await?;
         let connection = RusqliteConnection {
             connection,
-            syntax: self.syntax.clone(),
+            syntax: self.syntax,
         };
         Ok(connection.drop_table(table).await?)
     }
@@ -122,7 +122,7 @@ impl Query for RusqlitePool {
         let connection = self.pool.get().await?;
         let connection = RusqliteConnection {
             connection,
-            syntax: self.syntax.clone(),
+            syntax: self.syntax,
         };
         Ok(connection.drop_view(view).await?)
     }
