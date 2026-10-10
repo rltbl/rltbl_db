@@ -84,7 +84,7 @@ impl TryInto<libsql::Value> for Value {
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-// LibSQL Connection Pool
+// LibSQL Connection Pools
 ///////////////////////////////////////////////////////////////////////////////
 
 /// Represents a deadpool-sqlite database connection pool.
@@ -214,7 +214,7 @@ impl Pool for LibSQLPool {
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-// LibSQL Connection Pool
+// LibSQL Connections
 ///////////////////////////////////////////////////////////////////////////////
 
 /// Represents a SQLite connection.
@@ -227,18 +227,15 @@ pub struct LibSQLConnection {
 
 #[async_trait]
 impl Query for LibSQLConnection {
-    /// Implements [Query::syntax()] for [LibSQLTransaction]
     fn syntax(&self) -> &dyn Syntax {
         &self.syntax
     }
 
-    /// Implements [Query::execute_batch()] for [LibSQLTransaction]
     async fn execute_batch(&self, sql: &str) -> Result<(), Error> {
         self.connection.execute_batch(sql).await?;
         Ok(())
     }
 
-    /// Implements [Query::query()] for [LibSQLTransaction]
     async fn query(&self, sql: &str, params: &[Value]) -> Result<Rows, Error> {
         let params = params.to_vec();
         let mut rows = self.connection.query(sql, params).await?;
@@ -283,7 +280,6 @@ impl Query for LibSQLConnection {
         Ok(())
     }
 
-    /// Implements [Query::drop_table()] for [LibSQLTransaction]
     async fn drop_table(&self, table: &str) -> Result<(), Error> {
         let table = validate_table_name(table)?;
 
@@ -306,13 +302,15 @@ impl Query for LibSQLConnection {
 
 #[async_trait]
 impl Connection for LibSQLConnection {
-    async fn transaction(&mut self) -> Result<Box<dyn Transaction>, Error> {
+    // Note: the 'life0 lifetime allows the returned Transaction to depend on the data
+    // in this connection.
+    async fn transaction(&mut self) -> Result<Box<dyn Transaction + 'life0>, Error> {
         todo!()
     }
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-// LibSQL Connection Pool
+// LibSQL Transactions
 ///////////////////////////////////////////////////////////////////////////////
 
 /// Represents a SQLite transaction.

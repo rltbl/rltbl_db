@@ -8,8 +8,10 @@ use crate::{Error, Query, Transaction};
 /// An asynchronous trait for using database connections
 #[async_trait]
 pub trait Connection: Query + std::fmt::Debug {
+    // Note: the 'life0 lifetime allows the returned Transaction to depend on the data
+    // in this connection.
     /// Begin a transaction.
-    async fn transaction(&mut self) -> Result<Box<dyn Transaction>, Error>;
+    async fn transaction(&mut self) -> Result<Box<dyn Transaction + 'life0>, Error>;
 }
 
 /// An abstraction over the supported connection types.

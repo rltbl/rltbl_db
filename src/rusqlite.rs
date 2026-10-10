@@ -54,7 +54,7 @@ impl From<deadpool_sqlite::InteractError> for DatabaseError {
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-// Rusqlite Connection Pool
+// Rusqlite Connection Pools
 ///////////////////////////////////////////////////////////////////////////////
 
 /// Represents a deadpool-sqlite database connection pool.
@@ -172,7 +172,7 @@ impl RusqlitePool {
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-// Rusqlite Connection
+// Rusqlite Connections
 ///////////////////////////////////////////////////////////////////////////////
 
 /// Represents a SQLite connection.
@@ -184,12 +184,10 @@ pub struct RusqliteConnection {
 
 #[async_trait]
 impl Query for RusqliteConnection {
-    /// Implements [Query::syntax()] for [RusqliteTransaction]
     fn syntax(&self) -> &dyn Syntax {
         &self.syntax
     }
 
-    /// Implements [Query::execute_batch()] for [RusqliteTransaction]
     async fn execute_batch(&self, sql: &str) -> Result<(), Error> {
         let sql_string = sql.to_string();
         self.connection
@@ -203,7 +201,6 @@ impl Query for RusqliteConnection {
         Ok(())
     }
 
-    /// Implements [Query::query()] for [RusqliteTransaction]
     async fn query(&self, sql: &str, params: &[Value]) -> Result<Rows, Error> {
         let sql_string = sql.to_string();
         let params = params.to_vec();
@@ -252,7 +249,6 @@ impl Query for RusqliteConnection {
         Ok(())
     }
 
-    /// Implements [Query::drop_table()] for [RusqliteTransaction]
     async fn drop_table(&self, table: &str) -> Result<(), Error> {
         let table = validate_table_name(table)?;
 
@@ -275,21 +271,15 @@ impl Query for RusqliteConnection {
 
 #[async_trait]
 impl Connection for RusqliteConnection {
-    // /// Begins a new [Transaction].
-    // async fn transaction(&self) -> Result<Box<dyn Transaction>, Error> {
-    //     match RusqliteTransaction::begin(self.pool.clone()).await {
-    //         Ok(tx) => Ok(Box::new(tx)),
-    //         Err(err) => Err(err),
-    //     }
-    // }
-
-    async fn transaction(&mut self) -> Result<Box<dyn Transaction>, Error> {
+    // Note: the 'life0 lifetime allows the returned Transaction to depend on the data
+    // in this connection.
+    async fn transaction(&mut self) -> Result<Box<dyn Transaction + 'life0>, Error> {
         todo!()
     }
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-// Rusqlite Transaction
+// Rusqlite Transactions
 ///////////////////////////////////////////////////////////////////////////////
 
 /// Represents a SQLite transaction.
@@ -334,6 +324,7 @@ impl Query for RusqliteTransaction {
 
     /// Implements [Query::query()] for [RusqliteTransaction]
     async fn query(&self, sql: &str, params: &[Value]) -> Result<Rows, Error> {
+        // NOTE: This is an exact copy of the code above. Maybe refactor.
         match &self.conn {
             Some(conn) => {
                 let sql_string = sql.to_string();
