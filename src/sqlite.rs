@@ -11,7 +11,7 @@ pub static MAX_PARAMS_SQLITE: usize = 32766;
 /// The identifying name of [this syntax](SqliteSyntax).
 pub static SQLITE_SYNTAX_NAME: &str = "sqlite";
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct SqliteSyntax;
 
 impl Syntax for SqliteSyntax {

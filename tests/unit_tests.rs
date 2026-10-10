@@ -4722,6 +4722,8 @@ async fn test_postgres_anypool() -> Result<(), Error> {
 #[cfg(feature = "libsql")]
 #[tokio::test]
 async fn test_aliases_and_builtin_functions() -> Result<(), Error> {
+    use rltbl_db::Query;
+
     let pool = LibSQLPool::connect(":memory:").await.unwrap();
     pool.execute_batch(
         "DROP TABLE IF EXISTS test_table_indirect;\
@@ -4831,6 +4833,8 @@ async fn test_aliases_and_builtin_functions() -> Result<(), Error> {
 #[cfg(feature = "libsql")]
 #[tokio::test]
 async fn test_max_params() -> Result<(), Error> {
+    use rltbl_db::Query;
+
     let pool = LibSQLPool::connect(":memory:").await.unwrap();
     pool.execute_batch(
         "DROP TABLE IF EXISTS test_max_params;\
