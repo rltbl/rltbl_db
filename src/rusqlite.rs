@@ -53,6 +53,10 @@ impl From<deadpool_sqlite::InteractError> for DatabaseError {
     }
 }
 
+///////////////////////////////////////////////////////////////////////////////
+// Rusqlite Connection Pool
+///////////////////////////////////////////////////////////////////////////////
+
 /// Represents a deadpool-sqlite database connection pool.
 #[derive(Debug)]
 pub struct RusqlitePool {
@@ -130,15 +134,13 @@ impl Query for RusqlitePool {
 
 #[async_trait]
 impl Pool for RusqlitePool {
-    // /// Begins a new [Transaction].
-    // async fn transaction(&self) -> Result<Box<dyn Transaction>, Error> {
-    //     match RusqliteTransaction::begin(self.pool.clone()).await {
-    //         Ok(tx) => Ok(Box::new(tx)),
-    //         Err(err) => Err(err),
-    //     }
-    // }
     async fn connection(&self) -> Result<Box<dyn Connection>, Error> {
-        todo!()
+        let connection = self.pool.get().await?;
+        let connection = RusqliteConnection {
+            connection,
+            syntax: self.syntax,
+        };
+        Ok(Box::new(connection))
     }
 }
 
@@ -168,6 +170,10 @@ impl RusqlitePool {
         })
     }
 }
+
+///////////////////////////////////////////////////////////////////////////////
+// Rusqlite Connection
+///////////////////////////////////////////////////////////////////////////////
 
 /// Represents a SQLite connection.
 #[derive(Debug)]
@@ -269,10 +275,22 @@ impl Query for RusqliteConnection {
 
 #[async_trait]
 impl Connection for RusqliteConnection {
-    async fn transaction(&self) -> Result<Box<dyn Transaction>, Error> {
+    // /// Begins a new [Transaction].
+    // async fn transaction(&self) -> Result<Box<dyn Transaction>, Error> {
+    //     match RusqliteTransaction::begin(self.pool.clone()).await {
+    //         Ok(tx) => Ok(Box::new(tx)),
+    //         Err(err) => Err(err),
+    //     }
+    // }
+
+    async fn transaction(&mut self) -> Result<Box<dyn Transaction>, Error> {
         todo!()
     }
 }
+
+///////////////////////////////////////////////////////////////////////////////
+// Rusqlite Transaction
+///////////////////////////////////////////////////////////////////////////////
 
 /// Represents a SQLite transaction.
 #[derive(Debug)]
@@ -403,6 +421,10 @@ impl RusqliteTransaction {
         Ok(RusqliteTransaction { syntax, pool, conn })
     }
 }
+
+///////////////////////////////////////////////////////////////////////////////
+// Free functions
+///////////////////////////////////////////////////////////////////////////////
 
 /// Uses the rusqlite driver directly to query a database using the given prepared [Statement]
 /// and parameters.

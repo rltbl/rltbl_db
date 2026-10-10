@@ -43,6 +43,10 @@ impl From<deadpool_postgres::PoolError> for DatabaseError {
     }
 }
 
+///////////////////////////////////////////////////////////////////////////////
+// Postgres Connection Pool
+///////////////////////////////////////////////////////////////////////////////
+
 /// Represents a deadool-postgres database connection pool.
 #[derive(Debug)]
 pub struct PostgresPool {
@@ -209,18 +213,25 @@ impl Query for PostgresPool {
 
 #[async_trait]
 impl Pool for PostgresPool {
-    //async fn transaction(&self) -> Result<Box<dyn Transaction>, Error> {
-    //    unimplemented!()
-    //}
     async fn connection(&self) -> Result<Box<dyn Connection>, Error> {
-        todo!()
+        let connection = self.pool.get().await?;
+        let connection = PostgresConnection {
+            connection,
+            syntax: self.syntax,
+        };
+        Ok(Box::new(connection))
     }
 }
+
+///////////////////////////////////////////////////////////////////////////////
+// Postgres Connection
+///////////////////////////////////////////////////////////////////////////////
 
 /// Represents a SQLite connection.
 #[derive(Debug)]
 pub struct PostgresConnection {
     pub connection: deadpool_postgres::Object,
+    #[allow(unused)]
     syntax: PostgresSyntax,
 }
 
@@ -482,10 +493,73 @@ impl Query for PostgresConnection {
 
 #[async_trait]
 impl Connection for PostgresConnection {
-    async fn transaction(&self) -> Result<Box<dyn Transaction>, Error> {
+    async fn transaction(&mut self) -> Result<Box<dyn Transaction>, Error> {
         todo!()
     }
 }
+
+///////////////////////////////////////////////////////////////////////////////
+// Postgres Transaction
+///////////////////////////////////////////////////////////////////////////////
+
+#[derive(Debug)]
+pub struct PostgresTransaction<'a> {
+    pub tx: deadpool_postgres::Transaction<'a>,
+    #[allow(unused)]
+    syntax: PostgresSyntax,
+}
+
+#[async_trait]
+impl Query for PostgresTransaction<'_> {
+    /// Implements [Query::syntax()] for [PostgresTransaction]
+    fn syntax(&self) -> &dyn Syntax {
+        todo!()
+    }
+
+    /// Implements [Query::execute_batch()] for [PostgresTransaction]
+    async fn execute_batch(&self, _sql: &str) -> Result<(), Error> {
+        todo!()
+    }
+
+    /// Implements [Query::query()] for [PostgresTransaction]
+    async fn query(&self, _sql: &str, _params: &[Value]) -> Result<Rows, Error> {
+        todo!()
+    }
+
+    /// Implements [Query::can_copy_in()] for [PostgresTransaction]
+    fn can_copy_in(&self, _filename: &str) -> bool {
+        todo!()
+    }
+
+    /// Implements [Query::copy_in()] for [PostgresTransaction]
+    async fn copy_in(&self, _table: &str, _filename: &str) -> Result<(), Error> {
+        todo!()
+    }
+
+    /// Implements [Query::drop_table()] for [PostgresTransaction]
+    async fn drop_table(&self, _table: &str) -> Result<(), Error> {
+        todo!()
+    }
+
+    async fn drop_view(&self, _view: &str) -> Result<(), Error> {
+        todo!()
+    }
+}
+
+#[async_trait]
+impl Transaction for PostgresTransaction<'_> {
+    async fn rollback(&mut self) -> Result<(), Error> {
+        todo!()
+    }
+
+    async fn commit(&mut self) -> Result<(), Error> {
+        todo!()
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// Free functions
+///////////////////////////////////////////////////////////////////////////////
 
 /// Extracts the value at the given index from the given [PgRow].
 fn extract_value(row: &PgRow, idx: usize) -> Result<Value, Error> {
@@ -566,3 +640,5 @@ fn can_copy(filename: &str) -> bool {
     let filename = filename.to_lowercase();
     filename.ends_with("tsv") || filename.ends_with(".csv")
 }
+
+

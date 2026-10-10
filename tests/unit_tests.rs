@@ -13,7 +13,8 @@ use std::{
 };
 
 use rltbl_db::{
-    AnyPool, Column, Error, JsonValue, Pool, Row, Rows, StringRow, Value, ValueType,
+    AnyPool, Column, Error, JsonValue, Pool, Query, Row, Rows, StringRow, Transaction, Value,
+    ValueType,
     cache::{CachingStrategy, QUERY_CACHE_TABLE, TABLE_CACHE_TABLE},
     row,
     serde::{from_value, to_value},
@@ -4599,68 +4600,68 @@ async fn import_small(url: &str) {
     }
 }
 
-// #[cfg(feature = "rusqlite")]
-// #[tokio::test]
-// async fn test_transaction() {
-//     let url = ":memory:";
-//     let pool = RusqlitePool::connect(url).await.expect("connect to sqlite");
-//     pool.query("DROP TABLE IF EXISTS foo", &[])
-//         .await
-//         .expect("create table");
-//     pool.query("CREATE TABLE foo ( bar TEXT )", &[])
-//         .await
-//         .expect("create table");
-//     pool.query("INSERT INTO foo VALUES ('A')", &[])
-//         .await
-//         .expect("insert values");
-//     let rows = pool
-//         .query("SELECT bar FROM foo", &[])
-//         .await
-//         .expect("count rows");
-//     assert_eq!(rows.rows.len(), 1, "count rows before");
-//
-//     println!("before pool {:?}", pool.pool.status());
-//
-//     let mut tx = pool.transaction().await.unwrap();
-//     tx.query("INSERT INTO foo VALUES (456)", &[])
-//         .await
-//         .expect("transaction insert");
-//     foo(&tx).await;
-//     let rows = tx
-//         .query("SELECT bar FROM foo", &[])
-//         .await
-//         .expect("count rows");
-//     assert_eq!(rows.rows.len(), 2, "count rows inside transaction");
-//
-//     // WARN: Don't do this for :memory:!
-//     // Because we set max_size = 1
-//     // and the transaction holds one connection,
-//     // asking for another connection will await forever.
-//     if url != ":memory:" {
-//         let rows = pool
-//             .query("SELECT bar FROM foo", &[])
-//             .await
-//             .expect("count rows");
-//         assert_eq!(rows.rows.len(), 1, "count rows during");
-//     }
-//
-//     tx.commit().await.unwrap();
-//     println!("after pool {:?}", pool.pool.status());
-//     let rows = pool
-//         .query("SELECT bar FROM foo", &[])
-//         .await
-//         .expect("count rows");
-//     assert_eq!(rows.rows.len(), 2, "count rows after");
-//
-//     // assert!(false, "DONE");
-// }
+// TODO: Add a version of this for libsql, rusqlite, and anypool.
+#[cfg(feature = "tokio-postgres")]
+#[tokio::test]
+async fn test_transaction() {
+    let url = "postgresql:///rltbl_db";
+    let pool = PostgresPool::connect(url).await.expect("connect to sqlite");
+    pool.query("DROP TABLE IF EXISTS foo", &[])
+        .await
+        .expect("create table");
+    pool.query("CREATE TABLE foo ( bar TEXT )", &[])
+        .await
+        .expect("create table");
+    pool.query("INSERT INTO foo VALUES ('A')", &[])
+        .await
+        .expect("insert values");
+    let rows = pool
+        .query("SELECT bar FROM foo", &[])
+        .await
+        .expect("count rows");
+    assert_eq!(rows.rows.len(), 1, "count rows before");
 
-// // We allow unused here since this isn't being tested for LibSQL.
-// // TODO: Add a test once transactions have been implemented.
-// #[allow(unused)]
-// async fn foo(tx: &Box<dyn Transaction>) {
-//     tx.query("SELECT 'baz'", &[]).await.unwrap();
-// }
+    println!("before pool {:?}", pool.pool.status());
+    let _connection = pool.connection().await.unwrap();
+
+    // let mut tx = pool.transaction().await.unwrap();
+    // tx.query("INSERT INTO foo VALUES (456)", &[])
+    //     .await
+    //     .expect("transaction insert");
+    // foo(&tx).await;
+    // let rows = tx
+    //     .query("SELECT bar FROM foo", &[])
+    //     .await
+    //     .expect("count rows");
+    // assert_eq!(rows.rows.len(), 2, "count rows inside transaction");
+    //
+    // // WARN: Don't do this for :memory:!
+    // // Because we set max_size = 1
+    // // and the transaction holds one connection,
+    // // asking for another connection will await forever.
+    // if url != ":memory:" {
+    //     let rows = pool
+    //         .query("SELECT bar FROM foo", &[])
+    //         .await
+    //         .expect("count rows");
+    //     assert_eq!(rows.rows.len(), 1, "count rows during");
+    // }
+    //
+    // tx.commit().await.unwrap();
+    // println!("after pool {:?}", pool.pool.status());
+    // let rows = pool
+    //     .query("SELECT bar FROM foo", &[])
+    //     .await
+    //     .expect("count rows");
+    // assert_eq!(rows.rows.len(), 2, "count rows after");
+}
+
+// We allow unused here since this isn't being tested for LibSQL.
+// TODO: Add a test once transactions have been implemented.
+#[allow(unused)]
+async fn foo(tx: &Box<dyn Transaction>) {
+    tx.query("SELECT 'baz'", &[]).await.unwrap();
+}
 
 #[cfg(feature = "rusqlite")]
 #[tokio::test]
@@ -4722,8 +4723,6 @@ async fn test_postgres_anypool() -> Result<(), Error> {
 #[cfg(feature = "libsql")]
 #[tokio::test]
 async fn test_aliases_and_builtin_functions() -> Result<(), Error> {
-    use rltbl_db::Query;
-
     let pool = LibSQLPool::connect(":memory:").await.unwrap();
     pool.execute_batch(
         "DROP TABLE IF EXISTS test_table_indirect;\
@@ -4833,8 +4832,6 @@ async fn test_aliases_and_builtin_functions() -> Result<(), Error> {
 #[cfg(feature = "libsql")]
 #[tokio::test]
 async fn test_max_params() -> Result<(), Error> {
-    use rltbl_db::Query;
-
     let pool = LibSQLPool::connect(":memory:").await.unwrap();
     pool.execute_batch(
         "DROP TABLE IF EXISTS test_max_params;\

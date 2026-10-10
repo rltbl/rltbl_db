@@ -83,6 +83,10 @@ impl TryInto<libsql::Value> for Value {
     }
 }
 
+///////////////////////////////////////////////////////////////////////////////
+// LibSQL Connection Pool
+///////////////////////////////////////////////////////////////////////////////
+
 /// Represents a deadpool-sqlite database connection pool.
 #[derive(Debug)]
 pub struct LibSQLPool {
@@ -198,11 +202,20 @@ impl LibSQLPool {
 
 #[async_trait]
 impl Pool for LibSQLPool {
-    /// Begins a new [Transaction].
     async fn connection(&self) -> Result<Box<dyn Connection>, Error> {
-        todo!()
+        let connection = self.pool.get().await?;
+        let connection = LibSQLConnection {
+            connection,
+            syntax: self.syntax,
+            csv_extension_enabled: self.csv_extension_enabled,
+        };
+        Ok(Box::new(connection))
     }
 }
+
+///////////////////////////////////////////////////////////////////////////////
+// LibSQL Connection Pool
+///////////////////////////////////////////////////////////////////////////////
 
 /// Represents a SQLite connection.
 #[derive(Debug)]
@@ -293,10 +306,14 @@ impl Query for LibSQLConnection {
 
 #[async_trait]
 impl Connection for LibSQLConnection {
-    async fn transaction(&self) -> Result<Box<dyn Transaction>, Error> {
+    async fn transaction(&mut self) -> Result<Box<dyn Transaction>, Error> {
         todo!()
     }
 }
+
+///////////////////////////////////////////////////////////////////////////////
+// LibSQL Connection Pool
+///////////////////////////////////////////////////////////////////////////////
 
 /// Represents a SQLite transaction.
 #[derive(Debug)]
@@ -373,6 +390,10 @@ impl LibSQLTransaction {
         todo!()
     }
 }
+
+///////////////////////////////////////////////////////////////////////////////
+// Free functions
+///////////////////////////////////////////////////////////////////////////////
 
 fn can_copy_in(csv_extension_enabled: bool, filename: &str) -> bool {
     csv_extension_enabled && filename.to_lowercase().ends_with(".csv")

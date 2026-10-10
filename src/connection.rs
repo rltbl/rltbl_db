@@ -9,7 +9,7 @@ use crate::{Error, Query, Transaction};
 #[async_trait]
 pub trait Connection: Query + std::fmt::Debug {
     /// Begin a transaction.
-    async fn transaction(&self) -> Result<Box<dyn Transaction>, Error>;
+    async fn transaction(&mut self) -> Result<Box<dyn Transaction>, Error>;
 }
 
 /// An abstraction over the supported connection types.
@@ -24,4 +24,6 @@ impl From<Box<dyn Connection>> for AnyConnection {
     }
 }
 
-impl AnyConnection {}
+impl AnyConnection {
+    // TODO: Add methods here in a similar way as in AnyPool.
+}
