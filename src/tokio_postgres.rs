@@ -19,8 +19,8 @@ use std::{
 };
 
 use crate::{
-    Error, JsonValue, Pool, Query, Row, Rows, Syntax, Transaction, Value, error::DatabaseError,
-    postgres::PostgresSyntax, sql_parse::validate_table_name,
+    Connection, Error, JsonValue, Pool, Query, Row, Rows, Syntax, Transaction, Value,
+    error::DatabaseError, postgres::PostgresSyntax, sql_parse::validate_table_name,
 };
 
 // Error implementations:
@@ -394,8 +394,59 @@ impl Query for PostgresPool {
 
 #[async_trait]
 impl Pool for PostgresPool {
+    //async fn transaction(&self) -> Result<Box<dyn Transaction>, Error> {
+    //    unimplemented!()
+    //}
+    async fn connection(&self) -> Result<Box<dyn Connection>, Error> {
+        todo!()
+    }
+}
+
+/// Represents a SQLite connection.
+#[derive(Debug)]
+pub struct PostgresConnection {
+    pub connection: usize, // TODO: Change the type!
+}
+
+#[async_trait]
+impl Query for PostgresConnection {
+    /// Implements [Query::syntax()] for [PostgresTransaction]
+    fn syntax(&self) -> &dyn Syntax {
+        todo!()
+    }
+
+    /// Implements [Query::execute_batch()] for [PostgresTransaction]
+    async fn execute_batch(&self, _sql: &str) -> Result<(), Error> {
+        todo!()
+    }
+
+    /// Implements [Query::query()] for [PostgresTransaction]
+    async fn query(&self, _sql: &str, _params: &[Value]) -> Result<Rows, Error> {
+        todo!()
+    }
+
+    fn can_copy_in(&self, _filename: &str) -> bool {
+        todo!()
+    }
+
+    async fn copy_in(&self, _table: &str, _filename: &str) -> Result<(), Error> {
+        todo!()
+    }
+
+    /// Implements [Query::drop_table()] for [PostgresTransaction]
+    async fn drop_table(&self, _table: &str) -> Result<(), Error> {
+        todo!()
+    }
+
+    async fn drop_view(&self, _view: &str) -> Result<(), Error> {
+        todo!()
+    }
+}
+
+#[async_trait]
+impl Connection for PostgresConnection {
     async fn transaction(&self) -> Result<Box<dyn Transaction>, Error> {
-        unimplemented!()
+        todo!()
     }
 }
 

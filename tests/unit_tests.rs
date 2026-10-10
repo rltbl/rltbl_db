@@ -13,8 +13,7 @@ use std::{
 };
 
 use rltbl_db::{
-    AnyPool, Column, Error, JsonValue, Pool, Query, Row, Rows, StringRow, Transaction, Value,
-    ValueType,
+    AnyPool, Column, Error, JsonValue, Pool, Row, Rows, StringRow, Value, ValueType,
     cache::{CachingStrategy, QUERY_CACHE_TABLE, TABLE_CACHE_TABLE},
     row,
     serde::{from_value, to_value},
@@ -4600,68 +4599,68 @@ async fn import_small(url: &str) {
     }
 }
 
-#[cfg(feature = "rusqlite")]
-#[tokio::test]
-async fn test_transaction() {
-    let url = ":memory:";
-    let pool = RusqlitePool::connect(url).await.expect("connect to sqlite");
-    pool.query("DROP TABLE IF EXISTS foo", &[])
-        .await
-        .expect("create table");
-    pool.query("CREATE TABLE foo ( bar TEXT )", &[])
-        .await
-        .expect("create table");
-    pool.query("INSERT INTO foo VALUES ('A')", &[])
-        .await
-        .expect("insert values");
-    let rows = pool
-        .query("SELECT bar FROM foo", &[])
-        .await
-        .expect("count rows");
-    assert_eq!(rows.rows.len(), 1, "count rows before");
+// #[cfg(feature = "rusqlite")]
+// #[tokio::test]
+// async fn test_transaction() {
+//     let url = ":memory:";
+//     let pool = RusqlitePool::connect(url).await.expect("connect to sqlite");
+//     pool.query("DROP TABLE IF EXISTS foo", &[])
+//         .await
+//         .expect("create table");
+//     pool.query("CREATE TABLE foo ( bar TEXT )", &[])
+//         .await
+//         .expect("create table");
+//     pool.query("INSERT INTO foo VALUES ('A')", &[])
+//         .await
+//         .expect("insert values");
+//     let rows = pool
+//         .query("SELECT bar FROM foo", &[])
+//         .await
+//         .expect("count rows");
+//     assert_eq!(rows.rows.len(), 1, "count rows before");
+//
+//     println!("before pool {:?}", pool.pool.status());
+//
+//     let mut tx = pool.transaction().await.unwrap();
+//     tx.query("INSERT INTO foo VALUES (456)", &[])
+//         .await
+//         .expect("transaction insert");
+//     foo(&tx).await;
+//     let rows = tx
+//         .query("SELECT bar FROM foo", &[])
+//         .await
+//         .expect("count rows");
+//     assert_eq!(rows.rows.len(), 2, "count rows inside transaction");
+//
+//     // WARN: Don't do this for :memory:!
+//     // Because we set max_size = 1
+//     // and the transaction holds one connection,
+//     // asking for another connection will await forever.
+//     if url != ":memory:" {
+//         let rows = pool
+//             .query("SELECT bar FROM foo", &[])
+//             .await
+//             .expect("count rows");
+//         assert_eq!(rows.rows.len(), 1, "count rows during");
+//     }
+//
+//     tx.commit().await.unwrap();
+//     println!("after pool {:?}", pool.pool.status());
+//     let rows = pool
+//         .query("SELECT bar FROM foo", &[])
+//         .await
+//         .expect("count rows");
+//     assert_eq!(rows.rows.len(), 2, "count rows after");
+//
+//     // assert!(false, "DONE");
+// }
 
-    println!("before pool {:?}", pool.pool.status());
-
-    let mut tx = pool.transaction().await.unwrap();
-    tx.query("INSERT INTO foo VALUES (456)", &[])
-        .await
-        .expect("transaction insert");
-    foo(&tx).await;
-    let rows = tx
-        .query("SELECT bar FROM foo", &[])
-        .await
-        .expect("count rows");
-    assert_eq!(rows.rows.len(), 2, "count rows inside transaction");
-
-    // WARN: Don't do this for :memory:!
-    // Because we set max_size = 1
-    // and the transaction holds one connection,
-    // asking for another connection will await forever.
-    if url != ":memory:" {
-        let rows = pool
-            .query("SELECT bar FROM foo", &[])
-            .await
-            .expect("count rows");
-        assert_eq!(rows.rows.len(), 1, "count rows during");
-    }
-
-    tx.commit().await.unwrap();
-    println!("after pool {:?}", pool.pool.status());
-    let rows = pool
-        .query("SELECT bar FROM foo", &[])
-        .await
-        .expect("count rows");
-    assert_eq!(rows.rows.len(), 2, "count rows after");
-
-    // assert!(false, "DONE");
-}
-
-// We allow unused here since this isn't being tested for LibSQL.
-// TODO: Add a test once transactions have been implemented.
-#[allow(unused)]
-async fn foo(tx: &Box<dyn Transaction>) {
-    tx.query("SELECT 'baz'", &[]).await.unwrap();
-}
+// // We allow unused here since this isn't being tested for LibSQL.
+// // TODO: Add a test once transactions have been implemented.
+// #[allow(unused)]
+// async fn foo(tx: &Box<dyn Transaction>) {
+//     tx.query("SELECT 'baz'", &[]).await.unwrap();
+// }
 
 #[cfg(feature = "rusqlite")]
 #[tokio::test]

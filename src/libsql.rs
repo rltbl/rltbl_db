@@ -6,8 +6,8 @@ use rust_decimal::prelude::ToPrimitive;
 use std::env;
 
 use crate::{
-    Error, JsonValue, Pool, Query, Row, Rows, Syntax, Transaction, Value, error::DatabaseError,
-    sql_parse::validate_table_name, sqlite::SqliteSyntax,
+    Connection, Error, JsonValue, Pool, Query, Row, Rows, Syntax, Transaction, Value,
+    error::DatabaseError, sql_parse::validate_table_name, sqlite::SqliteSyntax,
 };
 
 // DatabaseError implementations.
@@ -56,7 +56,7 @@ impl TryInto<libsql::Value> for Value {
     fn try_into(self) -> Result<libsql::Value, Error> {
         match self {
             Value::Null => Ok(libsql::Value::Null),
-            // Libsql does not support booleans.
+            // LibSQL does not support booleans.
             // See: https://docs.rs/libsql/0.9.29/libsql/enum.Value.html,
             Value::Boolean(val) => Ok(libsql::Value::Integer(val.into())),
             Value::BigInteger(val) => Ok(libsql::Value::Integer(val.into())),
@@ -215,6 +215,54 @@ impl LibSQLPool {
 #[async_trait]
 impl Pool for LibSQLPool {
     /// Begins a new [Transaction].
+    async fn connection(&self) -> Result<Box<dyn Connection>, Error> {
+        todo!()
+    }
+}
+
+/// Represents a SQLite connection.
+#[derive(Debug)]
+pub struct LibSQLConnection {
+    pub connection: usize, // TODO: Change the type!
+}
+
+#[async_trait]
+impl Query for LibSQLConnection {
+    /// Implements [Query::syntax()] for [LibSQLTransaction]
+    fn syntax(&self) -> &dyn Syntax {
+        todo!()
+    }
+
+    /// Implements [Query::execute_batch()] for [LibSQLTransaction]
+    async fn execute_batch(&self, _sql: &str) -> Result<(), Error> {
+        todo!()
+    }
+
+    /// Implements [Query::query()] for [LibSQLTransaction]
+    async fn query(&self, _sql: &str, _params: &[Value]) -> Result<Rows, Error> {
+        todo!()
+    }
+
+    fn can_copy_in(&self, _filename: &str) -> bool {
+        todo!()
+    }
+
+    async fn copy_in(&self, _table: &str, _filename: &str) -> Result<(), Error> {
+        todo!()
+    }
+
+    /// Implements [Query::drop_table()] for [LibSQLTransaction]
+    async fn drop_table(&self, _table: &str) -> Result<(), Error> {
+        todo!()
+    }
+
+    async fn drop_view(&self, _view: &str) -> Result<(), Error> {
+        todo!()
+    }
+}
+
+#[async_trait]
+impl Connection for LibSQLConnection {
     async fn transaction(&self) -> Result<Box<dyn Transaction>, Error> {
         todo!()
     }

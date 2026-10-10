@@ -147,6 +147,7 @@
 
 // Re-exports:
 pub use self::column::Column;
+pub use self::connection::{AnyConnection, Connection};
 pub use self::error::Error;
 pub use self::pool::{AnyPool, Pool};
 pub use self::query::Query;

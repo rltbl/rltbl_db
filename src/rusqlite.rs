@@ -17,8 +17,8 @@ use rust_decimal::Decimal;
 use std::{env, str::from_utf8, sync::Arc};
 
 use crate::{
-    Error, JsonValue, Pool, Query, Row, Rows, Syntax, Transaction, Value, error::DatabaseError,
-    sql_parse::validate_table_name, sqlite::SqliteSyntax,
+    Connection, Error, JsonValue, Pool, Query, Row, Rows, Syntax, Transaction, Value,
+    error::DatabaseError, sql_parse::validate_table_name, sqlite::SqliteSyntax,
 };
 
 // DatabaseError implementations:
@@ -165,12 +165,15 @@ impl Query for RusqlitePool {
 
 #[async_trait]
 impl Pool for RusqlitePool {
-    /// Begins a new [Transaction].
-    async fn transaction(&self) -> Result<Box<dyn Transaction>, Error> {
-        match RusqliteTransaction::begin(self.pool.clone()).await {
-            Ok(tx) => Ok(Box::new(tx)),
-            Err(err) => Err(err),
-        }
+    // /// Begins a new [Transaction].
+    // async fn transaction(&self) -> Result<Box<dyn Transaction>, Error> {
+    //     match RusqliteTransaction::begin(self.pool.clone()).await {
+    //         Ok(tx) => Ok(Box::new(tx)),
+    //         Err(err) => Err(err),
+    //     }
+    // }
+    async fn connection(&self) -> Result<Box<dyn Connection>, Error> {
+        todo!()
     }
 }
 
@@ -198,6 +201,54 @@ impl RusqlitePool {
             syntax: SqliteSyntax,
             pool,
         })
+    }
+}
+
+/// Represents a SQLite connection.
+#[derive(Debug)]
+pub struct RusqliteConnection {
+    pub connection: usize, // TODO: Change the type!
+}
+
+#[async_trait]
+impl Query for RusqliteConnection {
+    /// Implements [Query::syntax()] for [RusqliteTransaction]
+    fn syntax(&self) -> &dyn Syntax {
+        todo!()
+    }
+
+    /// Implements [Query::execute_batch()] for [RusqliteTransaction]
+    async fn execute_batch(&self, _sql: &str) -> Result<(), Error> {
+        todo!()
+    }
+
+    /// Implements [Query::query()] for [RusqliteTransaction]
+    async fn query(&self, _sql: &str, _params: &[Value]) -> Result<Rows, Error> {
+        todo!()
+    }
+
+    fn can_copy_in(&self, _filename: &str) -> bool {
+        todo!()
+    }
+
+    async fn copy_in(&self, _table: &str, _filename: &str) -> Result<(), Error> {
+        todo!()
+    }
+
+    /// Implements [Query::drop_table()] for [RusqliteTransaction]
+    async fn drop_table(&self, _table: &str) -> Result<(), Error> {
+        todo!()
+    }
+
+    async fn drop_view(&self, _view: &str) -> Result<(), Error> {
+        todo!()
+    }
+}
+
+#[async_trait]
+impl Connection for RusqliteConnection {
+    async fn transaction(&self) -> Result<Box<dyn Transaction>, Error> {
+        todo!()
     }
 }
 
