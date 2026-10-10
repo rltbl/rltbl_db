@@ -306,7 +306,7 @@ impl Query for LibSQLConnection {
 
 #[async_trait]
 impl Connection for LibSQLConnection {
-    async fn transaction(&mut self) -> Result<Box<dyn Transaction>, Error> {
+    async fn transaction(&mut self) -> Result<Box<dyn Transaction + 'life0>, Error> {
         todo!()
     }
 }

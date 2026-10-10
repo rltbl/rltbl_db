@@ -9,7 +9,7 @@ use crate::{Error, Query, Transaction};
 #[async_trait]
 pub trait Connection: Query + std::fmt::Debug {
     /// Begin a transaction.
-    async fn transaction(&mut self) -> Result<Box<dyn Transaction>, Error>;
+    async fn transaction(&mut self) -> Result<Box<dyn Transaction + 'life0>, Error>;
 }
 
 /// An abstraction over the supported connection types.

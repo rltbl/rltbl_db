@@ -237,19 +237,17 @@ pub struct PostgresConnection {
 
 #[async_trait]
 impl Query for PostgresConnection {
-    /// Implements [Query::syntax()] for [PostgresTransaction]
     fn syntax(&self) -> &dyn Syntax {
         &self.syntax
     }
 
-    /// Implements [Query::execute_batch()] for [PostgresTransaction]
     async fn execute_batch(&self, sql: &str) -> Result<(), Error> {
         self.connection.batch_execute(sql).await?;
         Ok(())
     }
 
-    /// Implements [Query::query()] for [PostgresTransaction]
     async fn query(&self, sql: &str, params: &[Value]) -> Result<Rows, Error> {
+        // NOTE: This is an exact copy of the code above. Maybe refactor.
         // The expected types of all of the parameters as reported by the database via prepare():
         let param_pg_types = self.connection.prepare(sql).await?.params().to_vec();
 
@@ -493,8 +491,12 @@ impl Query for PostgresConnection {
 
 #[async_trait]
 impl Connection for PostgresConnection {
-    async fn transaction(&mut self) -> Result<Box<dyn Transaction>, Error> {
-        todo!()
+    async fn transaction(&mut self) -> Result<Box<dyn Transaction + 'life0>, Error> {
+        let tx = self.connection.transaction().await.unwrap();
+        Ok(Box::new(PostgresTransaction {
+            tx,
+            syntax: PostgresSyntax,
+        }))
     }
 }
 
@@ -513,7 +515,7 @@ pub struct PostgresTransaction<'a> {
 impl Query for PostgresTransaction<'_> {
     /// Implements [Query::syntax()] for [PostgresTransaction]
     fn syntax(&self) -> &dyn Syntax {
-        todo!()
+        &self.syntax
     }
 
     /// Implements [Query::execute_batch()] for [PostgresTransaction]
@@ -522,8 +524,124 @@ impl Query for PostgresTransaction<'_> {
     }
 
     /// Implements [Query::query()] for [PostgresTransaction]
-    async fn query(&self, _sql: &str, _params: &[Value]) -> Result<Rows, Error> {
-        todo!()
+    async fn query(&self, sql: &str, params: &[Value]) -> Result<Rows, Error> {
+        // NOTE: This is an exact copy of the code above. Maybe refactor.
+        // The expected types of all of the parameters as reported by the database via prepare():
+        let param_pg_types = self.tx.prepare(sql).await?.params().to_vec();
+
+        let mut paramses: Vec<Box<dyn ToSql + Sync + Send>> = Vec::new();
+        let gen_err = |param: &Value, sql_type: &str| -> String {
+            format!("Param {param:?} is wrong type for {sql_type} in query: {sql}")
+        };
+
+        for (i, param) in params.iter().enumerate() {
+            let pg_type = &param_pg_types[i];
+            match pg_type {
+                &Type::TEXT | &Type::VARCHAR | &Type::NAME => {
+                    match param {
+                        Value::Null => paramses.push(Box::new(None::<String>)),
+                        Value::Text(text) => paramses.push(Box::new(text.to_string())),
+                        _ => return Err(Error::InputError(gen_err(&param, "TEXT"))),
+                    };
+                }
+                &Type::INT2 => {
+                    match param {
+                        Value::Null => paramses.push(Box::new(None::<i16>)),
+                        Value::SmallInteger(num) => paramses.push(Box::new(*num)),
+                        _ => return Err(Error::InputError(gen_err(&param, "INT2"))),
+                    };
+                }
+                &Type::INT4 => {
+                    match param {
+                        Value::Null => paramses.push(Box::new(None::<i32>)),
+                        Value::Integer(num) => paramses.push(Box::new(*num)),
+                        _ => return Err(Error::InputError(gen_err(&param, "INT4"))),
+                    };
+                }
+                &Type::INT8 => {
+                    match param {
+                        Value::Null => paramses.push(Box::new(None::<i64>)),
+                        Value::BigInteger(num) => paramses.push(Box::new(*num)),
+                        _ => return Err(Error::InputError(gen_err(&param, "INT8"))),
+                    };
+                }
+                &Type::FLOAT4 => {
+                    match param {
+                        Value::Null => paramses.push(Box::new(None::<f32>)),
+                        Value::Real(num) => paramses.push(Box::new(*num)),
+                        _ => return Err(Error::InputError(gen_err(&param, "FLOAT4"))),
+                    };
+                }
+                &Type::FLOAT8 => {
+                    match param {
+                        Value::Null => paramses.push(Box::new(None::<f64>)),
+                        Value::BigReal(num) => paramses.push(Box::new(*num)),
+                        _ => return Err(Error::InputError(gen_err(&param, "FLOAT8"))),
+                    };
+                }
+                &Type::NUMERIC => {
+                    match param {
+                        Value::Null => paramses.push(Box::new(None::<Decimal>)),
+                        Value::Numeric(num) => paramses.push(Box::new(*num)),
+                        _ => return Err(Error::InputError(gen_err(&param, "NUMERIC"))),
+                    };
+                }
+                &Type::BOOL => {
+                    match param {
+                        Value::Null => paramses.push(Box::new(None::<bool>)),
+                        Value::Boolean(flag) => paramses.push(Box::new(*flag)),
+                        _ => return Err(Error::InputError(gen_err(&param, "BOOL"))),
+                    };
+                }
+                &Type::JSON | &Type::JSONB => match param {
+                    Value::Null => paramses.push(Box::new(None::<JsonValue>)),
+                    Value::Json(value) => paramses.push(Box::new(value.clone())),
+                    _ => {
+                        return Err(Error::InputError(gen_err(&param, &pg_type.to_string())));
+                    }
+                },
+                other => {
+                    match param {
+                        Value::Null => paramses.push(Box::new(GenericPostgresType { bytes: None })),
+                        Value::Other(_cname, bytes, _string_opt) => {
+                            paramses.push(Box::new(GenericPostgresType {
+                                bytes: Some(bytes.clone()),
+                            }))
+                        }
+                        _ => {
+                            return Err(Error::InputError(gen_err(&param, &other.to_string())));
+                        }
+                    };
+                }
+            };
+        }
+
+        // Finally, execute the query and return the results:
+        let query_params: Vec<&(dyn ToSql + Sync)> = paramses
+            .iter()
+            .map(|p| p.as_ref() as &(dyn ToSql + Sync))
+            .collect();
+        let rows = self.tx.query(sql, &query_params).await?;
+        let mut db_rows = vec![];
+        for row in &rows {
+            let mut db_row = Row::new();
+            let columns = row.columns();
+            for (i, column) in columns.iter().enumerate() {
+                db_row.insert(
+                    column.name().to_string(),
+                    match extract_value(row, i) {
+                        Err(err) => {
+                            eprintln!("WARNING: Got error: '{err}' while querying column.");
+                            Value::Null
+                        }
+                        Ok(val) => val,
+                    },
+                );
+            }
+            db_rows.push(db_row);
+        }
+
+        Ok(Rows { rows: db_rows })
     }
 
     /// Implements [Query::can_copy_in()] for [PostgresTransaction]
@@ -549,11 +667,15 @@ impl Query for PostgresTransaction<'_> {
 #[async_trait]
 impl Transaction for PostgresTransaction<'_> {
     async fn rollback(&mut self) -> Result<(), Error> {
-        todo!()
+        // TODO: Not working (compiler complains)
+        //self.tx.rollback().await.unwrap();
+        Ok(())
     }
 
     async fn commit(&mut self) -> Result<(), Error> {
-        todo!()
+        // TODO: Not working (compiler complains)
+        //self.tx.commit().await.unwrap();
+        Ok(())
     }
 }
 

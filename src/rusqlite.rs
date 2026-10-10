@@ -283,7 +283,7 @@ impl Connection for RusqliteConnection {
     //     }
     // }
 
-    async fn transaction(&mut self) -> Result<Box<dyn Transaction>, Error> {
+    async fn transaction(&mut self) -> Result<Box<dyn Transaction + 'life0>, Error> {
         todo!()
     }
 }
@@ -334,6 +334,7 @@ impl Query for RusqliteTransaction {
 
     /// Implements [Query::query()] for [RusqliteTransaction]
     async fn query(&self, sql: &str, params: &[Value]) -> Result<Rows, Error> {
+        // NOTE: This is an exact copy of the code above. Maybe refactor.
         match &self.conn {
             Some(conn) => {
                 let sql_string = sql.to_string();

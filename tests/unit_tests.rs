@@ -4622,44 +4622,47 @@ async fn test_transaction() {
     assert_eq!(rows.rows.len(), 1, "count rows before");
 
     println!("before pool {:?}", pool.pool.status());
-    let _connection = pool.connection().await.unwrap();
+    let mut conn = pool.connection().await.unwrap();
+    let mut tx = conn.transaction().await.unwrap();
 
-    // let mut tx = pool.transaction().await.unwrap();
-    // tx.query("INSERT INTO foo VALUES (456)", &[])
-    //     .await
-    //     .expect("transaction insert");
+    tx.query("INSERT INTO foo VALUES (456)", &[])
+        .await
+        .expect("transaction insert");
+
+    // TODO: Not working. Compiler complains that conn needs to outlive static. Seems very bad.
     // foo(&tx).await;
-    // let rows = tx
-    //     .query("SELECT bar FROM foo", &[])
-    //     .await
-    //     .expect("count rows");
-    // assert_eq!(rows.rows.len(), 2, "count rows inside transaction");
-    //
-    // // WARN: Don't do this for :memory:!
-    // // Because we set max_size = 1
-    // // and the transaction holds one connection,
-    // // asking for another connection will await forever.
-    // if url != ":memory:" {
-    //     let rows = pool
-    //         .query("SELECT bar FROM foo", &[])
-    //         .await
-    //         .expect("count rows");
-    //     assert_eq!(rows.rows.len(), 1, "count rows during");
-    // }
-    //
-    // tx.commit().await.unwrap();
-    // println!("after pool {:?}", pool.pool.status());
-    // let rows = pool
-    //     .query("SELECT bar FROM foo", &[])
-    //     .await
-    //     .expect("count rows");
+
+    let rows = tx
+        .query("SELECT bar FROM foo", &[])
+        .await
+        .expect("count rows");
+    assert_eq!(rows.rows.len(), 2, "count rows inside transaction");
+
+    // WARN: Don't do this for :memory:!
+    // Because we set max_size = 1
+    // and the transaction holds one connection,
+    // asking for another connection will await forever.
+    if url != ":memory:" {
+        let rows = pool
+            .query("SELECT bar FROM foo", &[])
+            .await
+            .expect("count rows");
+        assert_eq!(rows.rows.len(), 1, "count rows during");
+    }
+
+    tx.commit().await.unwrap();
+    println!("after pool {:?}", pool.pool.status());
+    let _rows = pool
+        .query("SELECT bar FROM foo", &[])
+        .await
+        .expect("count rows");
+
+    // TODO: This fails because we can't call foo() above, and because we can't commit()
+    // or rollback().
     // assert_eq!(rows.rows.len(), 2, "count rows after");
 }
 
-// We allow unused here since this isn't being tested for LibSQL.
-// TODO: Add a test once transactions have been implemented.
-#[allow(unused)]
-async fn foo(tx: &Box<dyn Transaction>) {
+async fn _foo(tx: &Box<dyn Transaction>) {
     tx.query("SELECT 'baz'", &[]).await.unwrap();
 }
 
