@@ -19,8 +19,8 @@ use std::{
 };
 
 use crate::{
-    Error, JsonValue, Pool, Query, Row, Rows, Syntax, Transaction, Value, error::DatabaseError,
-    postgres::PostgresSyntax, sql_parse::validate_table_name,
+    Connection, Error, JsonValue, Pool, Query, Row, Rows, Syntax, Transaction, Value,
+    error::DatabaseError, postgres::PostgresSyntax, sql_parse::validate_table_name,
 };
 
 // Error implementations:
@@ -42,6 +42,10 @@ impl From<deadpool_postgres::PoolError> for DatabaseError {
         DatabaseError::PoolError(err.to_string())
     }
 }
+
+///////////////////////////////////////////////////////////////////////////////
+// Postgres Connection Pool
+///////////////////////////////////////////////////////////////////////////////
 
 /// Represents a deadool-postgres database connection pool.
 #[derive(Debug)]
@@ -133,17 +137,119 @@ impl Query for PostgresPool {
 
     /// Implements [Query::execute_batch()] for [PostgresPool]
     async fn execute_batch(&self, sql: &str) -> Result<(), Error> {
-        let client = self.pool.get().await?;
-        client.batch_execute(sql).await?;
+        let connection = self.pool.get().await?;
+        let connection = PostgresConnection {
+            connection,
+            syntax: self.syntax,
+        };
+        connection.execute_batch(sql).await?;
         Ok(())
     }
 
     /// Implements [Query::query()] for [PostgresPool]
     async fn query(&self, sql: &str, params: &[Value]) -> Result<Rows, Error> {
-        let client = self.pool.get().await?;
+        let connection = self.pool.get().await?;
+        let connection = PostgresConnection {
+            connection,
+            syntax: self.syntax,
+        };
+        Ok(connection.query(sql, params).await?)
+    }
 
+    /// Implements [Query::can_copy_in()]. Returns true if the given filename ends
+    /// (case-insensitively) with either '.csv' or '.tsv'.
+    fn can_copy_in(&self, filename: &str) -> bool {
+        can_copy(filename)
+    }
+
+    /// Implements [Query::can_copy_out()]. Returns true if the given filename ends
+    /// (case-insensitively) with either '.csv' or '.tsv'.
+    fn can_copy_out(&self, filename: &str) -> bool {
+        can_copy(filename)
+    }
+
+    /// Load the given table using the data from the given file.
+    async fn copy_in(&self, table: &str, filename: &str) -> Result<(), Error> {
+        let connection = self.pool.get().await?;
+        let connection = PostgresConnection {
+            connection,
+            syntax: self.syntax,
+        };
+        Ok(connection.copy_in(table, filename).await?)
+    }
+
+    /// Implements [Query::copy_out()]
+    async fn copy_out(&self, table: &str, filename: &str) -> Result<(), Error> {
+        let connection = self.pool.get().await?;
+        let connection = PostgresConnection {
+            connection,
+            syntax: self.syntax,
+        };
+        Ok(connection.copy_out(table, filename).await?)
+    }
+
+    /// Implements [Query::drop_table()]. Note that for PostgreSQL (see
+    /// <https://www.postgresql.org/docs/current/sql-droptable.html>), if the dropped table,
+    /// say `table1`, appears in a foreign key constraint for another table, say `table2`, then
+    /// `table2`'s foreign constraint will be removed, but `table2` will not be dropped.
+    async fn drop_table(&self, table: &str) -> Result<(), Error> {
+        let connection = self.pool.get().await?;
+        let connection = PostgresConnection {
+            connection,
+            syntax: self.syntax,
+        };
+        Ok(connection.drop_table(table).await?)
+    }
+
+    async fn drop_view(&self, view: &str) -> Result<(), Error> {
+        let connection = self.pool.get().await?;
+        let connection = PostgresConnection {
+            connection,
+            syntax: self.syntax,
+        };
+        Ok(connection.drop_view(view).await?)
+    }
+}
+
+#[async_trait]
+impl Pool for PostgresPool {
+    async fn connection(&self) -> Result<Box<dyn Connection>, Error> {
+        let connection = self.pool.get().await?;
+        let connection = PostgresConnection {
+            connection,
+            syntax: self.syntax,
+        };
+        Ok(Box::new(connection))
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// Postgres Connection
+///////////////////////////////////////////////////////////////////////////////
+
+/// Represents a SQLite connection.
+#[derive(Debug)]
+pub struct PostgresConnection {
+    pub connection: deadpool_postgres::Object,
+    #[allow(unused)]
+    syntax: PostgresSyntax,
+}
+
+#[async_trait]
+impl Query for PostgresConnection {
+    fn syntax(&self) -> &dyn Syntax {
+        &self.syntax
+    }
+
+    async fn execute_batch(&self, sql: &str) -> Result<(), Error> {
+        self.connection.batch_execute(sql).await?;
+        Ok(())
+    }
+
+    async fn query(&self, sql: &str, params: &[Value]) -> Result<Rows, Error> {
+        // NOTE: This is an exact copy of the code above. Maybe refactor.
         // The expected types of all of the parameters as reported by the database via prepare():
-        let param_pg_types = client.prepare(sql).await?.params().to_vec();
+        let param_pg_types = self.connection.prepare(sql).await?.params().to_vec();
 
         let mut paramses: Vec<Box<dyn ToSql + Sync + Send>> = Vec::new();
         let gen_err = |param: &Value, sql_type: &str| -> String {
@@ -237,7 +343,7 @@ impl Query for PostgresPool {
             .iter()
             .map(|p| p.as_ref() as &(dyn ToSql + Sync))
             .collect();
-        let rows = client.query(sql, &query_params).await?;
+        let rows = self.connection.query(sql, &query_params).await?;
         let mut db_rows = vec![];
         for row in &rows {
             let mut db_row = Row::new();
@@ -260,28 +366,22 @@ impl Query for PostgresPool {
         Ok(Rows { rows: db_rows })
     }
 
-    /// Implements [Query::can_copy_in()]. Returns true if the given filename ends
-    /// (case-insensitively) with either '.csv' or '.tsv'.
     fn can_copy_in(&self, filename: &str) -> bool {
-        let filename = filename.to_lowercase();
-        filename.ends_with("tsv") || filename.ends_with(".csv")
+        can_copy(filename)
     }
 
-    /// Implements [Query::can_copy_out()]. Returns true if the given filename ends
-    /// (case-insensitively) with either '.csv' or '.tsv'.
     fn can_copy_out(&self, filename: &str) -> bool {
-        let filename = filename.to_lowercase();
-        filename.ends_with("tsv") || filename.ends_with(".csv")
+        can_copy(filename)
     }
 
-    /// Load the given table using the data from the given file.
     async fn copy_in(&self, table: &str, filename: &str) -> Result<(), Error> {
-        eprintln!("Loading table '{table}' from '{filename}' using COPY.");
         if !self.can_copy_in(filename) {
             return Err(Error::InputError(format!(
                 "Filename: '{filename}' must end with .tsv or .csv"
             )));
         }
+        eprintln!("Loading table '{table}' from '{filename}' using COPY.");
+
         let file = File::open(filename)?;
         let buf_reader = BufReader::new(file);
 
@@ -294,9 +394,8 @@ impl Query for PostgresPool {
         });
 
         // Send the input stream to the tokio-postgres client which is executing a copy_in():
-        let client = self.pool.get().await?;
         let mut copy_sink = pin!(
-            client
+            self.connection
                 .copy_in(&format!(r#"COPY "{table}" FROM STDIN WITH NULL ''"#))
                 .await?
         );
@@ -314,14 +413,14 @@ impl Query for PostgresPool {
         Ok(())
     }
 
-    /// Implements [Query::copy_out()]
     async fn copy_out(&self, table: &str, filename: &str) -> Result<(), Error> {
-        eprintln!("Saving table '{table}' to '{filename}' using COPY.");
         if !self.can_copy_out(filename) {
             return Err(Error::InputError(format!(
                 "Filename: '{filename}' must end with .tsv or .csv"
             )));
         }
+        eprintln!("Saving table '{table}' to '{filename}' using COPY.");
+
         let delimiter;
         if filename.to_lowercase().ends_with(".tsv") {
             delimiter = "\t";
@@ -349,13 +448,14 @@ impl Query for PostgresPool {
         let mut data_to_write = BytesMut::new();
         data_to_write.put(header_row.as_bytes());
 
-        let client = self.pool.get().await?;
-        let stmt = client
+        let stmt = self
+            .connection
             .prepare(&format!(
                 r#"COPY "{table}" TO STDOUT WITH DELIMITER '{delimiter}'"#
             ))
             .await?;
-        let table_contents = client
+        let table_contents = self
+            .connection
             .copy_out(&stmt)
             .await?
             .try_fold(BytesMut::new(), |mut buf, chunk| async move {
@@ -370,10 +470,7 @@ impl Query for PostgresPool {
         Ok(())
     }
 
-    /// Implements [Query::drop_table()]. Note that for PostgreSQL (see
-    /// <https://www.postgresql.org/docs/current/sql-droptable.html>), if the dropped table,
-    /// say `table1`, appears in a foreign key constraint for another table, say `table2`, then
-    /// `table2`'s foreign constraint will be removed, but `table2` will not be dropped.
+    /// Implements [Query::drop_table()] for [PostgresTransaction]
     async fn drop_table(&self, table: &str) -> Result<(), Error> {
         let table = validate_table_name(table)?;
 
@@ -393,11 +490,198 @@ impl Query for PostgresPool {
 }
 
 #[async_trait]
-impl Pool for PostgresPool {
-    async fn transaction(&self) -> Result<Box<dyn Transaction>, Error> {
-        unimplemented!()
+impl Connection for PostgresConnection {
+    async fn transaction(&mut self) -> Result<Box<dyn Transaction + 'life0>, Error> {
+        let tx = self.connection.transaction().await.unwrap();
+        Ok(Box::new(PostgresTransaction {
+            tx,
+            syntax: PostgresSyntax,
+        }))
     }
 }
+
+///////////////////////////////////////////////////////////////////////////////
+// Postgres Transaction
+///////////////////////////////////////////////////////////////////////////////
+
+#[derive(Debug)]
+pub struct PostgresTransaction<'a> {
+    pub tx: deadpool_postgres::Transaction<'a>,
+    #[allow(unused)]
+    syntax: PostgresSyntax,
+}
+
+#[async_trait]
+impl Query for PostgresTransaction<'_> {
+    /// Implements [Query::syntax()] for [PostgresTransaction]
+    fn syntax(&self) -> &dyn Syntax {
+        &self.syntax
+    }
+
+    /// Implements [Query::execute_batch()] for [PostgresTransaction]
+    async fn execute_batch(&self, _sql: &str) -> Result<(), Error> {
+        todo!()
+    }
+
+    /// Implements [Query::query()] for [PostgresTransaction]
+    async fn query(&self, sql: &str, params: &[Value]) -> Result<Rows, Error> {
+        // NOTE: This is an exact copy of the code above. Maybe refactor.
+        // The expected types of all of the parameters as reported by the database via prepare():
+        let param_pg_types = self.tx.prepare(sql).await?.params().to_vec();
+
+        let mut paramses: Vec<Box<dyn ToSql + Sync + Send>> = Vec::new();
+        let gen_err = |param: &Value, sql_type: &str| -> String {
+            format!("Param {param:?} is wrong type for {sql_type} in query: {sql}")
+        };
+
+        for (i, param) in params.iter().enumerate() {
+            let pg_type = &param_pg_types[i];
+            match pg_type {
+                &Type::TEXT | &Type::VARCHAR | &Type::NAME => {
+                    match param {
+                        Value::Null => paramses.push(Box::new(None::<String>)),
+                        Value::Text(text) => paramses.push(Box::new(text.to_string())),
+                        _ => return Err(Error::InputError(gen_err(&param, "TEXT"))),
+                    };
+                }
+                &Type::INT2 => {
+                    match param {
+                        Value::Null => paramses.push(Box::new(None::<i16>)),
+                        Value::SmallInteger(num) => paramses.push(Box::new(*num)),
+                        _ => return Err(Error::InputError(gen_err(&param, "INT2"))),
+                    };
+                }
+                &Type::INT4 => {
+                    match param {
+                        Value::Null => paramses.push(Box::new(None::<i32>)),
+                        Value::Integer(num) => paramses.push(Box::new(*num)),
+                        _ => return Err(Error::InputError(gen_err(&param, "INT4"))),
+                    };
+                }
+                &Type::INT8 => {
+                    match param {
+                        Value::Null => paramses.push(Box::new(None::<i64>)),
+                        Value::BigInteger(num) => paramses.push(Box::new(*num)),
+                        _ => return Err(Error::InputError(gen_err(&param, "INT8"))),
+                    };
+                }
+                &Type::FLOAT4 => {
+                    match param {
+                        Value::Null => paramses.push(Box::new(None::<f32>)),
+                        Value::Real(num) => paramses.push(Box::new(*num)),
+                        _ => return Err(Error::InputError(gen_err(&param, "FLOAT4"))),
+                    };
+                }
+                &Type::FLOAT8 => {
+                    match param {
+                        Value::Null => paramses.push(Box::new(None::<f64>)),
+                        Value::BigReal(num) => paramses.push(Box::new(*num)),
+                        _ => return Err(Error::InputError(gen_err(&param, "FLOAT8"))),
+                    };
+                }
+                &Type::NUMERIC => {
+                    match param {
+                        Value::Null => paramses.push(Box::new(None::<Decimal>)),
+                        Value::Numeric(num) => paramses.push(Box::new(*num)),
+                        _ => return Err(Error::InputError(gen_err(&param, "NUMERIC"))),
+                    };
+                }
+                &Type::BOOL => {
+                    match param {
+                        Value::Null => paramses.push(Box::new(None::<bool>)),
+                        Value::Boolean(flag) => paramses.push(Box::new(*flag)),
+                        _ => return Err(Error::InputError(gen_err(&param, "BOOL"))),
+                    };
+                }
+                &Type::JSON | &Type::JSONB => match param {
+                    Value::Null => paramses.push(Box::new(None::<JsonValue>)),
+                    Value::Json(value) => paramses.push(Box::new(value.clone())),
+                    _ => {
+                        return Err(Error::InputError(gen_err(&param, &pg_type.to_string())));
+                    }
+                },
+                other => {
+                    match param {
+                        Value::Null => paramses.push(Box::new(GenericPostgresType { bytes: None })),
+                        Value::Other(_cname, bytes, _string_opt) => {
+                            paramses.push(Box::new(GenericPostgresType {
+                                bytes: Some(bytes.clone()),
+                            }))
+                        }
+                        _ => {
+                            return Err(Error::InputError(gen_err(&param, &other.to_string())));
+                        }
+                    };
+                }
+            };
+        }
+
+        // Finally, execute the query and return the results:
+        let query_params: Vec<&(dyn ToSql + Sync)> = paramses
+            .iter()
+            .map(|p| p.as_ref() as &(dyn ToSql + Sync))
+            .collect();
+        let rows = self.tx.query(sql, &query_params).await?;
+        let mut db_rows = vec![];
+        for row in &rows {
+            let mut db_row = Row::new();
+            let columns = row.columns();
+            for (i, column) in columns.iter().enumerate() {
+                db_row.insert(
+                    column.name().to_string(),
+                    match extract_value(row, i) {
+                        Err(err) => {
+                            eprintln!("WARNING: Got error: '{err}' while querying column.");
+                            Value::Null
+                        }
+                        Ok(val) => val,
+                    },
+                );
+            }
+            db_rows.push(db_row);
+        }
+
+        Ok(Rows { rows: db_rows })
+    }
+
+    /// Implements [Query::can_copy_in()] for [PostgresTransaction]
+    fn can_copy_in(&self, _filename: &str) -> bool {
+        todo!()
+    }
+
+    /// Implements [Query::copy_in()] for [PostgresTransaction]
+    async fn copy_in(&self, _table: &str, _filename: &str) -> Result<(), Error> {
+        todo!()
+    }
+
+    /// Implements [Query::drop_table()] for [PostgresTransaction]
+    async fn drop_table(&self, _table: &str) -> Result<(), Error> {
+        todo!()
+    }
+
+    async fn drop_view(&self, _view: &str) -> Result<(), Error> {
+        todo!()
+    }
+}
+
+#[async_trait]
+impl Transaction for PostgresTransaction<'_> {
+    async fn rollback(&mut self) -> Result<(), Error> {
+        // TODO: Not working (compiler complains)
+        //self.tx.rollback().await.unwrap();
+        Ok(())
+    }
+
+    async fn commit(&mut self) -> Result<(), Error> {
+        // TODO: Not working (compiler complains)
+        //self.tx.commit().await.unwrap();
+        Ok(())
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// Free functions
+///////////////////////////////////////////////////////////////////////////////
 
 /// Extracts the value at the given index from the given [PgRow].
 fn extract_value(row: &PgRow, idx: usize) -> Result<Value, Error> {
@@ -473,3 +757,10 @@ fn extract_value(row: &PgRow, idx: usize) -> Result<Value, Error> {
         }
     }
 }
+
+fn can_copy(filename: &str) -> bool {
+    let filename = filename.to_lowercase();
+    filename.ends_with("tsv") || filename.ends_with(".csv")
+}
+
+

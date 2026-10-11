@@ -1,4 +1,5 @@
-//! The Pool Trait, for implementing a database connection pool
+//! Provides the [Pool] Trait, for implementing a database connection pool, and the [AnyPool]
+//! struct, a handy generic wrapper around [Pool] implementations.
 
 /// To connect to any supported database using a URL:
 ///
@@ -31,7 +32,7 @@ use std::{
 };
 
 use crate::{
-    AnyTransaction, Column, Error, Query, Row, Rows, Syntax, Transaction, Value,
+    AnyConnection, Column, Connection, Error, Query, Row, Rows, Syntax, Value,
     cache::{
         CachingStrategy, MemoryQueryCache, MemoryQueryCacheKey, MemoryQueryCacheValue,
         MemoryTableCache, MetaCache, QUERY_CACHE_TABLE, TABLE_CACHE_TABLE,
@@ -83,8 +84,8 @@ pub async fn connect(url: &str) -> Result<Box<dyn Pool>, Error> {
 /// A trait for implementing a database connection pool.
 #[async_trait]
 pub trait Pool: Query + std::fmt::Debug {
-    /// Start a transaction.
-    async fn transaction(&self) -> Result<Box<dyn Transaction>, Error>;
+    /// Get a connection from the pool.
+    async fn connection(&self) -> Result<Box<dyn Connection>, Error>;
 }
 
 /// An abstraction over the supported pool types.
@@ -515,9 +516,9 @@ impl AnyPool {
         Ok(self.which_are_tables(&[table]).await?.len() == 1)
     }
 
-    /// Begin a transaction.
-    pub async fn transaction(&self) -> Result<AnyTransaction, Error> {
-        Ok(AnyTransaction::begin(self.pool.transaction().await?))
+    /// Implements [Pool::connection()]
+    pub async fn connection(&self) -> Result<AnyConnection, Error> {
+        Ok(AnyConnection::from(self.pool.connection().await?))
     }
 
     /// Execute the given SQL command with the given parameters, returning a vector of rows.

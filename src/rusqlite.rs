@@ -17,8 +17,8 @@ use rust_decimal::Decimal;
 use std::{env, str::from_utf8, sync::Arc};
 
 use crate::{
-    Error, JsonValue, Pool, Query, Row, Rows, Syntax, Transaction, Value, error::DatabaseError,
-    sql_parse::validate_table_name, sqlite::SqliteSyntax,
+    Connection, Error, JsonValue, Pool, Query, Row, Rows, Syntax, Transaction, Value,
+    error::DatabaseError, sql_parse::validate_table_name, sqlite::SqliteSyntax,
 };
 
 // DatabaseError implementations:
@@ -53,6 +53,10 @@ impl From<deadpool_sqlite::InteractError> for DatabaseError {
     }
 }
 
+///////////////////////////////////////////////////////////////////////////////
+// Rusqlite Connection Pool
+///////////////////////////////////////////////////////////////////////////////
+
 /// Represents a deadpool-sqlite database connection pool.
 #[derive(Debug)]
 pub struct RusqlitePool {
@@ -69,108 +73,74 @@ impl Query for RusqlitePool {
 
     /// Implements [Query::execute_batch()].
     async fn execute_batch(&self, sql: &str) -> Result<(), Error> {
-        let conn = self.pool.get().await?;
-        let sql_string = sql.to_string();
-        match conn
-            .interact(move |conn| match conn.execute_batch(&sql_string) {
-                Err(err) => {
-                    return Err(DatabaseError::InteractError(err.to_string()));
-                }
-                Ok(_) => Ok(()),
-            })
-            .await
-        {
-            Err(err) => Err(err.into()),
-            Ok(_) => {
-                // We need to drop conn here to ensure that any changes to the db are persisted.
-                drop(conn);
-                Ok(())
-            }
-        }
+        let connection = self.pool.get().await?;
+        let connection = RusqliteConnection {
+            connection,
+            syntax: self.syntax,
+        };
+        connection.execute_batch(sql).await?;
+        // TODO: Not sure if this is still needed. Seems ok without it ...
+        // // We need to drop conn here to ensure that any changes to the db are persisted.
+        // drop(connection);
+        Ok(())
     }
 
     /// Implements [Query::query()].
     async fn query(&self, sql: &str, params: &[Value]) -> Result<Rows, Error> {
-        let conn = self.pool.get().await?;
-        let sql_string = sql.to_string();
-        let params = params.to_vec();
-        conn.interact(move |conn| {
-            let mut stmt = conn.prepare(&sql_string)?;
-            for (i, param) in params.iter().enumerate() {
-                stmt.raw_bind_parameter(i + 1, param.to_string())?;
-            }
-            let rows: Vec<Row> = query_prepared(&mut stmt, &params)?
-                .into_iter()
-                .map(|row| {
-                    row.map
-                        .into_iter()
-                        .map(|(key, val)| (key, Value::from(val)))
-                        .collect()
-                })
-                .collect();
-
-            Ok(Rows { rows })
-        })
-        .await?
+        let connection = self.pool.get().await?;
+        let connection = RusqliteConnection {
+            connection,
+            syntax: self.syntax,
+        };
+        Ok(connection.query(sql, params).await?)
     }
 
     /// Implements [Query::can_copy_in()]. Returns true if the given filename ends
     /// (case-insensitively) with '.csv'.
     fn can_copy_in(&self, filename: &str) -> bool {
-        filename.to_lowercase().ends_with(".csv")
+        can_copy_in(filename)
     }
 
     /// Implements [Query::copy_in()]
     async fn copy_in(&self, table: &str, filename: &str) -> Result<(), Error> {
-        if !self.can_copy_in(filename) {
-            return Err(Error::InputError(format!(
-                "Filename: '{filename}' must end with .csv"
-            )));
-        }
-
-        eprintln!("Loading table '{table}' from '{filename}' using SQLite's CSV load extension.");
-        let current_dir = env::current_dir()?;
-        let current_dir = current_dir.display();
-        let sql = format!(
-            r#"CREATE VIRTUAL TABLE temp.t1
-               USING CSV(filename='{current_dir}/{filename}', header=true)"#
-        );
-        self.execute(&sql, &[]).await?;
-        let sql = format!("INSERT INTO {table} SELECT * FROM temp.t1");
-        self.execute(&sql, &[]).await?;
-        Ok(())
+        let connection = self.pool.get().await?;
+        let connection = RusqliteConnection {
+            connection,
+            syntax: self.syntax,
+        };
+        Ok(connection.copy_in(table, filename).await?)
     }
 
     /// Implements [Query::drop_table()].
     async fn drop_table(&self, table: &str) -> Result<(), Error> {
-        let table = validate_table_name(table)?;
-
-        // Drop the table:
-        self.execute(&format!(r#"DROP TABLE IF EXISTS "{table}""#), &[])
-            .await?;
-
-        Ok(())
+        let connection = self.pool.get().await?;
+        let connection = RusqliteConnection {
+            connection,
+            syntax: self.syntax,
+        };
+        Ok(connection.drop_table(table).await?)
     }
 
     /// Implements [Query::drop_view()]
     async fn drop_view(&self, view: &str) -> Result<(), Error> {
-        let view = validate_table_name(view)?;
-
-        // Drop the view:
-        self.execute(&format!(r#"DROP VIEW IF EXISTS "{view}""#), &[])
-            .await?;
-        Ok(())
+        let connection = self.pool.get().await?;
+        let connection = RusqliteConnection {
+            connection,
+            syntax: self.syntax,
+        };
+        Ok(connection.drop_view(view).await?)
     }
 }
 
 #[async_trait]
 impl Pool for RusqlitePool {
-    /// Begins a new [Transaction].
-    async fn transaction(&self) -> Result<Box<dyn Transaction>, Error> {
-        match RusqliteTransaction::begin(self.pool.clone()).await {
-            Ok(tx) => Ok(Box::new(tx)),
-            Err(err) => Err(err),
-        }
+    async fn connection(&self) -> Result<Box<dyn Connection>, Error> {
+        let connection = self.pool.get().await?;
+        let connection = RusqliteConnection {
+            connection,
+            syntax: self.syntax,
+        };
+        Ok(Box::new(connection))
     }
 }
 
@@ -200,6 +170,127 @@ impl RusqlitePool {
         })
     }
 }
+
+///////////////////////////////////////////////////////////////////////////////
+// Rusqlite Connection
+///////////////////////////////////////////////////////////////////////////////
+
+/// Represents a SQLite connection.
+#[derive(Debug)]
+pub struct RusqliteConnection {
+    pub connection: deadpool_sqlite::Object,
+    syntax: SqliteSyntax,
+}
+
+#[async_trait]
+impl Query for RusqliteConnection {
+    /// Implements [Query::syntax()] for [RusqliteTransaction]
+    fn syntax(&self) -> &dyn Syntax {
+        &self.syntax
+    }
+
+    /// Implements [Query::execute_batch()] for [RusqliteTransaction]
+    async fn execute_batch(&self, sql: &str) -> Result<(), Error> {
+        let sql_string = sql.to_string();
+        self.connection
+            .interact(move |conn| match conn.execute_batch(&sql_string) {
+                Err(err) => {
+                    return Err(DatabaseError::InteractError(err.to_string()));
+                }
+                Ok(_) => Ok(()),
+            })
+            .await??;
+        Ok(())
+    }
+
+    /// Implements [Query::query()] for [RusqliteTransaction]
+    async fn query(&self, sql: &str, params: &[Value]) -> Result<Rows, Error> {
+        let sql_string = sql.to_string();
+        let params = params.to_vec();
+        self.connection
+            .interact(move |conn| {
+                let mut stmt = conn.prepare(&sql_string)?;
+                for (i, param) in params.iter().enumerate() {
+                    stmt.raw_bind_parameter(i + 1, param.to_string())?;
+                }
+                let rows: Vec<Row> = query_prepared(&mut stmt, &params)?
+                    .into_iter()
+                    .map(|row| {
+                        row.map
+                            .into_iter()
+                            .map(|(key, val)| (key, Value::from(val)))
+                            .collect()
+                    })
+                    .collect();
+
+                Ok(Rows { rows })
+            })
+            .await?
+    }
+
+    fn can_copy_in(&self, filename: &str) -> bool {
+        can_copy_in(filename)
+    }
+
+    async fn copy_in(&self, table: &str, filename: &str) -> Result<(), Error> {
+        if !self.can_copy_in(filename) {
+            return Err(Error::InputError(format!(
+                "Filename: '{filename}' must end with .csv"
+            )));
+        }
+
+        eprintln!("Loading table '{table}' from '{filename}' using SQLite's CSV load extension.");
+        let current_dir = env::current_dir()?;
+        let current_dir = current_dir.display();
+        let sql = format!(
+            r#"CREATE VIRTUAL TABLE temp.t1
+               USING CSV(filename='{current_dir}/{filename}', header=true)"#
+        );
+        self.execute(&sql, &[]).await?;
+        let sql = format!("INSERT INTO {table} SELECT * FROM temp.t1");
+        self.execute(&sql, &[]).await?;
+        Ok(())
+    }
+
+    /// Implements [Query::drop_table()] for [RusqliteTransaction]
+    async fn drop_table(&self, table: &str) -> Result<(), Error> {
+        let table = validate_table_name(table)?;
+
+        // Drop the table:
+        self.execute(&format!(r#"DROP TABLE IF EXISTS "{table}""#), &[])
+            .await?;
+
+        Ok(())
+    }
+
+    async fn drop_view(&self, view: &str) -> Result<(), Error> {
+        let view = validate_table_name(view)?;
+
+        // Drop the view:
+        self.execute(&format!(r#"DROP VIEW IF EXISTS "{view}""#), &[])
+            .await?;
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl Connection for RusqliteConnection {
+    // /// Begins a new [Transaction].
+    // async fn transaction(&self) -> Result<Box<dyn Transaction>, Error> {
+    //     match RusqliteTransaction::begin(self.pool.clone()).await {
+    //         Ok(tx) => Ok(Box::new(tx)),
+    //         Err(err) => Err(err),
+    //     }
+    // }
+
+    async fn transaction(&mut self) -> Result<Box<dyn Transaction + 'life0>, Error> {
+        todo!()
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// Rusqlite Transaction
+///////////////////////////////////////////////////////////////////////////////
 
 /// Represents a SQLite transaction.
 #[derive(Debug)]
@@ -243,6 +334,7 @@ impl Query for RusqliteTransaction {
 
     /// Implements [Query::query()] for [RusqliteTransaction]
     async fn query(&self, sql: &str, params: &[Value]) -> Result<Rows, Error> {
+        // NOTE: This is an exact copy of the code above. Maybe refactor.
         match &self.conn {
             Some(conn) => {
                 let sql_string = sql.to_string();
@@ -269,8 +361,8 @@ impl Query for RusqliteTransaction {
         }
     }
 
-    fn can_copy_in(&self, _filename: &str) -> bool {
-        todo!()
+    fn can_copy_in(&self, filename: &str) -> bool {
+        can_copy_in(filename)
     }
 
     async fn copy_in(&self, _table: &str, _filename: &str) -> Result<(), Error> {
@@ -330,6 +422,10 @@ impl RusqliteTransaction {
         Ok(RusqliteTransaction { syntax, pool, conn })
     }
 }
+
+///////////////////////////////////////////////////////////////////////////////
+// Free functions
+///////////////////////////////////////////////////////////////////////////////
 
 /// Uses the rusqlite driver directly to query a database using the given prepared [Statement]
 /// and parameters.
@@ -491,4 +587,9 @@ fn add_rusqlite_regexp_function(db: &rusqlite::Connection) -> Result<(), Error> 
             }
         },
     )?)
+}
+
+/// Determines whether copy_in() is supported for the given filename.
+fn can_copy_in(filename: &str) -> bool {
+    filename.to_lowercase().ends_with(".csv")
 }

@@ -1,4 +1,5 @@
-//! A trait for using database transactions
+//! Provides the [Transaction] trait for using database transactions, and the [AnyTransaction]
+//! struct, providing a handy generic wrapper around [Transaction] implementations.
 
 use async_trait::async_trait;
 
@@ -13,11 +14,21 @@ pub trait Transaction: Query + std::fmt::Debug {
 }
 
 /// An abstraction over the supported types of database [Transaction].
-#[allow(dead_code)]
 #[derive(Debug)]
 pub struct AnyTransaction {
     tx: Box<dyn Transaction>,
+    // TODO: Remove this allow:
+    #[allow(dead_code)]
     modified_tables: Vec<String>,
+}
+
+impl From<Box<dyn Transaction>> for AnyTransaction {
+    fn from(tx: Box<dyn Transaction>) -> Self {
+        AnyTransaction {
+            tx,
+            modified_tables: vec![],
+        }
+    }
 }
 
 impl AnyTransaction {

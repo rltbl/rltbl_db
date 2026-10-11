@@ -147,6 +147,7 @@
 
 // Re-exports:
 pub use self::column::Column;
+pub use self::connection::{AnyConnection, Connection};
 pub use self::error::Error;
 pub use self::pool::{AnyPool, Pool};
 pub use self::query::Query;
@@ -194,10 +195,13 @@ pub mod sql_parse;
 /// The [Query] trait
 pub mod query;
 
-/// The [Pool] trait (extends query)
+/// The [Pool] trait (extends query) and [AnyPool] struct.
 pub mod pool;
 
-/// The [Transaction] trait (extends query)
+/// The [Connection] trait (extends query (TODO: right?)) and [AnyConnection] struct.
+pub mod connection;
+
+/// The [Transaction] trait (extends query) and [AnyTransaction] struct.
 pub mod transaction;
 
 /// Caching support
