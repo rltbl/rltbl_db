@@ -11,7 +11,7 @@ use crate::{Column, Error, Syntax, Value, ValueType, values};
 pub static MAX_PARAMS_POSTGRES: usize = 32765;
 
 /// The identifying name of [this syntax](PostgresSyntax).
-pub static POSTGRES_SYNTAX_NAME: &str = "postgres";
+pub static POSTGRES_SYNTAX_NAME: &str = "PostgreSQL";
 
 #[derive(Debug)]
 pub struct PostgresSyntax;

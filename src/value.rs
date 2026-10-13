@@ -197,11 +197,6 @@ impl ValueType {
     /// Parses a given string representing the value of a database field into a [Value] of this
     /// type.
     pub fn parse_str(&self, value: &str) -> Result<Value, Error> {
-        // If the value is a NULL value, then we just return a Null:
-        if value == "" {
-            return Ok(Value::Null);
-        }
-
         // When parsing from a TSV or CSV file we will often encounter strings like "true",
         // "false", "f", "t", "0", and "1", possibly in uppercase or mixed case. When the current
         // type is a boolean, these should be interpreted as booleans. Otherwise, if the current
@@ -700,6 +695,12 @@ impl From<char> for Value {
 impl From<String> for Value {
     fn from(value: String) -> Self {
         Self::Text(value)
+    }
+}
+
+impl From<&String> for Value {
+    fn from(value: &String) -> Self {
+        Self::Text(value.clone())
     }
 }
 

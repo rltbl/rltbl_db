@@ -21,8 +21,8 @@ async fn run_axum(url: &str) {
     let pool = AnyPool::connect(url).await.unwrap();
     let kind = pool.syntax().name();
     let cascade = match kind.to_string().as_str() {
-        "sqlite" => "",
-        "postgres" => " CASCADE",
+        "SQLite" => "",
+        "PostgreSQL" => " CASCADE",
         _ => panic!("Invalid kind: '{}'", pool.syntax().name()),
     };
     pool.execute_batch(&format!(

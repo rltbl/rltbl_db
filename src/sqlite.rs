@@ -9,7 +9,7 @@ use crate::{Column, Error, Syntax, Value, ValueType, values};
 pub static MAX_PARAMS_SQLITE: usize = 32766;
 
 /// The identifying name of [this syntax](SqliteSyntax).
-pub static SQLITE_SYNTAX_NAME: &str = "sqlite";
+pub static SQLITE_SYNTAX_NAME: &str = "SQLite";
 
 #[derive(Debug)]
 pub struct SqliteSyntax;

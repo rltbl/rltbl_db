@@ -74,7 +74,7 @@
 //!     // Serialize the struct `Foo` into a value:
 //!     let test = Foo { bar: 1, baz: "b".to_string() };
 //!     let value = to_value(&test)?;
-//!     assert_eq!(value, Value::Json(json!({"bar": 1, "baz": "b"}))); 
+//!     assert_eq!(value, Value::Json(json!({"bar": 1, "baz": "b"})));
 //!
 //!     // Insert the value, as a row, into the database:
 //!     pool.execute("CREATE TABLE foo ( bar INT, baz TEXT )", ()).await?;
@@ -146,15 +146,17 @@
 //! implementations are required.
 
 // Re-exports:
+pub use self::cache::CachingStrategy;
 pub use self::column::Column;
 pub use self::error::Error;
 pub use self::pool::{AnyPool, Pool};
 pub use self::query::Query;
 pub use self::row::{Row, Rows};
+pub use self::serde::{from_row, from_value, to_row, to_value};
 pub use self::syntax::Syntax;
 pub use self::table::Table;
 pub use self::transaction::{AnyTransaction, Transaction};
-pub use self::value::{ValueType, Value};
+pub use self::value::{IntoValue, IntoValues, Value, ValueType};
 
 // Useful type aliases:
 pub type JsonValue = serde_json::Value;

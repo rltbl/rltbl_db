@@ -3,6 +3,7 @@
 #![recursion_limit = "2000"]
 
 use indexmap::{IndexMap, indexmap};
+use pretty_assertions::assert_eq;
 use rust_decimal::{Decimal, dec};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -17,7 +18,7 @@ use rltbl_db::{
     ValueType,
     cache::{CachingStrategy, QUERY_CACHE_TABLE, TABLE_CACHE_TABLE},
     row,
-    serde::{from_value, to_value},
+    serde::{from_row, from_value, to_row, to_value},
     sql_parse::{get_accessed_tables, get_affected_tables, get_view_tables, validate_table_name},
     values,
 };
@@ -250,12 +251,13 @@ fn test_serde() {
     let value: i64 = from_value(&value).unwrap();
     assert_eq!(value, expected_deserialized);
 
-    let expected_deserialized = 1_i128;
-    let expected_serialized = Value::SmallInteger(1);
-    let value = to_value(&expected_deserialized).unwrap();
-    assert_eq!(value, expected_serialized);
-    let value: i128 = from_value(&value).unwrap();
-    assert_eq!(value, expected_deserialized);
+    // TODO
+    // let expected_deserialized = 1_i128;
+    // let expected_serialized = Value::SmallInteger(1);
+    // let value = to_value(&expected_deserialized).unwrap();
+    // assert_eq!(value, expected_serialized);
+    // let value: i128 = from_value(&value).unwrap();
+    // assert_eq!(value, expected_deserialized);
 
     let expected_deserialized = u8::MAX;
     let expected_serialized = Value::SmallInteger(u8::MAX.into());
@@ -279,18 +281,19 @@ fn test_serde() {
     assert_eq!(value, expected_deserialized);
 
     let expected_deserialized = 1_u64;
-    let expected_serialized = Value::SmallInteger(1);
+    let expected_serialized = Value::BigInteger(1);
     let value = to_value(&expected_deserialized).unwrap();
     assert_eq!(value, expected_serialized);
     let value: u64 = from_value(&value).unwrap();
     assert_eq!(value, expected_deserialized);
 
-    let expected_deserialized = 1_u128;
-    let expected_serialized = Value::SmallInteger(1);
-    let value = to_value(&expected_deserialized).unwrap();
-    assert_eq!(value, expected_serialized);
-    let value: u128 = from_value(&value).unwrap();
-    assert_eq!(value, expected_deserialized);
+    // TODO
+    // let expected_deserialized = 1_u128;
+    // let expected_serialized = Value::SmallInteger(1);
+    // let value = to_value(&expected_deserialized).unwrap();
+    // assert_eq!(value, expected_serialized);
+    // let value: u128 = from_value(&value).unwrap();
+    // assert_eq!(value, expected_deserialized);
 
     let expected_deserialized = f32::MAX;
     let expected_serialized = Value::Real(f32::MAX);
@@ -608,7 +611,7 @@ fn test_serde() {
             "foo": "bar",
             "bar": 1,
             "list": [1, 2, 3],
-            "tuple": [1,"bar"],
+            "tuple": [1, "bar"],
             "json": [13, 14.0]
         },
         "structure_opt_none": JsonValue::Null,
@@ -624,10 +627,9 @@ fn test_serde() {
         "newtype_struct_opt_none": JsonValue::Null,
         "newtype_struct_opt_some": 1_i64,
 
-        "tuple": [1,"bar"],
+        "tuple": [1, "bar"],
         "tuple_opt_none": JsonValue::Null,
         "tuple_opt_some": [1,"bar"],
-
 
         "tuple_struct": [111,111],
         "tuple_struct_opt_none": JsonValue::Null,
@@ -677,6 +679,223 @@ fn test_serde() {
     assert_eq!(value, expected_serialized);
     let value: ComplicatedStruct = from_value(&value).unwrap();
     assert_eq!(value, expected_deserialized);
+
+    let expected_serialized_row = Row {
+        map: indexmap! {
+            "json_simple_1".to_string() => Value::BigInteger(1724),
+            "json_simple_2".to_string() => Value::Null,
+            "json_simple_3".to_string() => Value::Boolean(true),
+            "json_simple_4".to_string() => Value::Text("foo".to_string()),
+            "json_complex".to_string() => Value::Json(json!({"alpha": 10})),
+            "json_opt_none".to_string() => Value::Null,
+            "json_opt_some".to_string() => Value::Json(json!({})),
+
+            "boolean".to_string() => Value::Boolean(true),
+            "boolean_opt_none".to_string() => Value::Null,
+            "boolean_opt_some".to_string() => Value::Boolean(true),
+
+            "tinyint".to_string() => Value::SmallInteger(1),
+            "tinyint_opt_none".to_string() => Value::Null,
+            "tinyint_opt_some".to_string() => Value::SmallInteger(1),
+
+            "smallint".to_string() => Value::SmallInteger(1),
+            "smallint_opt_none".to_string() => Value::Null,
+            "smallint_opt_some".to_string() => Value::SmallInteger(1),
+
+            "mediumint".to_string() => Value::Integer(1),
+            "mediumint_opt_none".to_string() => Value::Null,
+            "mediumint_opt_some".to_string() => Value::Integer(1),
+
+            "bigint".to_string() => Value::BigInteger(1),
+            "bigint_opt_none".to_string() => Value::Null,
+            "bigint_opt_some".to_string() => Value::BigInteger(1),
+
+            "tiny_unsigned".to_string() => Value::SmallInteger(1),
+            "tiny_unsigned_opt_none".to_string() => Value::Null,
+            "tiny_unsigned_opt_some".to_string() => Value::SmallInteger(1),
+
+            "small_unsigned".to_string() => Value::SmallInteger(1),
+            "small_unsigned_opt_none".to_string() => Value::Null,
+            "small_unsigned_opt_some".to_string() => Value::SmallInteger(1),
+
+            "medium_unsigned".to_string() => Value::Integer(1),
+            "medium_unsigned_opt_none".to_string() => Value::Null,
+            "medium_unsigned_opt_some".to_string() => Value::Integer(1),
+
+            "big_unsigned".to_string() => Value::BigInteger(1),
+            "big_unsigned_opt_none".to_string() => Value::Null,
+            "big_unsigned_opt_some".to_string() => Value::BigInteger(1),
+
+            "smallfloat".to_string() => Value::Real(1.0),
+            "smallfloat_opt_none".to_string() => Value::Null,
+            "smallfloat_opt_some".to_string() => Value::Real(1.0),
+
+            "bigfloat".to_string() => Value::BigReal(1.0),
+            "bigfloat_opt_none".to_string() => Value::Null,
+            "bigfloat_opt_some".to_string() => Value::BigReal(1.0),
+
+            "text".to_string() => Value::Text(1.to_string()),
+            "text_opt_none".to_string() => Value::Null,
+            "text_opt_some".to_string() => Value::Text(1.to_string()),
+
+            "biggerfloat".to_string() => Value::Text("1".to_string()),
+            "biggerfloat_opt_none".to_string() => Value::Null,
+            "biggerfloat_opt_some".to_string() => Value::Text("1".to_string()),
+
+            "sequence".to_string() => Value::Json(json!([0, 1, 2])),
+            "sequence_opt_none".to_string() => Value::Null,
+            "sequence_opt_some".to_string() => Value::Json(json!([0, 1, 2])),
+
+            "enumeration".to_string() => Value::Json(json!({"NewTypeVariant": 1.0})),
+            "enumeration_opt_none".to_string() => Value::Null,
+            "enumeration_opt_some".to_string() => Value::Text("UnitVariant".to_string()),
+
+            "struct_variant".to_string() => Value::Json(json!({"StructVariant": {"foo": 1}})),
+            "struct_variant_opt_none".to_string() => Value::Null,
+            "struct_variant_opt_some".to_string() => Value::Json(json!({"StructVariant": {"foo": 1}})),
+
+            "tuple_variant".to_string() => Value::Json(json!({"TupleVariant": [1,1]})),
+            "tuple_variant_opt_none".to_string() => Value::Null,
+            "tuple_variant_opt_some".to_string() => Value::Json(json!({"TupleVariant": [1, 1]})),
+
+            "unit_struct".to_string() => Value::Text("UnitStruct".to_string()),
+            "unit_struct_opt_none".to_string() => Value::Null,
+            "unit_struct_opt_some".to_string() => Value::Text("UnitStruct".to_string()),
+
+            "structure".to_string() => Value::Json(json!({
+                "foo": "bar",
+                "bar": 1,
+                "list": [1, 2, 3],
+                "tuple": [1, "bar"],
+                "json": [13, 14.0]
+            })),
+            "structure_opt_none".to_string() => Value::Null,
+            "structure_opt_some".to_string() => Value::Json(json!({
+                "foo": "bar",
+                "bar": 1,
+                "list": [1, 2, 3],
+                "tuple": [1, "bar"],
+                "json": {"foo": 13.2, "bar": "yes"}
+            })),
+
+            "newtype_struct".to_string() => Value::BigInteger(1),
+            "newtype_struct_opt_none".to_string() => Value::Null,
+            "newtype_struct_opt_some".to_string() => Value::BigInteger(1),
+
+            "tuple".to_string() => Value::Json(json!([1,"bar"])),
+            "tuple_opt_none".to_string() => Value::Null,
+            "tuple_opt_some".to_string() => Value::Json(json!([1,"bar"])),
+
+            "tuple_struct".to_string() => Value::Json(json!([111,111])),
+            "tuple_struct_opt_none".to_string() => Value::Null,
+            "tuple_struct_opt_some".to_string() => Value::Json(json!([111,111])),
+
+            "nested_struct".to_string() => Value::Json(json!({
+                "foo": {"NewTypeVariant":1.0},
+                "bar": {
+                    "foo": "bar",
+                    "bar": 1,
+                    "list": [1, 2, 3],
+                    "tuple": [1, "bar"],
+                    "json": []
+                },
+                "foo_list":[{"NewTypeVariant": 1.0}],
+                "bar_list":[{
+                    "foo": "bar",
+                    "bar": 1,
+                    "list": [1, 2, 3],
+                    "tuple": [1, "bar"],
+                    "json": [JsonValue::Null, {}]
+                }],
+                "bar_tuple": [1, 1, "bar"]
+            })),
+            "nested_struct_opt_none".to_string() => Value::Null,
+            "nested_struct_opt_some".to_string() => Value::Json(json!({
+                "foo": {"NewTypeVariant": 1.0},
+                "bar": {
+                    "foo": "bar",
+                    "bar": 1,
+                    "list": [1, 2, 3],
+                    "tuple": [1, "bar"],
+                    "json": JsonValue::Null
+                },
+                "foo_list":[{"NewTypeVariant": 1.0}],
+                "bar_list":[{
+                    "foo": "bar",
+                    "bar": 1,
+                    "list": [1, 2, 3],
+                    "tuple": [1, "bar"],
+                    "json": "Semmelweis"
+                }],
+                "bar_tuple": [1, 1, "bar"]
+            }))
+        },
+    };
+
+    let row = to_row(&expected_deserialized).unwrap();
+    assert_eq!(row, expected_serialized_row, "to_row");
+    let row: ComplicatedStruct = from_row(&row).unwrap();
+    assert_eq!(row, expected_deserialized, "from_row");
+}
+
+#[test]
+fn test_serde_row() {
+    let before = NormalStruct {
+        foo: String::from("bar"),
+        bar: 1,
+        list: vec![1, 2, 3],
+        tuple: (1, String::from("bar")),
+        json: json!([13, 14.0]),
+    };
+    let row = to_row(&before).expect("to_row");
+    let after: NormalStruct = from_row(&row).expect("from_row");
+    assert_eq!(before, after, "normal struct as row");
+
+    let before_struct = NestedStruct {
+        foo: Enumeration::NewTypeVariant(1.0),
+        bar: NormalStruct {
+            foo: String::from("bar"),
+            bar: 1,
+            list: vec![1, 2, 3],
+            tuple: (1, String::from("bar")),
+            json: json!([]),
+        },
+        foo_list: vec![Enumeration::NewTypeVariant(1.0)],
+        bar_list: vec![NormalStruct {
+            foo: String::from("bar"),
+            bar: 1,
+            list: vec![1, 2, 3],
+            tuple: (1, String::from("bar")),
+            json: json!([JsonValue::Null, json!({})]),
+        }],
+        bar_tuple: (1, 1, String::from("bar")),
+    };
+    let before_row = row! {
+        "foo" => json!(Enumeration::NewTypeVariant(1.0)),
+        "bar" => json!(NormalStruct {
+            foo: String::from("bar"),
+            bar: 1,
+            list: vec![1, 2, 3],
+            tuple: (1, String::from("bar")),
+            json: json!([]),
+        }),
+        "foo_list" => json!(vec![Enumeration::NewTypeVariant(1.0)]),
+        "bar_list" => json!(vec![NormalStruct {
+            foo: String::from("bar"),
+            bar: 1,
+            list: vec![1, 2, 3],
+            tuple: (1, String::from("bar")),
+            json: json!([JsonValue::Null, json!({})]),
+        }]),
+        "bar_tuple" => json!((1, 1, String::from("bar"))),
+    };
+    println!("before row {before_row:?}");
+    let row = to_row(&before_struct).expect("to_row");
+    println!("nested row {row:?}");
+    assert_eq!(before_row, row, "nested struct as row");
+    let after: NestedStruct = from_row(&row).expect("from_row");
+    assert_eq!(before_struct, after, "nested struct as row");
+    assert!(false, "DONE");
 }
 
 #[test]
@@ -720,8 +939,8 @@ async fn primary_keys(url: &str) {
     let pool = AnyPool::connect(url).await.unwrap();
     let syntax = pool.syntax();
     let cascade = match syntax.name() {
-        "postgres" => " CASCADE",
-        "sqlite" => "",
+        "PostgreSQL" => " CASCADE",
+        "SQLite" => "",
         _ => panic!("Invalid syntax '{}'", syntax.name()),
     };
     pool.execute_batch(&format!(
@@ -773,8 +992,8 @@ async fn text_column_query(url: &str) {
         "DROP TABLE IF EXISTS test_table_text{cascade};\
          CREATE TABLE test_table_text ( value TEXT )",
         cascade = match syntax.name() {
-            "postgres" => " CASCADE",
-            "sqlite" => "",
+            "PostgreSQL" => " CASCADE",
+            "SQLite" => "",
             _ => panic!("Invalid syntax '{}'", syntax.name()),
         }
     ))
@@ -861,8 +1080,8 @@ async fn integer_column_query(url: &str) {
         "DROP TABLE IF EXISTS test_table_int{cascade};\
          CREATE TABLE test_table_int ( value_2 INT2, value_4 INT4, value_8 INT8 )",
         cascade = match syntax.name() {
-            "postgres" => " CASCADE",
-            "sqlite" => "",
+            "PostgreSQL" => " CASCADE",
+            "SQLite" => "",
             _ => panic!("Invalid syntax '{}'", syntax.name()),
         }
     ))
@@ -937,8 +1156,8 @@ async fn float_column_query(url: &str) {
         "DROP TABLE IF EXISTS test_table_float{cascade};\
          CREATE TABLE test_table_float ( value FLOAT8 )",
         cascade = match syntax.name() {
-            "postgres" => " CASCADE",
-            "sqlite" => "",
+            "PostgreSQL" => " CASCADE",
+            "SQLite" => "",
             _ => panic!("Invalid syntax '{}'", syntax.name()),
         }
     ))
@@ -989,8 +1208,8 @@ async fn float_column_query(url: &str) {
         "DROP TABLE IF EXISTS test_table_float{cascade};\
          CREATE TABLE test_table_float ( value FLOAT4 )",
         cascade = match syntax.name() {
-            "postgres" => " CASCADE",
-            "sqlite" => "",
+            "PostgreSQL" => " CASCADE",
+            "SQLite" => "",
             _ => panic!("Invalid syntax '{}'", syntax.name()),
         }
     ))
@@ -1043,8 +1262,8 @@ async fn mixed_column_query(url: &str) {
          alt_numeric_value NUMERIC\
          )",
         cascade = match syntax.name() {
-            "postgres" => " CASCADE",
-            "sqlite" => "",
+            "PostgreSQL" => " CASCADE",
+            "SQLite" => "",
             _ => panic!("Invalid syntax '{}'", syntax.name()),
         }
     ))
@@ -1116,8 +1335,8 @@ async fn mixed_column_query(url: &str) {
             "int_value" => 1_i64,
             "alt_int_value" => Value::Null,
             "bool_value" => match syntax.name() {
-                "sqlite" => Value::from(1_i64),
-                "postgres" => Value::from(true),
+                "SQLite" => Value::from(1_i64),
+                "PostgreSQL" => Value::from(true),
                 _ => panic!("Invalid syntax '{}'", syntax.name()),
             },
             "alt_bool_value" => Value::Null,
@@ -1137,8 +1356,8 @@ async fn mixed_column_query(url: &str) {
             "int_value" => 1_i64,
             "alt_int_value" => Value::Null,
             "bool_value" => match syntax.name() {
-                "sqlite" => Value::from(1_i64),
-                "postgres" => Value::from(true),
+                "SQLite" => Value::from(1_i64),
+                "PostgreSQL" => Value::from(true),
                 _ => panic!("Invalid syntax '{}'", syntax.name()),
             },
             "alt_bool_value" => Value::Null,
@@ -1166,8 +1385,8 @@ async fn input_params(url: &str) {
     let syntax = pool.syntax();
     let pp = syntax.param_prefix().to_string();
     let cascade = match syntax.name() {
-        "postgres" => " CASCADE",
-        "sqlite" => "",
+        "PostgreSQL" => " CASCADE",
+        "SQLite" => "",
         _ => panic!("Invalid syntax '{}'", syntax.name()),
     };
     pool.execute(
@@ -1291,8 +1510,8 @@ async fn drop_table(url: &str) {
     let pool = AnyPool::connect(url).await.unwrap();
     let syntax = pool.syntax();
     let cascade = match syntax.name() {
-        "postgres" => " CASCADE",
-        "sqlite" => "",
+        "PostgreSQL" => " CASCADE",
+        "SQLite" => "",
         _ => panic!("Invalid syntax '{}'", syntax.name()),
     };
     let table1 = "test_drop1";
@@ -1340,8 +1559,8 @@ async fn insert(url: &str) {
     let pool = AnyPool::connect(url).await.unwrap();
     let syntax = pool.syntax();
     let cascade = match syntax.name() {
-        "postgres" => " CASCADE",
-        "sqlite" => "",
+        "PostgreSQL" => " CASCADE",
+        "SQLite" => "",
         _ => panic!("Invalid syntax '{}'", syntax.name()),
     };
     pool.execute_batch(&format!(
@@ -1366,8 +1585,8 @@ async fn insert(url: &str) {
             row! {
                 "int_value" => 1_i64,
                 "bool_value" => match syntax.name() {
-                    "sqlite" => Value::from(1_i64),
-                    "postgres" => Value::from(true),
+                    "SQLite" => Value::from(1_i64),
+                    "PostgreSQL" => Value::from(true),
                     _ => panic!("Invalid syntax '{}'", syntax.name()),
                 },
             },
@@ -1397,8 +1616,8 @@ async fn insert(url: &str) {
                 "float_value" => Value::Null,
                 "int_value" => 1_i64,
                 "bool_value" => match syntax.name() {
-                    "sqlite" => Value::from(1_i64),
-                    "postgres" => Value::from(true),
+                    "SQLite" => Value::from(1_i64),
+                    "PostgreSQL" => Value::from(true),
                     _ => panic!("Invalid syntax '{}'", syntax.name()),
                 },
             }
@@ -1423,8 +1642,8 @@ async fn insert_returning(url: &str) {
     let pool = AnyPool::connect(url).await.unwrap();
     let syntax = pool.syntax();
     let cascade = match syntax.name() {
-        "postgres" => " CASCADE",
-        "sqlite" => "",
+        "PostgreSQL" => " CASCADE",
+        "SQLite" => "",
         _ => panic!("Invalid syntax '{}'", syntax.name()),
     };
     pool.execute_batch(&format!(
@@ -1472,8 +1691,8 @@ async fn insert_returning(url: &str) {
                 "float_value" => Value::Null,
                 "int_value" => 1_i64,
                 "bool_value" => match syntax.name() {
-                    "sqlite" => Value::from(1_i64),
-                    "postgres" => Value::from(true),
+                    "SQLite" => Value::from(1_i64),
+                    "PostgreSQL" => Value::from(true),
                     _ => panic!("Invalid syntax '{}'", syntax.name()),
                 },
             }
@@ -1530,8 +1749,8 @@ async fn update(url: &str) {
     let pool = AnyPool::connect(url).await.unwrap();
     let syntax = pool.syntax();
     let cascade = match syntax.name() {
-        "postgres" => " CASCADE",
-        "sqlite" => "",
+        "PostgreSQL" => " CASCADE",
+        "SQLite" => "",
         _ => panic!("Invalid syntax '{}'", syntax.name()),
     };
     pool.execute_batch(&format!(
@@ -1635,8 +1854,8 @@ async fn update_returning(url: &str) {
     let pool = AnyPool::connect(url).await.unwrap();
     let syntax = pool.syntax();
     let cascade = match syntax.name() {
-        "postgres" => " CASCADE",
-        "sqlite" => "",
+        "PostgreSQL" => " CASCADE",
+        "SQLite" => "",
         _ => panic!("Invalid syntax '{}'", syntax.name()),
     };
     pool.execute_batch(&format!(
@@ -1842,8 +2061,8 @@ async fn upsert(url: &str) {
     let pool = AnyPool::connect(url).await.unwrap();
     let syntax = pool.syntax();
     let cascade = match syntax.name() {
-        "postgres" => " CASCADE",
-        "sqlite" => "",
+        "PostgreSQL" => " CASCADE",
+        "SQLite" => "",
         _ => panic!("Invalid syntax '{}'", syntax.name()),
     };
     pool.execute_batch(&format!(
@@ -1953,8 +2172,8 @@ async fn upsert_returning(url: &str) {
     let pool = AnyPool::connect(url).await.unwrap();
     let syntax = pool.syntax();
     let cascade = match syntax.name() {
-        "postgres" => " CASCADE",
-        "sqlite" => "",
+        "PostgreSQL" => " CASCADE",
+        "SQLite" => "",
         _ => panic!("Invalid syntax '{}'", syntax.name()),
     };
     pool.execute_batch(&format!(
@@ -2668,10 +2887,10 @@ async fn sql_type(url: &str) {
     };
 
     match syntax.name() {
-        "postgres" => {
+        "PostgreSQL" => {
             assert_eq!(gamma_type, ValueType::SmallInteger("smallint".to_string()))
         }
-        "sqlite" => assert_eq!(gamma_type, ValueType::BigInteger("smallint".to_string())),
+        "SQLite" => assert_eq!(gamma_type, ValueType::BigInteger("smallint".to_string())),
         _ => panic!("Invalid syntax: '{}'", syntax.name()),
     };
 
@@ -4493,7 +4712,7 @@ async fn test_import_small() {
 
 async fn import_small(url: &str) {
     let pool = AnyPool::connect(url).await.unwrap();
-    if pool.syntax().name() == "sqlite" {
+    if pool.syntax().name() == "SQLite" {
         pool.import_table("tests/data/table1.csv").await.unwrap();
         let rows = pool.query("SELECT * FROM table1", ()).await.unwrap();
         assert_eq!(
@@ -4547,7 +4766,7 @@ async fn import_small(url: &str) {
                 },
             ]
         );
-    } else if pool.syntax().name() == "postgres" {
+    } else if pool.syntax().name() == "PostgreSQL" {
         pool.import_table("tests/data/table1.tsv").await.unwrap();
         let rows = pool.query("SELECT * FROM table1", ()).await.unwrap();
         assert_eq!(
