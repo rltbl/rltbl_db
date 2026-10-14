@@ -11,7 +11,7 @@ pub trait Connection: Query + std::fmt::Debug {
     // Note: the 'life0 lifetime allows the returned Transaction to depend on the data
     // in this connection.
     /// Begin a transaction.
-    async fn transaction(&mut self) -> Result<Box<dyn Transaction + 'life0>, Error>;
+    async fn transaction(self: Box<Self>) -> Result<Box<dyn Transaction>, Error>;
 }
 
 /// An abstraction over the supported connection types.

@@ -4605,7 +4605,9 @@ async fn import_small(url: &str) {
 #[tokio::test]
 async fn test_transaction() {
     let url = "postgresql:///rltbl_db";
-    let pool = PostgresPool::connect(url).await.expect("connect to sqlite");
+    let pool = PostgresPool::connect(url)
+        .await
+        .expect("connect to Postgres");
     pool.query("DROP TABLE IF EXISTS foo", &[])
         .await
         .expect("create table");
@@ -4622,8 +4624,10 @@ async fn test_transaction() {
     assert_eq!(rows.rows.len(), 1, "count rows before");
 
     println!("before pool {:?}", pool.pool.status());
-    let mut conn = pool.connection().await.unwrap();
-    let mut tx = conn.transaction().await.unwrap();
+    let conn = pool.connection().await.unwrap();
+    println!("conn {conn:?}");
+    let tx = conn.transaction().await.unwrap();
+    println!("tx {tx:?}");
 
     tx.query("INSERT INTO foo VALUES (456)", &[])
         .await
@@ -4632,7 +4636,7 @@ async fn test_transaction() {
     // TODO: This is not working. The compiler complains that `conn` needs to outlive static.
     // This seems very bad, and I worry that we are coming up against a fundamental limitation,
     // but I'm not sure.
-    // foo(&tx).await;
+    foo(&tx).await;
 
     let rows = tx
         .query("SELECT bar FROM foo", &[])
@@ -4661,7 +4665,7 @@ async fn test_transaction() {
 
     // TODO: This fails because (a) we can't call foo() above, and because (b) we can't commit()
     // or rollback().
-    // assert_eq!(rows.rows.len(), 2, "count rows after");
+    assert_eq!(rows.rows.len(), 2, "count rows after");
 }
 
 #[allow(unused)]

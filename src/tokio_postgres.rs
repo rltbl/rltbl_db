@@ -490,12 +490,8 @@ impl Query for PostgresConnection {
 
 #[async_trait]
 impl Connection for PostgresConnection {
-    async fn transaction(&mut self) -> Result<Box<dyn Transaction + 'life0>, Error> {
-        let tx = self.connection.transaction().await.unwrap();
-        Ok(Box::new(PostgresTransaction {
-            tx,
-            syntax: PostgresSyntax,
-        }))
+    async fn transaction(self: Box<Self>) -> Result<Box<dyn Transaction>, Error> {
+        Ok(Box::new(PostgresTransaction::begin(*self).await?))
     }
 }
 
@@ -504,14 +500,24 @@ impl Connection for PostgresConnection {
 ///////////////////////////////////////////////////////////////////////////////
 
 #[derive(Debug)]
-pub struct PostgresTransaction<'a> {
-    pub tx: deadpool_postgres::Transaction<'a>,
+pub struct PostgresTransaction {
+    pub connection: PostgresConnection,
     #[allow(unused)]
-    syntax: PostgresSyntax,
+    pub syntax: PostgresSyntax,
+}
+
+impl PostgresTransaction {
+    pub async fn begin(connection: PostgresConnection) -> Result<Self, Error> {
+        connection.execute("BEGIN TRANSACTION", &[]).await?;
+        Ok(Self {
+            connection,
+            syntax: PostgresSyntax,
+        })
+    }
 }
 
 #[async_trait]
-impl Query for PostgresTransaction<'_> {
+impl Query for PostgresTransaction {
     /// Implements [Query::syntax()] for [PostgresTransaction]
     fn syntax(&self) -> &dyn Syntax {
         &self.syntax
@@ -526,7 +532,13 @@ impl Query for PostgresTransaction<'_> {
     async fn query(&self, sql: &str, params: &[Value]) -> Result<Rows, Error> {
         // NOTE: This is an exact copy of the code above. Maybe refactor.
         // The expected types of all of the parameters as reported by the database via prepare():
-        let param_pg_types = self.tx.prepare(sql).await?.params().to_vec();
+        let param_pg_types = self
+            .connection
+            .connection
+            .prepare(sql)
+            .await?
+            .params()
+            .to_vec();
 
         let mut paramses: Vec<Box<dyn ToSql + Sync + Send>> = Vec::new();
         let gen_err = |param: &Value, sql_type: &str| -> String {
@@ -620,7 +632,7 @@ impl Query for PostgresTransaction<'_> {
             .iter()
             .map(|p| p.as_ref() as &(dyn ToSql + Sync))
             .collect();
-        let rows = self.tx.query(sql, &query_params).await?;
+        let rows = self.connection.connection.query(sql, &query_params).await?;
         let mut db_rows = vec![];
         for row in &rows {
             let mut db_row = Row::new();
@@ -664,16 +676,16 @@ impl Query for PostgresTransaction<'_> {
 }
 
 #[async_trait]
-impl Transaction for PostgresTransaction<'_> {
-    async fn rollback(&mut self) -> Result<(), Error> {
+impl Transaction for PostgresTransaction {
+    async fn rollback(self: Box<Self>) -> Result<(), Error> {
         // TODO: Not working (compiler complains). Seems like this might be a major problem.
-        //self.tx.rollback().await.unwrap();
+        self.connection.execute("ROLLBACK", &[]).await.unwrap();
         Ok(())
     }
 
-    async fn commit(&mut self) -> Result<(), Error> {
+    async fn commit(self: Box<Self>) -> Result<(), Error> {
         // TODO: Not working (compiler complains). Seems like this might be a major problem.
-        //self.tx.commit().await.unwrap();
+        self.connection.execute("COMMIT", &[]).await.unwrap();
         Ok(())
     }
 }
@@ -761,5 +773,3 @@ fn can_copy(filename: &str) -> bool {
     let filename = filename.to_lowercase();
     filename.ends_with("tsv") || filename.ends_with(".csv")
 }
-
-

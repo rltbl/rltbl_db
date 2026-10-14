@@ -8,9 +8,9 @@ use crate::{error::Error, query::Query, row::Rows, value::IntoValues};
 /// An asynchronous trait for using database transactions
 #[async_trait]
 pub trait Transaction: Query + std::fmt::Debug {
-    async fn commit(&mut self) -> Result<(), Error>;
+    async fn commit(self: Box<Self>) -> Result<(), Error>;
 
-    async fn rollback(&mut self) -> Result<(), Error>;
+    async fn rollback(self: Box<Self>) -> Result<(), Error>;
 }
 
 /// An abstraction over the supported types of database [Transaction].
@@ -61,13 +61,13 @@ impl AnyTransaction {
     // TODO: upsert_returning
 
     /// Commit the transaction.
-    pub async fn commit(&mut self) -> Result<(), Error> {
+    pub async fn commit(self) -> Result<(), Error> {
         // TODO: handle cache for modified tables
         self.tx.commit().await
     }
 
     /// Roll back the transaction.
-    pub async fn rollback(&mut self) -> Result<(), Error> {
+    pub async fn rollback(self) -> Result<(), Error> {
         self.tx.rollback().await
     }
 }

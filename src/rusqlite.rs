@@ -273,7 +273,7 @@ impl Query for RusqliteConnection {
 impl Connection for RusqliteConnection {
     // Note: the 'life0 lifetime allows the returned Transaction to depend on the data
     // in this connection.
-    async fn transaction(&mut self) -> Result<Box<dyn Transaction + 'life0>, Error> {
+    async fn transaction(self: Box<Self>) -> Result<Box<dyn Transaction>, Error> {
         todo!()
     }
 }
@@ -372,13 +372,13 @@ impl Query for RusqliteTransaction {
 #[async_trait]
 impl Transaction for RusqliteTransaction {
     /// Rolls back this transaction.
-    async fn rollback(&mut self) -> Result<(), Error> {
+    async fn rollback(self: Box<Self>) -> Result<(), Error> {
         match &self.conn {
             Some(conn) => {
                 conn.interact(move |conn| conn.execute("ROLLBACK;", []).unwrap())
                     .await
                     .unwrap();
-                self.conn = None;
+                // self.conn = None;
                 Ok(())
             }
             None => Err(Error::DatabaseError("transaction already complete".into())),
@@ -386,13 +386,13 @@ impl Transaction for RusqliteTransaction {
     }
 
     /// Commits this transaction.
-    async fn commit(&mut self) -> Result<(), Error> {
+    async fn commit(self: Box<Self>) -> Result<(), Error> {
         match &self.conn {
             Some(conn) => {
                 conn.interact(move |conn| conn.execute("COMMIT;", []).unwrap())
                     .await
                     .unwrap();
-                self.conn = None;
+                // self.conn = None;
                 Ok(())
             }
             None => Err(Error::DatabaseError("transaction already complete".into())),
