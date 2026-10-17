@@ -140,21 +140,19 @@
 //! 1. [Syntax] trait with your SQL language "flavour"
 //! 2. [Query] trait to run a query
 //! 3. [Pool] trait to connect to a database pool
-//! 4. [Transaction] trait to support transactions
 //!
 //! Each of these traits has default implementations of most methods, so only a few method
 //! implementations are required.
 
 // Re-exports:
 pub use self::column::Column;
-pub use self::connection::{AnyConnection, Connection};
+pub use self::connection::{Connection, AnyTransaction};
 pub use self::error::Error;
 pub use self::pool::{AnyPool, Pool};
 pub use self::query::Query;
 pub use self::row::{Row, Rows};
 pub use self::syntax::Syntax;
 pub use self::table::Table;
-pub use self::transaction::{AnyTransaction, Transaction};
 pub use self::value::{ValueType, Value};
 
 // Useful type aliases:
@@ -198,11 +196,8 @@ pub mod query;
 /// The [Pool] trait (extends query) and [AnyPool] struct.
 pub mod pool;
 
-/// The [Connection] trait (extends query (TODO: right?)) and [AnyConnection] struct.
+/// The [Connection] trait (extends query) and [AnyTransaction] struct.
 pub mod connection;
-
-/// The [Transaction] trait (extends query) and [AnyTransaction] struct.
-pub mod transaction;
 
 /// Caching support
 pub mod cache;

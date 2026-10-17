@@ -6,7 +6,7 @@ use rust_decimal::prelude::ToPrimitive;
 use std::env;
 
 use crate::{
-    Connection, Error, JsonValue, Pool, Query, Row, Rows, Syntax, Transaction, Value,
+    AnyTransaction, Connection, Error, JsonValue, Pool, Query, Row, Rows, Syntax, Value,
     error::DatabaseError, sql_parse::validate_table_name, sqlite::SqliteSyntax,
 };
 
@@ -302,90 +302,9 @@ impl Query for LibSQLConnection {
 
 #[async_trait]
 impl Connection for LibSQLConnection {
-    // Note: the 'life0 lifetime allows the returned Transaction to depend on the data
-    // in this connection.
-    async fn transaction(&mut self) -> Result<Box<dyn Transaction + 'life0>, Error> {
-        todo!()
-    }
-}
-
-///////////////////////////////////////////////////////////////////////////////
-// LibSQL Transactions
-///////////////////////////////////////////////////////////////////////////////
-
-/// Represents a SQLite transaction.
-#[derive(Debug)]
-pub struct LibSQLTransaction {
-    /// The syntax used for this transaction.
-    _syntax: SqliteSyntax,
-    csv_extension_enabled: bool,
-    _pool: deadpool_libsql::Pool,
-    _conn: Option<deadpool_libsql::Connection>,
-}
-
-/// [Drop] implements the destruction operation for rust objects.
-impl Drop for LibSQLTransaction {
-    /// Called whenever the object representing the LibSQLTransaction is dropped.
-    /// Executes a ROLLBACK of the transaction.
-    fn drop(&mut self) {
-        todo!()
-    }
-}
-
-#[async_trait]
-impl Query for LibSQLTransaction {
-    /// Implements [Query::syntax()] for [LibSQLTransaction]
-    fn syntax(&self) -> &dyn Syntax {
-        todo!()
-    }
-
-    /// Implements [Query::execute_batch()] for [LibSQLTransaction]
-    async fn execute_batch(&self, _sql: &str) -> Result<(), Error> {
-        todo!()
-    }
-
-    /// Implements [Query::query()] for [LibSQLTransaction]
-    async fn query(&self, _sql: &str, _params: &[Value]) -> Result<Rows, Error> {
-        todo!()
-    }
-
-    /// Implements [Query::can_copy_in()] for [LibSQLTransaction]
-    fn can_copy_in(&self, filename: &str) -> bool {
-        can_copy_in(self.csv_extension_enabled, filename)
-    }
-
-    /// Implements [Query::copy_in()] for [LibSQLTransaction]
-    async fn copy_in(&self, _table: &str, _filename: &str) -> Result<(), Error> {
-        todo!()
-    }
-
-    /// Implements [Query::drop_table()] for [LibSQLTransaction]
-    async fn drop_table(&self, _table: &str) -> Result<(), Error> {
-        todo!()
-    }
-
-    async fn drop_view(&self, _view: &str) -> Result<(), Error> {
-        todo!()
-    }
-}
-
-#[async_trait]
-impl Transaction for LibSQLTransaction {
-    /// Rolls back this transaction.
-    async fn rollback(&mut self) -> Result<(), Error> {
-        todo!()
-    }
-
-    /// Commits this transaction.
-    async fn commit(&mut self) -> Result<(), Error> {
-        todo!()
-    }
-}
-
-impl LibSQLTransaction {
-    /// Creates a new [LibSQLTransaction].
-    pub async fn _begin(_pool: deadpool_libsql::Pool) -> Result<Self, Error> {
-        todo!()
+    /// Implements [Connection::transaction()]
+    async fn transaction(self: Box<LibSQLConnection>) -> Result<AnyTransaction, Error> {
+        Ok(AnyTransaction::begin(self).await.unwrap())
     }
 }
 

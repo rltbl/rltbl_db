@@ -11,13 +11,12 @@ use deadpool_sqlite::{
         vtab::csvtab,
     },
 };
-use indexmap::indexmap;
 use regex::Regex;
 use rust_decimal::Decimal;
 use std::{env, str::from_utf8, sync::Arc};
 
 use crate::{
-    Connection, Error, JsonValue, Pool, Query, Row, Rows, Syntax, Transaction, Value,
+    AnyTransaction, Connection, Error, JsonValue, Pool, Query, Row, Rows, Syntax, Value,
     error::DatabaseError, sql_parse::validate_table_name, sqlite::SqliteSyntax,
 };
 
@@ -54,16 +53,18 @@ impl From<deadpool_sqlite::InteractError> for DatabaseError {
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-// Rusqlite Connection Pools
+// RusqlitePool
 ///////////////////////////////////////////////////////////////////////////////
 
 /// Represents a deadpool-sqlite database connection pool.
 #[derive(Debug)]
 pub struct RusqlitePool {
-    syntax: SqliteSyntax,
     pub pool: deadpool_sqlite::Pool,
+    syntax: SqliteSyntax,
 }
 
+// Query is implemented for RusqlitePool (mainly) as a wrapper around our implementation of
+// Query for RusqliteConnection (below).
 #[async_trait]
 impl Query for RusqlitePool {
     /// Implements [Query::syntax()].
@@ -79,9 +80,6 @@ impl Query for RusqlitePool {
             syntax: self.syntax,
         };
         connection.execute_batch(sql).await?;
-        // TODO: Not sure if this is still needed. Seems ok without it ...
-        // // We need to drop conn here to ensure that any changes to the db are persisted.
-        // drop(connection);
         Ok(())
     }
 
@@ -134,6 +132,7 @@ impl Query for RusqlitePool {
 
 #[async_trait]
 impl Pool for RusqlitePool {
+    /// Implements [Pool::connection()].
     async fn connection(&self) -> Result<Box<dyn Connection>, Error> {
         let connection = self.pool.get().await?;
         let connection = RusqliteConnection {
@@ -172,7 +171,7 @@ impl RusqlitePool {
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-// Rusqlite Connections
+// RusqliteConnection
 ///////////////////////////////////////////////////////////////////////////////
 
 /// Represents a SQLite connection.
@@ -184,10 +183,12 @@ pub struct RusqliteConnection {
 
 #[async_trait]
 impl Query for RusqliteConnection {
+    /// Implements [Query::syntax()]
     fn syntax(&self) -> &dyn Syntax {
         &self.syntax
     }
 
+    /// Implements [Query::execute_batch()]
     async fn execute_batch(&self, sql: &str) -> Result<(), Error> {
         let sql_string = sql.to_string();
         self.connection
@@ -201,6 +202,7 @@ impl Query for RusqliteConnection {
         Ok(())
     }
 
+    /// Implements [Query::query()]
     async fn query(&self, sql: &str, params: &[Value]) -> Result<Rows, Error> {
         let sql_string = sql.to_string();
         let params = params.to_vec();
@@ -225,10 +227,12 @@ impl Query for RusqliteConnection {
             .await?
     }
 
+    /// Implements [Query::can_copy_in()]
     fn can_copy_in(&self, filename: &str) -> bool {
         can_copy_in(filename)
     }
 
+    /// Implements [Query::copy_in()]
     async fn copy_in(&self, table: &str, filename: &str) -> Result<(), Error> {
         if !self.can_copy_in(filename) {
             return Err(Error::InputError(format!(
@@ -249,6 +253,7 @@ impl Query for RusqliteConnection {
         Ok(())
     }
 
+    /// Implements [Query::drop_table()]
     async fn drop_table(&self, table: &str) -> Result<(), Error> {
         let table = validate_table_name(table)?;
 
@@ -259,6 +264,7 @@ impl Query for RusqliteConnection {
         Ok(())
     }
 
+    /// Implements [Query::drop_view()]
     async fn drop_view(&self, view: &str) -> Result<(), Error> {
         let view = validate_table_name(view)?;
 
@@ -271,145 +277,9 @@ impl Query for RusqliteConnection {
 
 #[async_trait]
 impl Connection for RusqliteConnection {
-    // Note: the 'life0 lifetime allows the returned Transaction to depend on the data
-    // in this connection.
-    async fn transaction(&mut self) -> Result<Box<dyn Transaction + 'life0>, Error> {
-        todo!()
-    }
-}
-
-///////////////////////////////////////////////////////////////////////////////
-// Rusqlite Transactions
-///////////////////////////////////////////////////////////////////////////////
-
-/// Represents a SQLite transaction.
-#[derive(Debug)]
-pub struct RusqliteTransaction {
-    pub pool: deadpool_sqlite::Pool,
-    /// The syntax used for this transaction.
-    syntax: SqliteSyntax,
-    conn: Option<deadpool_sqlite::Connection>,
-}
-
-/// [Drop] implements the destruction operation for rust objects.
-impl Drop for RusqliteTransaction {
-    /// Called whenever the object representing the RusqliteTransaction is dropped.
-    /// Executes a ROLLBACK of the transaction.
-    fn drop(&mut self) {
-        match &self.conn {
-            Some(conn) => match conn.lock() {
-                Ok(guard) => {
-                    // TODO: Remove this println! or replace it with a logger.
-                    println!("ROLLING BACK!");
-                    let _ = guard.execute("ROLLBACK;", []);
-                }
-                Err(_) => (),
-            },
-            None => (),
-        }
-    }
-}
-
-#[async_trait]
-impl Query for RusqliteTransaction {
-    /// Implements [Query::syntax()] for [RusqliteTransaction]
-    fn syntax(&self) -> &dyn Syntax {
-        &self.syntax
-    }
-
-    /// Implements [Query::execute_batch()] for [RusqliteTransaction]
-    async fn execute_batch(&self, _sql: &str) -> Result<(), Error> {
-        todo!()
-    }
-
-    /// Implements [Query::query()] for [RusqliteTransaction]
-    async fn query(&self, sql: &str, params: &[Value]) -> Result<Rows, Error> {
-        // NOTE: This is an exact copy of the code above. Maybe refactor.
-        match &self.conn {
-            Some(conn) => {
-                let sql_string = sql.to_string();
-                let params = params.to_vec();
-                conn.interact(move |conn| {
-                    let mut stmt = conn.prepare(&sql_string)?;
-                    for (i, param) in params.iter().enumerate() {
-                        stmt.raw_bind_parameter(i + 1, param.to_string())?;
-                    }
-                    let rows: Vec<Row> = stmt
-                        .raw_query()
-                        .map(|row| {
-                            let string: String = row.get(0)?;
-                            Ok(Row {
-                                map: indexmap! { "a".to_string() => Value::from(string)},
-                            })
-                        })
-                        .collect()?;
-                    Ok(Rows { rows })
-                })
-                .await?
-            }
-            None => Err(Error::DatabaseError("transaction already complete".into())),
-        }
-    }
-
-    fn can_copy_in(&self, filename: &str) -> bool {
-        can_copy_in(filename)
-    }
-
-    async fn copy_in(&self, _table: &str, _filename: &str) -> Result<(), Error> {
-        todo!()
-    }
-
-    /// Implements [Query::drop_table()] for [RusqliteTransaction]
-    async fn drop_table(&self, _table: &str) -> Result<(), Error> {
-        todo!()
-    }
-
-    async fn drop_view(&self, _view: &str) -> Result<(), Error> {
-        todo!()
-    }
-}
-
-#[async_trait]
-impl Transaction for RusqliteTransaction {
-    /// Rolls back this transaction.
-    async fn rollback(&mut self) -> Result<(), Error> {
-        match &self.conn {
-            Some(conn) => {
-                conn.interact(move |conn| conn.execute("ROLLBACK;", []).unwrap())
-                    .await
-                    .unwrap();
-                self.conn = None;
-                Ok(())
-            }
-            None => Err(Error::DatabaseError("transaction already complete".into())),
-        }
-    }
-
-    /// Commits this transaction.
-    async fn commit(&mut self) -> Result<(), Error> {
-        match &self.conn {
-            Some(conn) => {
-                conn.interact(move |conn| conn.execute("COMMIT;", []).unwrap())
-                    .await
-                    .unwrap();
-                self.conn = None;
-                Ok(())
-            }
-            None => Err(Error::DatabaseError("transaction already complete".into())),
-        }
-    }
-}
-
-impl RusqliteTransaction {
-    /// Creates a new [RusqliteTransaction].
-    pub async fn begin(pool: deadpool_sqlite::Pool) -> Result<Self, Error> {
-        let conn = pool.get().await.unwrap();
-        conn.interact(move |conn| conn.execute("BEGIN TRANSACTION;", []).unwrap())
-            .await
-            .unwrap();
-        let conn = Some(conn);
-        let syntax = SqliteSyntax;
-        Ok(RusqliteTransaction { syntax, pool, conn })
+    /// Implements [Connection::transaction()]
+    async fn transaction(self: Box<RusqliteConnection>) -> Result<AnyTransaction, Error> {
+        Ok(AnyTransaction::begin(self).await.unwrap())
     }
 }
 
