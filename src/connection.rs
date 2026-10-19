@@ -1,6 +1,8 @@
 //! Provides the [Connection] trait for using database connections, and the [AnyTransaction]
 //! struct for handling transactions.
 
+use std::mem::ManuallyDrop;
+
 use async_trait::async_trait;
 
 use crate::{Error, Query, Rows, Syntax, Value};
@@ -24,7 +26,7 @@ pub trait Connection: Query + std::fmt::Debug {
 /// [Connection] types.
 #[derive(Debug)]
 pub struct AnyTransaction {
-    pub connection: Box<dyn Connection>,
+    pub connection: ManuallyDrop<Box<dyn Connection>>,
     completed: bool,
 }
 
@@ -36,7 +38,7 @@ impl AnyTransaction {
     pub async fn begin(connection: Box<dyn Connection>) -> Result<Self, Error> {
         connection.execute("BEGIN TRANSACTION", &[]).await?;
         Ok(Self {
-            connection: connection,
+            connection: ManuallyDrop::new(connection),
             completed: false,
         })
     }
@@ -109,5 +111,26 @@ impl Query for AnyTransaction {
     /// Implements [Query::drop_view()]
     async fn drop_view(&self, view: &str) -> Result<(), Error> {
         self.connection.drop_view(view).await
+    }
+}
+
+impl Drop for AnyTransaction {
+    fn drop(&mut self) {
+        unsafe {
+            // Steal the sender out of ManuallyDrop.
+            // This moves the value without running its Drop impl.
+            let connection = ManuallyDrop::take(&mut self.connection);
+
+            // Spawn a task to perform async cleanup.
+            // The task owns the sender and can await.
+            tokio::spawn(async move {
+                eprintln!("DROPPING...");
+                connection
+                    .execute("ROLLBACK", &[])
+                    .await
+                    .expect("Dropped transaction to ROLLBACK");
+                eprintln!("DROPPED!");
+            });
+        }
     }
 }
