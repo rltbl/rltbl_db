@@ -4660,7 +4660,7 @@ async fn transaction(pool: Box<dyn Pool>, table: &str, url: &str) {
         assert_eq!(rows.rows.len(), 3, "count rows inside transaction");
 
         // TODO: This needs to work without the explicit call here:
-        //tx.rollback().await.unwrap();
+        tx.rollback().await.unwrap();
     }
 
     let rows = pool
