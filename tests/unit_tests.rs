@@ -13,7 +13,7 @@ use std::{
 };
 
 use rltbl_db::{
-    AnyPool, AnyTransaction, Column, Error, JsonValue, Pool, Query, Row, Rows, StringRow, Value,
+    AnyPool, Column, Error, JsonValue, Pool, Query, Row, Rows, StringRow, Transaction, Value,
     ValueType,
     cache::{CachingStrategy, QUERY_CACHE_TABLE, TABLE_CACHE_TABLE},
     row,
@@ -4583,7 +4583,7 @@ async fn test_transaction_libsql() {
 }
 
 async fn transaction(pool: Box<dyn Pool>, table: &str, url: &str) {
-    async fn foo(tx: &AnyTransaction) {
+    async fn foo(tx: &Box<dyn Transaction>) {
         tx.query("SELECT 'baz'", &[]).await.unwrap();
     }
 
@@ -4660,7 +4660,7 @@ async fn transaction(pool: Box<dyn Pool>, table: &str, url: &str) {
         assert_eq!(rows.rows.len(), 3, "count rows inside transaction");
 
         // TODO: This needs to work without the explicit call here:
-        tx.rollback().await.unwrap();
+        //tx.rollback().await.unwrap();
     }
 
     let rows = pool

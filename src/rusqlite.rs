@@ -16,7 +16,7 @@ use rust_decimal::Decimal;
 use std::{env, str::from_utf8, sync::Arc};
 
 use crate::{
-    AnyTransaction, Connection, Error, JsonValue, Pool, Query, Row, Rows, Syntax, Value,
+    Connection, Error, JsonValue, Pool, Query, Row, Rows, Syntax, Transaction, Value,
     error::DatabaseError, sql_parse::validate_table_name, sqlite::SqliteSyntax,
 };
 
@@ -278,8 +278,123 @@ impl Query for RusqliteConnection {
 #[async_trait]
 impl Connection for RusqliteConnection {
     /// Implements [Connection::transaction()]
-    async fn transaction(self: Box<RusqliteConnection>) -> Result<AnyTransaction, Error> {
-        Ok(AnyTransaction::begin(self).await.unwrap())
+    async fn transaction(self: Box<RusqliteConnection>) -> Result<Box<dyn Transaction>, Error> {
+        Ok(Box::new(RusqliteTransaction::begin(*self).await.unwrap()))
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////
+// The RusqliteTransaction struct
+////////////////////////////////////////////////////////////////////////////////
+
+/// An abstract representation of a transaction associated with any of the supported
+/// [Connection] types.
+#[derive(Debug)]
+pub struct RusqliteTransaction {
+    pub connection: RusqliteConnection,
+    completed: bool,
+}
+
+/// [Drop] implements the destruction operation for rust objects.
+impl Drop for RusqliteTransaction {
+    /// Called whenever the object representing the RusqliteTransaction is dropped.
+    /// Executes a ROLLBACK of the transaction.
+    fn drop(&mut self) {
+        if !self.completed {
+            match self.connection.connection.lock() {
+                Ok(guard) => {
+                    // TODO: Remove this println! or replace it with a logger.
+                    println!("ROLLING BACK!");
+                    let _ = guard.execute("ROLLBACK;", []);
+                }
+                Err(_) => (),
+            };
+        }
+    }
+}
+
+impl RusqliteTransaction {
+    /// Executes a `BEGIN TRANSACTION` statement via the given [Connection], which it then
+    /// returns wrapped within an [RusqliteTransaction].
+    pub async fn begin(connection: RusqliteConnection) -> Result<Self, Error> {
+        connection.execute("BEGIN TRANSACTION", &[]).await?;
+        Ok(Self {
+            connection: connection,
+            completed: false,
+        })
+    }
+
+    // Private function used by commit() and rollback(). Executes the given SQL command and
+    // then sets self.completed to true.
+    async fn conclude_with_command(&mut self, cmd: &str) -> Result<(), Error> {
+        if self.completed {
+            return Err(Error::DatabaseError(
+                "Transaction already completed.".into(),
+            ));
+        }
+        if !["commit", "rollback"].contains(&cmd.to_lowercase().as_str()) {
+            return Err(Error::InputError(format!("Invalid command: {cmd}")));
+        }
+        self.connection.execute(cmd, &[]).await?;
+        self.completed = true;
+        Ok(())
+    }
+
+    /// Returns true if this transaction has already been committed or rolled back.
+    pub async fn completed(&self) -> bool {
+        self.completed
+    }
+}
+
+#[async_trait]
+impl Transaction for RusqliteTransaction {
+    /// Executes a `ROLLBACK` statement using this connection.
+    async fn rollback(&mut self) -> Result<(), Error> {
+        self.conclude_with_command("ROLLBACK").await
+    }
+
+    /// Executes a `COMMIT` statement using this connection.
+    async fn commit(&mut self) -> Result<(), Error> {
+        self.conclude_with_command("COMMIT").await
+    }
+}
+
+// We implement Query as a wrapper around the Query-able inner connection.
+#[async_trait]
+impl Query for RusqliteTransaction {
+    /// Implements [Query::syntax()]
+    fn syntax(&self) -> &dyn Syntax {
+        self.connection.syntax()
+    }
+
+    /// Implements [Query::execute_batch()]
+    async fn execute_batch(&self, sql: &str) -> Result<(), Error> {
+        self.connection.execute_batch(sql).await
+    }
+
+    /// Implements [Query::query()]
+    async fn query(&self, sql: &str, params: &[Value]) -> Result<Rows, Error> {
+        self.connection.query(sql, params).await
+    }
+
+    /// Implements [Query::can_copy_in()]
+    fn can_copy_in(&self, filename: &str) -> bool {
+        self.connection.can_copy_in(filename)
+    }
+
+    /// Implements [Query::copy_in()]
+    async fn copy_in(&self, table: &str, filename: &str) -> Result<(), Error> {
+        self.connection.copy_in(table, filename).await
+    }
+
+    /// Implements [Query::drop_table()]
+    async fn drop_table(&self, table: &str) -> Result<(), Error> {
+        self.connection.drop_table(table).await
+    }
+
+    /// Implements [Query::drop_view()]
+    async fn drop_view(&self, view: &str) -> Result<(), Error> {
+        self.connection.drop_view(view).await
     }
 }
 
