@@ -73,6 +73,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
 
 [[package]]
+name = "async-drop"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aeea5b17906dafb8872908630a8f12366f53ab920b6591fd8d4ef997dc637f53"
+dependencies = [
+ "tokio",
+]
+
+[[package]]
 name = "async-stream"
 version = "0.3.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1869,6 +1878,7 @@ name = "rltbl_db"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-drop",
  "async-trait",
  "axum 0.8.6",
  "bytes",

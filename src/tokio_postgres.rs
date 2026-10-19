@@ -1,5 +1,6 @@
 //! Driver using deadpool-postgres (tokio-postgres).
 
+use async_drop::Dropper;
 use async_trait::async_trait;
 use bytes::{BufMut, BytesMut};
 use deadpool_postgres::{
@@ -503,8 +504,8 @@ impl Query for PostgresConnection {
 #[async_trait]
 impl Connection for PostgresConnection {
     /// Implements [Connection::transaction()]
-    async fn transaction(self: Box<PostgresConnection>) -> Result<AnyTransaction, Error> {
-        Ok(AnyTransaction::begin(self).await.unwrap())
+    async fn transaction(self: Box<PostgresConnection>) -> Result<Dropper<AnyTransaction>, Error> {
+        Ok(Dropper::new(AnyTransaction::begin(self).await.unwrap()))
     }
 }
 

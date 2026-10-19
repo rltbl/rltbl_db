@@ -1,6 +1,7 @@
 //! Provides the [Connection] trait for using database connections, and the [AnyTransaction]
 //! struct for handling transactions.
 
+use async_drop::{AsyncDrop, AsyncDropFuture, Dropper};
 use async_trait::async_trait;
 
 use crate::{Error, Query, Rows, Syntax, Value};
@@ -13,7 +14,7 @@ use crate::{Error, Query, Rows, Syntax, Value};
 #[async_trait]
 pub trait Connection: Query + std::fmt::Debug {
     /// Begin a transaction.
-    async fn transaction(self: Box<Self>) -> Result<AnyTransaction, Error>;
+    async fn transaction(self: Box<Self>) -> Result<Dropper<AnyTransaction>, Error>;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -28,7 +29,23 @@ pub struct AnyTransaction {
     completed: bool,
 }
 
-// TODO: Implement Drop ??
+// TODO: Consider what to do about implementing Drop. Although it seems to be possible to
+// implement Drop synchronously (which is mandatory) in sqlite, it doesn't seem possible in
+// postgres. That said, the behaviour of the database seems to be that it will not commit
+// transactions that go out of scope.
+
+impl AsyncDrop for AnyTransaction {
+    fn async_drop(&mut self) -> AsyncDropFuture<'_> {
+        Box::pin(async {
+            if !self.completed {
+                eprintln!("DROPPING ...");
+                self.rollback().await.unwrap();
+                eprintln!("DROPPED!");
+            }
+            Ok(())
+        })
+    }
+}
 
 impl AnyTransaction {
     /// Executes a `BEGIN TRANSACTION` statement via the given [Connection], which it then

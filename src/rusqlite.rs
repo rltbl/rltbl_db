@@ -1,5 +1,6 @@
 //! Driver using deadpool-sqlite (rusqlite).
 
+use async_drop::Dropper;
 use async_trait::async_trait;
 use deadpool_sqlite::{
     self, Config, Hook, HookError, Runtime,
@@ -278,8 +279,8 @@ impl Query for RusqliteConnection {
 #[async_trait]
 impl Connection for RusqliteConnection {
     /// Implements [Connection::transaction()]
-    async fn transaction(self: Box<RusqliteConnection>) -> Result<AnyTransaction, Error> {
-        Ok(AnyTransaction::begin(self).await.unwrap())
+    async fn transaction(self: Box<RusqliteConnection>) -> Result<Dropper<AnyTransaction>, Error> {
+        Ok(Dropper::new(AnyTransaction::begin(self).await.unwrap()))
     }
 }
 

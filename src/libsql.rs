@@ -1,5 +1,6 @@
 //! Driver using deadpool-sqlite (libsql).
 
+use async_drop::Dropper;
 use async_trait::async_trait;
 use deadpool_libsql::{self, Manager, libsql, libsql::Builder};
 use rust_decimal::prelude::ToPrimitive;
@@ -303,8 +304,8 @@ impl Query for LibSQLConnection {
 #[async_trait]
 impl Connection for LibSQLConnection {
     /// Implements [Connection::transaction()]
-    async fn transaction(self: Box<LibSQLConnection>) -> Result<AnyTransaction, Error> {
-        Ok(AnyTransaction::begin(self).await.unwrap())
+    async fn transaction(self: Box<LibSQLConnection>) -> Result<Dropper<AnyTransaction>, Error> {
+        Ok(Dropper::new(AnyTransaction::begin(self).await.unwrap()))
     }
 }
 
