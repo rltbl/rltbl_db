@@ -19,8 +19,8 @@ use std::{
 };
 
 use crate::{
-    Error, JsonValue, Pool, Query, Row, Rows, Syntax, Transaction, Value, error::DatabaseError,
-    postgres::PostgresSyntax, sql_parse::validate_table_name,
+    AnyTransaction, Connection, Error, JsonValue, Pool, Query, Row, Rows, Syntax, Value,
+    error::DatabaseError, postgres::PostgresSyntax, sql_parse::validate_table_name,
 };
 
 // Error implementations:
@@ -42,6 +42,10 @@ impl From<deadpool_postgres::PoolError> for DatabaseError {
         DatabaseError::PoolError(err.to_string())
     }
 }
+
+///////////////////////////////////////////////////////////////////////////////
+// PostgresPool
+///////////////////////////////////////////////////////////////////////////////
 
 /// Represents a deadool-postgres database connection pool.
 #[derive(Debug)]
@@ -124,26 +128,129 @@ impl ToSql for GenericPostgresType {
     to_sql_checked!();
 }
 
+// We implement Query for PostgresPool (mostly) as a wrapper around our implementation of Query
+// for PostgresConnection, which you can find below.
 #[async_trait]
 impl Query for PostgresPool {
-    /// Implements [Query::syntax()] for [PostgresPool]
+    /// Implements [Query::syntax()] as a wrapper around [PostgresConnection::syntax()]
     fn syntax(&self) -> &dyn Syntax {
         &self.syntax
     }
 
-    /// Implements [Query::execute_batch()] for [PostgresPool]
+    /// Implements [Query::execute_batch()] as a wrapper around
+    /// [PostgresConnection::execute_batch()]
     async fn execute_batch(&self, sql: &str) -> Result<(), Error> {
-        let client = self.pool.get().await?;
-        client.batch_execute(sql).await?;
+        let connection = self.pool.get().await?;
+        let connection = PostgresConnection {
+            connection,
+            syntax: self.syntax,
+        };
+        connection.execute_batch(sql).await?;
         Ok(())
     }
 
-    /// Implements [Query::query()] for [PostgresPool]
+    /// Implements [Query::query()] as a wrapper around [PostgresConnection::query()]
     async fn query(&self, sql: &str, params: &[Value]) -> Result<Rows, Error> {
-        let client = self.pool.get().await?;
+        let connection = self.pool.get().await?;
+        let connection = PostgresConnection {
+            connection,
+            syntax: self.syntax,
+        };
+        Ok(connection.query(sql, params).await?)
+    }
 
+    /// Implements [Query::can_copy_in()] as a wrapper around [PostgresConnection::can_copy_in()]
+    fn can_copy_in(&self, filename: &str) -> bool {
+        can_copy(filename)
+    }
+
+    /// Implements [Query::can_copy_out()] as a wrapper around [PostgresConnection::can_copy_out()]
+    fn can_copy_out(&self, filename: &str) -> bool {
+        can_copy(filename)
+    }
+
+    /// Implements [Query::copy_in()] as a wrapper around [PostgresConnection::copy_in()]
+    async fn copy_in(&self, table: &str, filename: &str) -> Result<(), Error> {
+        let connection = self.pool.get().await?;
+        let connection = PostgresConnection {
+            connection,
+            syntax: self.syntax,
+        };
+        Ok(connection.copy_in(table, filename).await?)
+    }
+
+    /// Implements [Query::copy_out()] as a wrapper around [PostgresConnection::copy_out()]
+    async fn copy_out(&self, table: &str, filename: &str) -> Result<(), Error> {
+        let connection = self.pool.get().await?;
+        let connection = PostgresConnection {
+            connection,
+            syntax: self.syntax,
+        };
+        Ok(connection.copy_out(table, filename).await?)
+    }
+
+    /// Implements [Query::drop_table()] as a wrapper around [PostgresConnection::drop_table()]
+    async fn drop_table(&self, table: &str) -> Result<(), Error> {
+        let connection = self.pool.get().await?;
+        let connection = PostgresConnection {
+            connection,
+            syntax: self.syntax,
+        };
+        Ok(connection.drop_table(table).await?)
+    }
+
+    /// Implements [Query::drop_view()] as a wrapper around [PostgresConnection::drop_view()]
+    async fn drop_view(&self, view: &str) -> Result<(), Error> {
+        let connection = self.pool.get().await?;
+        let connection = PostgresConnection {
+            connection,
+            syntax: self.syntax,
+        };
+        Ok(connection.drop_view(view).await?)
+    }
+}
+
+#[async_trait]
+impl Pool for PostgresPool {
+    /// Implements [Pool::connection()]
+    async fn connection(&self) -> Result<Box<dyn Connection>, Error> {
+        let connection = self.pool.get().await?;
+        let connection = PostgresConnection {
+            connection,
+            syntax: self.syntax,
+        };
+        Ok(Box::new(connection))
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// PostgresConnection
+///////////////////////////////////////////////////////////////////////////////
+
+/// Represents a Postgres connection.
+#[derive(Debug)]
+pub struct PostgresConnection {
+    pub connection: deadpool_postgres::Object,
+    syntax: PostgresSyntax,
+}
+
+#[async_trait]
+impl Query for PostgresConnection {
+    /// Implements [Query::syntax()]
+    fn syntax(&self) -> &dyn Syntax {
+        &self.syntax
+    }
+
+    /// Implements [Query::execute_batch()]
+    async fn execute_batch(&self, sql: &str) -> Result<(), Error> {
+        self.connection.batch_execute(sql).await?;
+        Ok(())
+    }
+
+    /// Implements [Query::query()]
+    async fn query(&self, sql: &str, params: &[Value]) -> Result<Rows, Error> {
         // The expected types of all of the parameters as reported by the database via prepare():
-        let param_pg_types = client.prepare(sql).await?.params().to_vec();
+        let param_pg_types = self.connection.prepare(sql).await?.params().to_vec();
 
         let mut paramses: Vec<Box<dyn ToSql + Sync + Send>> = Vec::new();
         let gen_err = |param: &Value, sql_type: &str| -> String {
@@ -237,7 +344,7 @@ impl Query for PostgresPool {
             .iter()
             .map(|p| p.as_ref() as &(dyn ToSql + Sync))
             .collect();
-        let rows = client.query(sql, &query_params).await?;
+        let rows = self.connection.query(sql, &query_params).await?;
         let mut db_rows = vec![];
         for row in &rows {
             let mut db_row = Row::new();
@@ -263,25 +370,24 @@ impl Query for PostgresPool {
     /// Implements [Query::can_copy_in()]. Returns true if the given filename ends
     /// (case-insensitively) with either '.csv' or '.tsv'.
     fn can_copy_in(&self, filename: &str) -> bool {
-        let filename = filename.to_lowercase();
-        filename.ends_with("tsv") || filename.ends_with(".csv")
+        can_copy(filename)
     }
 
-    /// Implements [Query::can_copy_out()]. Returns true if the given filename ends
+    /// Implements [Query::can_copy_out]. Returns true if the given filename ends
     /// (case-insensitively) with either '.csv' or '.tsv'.
     fn can_copy_out(&self, filename: &str) -> bool {
-        let filename = filename.to_lowercase();
-        filename.ends_with("tsv") || filename.ends_with(".csv")
+        can_copy(filename)
     }
 
-    /// Load the given table using the data from the given file.
+    /// Implements [Query::copy_in()]
     async fn copy_in(&self, table: &str, filename: &str) -> Result<(), Error> {
-        eprintln!("Loading table '{table}' from '{filename}' using COPY.");
         if !self.can_copy_in(filename) {
             return Err(Error::InputError(format!(
                 "Filename: '{filename}' must end with .tsv or .csv"
             )));
         }
+        eprintln!("Loading table '{table}' from '{filename}' using COPY.");
+
         let file = File::open(filename)?;
         let buf_reader = BufReader::new(file);
 
@@ -294,9 +400,8 @@ impl Query for PostgresPool {
         });
 
         // Send the input stream to the tokio-postgres client which is executing a copy_in():
-        let client = self.pool.get().await?;
         let mut copy_sink = pin!(
-            client
+            self.connection
                 .copy_in(&format!(r#"COPY "{table}" FROM STDIN WITH NULL ''"#))
                 .await?
         );
@@ -316,12 +421,13 @@ impl Query for PostgresPool {
 
     /// Implements [Query::copy_out()]
     async fn copy_out(&self, table: &str, filename: &str) -> Result<(), Error> {
-        eprintln!("Saving table '{table}' to '{filename}' using COPY.");
         if !self.can_copy_out(filename) {
             return Err(Error::InputError(format!(
                 "Filename: '{filename}' must end with .tsv or .csv"
             )));
         }
+        eprintln!("Saving table '{table}' to '{filename}' using COPY.");
+
         let delimiter;
         if filename.to_lowercase().ends_with(".tsv") {
             delimiter = "\t";
@@ -349,13 +455,14 @@ impl Query for PostgresPool {
         let mut data_to_write = BytesMut::new();
         data_to_write.put(header_row.as_bytes());
 
-        let client = self.pool.get().await?;
-        let stmt = client
+        let stmt = self
+            .connection
             .prepare(&format!(
                 r#"COPY "{table}" TO STDOUT WITH DELIMITER '{delimiter}'"#
             ))
             .await?;
-        let table_contents = client
+        let table_contents = self
+            .connection
             .copy_out(&stmt)
             .await?
             .try_fold(BytesMut::new(), |mut buf, chunk| async move {
@@ -382,6 +489,7 @@ impl Query for PostgresPool {
         Ok(())
     }
 
+    /// Implements [Query::drop_view()]
     async fn drop_view(&self, view: &str) -> Result<(), Error> {
         let view = validate_table_name(view)?;
 
@@ -393,11 +501,16 @@ impl Query for PostgresPool {
 }
 
 #[async_trait]
-impl Pool for PostgresPool {
-    async fn transaction(&self) -> Result<Box<dyn Transaction>, Error> {
-        unimplemented!()
+impl Connection for PostgresConnection {
+    /// Implements [Connection::transaction()]
+    async fn transaction(self: Box<PostgresConnection>) -> Result<AnyTransaction, Error> {
+        Ok(AnyTransaction::begin(self).await.unwrap())
     }
 }
+
+///////////////////////////////////////////////////////////////////////////////
+// Free functions
+///////////////////////////////////////////////////////////////////////////////
 
 /// Extracts the value at the given index from the given [PgRow].
 fn extract_value(row: &PgRow, idx: usize) -> Result<Value, Error> {
@@ -472,4 +585,11 @@ fn extract_value(row: &PgRow, idx: usize) -> Result<Value, Error> {
             }
         }
     }
+}
+
+/// Determines whether it is possible to COPY the contents of the given filename into the
+/// database.
+fn can_copy(filename: &str) -> bool {
+    let filename = filename.to_lowercase();
+    filename.ends_with("tsv") || filename.ends_with(".csv")
 }

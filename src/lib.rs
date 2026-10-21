@@ -11,7 +11,9 @@
 //! "flavours" of the SQL language. A handful of other traits allow for different database
 //! "drivers" to handle the details of the pooled database connection. The `AnyPool` struct
 //! connects you to your database at runtime, providing `execute`, `query`, `insert`, and
-//! similar methods, plus a configurable caching system.
+//! similar methods, plus a configurable caching system. The `AnyTransaction` struct provides
+//! all of the query methods plus `commit`, `rollback`, and other methods for interacting
+//! with the database transactionally.
 //!
 //! ## Usage
 //!
@@ -140,20 +142,20 @@
 //! 1. [Syntax] trait with your SQL language "flavour"
 //! 2. [Query] trait to run a query
 //! 3. [Pool] trait to connect to a database pool
-//! 4. [Transaction] trait to support transactions
+//! 4. [Connection] trait to begin a database transaction
 //!
 //! Each of these traits has default implementations of most methods, so only a few method
 //! implementations are required.
 
 // Re-exports:
 pub use self::column::Column;
+pub use self::connection::{Connection, AnyTransaction};
 pub use self::error::Error;
 pub use self::pool::{AnyPool, Pool};
 pub use self::query::Query;
 pub use self::row::{Row, Rows};
 pub use self::syntax::Syntax;
 pub use self::table::Table;
-pub use self::transaction::{AnyTransaction, Transaction};
 pub use self::value::{ValueType, Value};
 
 // Useful type aliases:
@@ -194,11 +196,11 @@ pub mod sql_parse;
 /// The [Query] trait
 pub mod query;
 
-/// The [Pool] trait (extends query)
+/// The [Pool] trait (extends query) and [AnyPool] struct.
 pub mod pool;
 
-/// The [Transaction] trait (extends query)
-pub mod transaction;
+/// The [Connection] trait (extends query) and [AnyTransaction] struct.
+pub mod connection;
 
 /// Caching support
 pub mod cache;
