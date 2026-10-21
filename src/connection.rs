@@ -117,15 +117,16 @@ impl Drop for AnyTransaction {
             // Steal the sender out of ManuallyDrop.
             // This moves the value without running its Drop impl.
             let connection = ManuallyDrop::take(&mut self.connection);
-
-            // Spawn a task to perform async cleanup.
-            // The task owns the sender and can await.
-            tokio::spawn(async move {
-                connection
-                    .execute("ROLLBACK", &[])
-                    .await
-                    .expect("Error dropping transaction to ROLLBACK");
-            });
+            if !self.completed {
+                // Spawn a task to perform async cleanup.
+                // The task owns the sender and can await.
+                tokio::spawn(async move {
+                    connection
+                        .execute("ROLLBACK", &[])
+                        .await
+                        .expect("Error dropping transaction to ROLLBACK");
+                });
+            }
         }
     }
 }

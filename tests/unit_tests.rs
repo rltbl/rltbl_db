@@ -4648,7 +4648,7 @@ async fn transaction(pool: Box<dyn Pool>, table: &str, url: &str) {
     // verify that it was not committed.
     {
         let conn = pool.connection().await.unwrap();
-        let mut tx = conn.transaction().await.unwrap();
+        let tx = conn.transaction().await.unwrap();
         tx.query(&format!("INSERT INTO {table} VALUES (789)"), &[])
             .await
             .expect("Error in transaction insert");
