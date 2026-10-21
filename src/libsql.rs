@@ -1,7 +1,7 @@
 //! Driver using deadpool-sqlite (libsql).
 
 use async_trait::async_trait;
-use deadpool_libsql::{self, Manager, libsql, libsql::Builder};
+use deadpool_libsql::{self, Manager, PoolConfig, libsql, libsql::Builder};
 use rust_decimal::prelude::ToPrimitive;
 use std::env;
 
@@ -173,7 +173,14 @@ impl LibSQLPool {
     pub async fn connect(url: &str) -> Result<Self, Error> {
         let db = Builder::new_local(url).build().await?;
         let manager = Manager::from_libsql_database(db);
-        let pool = deadpool_libsql::Pool::builder(manager).build()?;
+        let pool_builder = match url {
+            ":memory:" => deadpool_libsql::Pool::builder(manager).config(PoolConfig {
+                max_size: 1,
+                ..Default::default()
+            }),
+            _ => deadpool_libsql::Pool::builder(manager),
+        };
+        let pool = pool_builder.build()?;
         let conn = pool.get().await?;
 
         // Enable the CSV load extension if possible. This requires that the file `csv.so` is in
