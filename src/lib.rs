@@ -11,7 +11,9 @@
 //! "flavours" of the SQL language. A handful of other traits allow for different database
 //! "drivers" to handle the details of the pooled database connection. The `AnyPool` struct
 //! connects you to your database at runtime, providing `execute`, `query`, `insert`, and
-//! similar methods, plus a configurable caching system.
+//! similar methods, plus a configurable caching system. The `AnyTransaction` struct provides
+//! all of the query methods plus `commit`, `rollback`, and other methods for interacting
+//! with the database transactionally.
 //!
 //! ## Usage
 //!
@@ -140,6 +142,7 @@
 //! 1. [Syntax] trait with your SQL language "flavour"
 //! 2. [Query] trait to run a query
 //! 3. [Pool] trait to connect to a database pool
+//! 4. [Connection] trait to begin a database transaction
 //!
 //! Each of these traits has default implementations of most methods, so only a few method
 //! implementations are required.

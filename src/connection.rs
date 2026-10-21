@@ -1,9 +1,8 @@
 //! Provides the [Connection] trait for using database connections, and the [AnyTransaction]
 //! struct for handling transactions.
 
-use std::mem::ManuallyDrop;
-
 use async_trait::async_trait;
+use std::mem::ManuallyDrop;
 
 use crate::{Error, Query, Rows, Syntax, Value};
 
@@ -30,8 +29,6 @@ pub struct AnyTransaction {
     completed: bool,
 }
 
-// TODO: Implement Drop ??
-
 impl AnyTransaction {
     /// Executes a `BEGIN TRANSACTION` statement via the given [Connection], which it then
     /// returns wrapped within an [AnyTransaction].
@@ -43,8 +40,8 @@ impl AnyTransaction {
         })
     }
 
-    // Private function used by commit() and rollback(). Executes the given SQL command and
-    // then sets self.completed to true.
+    /// Private function used by commit() and rollback(). Executes the given SQL command and
+    /// then sets self.completed to true.
     async fn conclude_with_command(&mut self, cmd: &str) -> Result<(), Error> {
         if self.completed {
             return Err(Error::DatabaseError(
@@ -124,12 +121,10 @@ impl Drop for AnyTransaction {
             // Spawn a task to perform async cleanup.
             // The task owns the sender and can await.
             tokio::spawn(async move {
-                eprintln!("DROPPING...");
                 connection
                     .execute("ROLLBACK", &[])
                     .await
-                    .expect("Dropped transaction to ROLLBACK");
-                eprintln!("DROPPED!");
+                    .expect("Error dropping transaction to ROLLBACK");
             });
         }
     }
