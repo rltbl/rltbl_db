@@ -29,6 +29,7 @@
 //! We implement `Serialize and `Deserialize` for `Value`. For Rust primitives
 //! the serlialization is trivial. We represent complex cases as JSON using `serde_json`.
 
+use chrono::NaiveDateTime;
 use rust_decimal::{Decimal, dec};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -386,7 +387,13 @@ pub enum Value {
     Text(String),
     /// Use with JSON or JSONB column types or equivalent.
     Json(JsonValue),
-    /// Other types that are not explicitly supported, represented by the triple
+    // Note: This supports TIMESTAMP but not TIMESTAMP WITH TIME ZONE. The problem with the latter
+    // is that it uses DateTime, not NaiveDateTime, but DateTime is not (de)serializable directly
+    // to/from a database field, but creation of a custom type is required. See:
+    // https://stackoverflow.com/questions/77588919/rust-tokio-postgres-with-timestamp-column
+    /// Use with TIMESTAMP columns (postgres only).
+    Timestamp(NaiveDateTime),
+    /// Other types that are not explicitly supported (postgres only), represented by the triple
     /// (other type, raw representation, optional string representation)
     Other(String, Vec<u8>, Option<String>),
 }
@@ -435,6 +442,7 @@ impl Hash for Value {
             }
             Value::Numeric(num) => num.hash(h),
             Value::Json(value) => value.hash(h),
+            Value::Timestamp(value) => value.hash(h),
             Value::Other(_, _, _) => format!("{self:?}").hash(h),
         }
     }
@@ -706,6 +714,7 @@ impl Into<JsonValue> for Value {
             Value::Numeric(value) => json!(value),
             Value::Text(value) => JsonValue::String(value),
             Value::Json(value) => value,
+            Value::Timestamp(value) => json!(value),
             Value::Other(_, _, _) => JsonValue::String(format!("{self:?}")),
         }
     }
@@ -763,6 +772,7 @@ impl Into<String> for Value {
             Value::BigReal(val) => val.to_string(),
             Value::Numeric(val) => val.to_string(),
             Value::Json(value) => value.to_string(),
+            Value::Timestamp(value) => value.to_string(),
             Value::Other(_, _, _) => {
                 format!("{self:?}")
             }
