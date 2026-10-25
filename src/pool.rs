@@ -1,4 +1,5 @@
-//! The Pool Trait, for implementing a database connection pool
+//! Provides the [Pool] Trait, for implementing a database connection pool, and the [AnyPool]
+//! struct, a handy generic wrapper around [Pool] implementations.
 
 /// To connect to any supported database using a URL:
 ///
@@ -31,7 +32,7 @@ use std::{
 };
 
 use crate::{
-    AnyTransaction, Column, Error, Query, Row, Rows, Syntax, Transaction, Value,
+    Column, Connection, Error, Query, Row, Rows, Syntax, Value,
     cache::{
         CachingStrategy, MemoryQueryCache, MemoryQueryCacheKey, MemoryQueryCacheValue,
         MemoryTableCache, MetaCache, QUERY_CACHE_TABLE, TABLE_CACHE_TABLE,
@@ -83,8 +84,8 @@ pub async fn connect(url: &str) -> Result<Box<dyn Pool>, Error> {
 /// A trait for implementing a database connection pool.
 #[async_trait]
 pub trait Pool: Query + std::fmt::Debug {
-    /// Start a transaction.
-    async fn transaction(&self) -> Result<Box<dyn Transaction>, Error>;
+    /// Get a connection from the pool.
+    async fn connection(&self) -> Result<Box<dyn Connection>, Error>;
 }
 
 /// An abstraction over the supported pool types.
@@ -137,29 +138,34 @@ impl AnyPool {
         Ok(AnyPool::from(pool))
     }
 
-    /// Implements [Query::syntax()].
+    /// A wrapper around the inner `Pool`'s [Pool::connection()] method.
+    pub async fn connection(&self) -> Result<Box<dyn Connection>, Error> {
+        self.pool.connection().await
+    }
+
+    /// A wrapper around the inner `Query`-able's [Query::syntax()] method.
     pub fn syntax(&self) -> &dyn Syntax {
         self.pool.syntax()
     }
 
-    /// Implements [Query::columns()].
+    /// A wrapper around the inner `Query`-able's [Query::columns()] method.
     pub async fn columns(&self, table: &str) -> Result<IndexMap<String, String>, Error> {
         self.pool.columns(table).await
     }
 
-    /// Implements [Query::primary_keys()].
+    /// A wrapper around the inner `Query`-able's [Query::primary_keys()] method.
     pub async fn primary_keys(&self, table: &str) -> Result<Vec<String>, Error> {
         self.pool.primary_keys(table).await
     }
 
-    /// Implements [Query::execute()].
+    /// A wrapper around the inner `Query`-able's [Query::execute()] method.
     pub async fn execute(&self, sql: &str, values: impl IntoValues) -> Result<(), Error> {
         let values = values.into_values()?.collect::<Vec<_>>();
         self.query(sql, values).await?;
         Ok(())
     }
 
-    /// Implements [Query::execute_batch()].
+    /// A wrapper around the inner `Query`-able's [Query::execute_batch()] method.
     pub async fn execute_batch(&self, sql: &str) -> Result<(), Error> {
         self.pool.execute_batch(sql).await?;
         if self.get_cache_aware_query() {
@@ -168,7 +174,7 @@ impl AnyPool {
         Ok(())
     }
 
-    /// Implements [Query::query()] for [AnyPool]
+    /// A wrapper around the inner `Query`-able's [Query::query()] method.
     pub async fn query(&self, sql: &str, values: impl IntoValues) -> Result<Rows, Error> {
         let values = values.into_values()?.collect::<Vec<_>>();
         let rows = self.pool.query(sql, &values).await?;
@@ -178,14 +184,14 @@ impl AnyPool {
         Ok(rows)
     }
 
-    /// Implements [Query::drop_table()].
+    /// A wrapper around the inner `Query`-able's [Query::drop_table()] method.
     pub async fn drop_table(&self, table: &str) -> Result<(), Error> {
         self.pool.drop_table(table).await?;
         self.clear_cache_for_dropped_tables(&[&table]).await?;
         Ok(())
     }
 
-    /// Implements [Query::drop_view()].
+    /// A wrapper around the inner `Query`-able's [Query::drop_view()] method.
     pub async fn drop_view(&self, view: &str) -> Result<(), Error> {
         self.pool.drop_view(view).await?;
         self.clear_cache_for_dropped_tables(&[&view]).await?;
@@ -515,11 +521,6 @@ impl AnyPool {
         Ok(self.which_are_tables(&[table]).await?.len() == 1)
     }
 
-    /// Begin a transaction.
-    pub async fn transaction(&self) -> Result<AnyTransaction, Error> {
-        Ok(AnyTransaction::begin(self.pool.transaction().await?))
-    }
-
     /// Execute the given SQL command with the given parameters, returning a vector of rows.
     /// If the result of the command exists in the query cache for the given tables, get the
     /// value from there instead of from the tables themselves, in accordance with the given
@@ -633,22 +634,21 @@ impl AnyPool {
 
     ////////// Private functions //////////
 
-    /// Returns true if the database driver is capable of bulk-copying this file into a table.
+    // Wrappers around similarly-named methods of the inner Query-able, relevant to
+    // bulk-copying:
+
     fn can_copy_in(&self, filename: &str) -> bool {
         self.pool.can_copy_in(filename)
     }
 
-    /// Returns true if the database driver is capable of bulk-copying this table into a file.
     fn can_copy_out(&self, filename: &str) -> bool {
         self.pool.can_copy_out(filename)
     }
 
-    /// Load the given table using the data from the given file.
     async fn copy_in(&self, table: &str, filename: &str) -> Result<(), Error> {
         self.pool.copy_in(table, filename).await
     }
 
-    /// Copy the data from the given table into the given file.
     async fn copy_out(&self, table: &str, filename: &str) -> Result<(), Error> {
         self.pool.copy_out(table, filename).await
     }

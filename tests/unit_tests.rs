@@ -13,7 +13,7 @@ use std::{
 };
 
 use rltbl_db::{
-    AnyPool, Column, Error, JsonValue, Pool, Query, Row, Rows, StringRow, Transaction, Value,
+    AnyPool, AnyTransaction, Column, Error, JsonValue, Pool, Query, Row, Rows, StringRow, Value,
     ValueType,
     cache::{CachingStrategy, QUERY_CACHE_TABLE, TABLE_CACHE_TABLE},
     row,
@@ -705,6 +705,710 @@ fn test_macros() {
     // Empty row:
     assert_eq!(row! {}, Row::new());
 }
+
+#[test]
+fn test_min_typing() {
+    let column_values = vec![
+        // Column A:
+        vec![
+            Value::from(true),
+            Value::from(1),
+            Value::from(u64::MAX),
+            Value::from(2.1),
+            Value::from(f64::MAX),
+        ],
+        // Column B:
+        vec![
+            Value::from(1),
+            Value::from(true),
+            Value::from(u64::MAX),
+            Value::from(2.1),
+            Value::from(f64::MAX),
+        ],
+        // Column C:
+        vec![
+            Value::from(f64::MAX),
+            Value::from(1),
+            Value::from(true),
+            Value::from(u64::MAX),
+            Value::from(2.1),
+        ],
+        // Column D:
+        vec![
+            Value::from("alphanum"),
+            Value::from(f32::MAX),
+            Value::from(true),
+            Value::from(25),
+            Value::from(i32::MAX),
+        ],
+        // Column E:
+        vec![
+            Value::from(true),
+            Value::from(true),
+            Value::from(true),
+            Value::from(false),
+            Value::from(0),
+        ],
+        // Column F:
+        vec![
+            Value::from(1),
+            Value::from(2.1),
+            Value::from(2.1),
+            Value::from(i64::MAX),
+            Value::Null,
+        ],
+        // Column G:
+        vec![
+            Value::Null,
+            Value::from(i64::MAX),
+            Value::from(2.1),
+            Value::from(1),
+            Value::from(2.1),
+        ],
+        // Column H:
+        vec![
+            Value::Null,
+            Value::from(i32::MAX),
+            Value::from(2),
+            Value::from(1),
+            Value::from(i32::MAX),
+        ],
+        // Column I:
+        vec![
+            Value::Null,
+            Value::from(i16::MAX),
+            Value::from(2),
+            Value::from(1),
+            Value::from(3),
+        ],
+        // Column J:
+        vec![
+            Value::Null,
+            Value::from(u64::MAX),
+            Value::from(2),
+            Value::from(1),
+            Value::from(3),
+        ],
+        // Column K:
+        vec![
+            Value::Null,
+            Value::from(u32::MAX),
+            Value::from(2),
+            Value::from(1),
+            Value::from(3),
+        ],
+    ];
+
+    let columns = Column::min_columns_from_column_values(column_values.into_iter()).unwrap();
+    assert_eq!(
+        columns,
+        [
+            // Column A:
+            Column {
+                name: "".to_string(),
+                sql_type: ValueType::BigReal("".to_string()),
+                not_null: true,
+                unique: true,
+            },
+            // Column B:
+            Column {
+                name: "".to_string(),
+                sql_type: ValueType::BigReal("".to_string()),
+                not_null: true,
+                unique: true,
+            },
+            // Column C:
+            Column {
+                name: "".to_string(),
+                sql_type: ValueType::BigReal("".to_string()),
+                not_null: true,
+                unique: true,
+            },
+            // Column D:
+            Column {
+                name: "".to_string(),
+                sql_type: ValueType::Text("".to_string()),
+                not_null: true,
+                unique: true,
+            },
+            // Column E:
+            Column {
+                name: "".to_string(),
+                sql_type: ValueType::Boolean("".to_string()),
+                not_null: true,
+                unique: false,
+            },
+            // Column F:
+            Column {
+                name: "".to_string(),
+                sql_type: ValueType::Real("".to_string()),
+                not_null: false,
+                unique: false,
+            },
+            // Column G:
+            Column {
+                name: "".to_string(),
+                sql_type: ValueType::Real("".to_string()),
+                not_null: false,
+                unique: false,
+            },
+            // Column H:
+            Column {
+                name: "".to_string(),
+                sql_type: ValueType::Integer("".to_string()),
+                not_null: false,
+                unique: false,
+            },
+            // Column I:
+            Column {
+                name: "".to_string(),
+                sql_type: ValueType::SmallInteger("".to_string()),
+                not_null: false,
+                unique: true,
+            },
+            // Column J:
+            Column {
+                name: "".to_string(),
+                sql_type: ValueType::Real("".to_string()),
+                not_null: false,
+                unique: true,
+            },
+            // Column K:
+            Column {
+                name: "".to_string(),
+                sql_type: ValueType::BigInteger("".to_string()),
+                not_null: false,
+                unique: true,
+            },
+        ]
+    );
+
+    let db_rows = vec![
+        row! { "foo" => 1, "bar" => 2.0, "jar" => "alphanum", "har" => true },
+        row! { "foo" => f32::MAX, "bar" => 2, "jar" => "alphanum", "har" => true },
+        row! { "foo" => 3, "bar" => 2.0, "jar" => "alphanum", "har" => false },
+        row! { "foo" => i64::MAX, "bar" => 2.0, "jar" => "alphanum", "har" => Value::Null },
+    ];
+
+    let column_map = Column::min_row_from_db_rows(db_rows.into_iter()).unwrap();
+    assert_eq!(
+        column_map,
+        indexmap! {
+            "foo".to_string() => Column {
+                name: "foo".to_string(),
+                sql_type: ValueType::Real("".to_string()),
+                not_null: true,
+                unique: true,
+            },
+            "bar".to_string() => Column {
+                name: "bar".to_string(),
+                sql_type: ValueType::SmallInteger("".to_string()),
+                not_null: true,
+                unique: false,
+            },
+            "jar".to_string() => Column {
+                name: "jar".to_string(),
+                sql_type: ValueType::Text("".to_string()),
+                not_null: true,
+                unique: false,
+            },
+            "har".to_string() => Column {
+                name: "har".to_string(),
+                sql_type: ValueType::Boolean("".to_string()),
+                not_null: false,
+                unique: false,
+            }
+        }
+    );
+
+    let anonymous_rows = vec![
+        // Row 0
+        vec![
+            Value::from(1),
+            Value::from(2.0),
+            Value::from("a"),
+            Value::from(true),
+        ],
+        // Row 1, etc.
+        vec![
+            Value::from(2),
+            Value::from(2),
+            Value::from("a"),
+            Value::from(true),
+        ],
+        vec![
+            Value::from(3),
+            Value::from(2.0),
+            Value::from("a"),
+            Value::from(false),
+        ],
+        vec![
+            Value::from(i64::MAX),
+            Value::from(2.0),
+            Value::from("a"),
+            Value::Null,
+        ],
+    ];
+
+    let columns = Column::min_columns_from_anonymous_rows(anonymous_rows.into_iter()).unwrap();
+    assert_eq!(
+        columns,
+        vec![
+            Column {
+                name: "".to_string(),
+                sql_type: ValueType::BigInteger("".to_string()),
+                not_null: true,
+                unique: true,
+            },
+            Column {
+                name: "".to_string(),
+                sql_type: ValueType::SmallInteger("".to_string()),
+                not_null: true,
+                unique: false,
+            },
+            Column {
+                name: "".to_string(),
+                sql_type: ValueType::Text("".to_string()),
+                not_null: true,
+                unique: false,
+            },
+            Column {
+                name: "".to_string(),
+                sql_type: ValueType::Boolean("".to_string()),
+                not_null: false,
+                unique: false,
+            }
+        ]
+    );
+}
+
+#[test]
+fn test_coerce() {
+    let input_row_1 = row! {
+        "foo" => Value::SmallInteger(1),
+        "bar" => Value::SmallInteger(2),
+        "jar" => Value::Text("3".to_string()),
+        "har" => Value::Text("t".to_string())
+    };
+    let input_row_2 = row! {
+        "foo" => Value::BigInteger(i64::MAX),
+        "bar" => Value::Text("2".to_string()),
+        "jar" => Value::SmallInteger(9),
+        "har" => Value::Text("0".to_string())
+    };
+    let column_map = indexmap! {
+        "foo".to_string() => Column {
+            name: "foo".to_string(),
+            sql_type: ValueType::Real("".to_string()),
+            not_null: true,
+            unique: true,
+        },
+        "bar".to_string() => Column {
+            name: "bar".to_string(),
+            sql_type: ValueType::SmallInteger("".to_string()),
+            not_null: true,
+            unique: true,
+        },
+        "jar".to_string() => Column {
+            name: "jar".to_string(),
+            sql_type: ValueType::BigInteger("".to_string()),
+            not_null: true,
+            unique: true,
+        },
+        "har".to_string() => Column {
+            name: "har".to_string(),
+            sql_type: ValueType::Boolean("".to_string()),
+            not_null: true,
+            unique: true,
+        }
+    };
+    let expected_row_1 = row! {
+        "foo" => Value::Real(1.0),
+        "bar" => Value::SmallInteger(2),
+        "jar" => Value::BigInteger(3),
+        "har" => Value::Boolean(true),
+    };
+    let expected_row_2 = row! {
+        "foo" => Value::Real(9.223372e18),
+        "bar" => Value::SmallInteger(2),
+        "jar" => Value::BigInteger(9),
+        "har" => Value::Boolean(false),
+    };
+
+    let coerced_row = input_row_1.coerce(&column_map).unwrap();
+    assert_eq!(coerced_row, expected_row_1);
+
+    let mut coerced_rows = Rows::coerce([input_row_1, input_row_2].into_iter(), &column_map);
+    assert_eq!(coerced_rows.next().unwrap().unwrap(), expected_row_1);
+    assert_eq!(coerced_rows.next().unwrap().unwrap(), expected_row_2);
+}
+
+#[test]
+fn test_from_str() {
+    let foo = ValueType::minimum().min_type("True").unwrap();
+    assert_eq!(foo, ValueType::Boolean("".to_string()));
+
+    let foo = ValueType::minimum().min_type("2").unwrap();
+    assert_eq!(foo, ValueType::SmallInteger("".to_string()));
+
+    let foo = ValueType::minimum().min_type("2.0").unwrap();
+    assert_eq!(foo, ValueType::Real("".to_string()));
+}
+
+#[test]
+fn test_json() {
+    // Test is_json(), as_json() methods:
+    let db_val = Value::Json(json!([]));
+    assert_eq!(db_val.is_json(), true);
+    assert_eq!(db_val.as_json(), Some(json!([])));
+
+    let db_val = Value::Text(json!([]).to_string());
+    assert_eq!(db_val.is_json(), false);
+    assert_eq!(db_val.as_json(), None);
+
+    // Test into() method:
+    let db_val = Value::Json(json!([]));
+    let json_val: JsonValue = db_val.into();
+    assert_eq!(json_val, json!([]));
+
+    let db_val = Value::Text(json!([]).to_string());
+    let json_val: JsonValue = db_val.into();
+    assert_eq!(json_val, JsonValue::String("[]".into()));
+}
+
+#[test]
+fn test_hashing() {
+    let mut test_map = HashMap::new();
+    for (i, value) in [
+        Value::Null,
+        Value::Text("NULL".to_string()),
+        Value::Boolean(true),
+        Value::SmallInteger(1),
+        Value::BigInteger(1),
+        Value::Real(0.0f32),
+        Value::Real(0.456f32),
+        Value::BigReal(0.123f64),
+        Value::BigReal(0.0f64),
+        Value::Numeric(dec!(1)),
+        Value::Json(json!({"foo":1})),
+        Value::Other("bpchar".to_string(), vec![97], Some("a".to_string())),
+    ]
+    .iter()
+    .enumerate()
+    {
+        test_map.insert(value.clone(), i);
+        assert_eq!(*test_map.get(&value).unwrap(), i);
+    }
+}
+
+#[test]
+fn test_table_names() {
+    // Valid table names:
+    assert_eq!(
+        validate_table_name(r#"table"#).expect("Expected table name to be valid"),
+        "table"
+    );
+    assert_eq!(
+        validate_table_name(r#"my_table"#).expect("Expected table name to be valid"),
+        "my_table"
+    );
+    assert_eq!(
+        validate_table_name(r#"my_2nd_table"#).expect("Expected table name to be valid"),
+        "my_2nd_table"
+    );
+    assert_eq!(
+        validate_table_name(r#"my_table_2"#).expect("Expected table name to be valid"),
+        "my_table_2"
+    );
+    assert_eq!(
+        validate_table_name(r#"my_table2"#).expect("Expected table name to be valid"),
+        "my_table2"
+    );
+    assert_eq!(
+        validate_table_name(r#"My_Table_2"#).expect("Expected table name to be valid"),
+        "My_Table_2"
+    );
+
+    // Valid table name surrounded by quotes:
+    assert_eq!(
+        validate_table_name(r#""table""#).expect("Expected table name to be valid"),
+        "table"
+    );
+
+    // Invalid first character:
+    if let Ok(_) = validate_table_name(r#"1table"#) {
+        panic!("Expected an error");
+    };
+    if let Ok(_) = validate_table_name(r#""1table""#) {
+        panic!("Expected an error");
+    }
+
+    // Beginning or trailing double-quote is missing:
+    if let Ok(_) = validate_table_name(r#"table""#) {
+        panic!("Expected an error");
+    }
+    if let Ok(_) = validate_table_name(r#""table"#) {
+        panic!("Expected an error");
+    }
+
+    // Table name with spaces:
+    if let Ok(_) = validate_table_name(r#"my table"#) {
+        panic!("Expected an error");
+    }
+}
+
+#[test]
+fn test_sql_parsing() {
+    let tables_read = get_accessed_tables(&format!(
+        r#"SELECT t1.foo
+               FROM alpha t1, beta t2
+               WHERE t1.foo = t2.foo"#
+    ))
+    .unwrap();
+    let tables_read: Vec<_> = tables_read.into_iter().collect();
+    assert_eq!(tables_read, ["alpha", "beta"]);
+
+    let tables_read = get_accessed_tables(&format!(
+        r#"SELECT t1.foo
+               FROM alpha t1
+               INNER JOIN beta t2 ON (t1.foo = t2.foo)"#
+    ))
+    .unwrap();
+    let tables_read: Vec<_> = tables_read.into_iter().collect();
+    assert_eq!(tables_read, ["alpha", "beta"]);
+
+    let tables_read = get_accessed_tables(&format!(
+        r#"SELECT t1.foo
+               FROM alpha t1
+               INNER JOIN beta t2 ON t1.foo = t2.foo
+               WHERE t2.foo in (
+                 SELECT t3.foo
+                 FROM gamma t3
+               )
+               AND NOT t1.foo"#
+    ))
+    .unwrap();
+    let tables_read: Vec<_> = tables_read.into_iter().collect();
+    assert_eq!(tables_read, ["alpha", "beta", "gamma"]);
+
+    let tables_read = get_accessed_tables(&format!(
+        r#"SELECT t1.foo
+               FROM alpha t1
+               INNER JOIN beta t2 ON (
+                 t1.foo = t2.foo AND
+                 t2.foo in (
+                   SELECT t3.foo
+                   FROM gamma t3
+                 )
+               )
+               WHERE NOT t1.foo"#
+    ))
+    .unwrap();
+    let tables_read: Vec<_> = tables_read.into_iter().collect();
+    assert_eq!(tables_read, ["alpha", "beta", "gamma"]);
+
+    let view_sql = r#"CREATE VIEW greek_letter_foo AS
+                          SELECT alpha.foo
+                          FROM alpha, beta"#;
+    let view_tables = get_view_tables(&view_sql).unwrap();
+    assert_eq!(view_tables, ["alpha", "beta"]);
+
+    let tables_read = get_accessed_tables(&format!(
+        r#"SELECT t1.foo
+                 FROM alpha t1, beta t2
+                 WHERE t1.foo = t2.foo
+               UNION ALL
+               SELECT t3.foo
+                 FROM gamma t3"#
+    ))
+    .unwrap();
+    let tables_read: Vec<_> = tables_read.into_iter().collect();
+    assert_eq!(tables_read, ["alpha", "beta", "gamma"]);
+
+    let tables_read = get_accessed_tables(&format!(
+        r#"WITH goo as (
+                 SELECT alpha.foo FROM alpha
+                 LEFT JOIN gamma ON gamma.foo = alpha.foo
+               ), hoo as (
+                 SELECT foo FROM beta
+               ), ioo as (
+                 SELECT foo FROM gamma
+               )
+               SELECT t1.foo
+               FROM goo t1, hoo t2
+               WHERE t1.foo = t2.foo
+                 AND t2.foo in (
+                   SELECT t3.foo
+                     FROM delta t3
+                 )
+               UNION ALL
+               SELECT * from ioo"#
+    ))
+    .unwrap();
+    let tables_read: Vec<_> = tables_read.into_iter().collect();
+    assert_eq!(tables_read, ["alpha", "beta", "delta", "gamma"]);
+
+    let view_sql = r#"CREATE VIEW greek_letter_foo AS
+                          SELECT alpha.foo
+                          FROM alpha, beta
+                          WHERE alpha.foo = beta.foo
+                          UNION ALL
+                          SELECT gamma.foo
+                          FROM gamma"#;
+    let view_tables = get_view_tables(&view_sql).unwrap();
+    assert_eq!(view_tables, ["alpha", "beta", "gamma"]);
+
+    let (edited_tables, dropped_tables) =
+        get_affected_tables(&format!(r#"INSERT INTO "alpha" VALUES ($1, $2, $3)"#)).unwrap();
+    let edited_tables: Vec<_> = edited_tables.into_iter().collect();
+    assert_eq!(edited_tables, ["alpha"]);
+    assert_eq!(dropped_tables, [].into());
+
+    let (edited_tables, dropped_tables) = get_affected_tables(
+        r#"WITH bar AS (SELECT * FROM alpha),
+                    mar AS (SELECT * FROM beta)
+                 INSERT INTO gamma
+                 SELECT alpha.*
+                 FROM alpha, beta
+                 WHERE alpha.value = beta.value"#,
+    )
+    .unwrap();
+    let edited_tables: Vec<_> = edited_tables.into_iter().collect();
+    assert_eq!(edited_tables, ["gamma"]);
+    assert_eq!(dropped_tables, [].into());
+
+    let (edited_tables, dropped_tables) =
+        get_affected_tables(&format!(r#"UPDATE "delta" set bar = $1 WHERE bar = $2"#)).unwrap();
+    let edited_tables: Vec<_> = edited_tables.into_iter().collect();
+    assert_eq!(edited_tables, ["delta"]);
+    assert_eq!(dropped_tables, [].into());
+
+    let (edited_tables, dropped_tables) = get_affected_tables(&format!(
+        r#"WITH bar AS (SELECT * FROM test),
+                    mar AS (SELECT * FROM test)
+                 UPDATE delta
+                 SET value = bar.value
+                 FROM bar, mar
+                 WHERE bar.value = $1 AND bar.value = mar.value"#,
+    ))
+    .unwrap();
+    let edited_tables: Vec<_> = edited_tables.into_iter().collect();
+    assert_eq!(edited_tables, ["delta"]);
+    assert_eq!(dropped_tables, [].into());
+
+    let (edited_tables, dropped_tables) =
+        get_affected_tables(&format!(r#"DELETE FROM "epsilon" WHERE bar >= $1"#)).unwrap();
+    let edited_tables: Vec<_> = edited_tables.into_iter().collect();
+    assert_eq!(edited_tables, ["epsilon"]);
+    assert_eq!(dropped_tables, [].into());
+
+    let (edited_tables, dropped_tables) = get_affected_tables(
+        r#"WITH bar AS (SELECT * FROM test),
+                    mar AS (SELECT * FROM test)
+                 DELETE FROM lambda WHERE value IN (SELECT value FROM bar)"#,
+    )
+    .unwrap();
+    let edited_tables: Vec<_> = edited_tables.into_iter().collect();
+    assert_eq!(edited_tables, ["lambda"]);
+    assert_eq!(dropped_tables, [].into());
+
+    let (edited_tables, dropped_tables) = get_affected_tables(r#"DROP TABLE "rho""#).unwrap();
+    let dropped_tables: Vec<_> = dropped_tables.into_iter().collect();
+    assert_eq!(dropped_tables, ["rho"]);
+    assert_eq!(edited_tables, [].into());
+
+    let (edited_tables, dropped_tables) =
+        get_affected_tables(r#"DROP TABLE IF EXISTS "phi" CASCADE"#).unwrap();
+    let dropped_tables: Vec<_> = dropped_tables.into_iter().collect();
+    assert_eq!(dropped_tables, ["phi"]);
+    assert_eq!(edited_tables, [].into());
+
+    let (edited_tables, dropped_tables) =
+        get_affected_tables("TRUNCATE TABLE mu, nu CASCADE").unwrap();
+    let edited_tables: Vec<_> = edited_tables.into_iter().collect();
+    assert_eq!(edited_tables, ["mu", "nu"]);
+    assert_eq!(dropped_tables, [].into());
+
+    let (edited_tables, dropped_tables) =
+        get_affected_tables("ALTER TABLE phi ADD COLUMN varphi INT").unwrap();
+    let edited_tables: Vec<_> = edited_tables.into_iter().collect();
+    assert_eq!(edited_tables, ["phi"]);
+    assert_eq!(dropped_tables, [].into());
+
+    let (edited_tables, dropped_tables) = get_affected_tables("DROP VIEW theta").unwrap();
+    let dropped_tables: Vec<_> = dropped_tables.into_iter().collect();
+    assert_eq!(edited_tables, [].into());
+    assert_eq!(dropped_tables, ["theta"]);
+
+    let (edited_tables, dropped_tables) = get_affected_tables(
+        r#"UPDATE epsilon
+                 SET alpha = new_beta
+                 FROM (
+                   SELECT 9 AS new_alpha, 3 AS new_beta, 2 AS new_gamma, 1 AS new_delta
+                   UNION ALL
+                   SELECT 4 AS new_alpha, 3 as new_beta, 2 AS new_gamma, 1 AS new_delta
+                 ) foo_alias
+                 WHERE alpha = new_alpha"#,
+    )
+    .unwrap();
+    let edited_tables: Vec<_> = edited_tables.into_iter().collect();
+    assert_eq!(edited_tables, ["epsilon"]);
+    assert_eq!(dropped_tables, [].into());
+
+    // Multiple statements, no parameters:
+
+    let sql = r#"BEGIN TRANSACTION;
+
+                     INSERT INTO "alpha" VALUES (1, 2, 3), (4, 5, 6);
+
+                     INSERT INTO gamma
+                     SELECT alpha.*
+                     FROM alpha, beta
+                     WHERE alpha.value = beta.value;
+
+                     WITH t AS (
+                       SELECT * from delta_base ORDER BY quality LIMIT 1
+                     )
+                     UPDATE delta SET price = t.price * 1.05;
+
+                     WITH t AS (
+                       SELECT * FROM phi_base
+                       WHERE
+                         "date" >= '2010-10-01' AND
+                         "date" < '2010-11-01'
+                     )
+                     INSERT INTO phi
+                     SELECT * FROM t;
+
+                     DELETE FROM "psi" WHERE bar >= 10;
+
+                     WITH RECURSIVE included_lambda(sub_lambda, lambda) AS (
+                         SELECT sub_lambda, lambda FROM lambda WHERE lambda = 'our_product'
+                       UNION ALL
+                         SELECT p.sub_lambda, p.lambda
+                         FROM included_lambda pr, lambda p
+                         WHERE p.lambda = pr.sub_lambda
+                     )
+                     DELETE FROM lambda
+                       WHERE lambda IN (SELECT lambda FROM included_lambda);
+
+                     DROP TABLE "rho";
+
+                     DROP TABLE "sigma" CASCADE;
+
+                     COMMIT"#;
+
+    let (edited_tables, dropped_tables) = get_affected_tables(&sql).unwrap();
+    let edited_tables: Vec<_> = edited_tables.into_iter().collect();
+    let dropped_tables: Vec<_> = dropped_tables.into_iter().collect();
+    assert_eq!(
+        edited_tables,
+        ["alpha", "delta", "gamma", "lambda", "phi", "psi",]
+    );
+    assert_eq!(dropped_tables, ["rho", "sigma",]);
+}
+
+// AnyPool tests:
 
 #[tokio::test]
 async fn test_primary_keys() {
@@ -2049,6 +2753,357 @@ async fn upsert_returning(url: &str) {
 }
 
 #[tokio::test]
+async fn test_import_small() {
+    #[cfg(feature = "rusqlite")]
+    import_small(":memory:").await;
+    #[cfg(feature = "tokio-postgres")]
+    import_small("postgresql:///rltbl_db").await;
+    #[cfg(feature = "libsql")]
+    import_small(":memory:").await;
+}
+
+async fn import_small(url: &str) {
+    let pool = AnyPool::connect(url).await.unwrap();
+    if pool.syntax().name() == "sqlite" {
+        pool.import_table("tests/data/table1.csv").await.unwrap();
+        let rows = pool.query("SELECT * FROM table1", ()).await.unwrap();
+        assert_eq!(
+            rows.rows,
+            vec![
+                row! {
+                    "alpha" => Value::BigInteger(1),
+                    "beta" => Value::Text("short".to_string()),
+                    "gamma" => Value::BigReal(9.0),
+                    "delta" => Value::BigReal(i64::MAX as f64),
+                },
+                row! {
+                    // TODO: This first value is wrong. It should be Value::Null,
+                    // but we need a way to import NULL values from TSV. One possibility
+                    // is to create a trigger on tables with nullable columns to insert NULL
+                    // whenever we are given some special string such as '\N', 'null', etc.
+                    "alpha" => Value::Text("".to_string()),
+                    "beta" => Value::Text("long".to_string()),
+                    "gamma" => Value::BigReal(i32::MAX as f64),
+                    "delta" => Value::BigReal(4.0),
+                },
+                row! {
+                    "alpha" => Value::BigInteger(19),
+                    "beta" => Value::Text("short".to_string()),
+                    "gamma" => Value::BigReal(5.2),
+                    "delta" => Value::BigReal(4.1),
+                },
+                row! {
+                    "alpha" => Value::BigInteger(100),
+                    "beta" => Value::Text("long".to_string()),
+                    "gamma" => Value::BigReal(7.0),
+                    "delta" => Value::BigReal(19.0),
+                },
+                row! {
+                    "alpha" => Value::BigInteger(115),
+                    "beta" => Value::Text("short".to_string()),
+                    "gamma" => Value::BigReal(10.0),
+                    "delta" => Value::BigReal(12.0),
+                },
+                row! {
+                    "alpha" => Value::BigInteger(30),
+                    "beta" => Value::Text("short".to_string()),
+                    "gamma" => Value::BigReal(4.0),
+                    "delta" => Value::BigReal(19.0),
+                },
+                row! {
+                    "alpha" => Value::BigInteger(39),
+                    "beta" => Value::Text("midway".to_string()),
+                    "gamma" => Value::BigReal(19.99),
+                    "delta" => Value::BigReal(75.0),
+                },
+            ]
+        );
+    } else if pool.syntax().name() == "postgres" {
+        pool.import_table("tests/data/table1.tsv").await.unwrap();
+        let rows = pool.query("SELECT * FROM table1", ()).await.unwrap();
+        assert_eq!(
+            rows.rows,
+            vec![
+                row! {
+                    "alpha" => Value::SmallInteger(1),
+                    "beta" => Value::Text("short".to_string()),
+                    "gamma" => Value::Real(9.0),
+                    "delta" => Value::Real(i64::MAX as f32),
+                },
+                row! {
+                    "alpha" => Value::Null,
+                    "beta" => Value::Text("long".to_string()),
+                    "gamma" => Value::Real(i32::MAX as f32),
+                    "delta" => Value::Real(4.0),
+                },
+                row! {
+                    "alpha" => Value::SmallInteger(19),
+                    "beta" => Value::Text("short".to_string()),
+                    "gamma" => Value::Real(5.2),
+                    "delta" => Value::Real(4.1),
+                },
+                row! {
+                    "alpha" => Value::SmallInteger(100),
+                    "beta" => Value::Text("long".to_string()),
+                    "gamma" => Value::Real(7.0),
+                    "delta" => Value::Real(19.0),
+                },
+                row! {
+                    "alpha" => Value::SmallInteger(115),
+                    "beta" => Value::Text("short".to_string()),
+                    "gamma" => Value::Real(10.0),
+                    "delta" => Value::Real(12.0),
+                },
+                row! {
+                    "alpha" => Value::SmallInteger(30),
+                    "beta" => Value::Text("short".to_string()),
+                    "gamma" => Value::Real(4.0),
+                    "delta" => Value::Real(19.0),
+                },
+                row! {
+                    "alpha" => Value::SmallInteger(39),
+                    "beta" => Value::Text("midway".to_string()),
+                    "gamma" => Value::Real(19.99),
+                    "delta" => Value::Real(75.0),
+                },
+            ]
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_save() {
+    #[cfg(feature = "rusqlite")]
+    save(":memory:").await.unwrap();
+    #[cfg(feature = "tokio-postgres")]
+    save("postgresql:///rltbl_db").await.unwrap();
+    #[cfg(feature = "libsql")]
+    save(":memory:").await.unwrap();
+}
+
+async fn save(url: &str) -> Result<(), Error> {
+    let pool = AnyPool::connect(url).await.unwrap();
+    let syntax = pool.syntax();
+    let pp = syntax.param_prefix().to_string();
+    let table = format!("test_save_{}", pool.syntax().name());
+
+    // Remove any previous test files:
+    std::fs::remove_file(&format!("tests/output/{table}.tsv")).unwrap_or(());
+    std::fs::remove_file(&format!("tests/output/{table}.csv")).unwrap_or(());
+
+    pool.execute_batch(&format!(
+        "DROP TABLE IF EXISTS {table}{cascade};\
+         CREATE TABLE {table} (\
+           text_value TEXT,\
+           alt_text_value TEXT,\
+           float_value FLOAT8,\
+           alt_float_value FLOAT8,\
+           int_value INT8,\
+           alt_int_value INT8,\
+           bool_value BOOL,\
+           alt_bool_value BOOL,\
+           numeric_value NUMERIC,\
+           alt_numeric_value NUMERIC\
+         )",
+        cascade = match syntax.name() {
+            "postgres" => " CASCADE",
+            "sqlite" => "",
+            _ => panic!("Invalid syntax '{}'", syntax.name()),
+        }
+    ))
+    .await
+    .unwrap();
+
+    pool.execute(
+        &format!(
+            r#"INSERT INTO {table}
+               (
+                 text_value,
+                 alt_text_value,
+                 float_value,
+                 alt_float_value,
+                 int_value,
+                 alt_int_value,
+                 bool_value,
+                 alt_bool_value,
+                 numeric_value,
+                 alt_numeric_value
+               )
+               VALUES
+                 ({pp}1, {pp}2, {pp}3, {pp}4, {pp}5, {pp}6, {pp}7, {pp}8, {pp}9, {pp}10),
+                 ({pp}11, {pp}12, {pp}13, {pp}14, {pp}15, {pp}16, {pp}17, {pp}18, {pp}19, {pp}20)"#,
+        ),
+        &values![
+            "foo",
+            (),
+            1.05_f64,
+            (),
+            1_i64,
+            (),
+            true,
+            (),
+            dec!(1),
+            (),
+            "goo",
+            (),
+            2.05_f64,
+            (),
+            2_i64,
+            (),
+            false,
+            (),
+            dec!(2),
+            (),
+        ],
+    )
+    .await
+    .unwrap();
+
+    let tsv_path = format!("tests/output/{table}.tsv");
+    pool.save_table(&table, &tsv_path).await.unwrap();
+    let saved = std::fs::read_to_string(&tsv_path).unwrap();
+    assert_eq!(
+        saved,
+        match syntax.name() {
+            "sqlite" =>
+                "text_value\talt_text_value\tfloat_value\talt_float_value\tint_value\
+                 \talt_int_value\tbool_value\talt_bool_value\tnumeric_value\
+                 \talt_numeric_value\nfoo\t\t1.05\t\t1\t\t1\t\t1\t\ngoo\t\t2.05\t\
+                 \t2\t\t0\t\t2\t\n",
+            "postgres" =>
+                "text_value\talt_text_value\tfloat_value\talt_float_value\tint_value\t\
+                 alt_int_value\tbool_value\talt_bool_value\tnumeric_value\t\
+                 alt_numeric_valuefoo\t\\N\t1.05\t\\N\t1\t\\N\tt\t\\N\t1\t\\N\ngoo\t\\N\
+                 \t2.05\t\\N\t2\t\\N\tf\t\\N\t2\t\\N\n",
+            _ => panic!("Invalid syntax: {}", syntax.name()),
+        }
+    );
+
+    let csv_path = format!("tests/output/{table}.csv");
+    pool.save_table(&table, &csv_path).await.unwrap();
+    let saved = std::fs::read_to_string(&csv_path).unwrap();
+    assert_eq!(
+        saved,
+        match syntax.name() {
+            "sqlite" =>
+                "text_value,alt_text_value,float_value,alt_float_value,int_value\
+                 ,alt_int_value,bool_value,alt_bool_value,numeric_value\
+                 ,alt_numeric_value\nfoo,,1.05,,1,,1,,1,\ngoo,,2.05,\
+                 ,2,,0,,2,\n",
+            "postgres" =>
+                "text_value,alt_text_value,float_value,alt_float_value,int_value,\
+                 alt_int_value,bool_value,alt_bool_value,numeric_value,\
+                 alt_numeric_valuefoo,\\N,1.05,\\N,1,\\N,t,\\N,1,\\N\ngoo,\\N\
+                 ,2.05,\\N,2,\\N,f,\\N,2,\\N\n",
+            _ => panic!("Invalid syntax: {}", syntax.name()),
+        }
+    );
+
+    // Clean up:
+    pool.drop_table(&table).await.unwrap();
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_transaction() {
+    #[cfg(feature = "rusqlite")]
+    transaction(":memory:").await;
+    #[cfg(feature = "tokio-postgres")]
+    transaction("postgresql:///rltbl_db").await;
+    #[cfg(feature = "libsql")]
+    transaction(":memory:").await;
+}
+
+async fn transaction(url: &str) {
+    async fn foo(tx: &AnyTransaction) {
+        tx.query("SELECT 'baz'", &[]).await.unwrap();
+    }
+
+    let pool = AnyPool::connect(url).await.unwrap();
+    let table = format!("test_transaction_{}", pool.syntax().name());
+    pool.query(&format!("DROP TABLE IF EXISTS {table}"), ())
+        .await
+        .expect("Error creating table");
+    pool.query(&format!("CREATE TABLE {table} ( bar TEXT )"), ())
+        .await
+        .expect("Error creating table");
+    pool.query(&format!("INSERT INTO {table} VALUES ('A')"), ())
+        .await
+        .expect("Error inserting values");
+    let rows = pool
+        .query(&format!("SELECT bar FROM {table}"), ())
+        .await
+        .expect("Error counting rows");
+    assert_eq!(rows.rows.len(), 1, "count rows before");
+
+    let conn = pool.connection().await.unwrap();
+    let mut tx = conn.transaction().await.unwrap();
+
+    tx.query(&format!("INSERT INTO {table} VALUES (456)"), &[])
+        .await
+        .expect("Error in transaction insert");
+
+    foo(&tx).await;
+
+    let rows = tx
+        .query(&format!("SELECT bar FROM {table}"), &[])
+        .await
+        .expect("Error counting rows");
+    assert_eq!(rows.rows.len(), 2, "count rows inside transaction");
+
+    // WARN: Don't do this for :memory:!
+    // Because we set max_size = 1
+    // and the transaction holds one connection,
+    // asking for another connection will await forever.
+    if url != ":memory:" {
+        let rows = pool
+            .query(&format!("SELECT bar FROM {table}"), ())
+            .await
+            .expect("Error counting rows");
+        assert_eq!(rows.rows.len(), 1, "count rows during");
+    }
+
+    tx.commit().await.unwrap();
+
+    // If the url is :memory: make sure to drop the connection first
+    // (see the comment right above).
+    if url == ":memory:" {
+        drop(tx);
+    }
+
+    let rows = pool
+        .query(&format!("SELECT bar FROM {table}"), ())
+        .await
+        .expect("Error counting rows");
+
+    assert_eq!(rows.rows.len(), 2, "count rows after");
+
+    // Create a new transaction, let it go out of scope without committing it, and then
+    // verify that it was not committed.
+    {
+        let conn = pool.connection().await.unwrap();
+        let tx = conn.transaction().await.unwrap();
+        tx.query(&format!("INSERT INTO {table} VALUES (789)"), &[])
+            .await
+            .expect("Error in transaction insert");
+
+        let rows = tx
+            .query(&format!("SELECT bar FROM {table}"), &[])
+            .await
+            .expect("Error counting rows");
+        assert_eq!(rows.rows.len(), 3, "count rows inside transaction");
+    }
+
+    let rows = pool
+        .query(&format!("SELECT bar FROM {table}"), ())
+        .await
+        .expect("Error counting rows");
+
+    println!("ROWS: {rows:#?}");
+    assert_eq!(rows.rows.len(), 2, "count rows after");
+}
+
+#[tokio::test]
 async fn test_caching() {
     let all_strategies = ["truncate_all", "truncate", "trigger", "memory:5"]
         .iter()
@@ -2712,312 +3767,9 @@ async fn sql_type(url: &str) {
     pool.drop_table("test_sql_type").await.unwrap();
 }
 
-#[tokio::test]
-async fn test_table_names() {
-    // Valid table names:
-    assert_eq!(
-        validate_table_name(r#"table"#).expect("Expected table name to be valid"),
-        "table"
-    );
-    assert_eq!(
-        validate_table_name(r#"my_table"#).expect("Expected table name to be valid"),
-        "my_table"
-    );
-    assert_eq!(
-        validate_table_name(r#"my_2nd_table"#).expect("Expected table name to be valid"),
-        "my_2nd_table"
-    );
-    assert_eq!(
-        validate_table_name(r#"my_table_2"#).expect("Expected table name to be valid"),
-        "my_table_2"
-    );
-    assert_eq!(
-        validate_table_name(r#"my_table2"#).expect("Expected table name to be valid"),
-        "my_table2"
-    );
-    assert_eq!(
-        validate_table_name(r#"My_Table_2"#).expect("Expected table name to be valid"),
-        "My_Table_2"
-    );
+// Built-in driver-specific pool tests:
 
-    // Valid table name surrounded by quotes:
-    assert_eq!(
-        validate_table_name(r#""table""#).expect("Expected table name to be valid"),
-        "table"
-    );
-
-    // Invalid first character:
-    if let Ok(_) = validate_table_name(r#"1table"#) {
-        panic!("Expected an error");
-    };
-    if let Ok(_) = validate_table_name(r#""1table""#) {
-        panic!("Expected an error");
-    }
-
-    // Beginning or trailing double-quote is missing:
-    if let Ok(_) = validate_table_name(r#"table""#) {
-        panic!("Expected an error");
-    }
-    if let Ok(_) = validate_table_name(r#""table"#) {
-        panic!("Expected an error");
-    }
-
-    // Table name with spaces:
-    if let Ok(_) = validate_table_name(r#"my table"#) {
-        panic!("Expected an error");
-    }
-}
-
-#[tokio::test]
-async fn test_sql_parsing() {
-    let tables_read = get_accessed_tables(&format!(
-        r#"SELECT t1.foo
-               FROM alpha t1, beta t2
-               WHERE t1.foo = t2.foo"#
-    ))
-    .unwrap();
-    let tables_read: Vec<_> = tables_read.into_iter().collect();
-    assert_eq!(tables_read, ["alpha", "beta"]);
-
-    let tables_read = get_accessed_tables(&format!(
-        r#"SELECT t1.foo
-               FROM alpha t1
-               INNER JOIN beta t2 ON (t1.foo = t2.foo)"#
-    ))
-    .unwrap();
-    let tables_read: Vec<_> = tables_read.into_iter().collect();
-    assert_eq!(tables_read, ["alpha", "beta"]);
-
-    let tables_read = get_accessed_tables(&format!(
-        r#"SELECT t1.foo
-               FROM alpha t1
-               INNER JOIN beta t2 ON t1.foo = t2.foo
-               WHERE t2.foo in (
-                 SELECT t3.foo
-                 FROM gamma t3
-               )
-               AND NOT t1.foo"#
-    ))
-    .unwrap();
-    let tables_read: Vec<_> = tables_read.into_iter().collect();
-    assert_eq!(tables_read, ["alpha", "beta", "gamma"]);
-
-    let tables_read = get_accessed_tables(&format!(
-        r#"SELECT t1.foo
-               FROM alpha t1
-               INNER JOIN beta t2 ON (
-                 t1.foo = t2.foo AND
-                 t2.foo in (
-                   SELECT t3.foo
-                   FROM gamma t3
-                 )
-               )
-               WHERE NOT t1.foo"#
-    ))
-    .unwrap();
-    let tables_read: Vec<_> = tables_read.into_iter().collect();
-    assert_eq!(tables_read, ["alpha", "beta", "gamma"]);
-
-    let view_sql = r#"CREATE VIEW greek_letter_foo AS
-                          SELECT alpha.foo
-                          FROM alpha, beta"#;
-    let view_tables = get_view_tables(&view_sql).unwrap();
-    assert_eq!(view_tables, ["alpha", "beta"]);
-
-    let tables_read = get_accessed_tables(&format!(
-        r#"SELECT t1.foo
-                 FROM alpha t1, beta t2
-                 WHERE t1.foo = t2.foo
-               UNION ALL
-               SELECT t3.foo
-                 FROM gamma t3"#
-    ))
-    .unwrap();
-    let tables_read: Vec<_> = tables_read.into_iter().collect();
-    assert_eq!(tables_read, ["alpha", "beta", "gamma"]);
-
-    let tables_read = get_accessed_tables(&format!(
-        r#"WITH goo as (
-                 SELECT alpha.foo FROM alpha
-                 LEFT JOIN gamma ON gamma.foo = alpha.foo
-               ), hoo as (
-                 SELECT foo FROM beta
-               ), ioo as (
-                 SELECT foo FROM gamma
-               )
-               SELECT t1.foo
-               FROM goo t1, hoo t2
-               WHERE t1.foo = t2.foo
-                 AND t2.foo in (
-                   SELECT t3.foo
-                     FROM delta t3
-                 )
-               UNION ALL
-               SELECT * from ioo"#
-    ))
-    .unwrap();
-    let tables_read: Vec<_> = tables_read.into_iter().collect();
-    assert_eq!(tables_read, ["alpha", "beta", "delta", "gamma"]);
-
-    let view_sql = r#"CREATE VIEW greek_letter_foo AS
-                          SELECT alpha.foo
-                          FROM alpha, beta
-                          WHERE alpha.foo = beta.foo
-                          UNION ALL
-                          SELECT gamma.foo
-                          FROM gamma"#;
-    let view_tables = get_view_tables(&view_sql).unwrap();
-    assert_eq!(view_tables, ["alpha", "beta", "gamma"]);
-
-    let (edited_tables, dropped_tables) =
-        get_affected_tables(&format!(r#"INSERT INTO "alpha" VALUES ($1, $2, $3)"#)).unwrap();
-    let edited_tables: Vec<_> = edited_tables.into_iter().collect();
-    assert_eq!(edited_tables, ["alpha"]);
-    assert_eq!(dropped_tables, [].into());
-
-    let (edited_tables, dropped_tables) = get_affected_tables(
-        r#"WITH bar AS (SELECT * FROM alpha),
-                    mar AS (SELECT * FROM beta)
-                 INSERT INTO gamma
-                 SELECT alpha.*
-                 FROM alpha, beta
-                 WHERE alpha.value = beta.value"#,
-    )
-    .unwrap();
-    let edited_tables: Vec<_> = edited_tables.into_iter().collect();
-    assert_eq!(edited_tables, ["gamma"]);
-    assert_eq!(dropped_tables, [].into());
-
-    let (edited_tables, dropped_tables) =
-        get_affected_tables(&format!(r#"UPDATE "delta" set bar = $1 WHERE bar = $2"#)).unwrap();
-    let edited_tables: Vec<_> = edited_tables.into_iter().collect();
-    assert_eq!(edited_tables, ["delta"]);
-    assert_eq!(dropped_tables, [].into());
-
-    let (edited_tables, dropped_tables) = get_affected_tables(&format!(
-        r#"WITH bar AS (SELECT * FROM test),
-                    mar AS (SELECT * FROM test)
-                 UPDATE delta
-                 SET value = bar.value
-                 FROM bar, mar
-                 WHERE bar.value = $1 AND bar.value = mar.value"#,
-    ))
-    .unwrap();
-    let edited_tables: Vec<_> = edited_tables.into_iter().collect();
-    assert_eq!(edited_tables, ["delta"]);
-    assert_eq!(dropped_tables, [].into());
-
-    let (edited_tables, dropped_tables) =
-        get_affected_tables(&format!(r#"DELETE FROM "epsilon" WHERE bar >= $1"#)).unwrap();
-    let edited_tables: Vec<_> = edited_tables.into_iter().collect();
-    assert_eq!(edited_tables, ["epsilon"]);
-    assert_eq!(dropped_tables, [].into());
-
-    let (edited_tables, dropped_tables) = get_affected_tables(
-        r#"WITH bar AS (SELECT * FROM test),
-                    mar AS (SELECT * FROM test)
-                 DELETE FROM lambda WHERE value IN (SELECT value FROM bar)"#,
-    )
-    .unwrap();
-    let edited_tables: Vec<_> = edited_tables.into_iter().collect();
-    assert_eq!(edited_tables, ["lambda"]);
-    assert_eq!(dropped_tables, [].into());
-
-    let (edited_tables, dropped_tables) = get_affected_tables(r#"DROP TABLE "rho""#).unwrap();
-    let dropped_tables: Vec<_> = dropped_tables.into_iter().collect();
-    assert_eq!(dropped_tables, ["rho"]);
-    assert_eq!(edited_tables, [].into());
-
-    let (edited_tables, dropped_tables) =
-        get_affected_tables(r#"DROP TABLE IF EXISTS "phi" CASCADE"#).unwrap();
-    let dropped_tables: Vec<_> = dropped_tables.into_iter().collect();
-    assert_eq!(dropped_tables, ["phi"]);
-    assert_eq!(edited_tables, [].into());
-
-    let (edited_tables, dropped_tables) =
-        get_affected_tables("TRUNCATE TABLE mu, nu CASCADE").unwrap();
-    let edited_tables: Vec<_> = edited_tables.into_iter().collect();
-    assert_eq!(edited_tables, ["mu", "nu"]);
-    assert_eq!(dropped_tables, [].into());
-
-    let (edited_tables, dropped_tables) =
-        get_affected_tables("ALTER TABLE phi ADD COLUMN varphi INT").unwrap();
-    let edited_tables: Vec<_> = edited_tables.into_iter().collect();
-    assert_eq!(edited_tables, ["phi"]);
-    assert_eq!(dropped_tables, [].into());
-
-    let (edited_tables, dropped_tables) = get_affected_tables("DROP VIEW theta").unwrap();
-    let dropped_tables: Vec<_> = dropped_tables.into_iter().collect();
-    assert_eq!(edited_tables, [].into());
-    assert_eq!(dropped_tables, ["theta"]);
-
-    let (edited_tables, dropped_tables) = get_affected_tables(
-        r#"UPDATE epsilon
-                 SET alpha = new_beta
-                 FROM (
-                   SELECT 9 AS new_alpha, 3 AS new_beta, 2 AS new_gamma, 1 AS new_delta
-                   UNION ALL
-                   SELECT 4 AS new_alpha, 3 as new_beta, 2 AS new_gamma, 1 AS new_delta
-                 ) foo_alias
-                 WHERE alpha = new_alpha"#,
-    )
-    .unwrap();
-    let edited_tables: Vec<_> = edited_tables.into_iter().collect();
-    assert_eq!(edited_tables, ["epsilon"]);
-    assert_eq!(dropped_tables, [].into());
-
-    // Multiple statements, no parameters:
-
-    let sql = r#"BEGIN TRANSACTION;
-
-                     INSERT INTO "alpha" VALUES (1, 2, 3), (4, 5, 6);
-
-                     INSERT INTO gamma
-                     SELECT alpha.*
-                     FROM alpha, beta
-                     WHERE alpha.value = beta.value;
-
-                     WITH t AS (
-                       SELECT * from delta_base ORDER BY quality LIMIT 1
-                     )
-                     UPDATE delta SET price = t.price * 1.05;
-
-                     WITH t AS (
-                       SELECT * FROM phi_base
-                       WHERE
-                         "date" >= '2010-10-01' AND
-                         "date" < '2010-11-01'
-                     )
-                     INSERT INTO phi
-                     SELECT * FROM t;
-
-                     DELETE FROM "psi" WHERE bar >= 10;
-
-                     WITH RECURSIVE included_lambda(sub_lambda, lambda) AS (
-                         SELECT sub_lambda, lambda FROM lambda WHERE lambda = 'our_product'
-                       UNION ALL
-                         SELECT p.sub_lambda, p.lambda
-                         FROM included_lambda pr, lambda p
-                         WHERE p.lambda = pr.sub_lambda
-                     )
-                     DELETE FROM lambda
-                       WHERE lambda IN (SELECT lambda FROM included_lambda);
-
-                     DROP TABLE "rho";
-
-                     DROP TABLE "sigma" CASCADE;
-
-                     COMMIT"#;
-
-    let (edited_tables, dropped_tables) = get_affected_tables(&sql).unwrap();
-    let edited_tables: Vec<_> = edited_tables.into_iter().collect();
-    let dropped_tables: Vec<_> = dropped_tables.into_iter().collect();
-    assert_eq!(
-        edited_tables,
-        ["alpha", "delta", "gamma", "lambda", "phi", "psi",]
-    );
-    assert_eq!(dropped_tables, ["rho", "sigma",]);
-}
+// Tokiop-postgres:
 
 #[cfg(feature = "tokio-postgres")]
 #[tokio::test]
@@ -3066,212 +3818,6 @@ async fn test_jsonb() {
          \"foo\": Boolean(true)} \
          }"
     );
-}
-
-#[cfg(feature = "rusqlite")]
-#[tokio::test]
-async fn test_rusqlite_aliases_and_builtin_functions() {
-    let pool = AnyPool::connect(":memory:").await.unwrap();
-    pool.execute_batch(
-        "DROP TABLE IF EXISTS test_table_indirect;\
-         CREATE TABLE test_table_indirect (\
-         text_value TEXT,\
-         alt_text_value TEXT,\
-         float_value FLOAT8,\
-         int_value INT8,\
-         bool_value BOOL\
-         )",
-    )
-    .await
-    .unwrap();
-    pool.execute(
-        r#"INSERT INTO test_table_indirect
-               (text_value, alt_text_value, float_value, int_value, bool_value)
-               VALUES (?1, ?2, ?3, ?4, ?5)"#,
-        values!["foo", Value::Null, 1.05_f64, 1_i64, true],
-    )
-    .await
-    .unwrap();
-
-    // Test aggregate:
-    let rows = pool
-        .query("SELECT MAX(int_value) FROM test_table_indirect", ())
-        .await
-        .unwrap();
-    assert_eq!(
-        rows.rows,
-        [row! {
-            "MAX(int_value)" => 1_i64,
-        }]
-    );
-
-    // Test alias:
-    let rows = pool
-        .query(
-            "SELECT bool_value AS bool_value_alias FROM test_table_indirect",
-            (),
-        )
-        .await
-        .unwrap();
-    assert_eq!(rows.rows, [row! {"bool_value_alias" => 1_i64,}]);
-
-    // Test aggregate with alias:
-    let rows = pool
-        .query(
-            "SELECT MAX(int_value) AS max_int_value FROM test_table_indirect",
-            (),
-        )
-        .await
-        .unwrap();
-    // Note that the alias is not shown in the results:
-    assert_eq!(rows.rows, [row! {"max_int_value" => 1_i64,}]);
-
-    // Test non-aggregate function:
-    let rows = pool
-        .query(
-            "SELECT CAST(int_value AS TEXT) FROM test_table_indirect",
-            (),
-        )
-        .await
-        .unwrap();
-    assert_eq!(
-        rows.rows,
-        [row! {
-            "CAST(int_value AS TEXT)" => "1",
-        }]
-    );
-
-    // Test non-aggregate function with alias:
-    let rows = pool
-        .query(
-            "SELECT CAST(int_value AS TEXT) AS int_value_cast FROM test_table_indirect",
-            (),
-        )
-        .await
-        .unwrap();
-    assert_eq!(
-        rows.rows,
-        [row! {
-            "int_value_cast" => "1",
-        }]
-    );
-
-    // Test functions over booleans:
-    let rows = pool
-        .query("SELECT MAX(bool_value) FROM test_table_indirect", ())
-        .await
-        .unwrap();
-    // It is not possible to represent the boolean result of an aggregate function as a
-    // boolean, since internally to sqlite it is stored as an integer, and we can't query
-    // the metadata to get the datatype of an expression. If we want to represent it as a
-    // boolean, we will need to parse the expression. Note that PostgreSQL does not support
-    // MAX(bool_value) - it gives the error:
-    //   ERROR: function max(boolean) does not exist\nHINT: No function matches the given
-    //          name and argument types. You might need to add explicit type casts.
-    // So, perhaps, this is tu quoque an argument that the behaviour below is acceptable for
-    // sqlite.
-    assert_eq!(
-        rows.rows,
-        [row! {
-            "MAX(bool_value)" => 1_i64,
-        }]
-    );
-}
-
-/// This verifies that
-/// using [MAX_PARAMS_SQLITE] parameters in a query is indeed supported.
-#[cfg(feature = "rusqlite")]
-#[tokio::test]
-async fn test_rusqlite_max_params() {
-    let pool = AnyPool::connect(":memory:").await.unwrap();
-    pool.execute_batch(
-        "DROP TABLE IF EXISTS test_max_params;\
-         CREATE TABLE test_max_params (\
-         column1 INT,\
-         column2 INT,\
-         column3 INT,\
-         column4 INT,\
-         column5 INT,\
-         column6 INT\
-         )",
-    )
-    .await
-    .unwrap();
-
-    let mut sql = "INSERT INTO test_max_params VALUES ".to_string();
-    let mut values = vec![];
-    let mut params = vec![];
-    let mut n = 1;
-    while n <= MAX_PARAMS_SQLITE {
-        values.push(format!(
-            "(?{}, ?{}, ?{}, ?{}, ?{}, ?{})",
-            n,
-            n + 1,
-            n + 2,
-            n + 3,
-            n + 4,
-            n + 5
-        ));
-        params.push(1);
-        params.push(1);
-        params.push(1);
-        params.push(1);
-        params.push(1);
-        params.push(1);
-        n += 6;
-    }
-    sql.push_str(&values.join(", "));
-    pool.execute(&sql, params).await.unwrap();
-    pool.drop_table("text_max_params").await.unwrap();
-}
-
-#[cfg(feature = "rusqlite")]
-#[tokio::test]
-async fn test_rusqlite_match() {
-    let conn = AnyPool::connect("test_match_columns.db").await.unwrap();
-    conn.execute_batch(
-        "DROP TABLE IF EXISTS test_table_match;\
-         CREATE TABLE test_table_match (\
-         text_value TEXT,\
-         alt_text_value TEXT\
-         )",
-    )
-    .await
-    .unwrap();
-    conn.execute(
-        r#"INSERT INTO test_table_match
-               (text_value, alt_text_value)
-               VALUES ($1, $2)"#,
-        &["foo", "123"],
-    )
-    .await
-    .unwrap();
-
-    let value: String = conn
-        .query(
-            "SELECT text_value from test_table_match
-                 WHERE regexp_match(text_value, $1) = 1",
-            values!["foo"],
-        )
-        .await
-        .unwrap()
-        .try_into_value()
-        .unwrap();
-
-    assert_eq!(value, "foo");
-
-    let value: String = conn
-        .query(
-            r#"SELECT alt_text_value from test_table_match
-                   WHERE regexp_match(alt_text_value, '\d+') = 1"#,
-            (),
-        )
-        .await
-        .unwrap()
-        .try_into_value()
-        .unwrap();
-
-    assert_eq!(value, "123");
 }
 
 #[cfg(feature = "tokio-postgres")]
@@ -4086,581 +4632,233 @@ async fn test_other_types() {
     pool.drop_table("test_other_types").await.unwrap();
 }
 
-#[test]
-fn test_min_typing() {
-    let column_values = vec![
-        // Column A:
-        vec![
-            Value::from(true),
-            Value::from(1),
-            Value::from(u64::MAX),
-            Value::from(2.1),
-            Value::from(f64::MAX),
-        ],
-        // Column B:
-        vec![
-            Value::from(1),
-            Value::from(true),
-            Value::from(u64::MAX),
-            Value::from(2.1),
-            Value::from(f64::MAX),
-        ],
-        // Column C:
-        vec![
-            Value::from(f64::MAX),
-            Value::from(1),
-            Value::from(true),
-            Value::from(u64::MAX),
-            Value::from(2.1),
-        ],
-        // Column D:
-        vec![
-            Value::from("alphanum"),
-            Value::from(f32::MAX),
-            Value::from(true),
-            Value::from(25),
-            Value::from(i32::MAX),
-        ],
-        // Column E:
-        vec![
-            Value::from(true),
-            Value::from(true),
-            Value::from(true),
-            Value::from(false),
-            Value::from(0),
-        ],
-        // Column F:
-        vec![
-            Value::from(1),
-            Value::from(2.1),
-            Value::from(2.1),
-            Value::from(i64::MAX),
-            Value::Null,
-        ],
-        // Column G:
-        vec![
-            Value::Null,
-            Value::from(i64::MAX),
-            Value::from(2.1),
-            Value::from(1),
-            Value::from(2.1),
-        ],
-        // Column H:
-        vec![
-            Value::Null,
-            Value::from(i32::MAX),
-            Value::from(2),
-            Value::from(1),
-            Value::from(i32::MAX),
-        ],
-        // Column I:
-        vec![
-            Value::Null,
-            Value::from(i16::MAX),
-            Value::from(2),
-            Value::from(1),
-            Value::from(3),
-        ],
-        // Column J:
-        vec![
-            Value::Null,
-            Value::from(u64::MAX),
-            Value::from(2),
-            Value::from(1),
-            Value::from(3),
-        ],
-        // Column K:
-        vec![
-            Value::Null,
-            Value::from(u32::MAX),
-            Value::from(2),
-            Value::from(1),
-            Value::from(3),
-        ],
-    ];
-
-    let columns = Column::min_columns_from_column_values(column_values.into_iter()).unwrap();
-    assert_eq!(
-        columns,
-        [
-            // Column A:
-            Column {
-                name: "".to_string(),
-                sql_type: ValueType::BigReal("".to_string()),
-                not_null: true,
-                unique: true,
-            },
-            // Column B:
-            Column {
-                name: "".to_string(),
-                sql_type: ValueType::BigReal("".to_string()),
-                not_null: true,
-                unique: true,
-            },
-            // Column C:
-            Column {
-                name: "".to_string(),
-                sql_type: ValueType::BigReal("".to_string()),
-                not_null: true,
-                unique: true,
-            },
-            // Column D:
-            Column {
-                name: "".to_string(),
-                sql_type: ValueType::Text("".to_string()),
-                not_null: true,
-                unique: true,
-            },
-            // Column E:
-            Column {
-                name: "".to_string(),
-                sql_type: ValueType::Boolean("".to_string()),
-                not_null: true,
-                unique: false,
-            },
-            // Column F:
-            Column {
-                name: "".to_string(),
-                sql_type: ValueType::Real("".to_string()),
-                not_null: false,
-                unique: false,
-            },
-            // Column G:
-            Column {
-                name: "".to_string(),
-                sql_type: ValueType::Real("".to_string()),
-                not_null: false,
-                unique: false,
-            },
-            // Column H:
-            Column {
-                name: "".to_string(),
-                sql_type: ValueType::Integer("".to_string()),
-                not_null: false,
-                unique: false,
-            },
-            // Column I:
-            Column {
-                name: "".to_string(),
-                sql_type: ValueType::SmallInteger("".to_string()),
-                not_null: false,
-                unique: true,
-            },
-            // Column J:
-            Column {
-                name: "".to_string(),
-                sql_type: ValueType::Real("".to_string()),
-                not_null: false,
-                unique: true,
-            },
-            // Column K:
-            Column {
-                name: "".to_string(),
-                sql_type: ValueType::BigInteger("".to_string()),
-                not_null: false,
-                unique: true,
-            },
-        ]
-    );
-
-    let db_rows = vec![
-        row! { "foo" => 1, "bar" => 2.0, "jar" => "alphanum", "har" => true },
-        row! { "foo" => f32::MAX, "bar" => 2, "jar" => "alphanum", "har" => true },
-        row! { "foo" => 3, "bar" => 2.0, "jar" => "alphanum", "har" => false },
-        row! { "foo" => i64::MAX, "bar" => 2.0, "jar" => "alphanum", "har" => Value::Null },
-    ];
-
-    let column_map = Column::min_row_from_db_rows(db_rows.into_iter()).unwrap();
-    assert_eq!(
-        column_map,
-        indexmap! {
-            "foo".to_string() => Column {
-                name: "foo".to_string(),
-                sql_type: ValueType::Real("".to_string()),
-                not_null: true,
-                unique: true,
-            },
-            "bar".to_string() => Column {
-                name: "bar".to_string(),
-                sql_type: ValueType::SmallInteger("".to_string()),
-                not_null: true,
-                unique: false,
-            },
-            "jar".to_string() => Column {
-                name: "jar".to_string(),
-                sql_type: ValueType::Text("".to_string()),
-                not_null: true,
-                unique: false,
-            },
-            "har".to_string() => Column {
-                name: "har".to_string(),
-                sql_type: ValueType::Boolean("".to_string()),
-                not_null: false,
-                unique: false,
-            }
-        }
-    );
-
-    let anonymous_rows = vec![
-        // Row 0
-        vec![
-            Value::from(1),
-            Value::from(2.0),
-            Value::from("a"),
-            Value::from(true),
-        ],
-        // Row 1, etc.
-        vec![
-            Value::from(2),
-            Value::from(2),
-            Value::from("a"),
-            Value::from(true),
-        ],
-        vec![
-            Value::from(3),
-            Value::from(2.0),
-            Value::from("a"),
-            Value::from(false),
-        ],
-        vec![
-            Value::from(i64::MAX),
-            Value::from(2.0),
-            Value::from("a"),
-            Value::Null,
-        ],
-    ];
-
-    let columns = Column::min_columns_from_anonymous_rows(anonymous_rows.into_iter()).unwrap();
-    assert_eq!(
-        columns,
-        vec![
-            Column {
-                name: "".to_string(),
-                sql_type: ValueType::BigInteger("".to_string()),
-                not_null: true,
-                unique: true,
-            },
-            Column {
-                name: "".to_string(),
-                sql_type: ValueType::SmallInteger("".to_string()),
-                not_null: true,
-                unique: false,
-            },
-            Column {
-                name: "".to_string(),
-                sql_type: ValueType::Text("".to_string()),
-                not_null: true,
-                unique: false,
-            },
-            Column {
-                name: "".to_string(),
-                sql_type: ValueType::Boolean("".to_string()),
-                not_null: false,
-                unique: false,
-            }
-        ]
-    );
-}
-
-#[test]
-fn test_coerce() {
-    let input_row_1 = row! {
-        "foo" => Value::SmallInteger(1),
-        "bar" => Value::SmallInteger(2),
-        "jar" => Value::Text("3".to_string()),
-        "har" => Value::Text("t".to_string())
-    };
-    let input_row_2 = row! {
-        "foo" => Value::BigInteger(i64::MAX),
-        "bar" => Value::Text("2".to_string()),
-        "jar" => Value::SmallInteger(9),
-        "har" => Value::Text("0".to_string())
-    };
-    let column_map = indexmap! {
-        "foo".to_string() => Column {
-            name: "foo".to_string(),
-            sql_type: ValueType::Real("".to_string()),
-            not_null: true,
-            unique: true,
-        },
-        "bar".to_string() => Column {
-            name: "bar".to_string(),
-            sql_type: ValueType::SmallInteger("".to_string()),
-            not_null: true,
-            unique: true,
-        },
-        "jar".to_string() => Column {
-            name: "jar".to_string(),
-            sql_type: ValueType::BigInteger("".to_string()),
-            not_null: true,
-            unique: true,
-        },
-        "har".to_string() => Column {
-            name: "har".to_string(),
-            sql_type: ValueType::Boolean("".to_string()),
-            not_null: true,
-            unique: true,
-        }
-    };
-    let expected_row_1 = row! {
-        "foo" => Value::Real(1.0),
-        "bar" => Value::SmallInteger(2),
-        "jar" => Value::BigInteger(3),
-        "har" => Value::Boolean(true),
-    };
-    let expected_row_2 = row! {
-        "foo" => Value::Real(9.223372e18),
-        "bar" => Value::SmallInteger(2),
-        "jar" => Value::BigInteger(9),
-        "har" => Value::Boolean(false),
-    };
-
-    let coerced_row = input_row_1.coerce(&column_map).unwrap();
-    assert_eq!(coerced_row, expected_row_1);
-
-    let mut coerced_rows = Rows::coerce([input_row_1, input_row_2].into_iter(), &column_map);
-    assert_eq!(coerced_rows.next().unwrap().unwrap(), expected_row_1);
-    assert_eq!(coerced_rows.next().unwrap().unwrap(), expected_row_2);
-}
-
-#[test]
-fn test_from_str() {
-    let foo = ValueType::minimum().min_type("True").unwrap();
-    assert_eq!(foo, ValueType::Boolean("".to_string()));
-
-    let foo = ValueType::minimum().min_type("2").unwrap();
-    assert_eq!(foo, ValueType::SmallInteger("".to_string()));
-
-    let foo = ValueType::minimum().min_type("2.0").unwrap();
-    assert_eq!(foo, ValueType::Real("".to_string()));
-}
-
-#[test]
-fn test_json() {
-    // Test is_json(), as_json() methods:
-    let db_val = Value::Json(json!([]));
-    assert_eq!(db_val.is_json(), true);
-    assert_eq!(db_val.as_json(), Some(json!([])));
-
-    let db_val = Value::Text(json!([]).to_string());
-    assert_eq!(db_val.is_json(), false);
-    assert_eq!(db_val.as_json(), None);
-
-    // Test into() method:
-    let db_val = Value::Json(json!([]));
-    let json_val: JsonValue = db_val.into();
-    assert_eq!(json_val, json!([]));
-
-    let db_val = Value::Text(json!([]).to_string());
-    let json_val: JsonValue = db_val.into();
-    assert_eq!(json_val, JsonValue::String("[]".into()));
-}
-
-#[test]
-fn test_hashing() {
-    let mut test_map = HashMap::new();
-    for (i, value) in [
-        Value::Null,
-        Value::Text("NULL".to_string()),
-        Value::Boolean(true),
-        Value::SmallInteger(1),
-        Value::BigInteger(1),
-        Value::Real(0.0f32),
-        Value::Real(0.456f32),
-        Value::BigReal(0.123f64),
-        Value::BigReal(0.0f64),
-        Value::Numeric(dec!(1)),
-        Value::Json(json!({"foo":1})),
-        Value::Other("bpchar".to_string(), vec![97], Some("a".to_string())),
-    ]
-    .iter()
-    .enumerate()
-    {
-        test_map.insert(value.clone(), i);
-        assert_eq!(*test_map.get(&value).unwrap(), i);
-    }
-}
-
+#[cfg(feature = "tokio-postgres")]
 #[tokio::test]
-async fn test_import_small() {
-    #[cfg(feature = "rusqlite")]
-    import_small(":memory:").await;
-    #[cfg(feature = "tokio-postgres")]
-    import_small("postgresql:///rltbl_db").await;
-    #[cfg(feature = "libsql")]
-    import_small(":memory:").await;
+async fn test_postgres_anypool() -> Result<(), Error> {
+    let url = "postgresql:///rltbl_db";
+    let pool = PostgresPool::connect(url).await?;
+    let pool: Box<dyn Pool> = Box::new(pool);
+    let pool = AnyPool::from(pool);
+
+    let _rows = pool.query("DROP TABLE IF EXISTS foo CASCADE", ()).await?;
+    let _rows = pool
+        .query("CREATE TABLE foo (bar BIGINT, gar TEXT)", ())
+        .await?;
+    let sql = "INSERT INTO foo VALUES ($1, $2)";
+    let values = vec![Value::from(1_i64), Value::from("foo")];
+    let _values = values![1_i64, "foo"];
+    let _rows = pool.query(sql, &values).await?;
+    let _rows = pool.query("DROP TABLE foo CASCADE", ()).await?;
+
+    Ok(())
 }
 
-async fn import_small(url: &str) {
-    let pool = AnyPool::connect(url).await.unwrap();
-    if pool.syntax().name() == "sqlite" {
-        pool.import_table("tests/data/table1.csv").await.unwrap();
-        let rows = pool.query("SELECT * FROM table1", ()).await.unwrap();
-        assert_eq!(
-            rows.rows,
-            vec![
-                row! {
-                    "alpha" => Value::BigInteger(1),
-                    "beta" => Value::Text("short".to_string()),
-                    "gamma" => Value::BigReal(9.0),
-                    "delta" => Value::BigReal(i64::MAX as f64),
-                },
-                row! {
-                    // TODO: This first value is wrong. It should be Value::Null,
-                    // but we need a way to import NULL values from TSV. One possibility
-                    // is to create a trigger on tables with nullable columns to insert NULL
-                    // whenever we are given some special string such as '\N', 'null', etc.
-                    "alpha" => Value::Text("".to_string()),
-                    "beta" => Value::Text("long".to_string()),
-                    "gamma" => Value::BigReal(i32::MAX as f64),
-                    "delta" => Value::BigReal(4.0),
-                },
-                row! {
-                    "alpha" => Value::BigInteger(19),
-                    "beta" => Value::Text("short".to_string()),
-                    "gamma" => Value::BigReal(5.2),
-                    "delta" => Value::BigReal(4.1),
-                },
-                row! {
-                    "alpha" => Value::BigInteger(100),
-                    "beta" => Value::Text("long".to_string()),
-                    "gamma" => Value::BigReal(7.0),
-                    "delta" => Value::BigReal(19.0),
-                },
-                row! {
-                    "alpha" => Value::BigInteger(115),
-                    "beta" => Value::Text("short".to_string()),
-                    "gamma" => Value::BigReal(10.0),
-                    "delta" => Value::BigReal(12.0),
-                },
-                row! {
-                    "alpha" => Value::BigInteger(30),
-                    "beta" => Value::Text("short".to_string()),
-                    "gamma" => Value::BigReal(4.0),
-                    "delta" => Value::BigReal(19.0),
-                },
-                row! {
-                    "alpha" => Value::BigInteger(39),
-                    "beta" => Value::Text("midway".to_string()),
-                    "gamma" => Value::BigReal(19.99),
-                    "delta" => Value::BigReal(75.0),
-                },
-            ]
-        );
-    } else if pool.syntax().name() == "postgres" {
-        pool.import_table("tests/data/table1.tsv").await.unwrap();
-        let rows = pool.query("SELECT * FROM table1", ()).await.unwrap();
-        assert_eq!(
-            rows.rows,
-            vec![
-                row! {
-                    "alpha" => Value::SmallInteger(1),
-                    "beta" => Value::Text("short".to_string()),
-                    "gamma" => Value::Real(9.0),
-                    "delta" => Value::Real(i64::MAX as f32),
-                },
-                row! {
-                    "alpha" => Value::Null,
-                    "beta" => Value::Text("long".to_string()),
-                    "gamma" => Value::Real(i32::MAX as f32),
-                    "delta" => Value::Real(4.0),
-                },
-                row! {
-                    "alpha" => Value::SmallInteger(19),
-                    "beta" => Value::Text("short".to_string()),
-                    "gamma" => Value::Real(5.2),
-                    "delta" => Value::Real(4.1),
-                },
-                row! {
-                    "alpha" => Value::SmallInteger(100),
-                    "beta" => Value::Text("long".to_string()),
-                    "gamma" => Value::Real(7.0),
-                    "delta" => Value::Real(19.0),
-                },
-                row! {
-                    "alpha" => Value::SmallInteger(115),
-                    "beta" => Value::Text("short".to_string()),
-                    "gamma" => Value::Real(10.0),
-                    "delta" => Value::Real(12.0),
-                },
-                row! {
-                    "alpha" => Value::SmallInteger(30),
-                    "beta" => Value::Text("short".to_string()),
-                    "gamma" => Value::Real(4.0),
-                    "delta" => Value::Real(19.0),
-                },
-                row! {
-                    "alpha" => Value::SmallInteger(39),
-                    "beta" => Value::Text("midway".to_string()),
-                    "gamma" => Value::Real(19.99),
-                    "delta" => Value::Real(75.0),
-                },
-            ]
-        );
+// Rusqlite:
+
+#[cfg(feature = "rusqlite")]
+#[tokio::test]
+async fn test_rusqlite_aliases_and_builtin_functions() {
+    let pool = AnyPool::connect(":memory:").await.unwrap();
+    pool.execute_batch(
+        "DROP TABLE IF EXISTS test_table_indirect;\
+         CREATE TABLE test_table_indirect (\
+         text_value TEXT,\
+         alt_text_value TEXT,\
+         float_value FLOAT8,\
+         int_value INT8,\
+         bool_value BOOL\
+         )",
+    )
+    .await
+    .unwrap();
+    pool.execute(
+        r#"INSERT INTO test_table_indirect
+               (text_value, alt_text_value, float_value, int_value, bool_value)
+               VALUES (?1, ?2, ?3, ?4, ?5)"#,
+        values!["foo", Value::Null, 1.05_f64, 1_i64, true],
+    )
+    .await
+    .unwrap();
+
+    // Test aggregate:
+    let rows = pool
+        .query("SELECT MAX(int_value) FROM test_table_indirect", ())
+        .await
+        .unwrap();
+    assert_eq!(
+        rows.rows,
+        [row! {
+            "MAX(int_value)" => 1_i64,
+        }]
+    );
+
+    // Test alias:
+    let rows = pool
+        .query(
+            "SELECT bool_value AS bool_value_alias FROM test_table_indirect",
+            (),
+        )
+        .await
+        .unwrap();
+    assert_eq!(rows.rows, [row! {"bool_value_alias" => 1_i64,}]);
+
+    // Test aggregate with alias:
+    let rows = pool
+        .query(
+            "SELECT MAX(int_value) AS max_int_value FROM test_table_indirect",
+            (),
+        )
+        .await
+        .unwrap();
+    // Note that the alias is not shown in the results:
+    assert_eq!(rows.rows, [row! {"max_int_value" => 1_i64,}]);
+
+    // Test non-aggregate function:
+    let rows = pool
+        .query(
+            "SELECT CAST(int_value AS TEXT) FROM test_table_indirect",
+            (),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        rows.rows,
+        [row! {
+            "CAST(int_value AS TEXT)" => "1",
+        }]
+    );
+
+    // Test non-aggregate function with alias:
+    let rows = pool
+        .query(
+            "SELECT CAST(int_value AS TEXT) AS int_value_cast FROM test_table_indirect",
+            (),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        rows.rows,
+        [row! {
+            "int_value_cast" => "1",
+        }]
+    );
+
+    // Test functions over booleans:
+    let rows = pool
+        .query("SELECT MAX(bool_value) FROM test_table_indirect", ())
+        .await
+        .unwrap();
+    // It is not possible to represent the boolean result of an aggregate function as a
+    // boolean, since internally to sqlite it is stored as an integer, and we can't query
+    // the metadata to get the datatype of an expression. If we want to represent it as a
+    // boolean, we will need to parse the expression. Note that PostgreSQL does not support
+    // MAX(bool_value) - it gives the error:
+    //   ERROR: function max(boolean) does not exist\nHINT: No function matches the given
+    //          name and argument types. You might need to add explicit type casts.
+    // So, perhaps, this is tu quoque an argument that the behaviour below is acceptable for
+    // sqlite.
+    assert_eq!(
+        rows.rows,
+        [row! {
+            "MAX(bool_value)" => 1_i64,
+        }]
+    );
+}
+
+/// This verifies that
+/// using [MAX_PARAMS_SQLITE] parameters in a query is indeed supported.
+#[cfg(feature = "rusqlite")]
+#[tokio::test]
+async fn test_rusqlite_max_params() {
+    let pool = AnyPool::connect(":memory:").await.unwrap();
+    pool.execute_batch(
+        "DROP TABLE IF EXISTS test_max_params;\
+         CREATE TABLE test_max_params (\
+         column1 INT,\
+         column2 INT,\
+         column3 INT,\
+         column4 INT,\
+         column5 INT,\
+         column6 INT\
+         )",
+    )
+    .await
+    .unwrap();
+
+    let mut sql = "INSERT INTO test_max_params VALUES ".to_string();
+    let mut values = vec![];
+    let mut params = vec![];
+    let mut n = 1;
+    while n <= MAX_PARAMS_SQLITE {
+        values.push(format!(
+            "(?{}, ?{}, ?{}, ?{}, ?{}, ?{})",
+            n,
+            n + 1,
+            n + 2,
+            n + 3,
+            n + 4,
+            n + 5
+        ));
+        params.push(1);
+        params.push(1);
+        params.push(1);
+        params.push(1);
+        params.push(1);
+        params.push(1);
+        n += 6;
     }
+    sql.push_str(&values.join(", "));
+    pool.execute(&sql, params).await.unwrap();
+    pool.drop_table("text_max_params").await.unwrap();
 }
 
 #[cfg(feature = "rusqlite")]
 #[tokio::test]
-async fn test_transaction() {
-    let url = ":memory:";
-    let pool = RusqlitePool::connect(url).await.expect("connect to sqlite");
-    pool.query("DROP TABLE IF EXISTS foo", &[])
-        .await
-        .expect("create table");
-    pool.query("CREATE TABLE foo ( bar TEXT )", &[])
-        .await
-        .expect("create table");
-    pool.query("INSERT INTO foo VALUES ('A')", &[])
-        .await
-        .expect("insert values");
-    let rows = pool
-        .query("SELECT bar FROM foo", &[])
-        .await
-        .expect("count rows");
-    assert_eq!(rows.rows.len(), 1, "count rows before");
+async fn test_rusqlite_match() {
+    let conn = AnyPool::connect("test_match_columns.db").await.unwrap();
+    conn.execute_batch(
+        "DROP TABLE IF EXISTS test_table_match;\
+         CREATE TABLE test_table_match (\
+         text_value TEXT,\
+         alt_text_value TEXT\
+         )",
+    )
+    .await
+    .unwrap();
+    conn.execute(
+        r#"INSERT INTO test_table_match
+               (text_value, alt_text_value)
+               VALUES ($1, $2)"#,
+        &["foo", "123"],
+    )
+    .await
+    .unwrap();
 
-    println!("before pool {:?}", pool.pool.status());
-
-    let mut tx = pool.transaction().await.unwrap();
-    tx.query("INSERT INTO foo VALUES (456)", &[])
+    let value: String = conn
+        .query(
+            "SELECT text_value from test_table_match
+                 WHERE regexp_match(text_value, $1) = 1",
+            values!["foo"],
+        )
         .await
-        .expect("transaction insert");
-    foo(&tx).await;
-    let rows = tx
-        .query("SELECT bar FROM foo", &[])
+        .unwrap()
+        .try_into_value()
+        .unwrap();
+
+    assert_eq!(value, "foo");
+
+    let value: String = conn
+        .query(
+            r#"SELECT alt_text_value from test_table_match
+                   WHERE regexp_match(alt_text_value, '\d+') = 1"#,
+            (),
+        )
         .await
-        .expect("count rows");
-    assert_eq!(rows.rows.len(), 2, "count rows inside transaction");
+        .unwrap()
+        .try_into_value()
+        .unwrap();
 
-    // WARN: Don't do this for :memory:!
-    // Because we set max_size = 1
-    // and the transaction holds one connection,
-    // asking for another connection will await forever.
-    if url != ":memory:" {
-        let rows = pool
-            .query("SELECT bar FROM foo", &[])
-            .await
-            .expect("count rows");
-        assert_eq!(rows.rows.len(), 1, "count rows during");
-    }
-
-    tx.commit().await.unwrap();
-    println!("after pool {:?}", pool.pool.status());
-    let rows = pool
-        .query("SELECT bar FROM foo", &[])
-        .await
-        .expect("count rows");
-    assert_eq!(rows.rows.len(), 2, "count rows after");
-
-    // assert!(false, "DONE");
-}
-
-// We allow unused here since this isn't being tested for LibSQL.
-// TODO: Add a test once transactions have been implemented.
-#[allow(unused)]
-async fn foo(tx: &Box<dyn Transaction>) {
-    tx.query("SELECT 'baz'", &[]).await.unwrap();
+    assert_eq!(value, "123");
 }
 
 #[cfg(feature = "rusqlite")]
@@ -4681,6 +4879,8 @@ async fn test_rusqlite_anypool() -> Result<(), Error> {
     Ok(())
 }
 
+// Libsql:
+
 #[cfg(feature = "libsql")]
 #[tokio::test]
 async fn test_libsql_anypool() -> Result<(), Error> {
@@ -4695,27 +4895,6 @@ async fn test_libsql_anypool() -> Result<(), Error> {
     let values = vec![Value::from(1), Value::from("foo")];
     let _values = values![1, "foo"];
     let _rows = pool.query(sql, &values).await?;
-
-    Ok(())
-}
-
-#[cfg(feature = "tokio-postgres")]
-#[tokio::test]
-async fn test_postgres_anypool() -> Result<(), Error> {
-    let url = "postgresql:///rltbl_db";
-    let pool = PostgresPool::connect(url).await?;
-    let pool: Box<dyn Pool> = Box::new(pool);
-    let pool = AnyPool::from(pool);
-
-    let _rows = pool.query("DROP TABLE IF EXISTS foo CASCADE", ()).await?;
-    let _rows = pool
-        .query("CREATE TABLE foo (bar BIGINT, gar TEXT)", ())
-        .await?;
-    let sql = "INSERT INTO foo VALUES ($1, $2)";
-    let values = vec![Value::from(1_i64), Value::from("foo")];
-    let _values = values![1_i64, "foo"];
-    let _rows = pool.query(sql, &values).await?;
-    let _rows = pool.query("DROP TABLE foo CASCADE", ()).await?;
 
     Ok(())
 }
@@ -4873,139 +5052,5 @@ async fn test_max_params() -> Result<(), Error> {
     pool.execute(&sql, &params).await.unwrap();
     pool.drop_table("text_max_params").await.unwrap();
 
-    Ok(())
-}
-
-/// Tests the ability to save a table to a TSV file.
-#[tokio::test]
-async fn test_save() {
-    #[cfg(feature = "rusqlite")]
-    save(":memory:").await.unwrap();
-    #[cfg(feature = "tokio-postgres")]
-    save("postgresql:///rltbl_db").await.unwrap();
-    #[cfg(feature = "libsql")]
-    save(":memory:").await.unwrap();
-}
-
-async fn save(url: &str) -> Result<(), Error> {
-    let pool = AnyPool::connect(url).await.unwrap();
-    let syntax = pool.syntax();
-    let pp = syntax.param_prefix().to_string();
-    let table = format!("test_save_{}", pool.syntax().name());
-
-    // Remove any previous test files:
-    std::fs::remove_file(&format!("tests/output/{table}.tsv")).unwrap_or(());
-    std::fs::remove_file(&format!("tests/output/{table}.csv")).unwrap_or(());
-
-    pool.execute_batch(&format!(
-        "DROP TABLE IF EXISTS {table}{cascade};\
-         CREATE TABLE {table} (\
-           text_value TEXT,\
-           alt_text_value TEXT,\
-           float_value FLOAT8,\
-           alt_float_value FLOAT8,\
-           int_value INT8,\
-           alt_int_value INT8,\
-           bool_value BOOL,\
-           alt_bool_value BOOL,\
-           numeric_value NUMERIC,\
-           alt_numeric_value NUMERIC\
-         )",
-        cascade = match syntax.name() {
-            "postgres" => " CASCADE",
-            "sqlite" => "",
-            _ => panic!("Invalid syntax '{}'", syntax.name()),
-        }
-    ))
-    .await
-    .unwrap();
-
-    pool.execute(
-        &format!(
-            r#"INSERT INTO {table}
-               (
-                 text_value,
-                 alt_text_value,
-                 float_value,
-                 alt_float_value,
-                 int_value,
-                 alt_int_value,
-                 bool_value,
-                 alt_bool_value,
-                 numeric_value,
-                 alt_numeric_value
-               )
-               VALUES
-                 ({pp}1, {pp}2, {pp}3, {pp}4, {pp}5, {pp}6, {pp}7, {pp}8, {pp}9, {pp}10),
-                 ({pp}11, {pp}12, {pp}13, {pp}14, {pp}15, {pp}16, {pp}17, {pp}18, {pp}19, {pp}20)"#,
-        ),
-        &values![
-            "foo",
-            (),
-            1.05_f64,
-            (),
-            1_i64,
-            (),
-            true,
-            (),
-            dec!(1),
-            (),
-            "goo",
-            (),
-            2.05_f64,
-            (),
-            2_i64,
-            (),
-            false,
-            (),
-            dec!(2),
-            (),
-        ],
-    )
-    .await
-    .unwrap();
-
-    let tsv_path = format!("tests/output/{table}.tsv");
-    pool.save_table(&table, &tsv_path).await.unwrap();
-    let saved = std::fs::read_to_string(&tsv_path).unwrap();
-    assert_eq!(
-        saved,
-        match syntax.name() {
-            "sqlite" =>
-                "text_value\talt_text_value\tfloat_value\talt_float_value\tint_value\
-                 \talt_int_value\tbool_value\talt_bool_value\tnumeric_value\
-                 \talt_numeric_value\nfoo\t\t1.05\t\t1\t\t1\t\t1\t\ngoo\t\t2.05\t\
-                 \t2\t\t0\t\t2\t\n",
-            "postgres" =>
-                "text_value\talt_text_value\tfloat_value\talt_float_value\tint_value\t\
-                 alt_int_value\tbool_value\talt_bool_value\tnumeric_value\t\
-                 alt_numeric_valuefoo\t\\N\t1.05\t\\N\t1\t\\N\tt\t\\N\t1\t\\N\ngoo\t\\N\
-                 \t2.05\t\\N\t2\t\\N\tf\t\\N\t2\t\\N\n",
-            _ => panic!("Invalid syntax: {}", syntax.name()),
-        }
-    );
-
-    let csv_path = format!("tests/output/{table}.csv");
-    pool.save_table(&table, &csv_path).await.unwrap();
-    let saved = std::fs::read_to_string(&csv_path).unwrap();
-    assert_eq!(
-        saved,
-        match syntax.name() {
-            "sqlite" =>
-                "text_value,alt_text_value,float_value,alt_float_value,int_value\
-                 ,alt_int_value,bool_value,alt_bool_value,numeric_value\
-                 ,alt_numeric_value\nfoo,,1.05,,1,,1,,1,\ngoo,,2.05,\
-                 ,2,,0,,2,\n",
-            "postgres" =>
-                "text_value,alt_text_value,float_value,alt_float_value,int_value,\
-                 alt_int_value,bool_value,alt_bool_value,numeric_value,\
-                 alt_numeric_valuefoo,\\N,1.05,\\N,1,\\N,t,\\N,1,\\N\ngoo,\\N\
-                 ,2.05,\\N,2,\\N,f,\\N,2,\\N\n",
-            _ => panic!("Invalid syntax: {}", syntax.name()),
-        }
-    );
-
-    // Clean up:
-    pool.drop_table(&table).await.unwrap();
     Ok(())
 }
