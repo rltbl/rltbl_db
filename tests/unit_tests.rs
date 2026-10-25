@@ -3005,6 +3005,105 @@ async fn save(url: &str) -> Result<(), Error> {
 }
 
 #[tokio::test]
+async fn test_transaction() {
+    #[cfg(feature = "rusqlite")]
+    transaction(":memory:").await;
+    #[cfg(feature = "tokio-postgres")]
+    transaction("postgresql:///rltbl_db").await;
+    #[cfg(feature = "libsql")]
+    transaction(":memory:").await;
+}
+
+async fn transaction(url: &str) {
+    async fn foo(tx: &AnyTransaction) {
+        tx.query("SELECT 'baz'", &[]).await.unwrap();
+    }
+
+    let pool = AnyPool::connect(url).await.unwrap();
+    let table = format!("test_transaction_{}", pool.syntax().name());
+    pool.query(&format!("DROP TABLE IF EXISTS {table}"), ())
+        .await
+        .expect("Error creating table");
+    pool.query(&format!("CREATE TABLE {table} ( bar TEXT )"), ())
+        .await
+        .expect("Error creating table");
+    pool.query(&format!("INSERT INTO {table} VALUES ('A')"), ())
+        .await
+        .expect("Error inserting values");
+    let rows = pool
+        .query(&format!("SELECT bar FROM {table}"), ())
+        .await
+        .expect("Error counting rows");
+    assert_eq!(rows.rows.len(), 1, "count rows before");
+
+    let conn = pool.connection().await.unwrap();
+    let mut tx = conn.transaction().await.unwrap();
+
+    tx.query(&format!("INSERT INTO {table} VALUES (456)"), &[])
+        .await
+        .expect("Error in transaction insert");
+
+    foo(&tx).await;
+
+    let rows = tx
+        .query(&format!("SELECT bar FROM {table}"), &[])
+        .await
+        .expect("Error counting rows");
+    assert_eq!(rows.rows.len(), 2, "count rows inside transaction");
+
+    // WARN: Don't do this for :memory:!
+    // Because we set max_size = 1
+    // and the transaction holds one connection,
+    // asking for another connection will await forever.
+    if url != ":memory:" {
+        let rows = pool
+            .query(&format!("SELECT bar FROM {table}"), ())
+            .await
+            .expect("Error counting rows");
+        assert_eq!(rows.rows.len(), 1, "count rows during");
+    }
+
+    tx.commit().await.unwrap();
+
+    // If the url is :memory: make sure to drop the connection first
+    // (see the comment right above).
+    if url == ":memory:" {
+        drop(tx);
+    }
+
+    let rows = pool
+        .query(&format!("SELECT bar FROM {table}"), ())
+        .await
+        .expect("Error counting rows");
+
+    assert_eq!(rows.rows.len(), 2, "count rows after");
+
+    // Create a new transaction, let it go out of scope without committing it, and then
+    // verify that it was not committed.
+    {
+        let conn = pool.connection().await.unwrap();
+        let tx = conn.transaction().await.unwrap();
+        tx.query(&format!("INSERT INTO {table} VALUES (789)"), &[])
+            .await
+            .expect("Error in transaction insert");
+
+        let rows = tx
+            .query(&format!("SELECT bar FROM {table}"), &[])
+            .await
+            .expect("Error counting rows");
+        assert_eq!(rows.rows.len(), 3, "count rows inside transaction");
+    }
+
+    let rows = pool
+        .query(&format!("SELECT bar FROM {table}"), ())
+        .await
+        .expect("Error counting rows");
+
+    println!("ROWS: {rows:#?}");
+    assert_eq!(rows.rows.len(), 2, "count rows after");
+}
+
+#[tokio::test]
 async fn test_caching() {
     let all_strategies = ["truncate_all", "truncate", "trigger", "memory:5"]
         .iter()
@@ -4552,121 +4651,6 @@ async fn test_postgres_anypool() -> Result<(), Error> {
     let _rows = pool.query("DROP TABLE foo CASCADE", ()).await?;
 
     Ok(())
-}
-
-#[cfg(feature = "tokio-postgres")]
-#[tokio::test]
-async fn test_transaction_tokio_postgres() {
-    let url = "postgresql:///rltbl_db";
-    let pool = PostgresPool::connect(url)
-        .await
-        .expect("connect to Postgres");
-    transaction(Box::new(pool), "foo_tokio_postgres", url).await;
-}
-
-#[cfg(feature = "rusqlite")]
-#[tokio::test]
-async fn test_transaction_rusqlite() {
-    let url = ":memory:";
-    let pool = RusqlitePool::connect(url)
-        .await
-        .expect("connect to Rusqlite");
-    transaction(Box::new(pool), "foo_rusqlite", url).await;
-}
-
-#[cfg(feature = "libsql")]
-#[tokio::test]
-async fn test_transaction_libsql() {
-    let url = ":memory:";
-    let pool = LibSQLPool::connect(url).await.expect("connect to LibSQL");
-    transaction(Box::new(pool), "foo_libsql", url).await;
-}
-
-async fn transaction(pool: Box<dyn Pool>, table: &str, url: &str) {
-    async fn foo(tx: &AnyTransaction) {
-        tx.query("SELECT 'baz'", &[]).await.unwrap();
-    }
-
-    pool.query(&format!("DROP TABLE IF EXISTS {table}"), &[])
-        .await
-        .expect("Error creating table");
-    pool.query(&format!("CREATE TABLE {table} ( bar TEXT )"), &[])
-        .await
-        .expect("Error creating table");
-    pool.query(&format!("INSERT INTO {table} VALUES ('A')"), &[])
-        .await
-        .expect("Error inserting values");
-    let rows = pool
-        .query(&format!("SELECT bar FROM {table}"), &[])
-        .await
-        .expect("Error counting rows");
-    assert_eq!(rows.rows.len(), 1, "count rows before");
-
-    let conn = pool.connection().await.unwrap();
-    let mut tx = conn.transaction().await.unwrap();
-
-    tx.query(&format!("INSERT INTO {table} VALUES (456)"), &[])
-        .await
-        .expect("Error in transaction insert");
-
-    foo(&tx).await;
-
-    let rows = tx
-        .query(&format!("SELECT bar FROM {table}"), &[])
-        .await
-        .expect("Error counting rows");
-    assert_eq!(rows.rows.len(), 2, "count rows inside transaction");
-
-    // WARN: Don't do this for :memory:!
-    // Because we set max_size = 1
-    // and the transaction holds one connection,
-    // asking for another connection will await forever.
-    if url != ":memory:" {
-        let rows = pool
-            .query(&format!("SELECT bar FROM {table}"), &[])
-            .await
-            .expect("Error counting rows");
-        assert_eq!(rows.rows.len(), 1, "count rows during");
-    }
-
-    tx.commit().await.unwrap();
-
-    // If the url is :memory: make sure to drop the connection first
-    // (see the comment right above).
-    if url == ":memory:" {
-        drop(tx);
-    }
-
-    let rows = pool
-        .query(&format!("SELECT bar FROM {table}"), &[])
-        .await
-        .expect("Error counting rows");
-
-    assert_eq!(rows.rows.len(), 2, "count rows after");
-
-    // Create a new transaction, let it go out of scope without committing it, and then
-    // verify that it was not committed.
-    {
-        let conn = pool.connection().await.unwrap();
-        let tx = conn.transaction().await.unwrap();
-        tx.query(&format!("INSERT INTO {table} VALUES (789)"), &[])
-            .await
-            .expect("Error in transaction insert");
-
-        let rows = tx
-            .query(&format!("SELECT bar FROM {table}"), &[])
-            .await
-            .expect("Error counting rows");
-        assert_eq!(rows.rows.len(), 3, "count rows inside transaction");
-    }
-
-    let rows = pool
-        .query(&format!("SELECT bar FROM {table}"), &[])
-        .await
-        .expect("Error counting rows");
-
-    println!("ROWS: {rows:#?}");
-    assert_eq!(rows.rows.len(), 2, "count rows after");
 }
 
 // Rusqlite:

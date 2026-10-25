@@ -279,7 +279,7 @@ impl Query for RusqliteConnection {
 impl Connection for RusqliteConnection {
     /// Implements [Connection::transaction()]
     async fn transaction(self: Box<RusqliteConnection>) -> Result<AnyTransaction, Error> {
-        Ok(AnyTransaction::begin(self).await.unwrap())
+        AnyTransaction::begin(self).await
     }
 }
 

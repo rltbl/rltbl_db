@@ -504,7 +504,7 @@ impl Query for PostgresConnection {
 impl Connection for PostgresConnection {
     /// Implements [Connection::transaction()]
     async fn transaction(self: Box<PostgresConnection>) -> Result<AnyTransaction, Error> {
-        Ok(AnyTransaction::begin(self).await.unwrap())
+        AnyTransaction::begin(self).await
     }
 }
 

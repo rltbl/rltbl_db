@@ -112,6 +112,8 @@ impl Query for AnyTransaction {
 }
 
 impl Drop for AnyTransaction {
+    /// Drops the inner connection after executing a "ROLLBACK" statement, unless the
+    /// transaction is already complete. This function panics on database errors.
     fn drop(&mut self) {
         unsafe {
             // Steal the sender out of ManuallyDrop.

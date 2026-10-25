@@ -84,7 +84,7 @@ impl TryInto<libsql::Value> for Value {
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-// LibSQL Connection Pools
+// LibSQLPool
 ///////////////////////////////////////////////////////////////////////////////
 
 /// Represents a deadpool-sqlite database connection pool.
@@ -221,7 +221,7 @@ impl Pool for LibSQLPool {
 }
 
 ///////////////////////////////////////////////////////////////////////////////
-// LibSQL Connections
+// LibSQLConnection
 ///////////////////////////////////////////////////////////////////////////////
 
 /// Represents a SQLite connection.
@@ -311,7 +311,7 @@ impl Query for LibSQLConnection {
 impl Connection for LibSQLConnection {
     /// Implements [Connection::transaction()]
     async fn transaction(self: Box<LibSQLConnection>) -> Result<AnyTransaction, Error> {
-        Ok(AnyTransaction::begin(self).await.unwrap())
+        AnyTransaction::begin(self).await
     }
 }
 
