@@ -3678,6 +3678,73 @@ async fn json_values(url: &str) {
 }
 
 #[tokio::test]
+async fn test_timestamp_values() {
+    #[cfg(feature = "rusqlite")]
+    timestamp_values(":memory:").await;
+    #[cfg(feature = "tokio-postgres")]
+    timestamp_values("postgresql:///rltbl_db").await;
+    #[cfg(feature = "libsql")]
+    timestamp_values(":memory:").await;
+}
+
+async fn timestamp_values(url: &str) {
+    let pool = AnyPool::connect(url).await.unwrap();
+    pool.drop_table("test_timestamp_values").await.unwrap();
+    pool.execute(
+        r#"CREATE TABLE test_timestamp_values (bar TIMESTAMP, foo BOOL DEFAULT FALSE)"#,
+        (),
+    )
+    .await
+    .unwrap();
+    pool.execute(
+        r#"INSERT INTO test_timestamp_values (bar) VALUES ('2004-10-19 10:23:54')"#,
+        (),
+    )
+    .await
+    .unwrap();
+
+    // Get the value that was just inserted and use it to edit the table and verify the result:
+    let mut db_rows = pool
+        .query(r#"SELECT * FROM test_timestamp_values"#, ())
+        .await
+        .unwrap();
+    let db_row = db_rows.rows.pop().unwrap();
+    let db_bar = db_row.get("bar").unwrap();
+    let db_foo = db_row.get("foo").unwrap();
+    if pool.syntax().name().to_lowercase() == "postgres" {
+        assert_eq!(format!("{:?}", db_bar), "Timestamp(2004-10-19T10:23:54)");
+        assert_eq!(*db_foo, Value::Boolean(false));
+    } else if pool.syntax().name().to_lowercase() == "sqlite" {
+        assert_eq!(format!("{:?}", db_bar), "Text(\"2004-10-19 10:23:54\")");
+        assert_eq!(*db_foo, Value::BigInteger(0));
+    }
+
+    // Use the value as a parameter in a query:
+    pool.execute(
+        r#"UPDATE test_timestamp_values SET foo = TRUE WHERE bar = $1"#,
+        values![db_bar],
+    )
+    .await
+    .unwrap();
+
+    // Verify that the db values are as expected:
+    let mut db_rows = pool
+        .query(r#"SELECT * FROM test_timestamp_values"#, ())
+        .await
+        .unwrap();
+    let db_row = db_rows.rows.pop().unwrap();
+    let db_bar = db_row.get("bar").unwrap();
+    let db_foo = db_row.get("foo").unwrap();
+    if pool.syntax().name().to_lowercase() == "postgres" {
+        assert_eq!(format!("{:?}", db_bar), "Timestamp(2004-10-19T10:23:54)");
+        assert_eq!(*db_foo, Value::Boolean(true));
+    } else if pool.syntax().name().to_lowercase() == "sqlite" {
+        assert_eq!(format!("{:?}", db_bar), "Text(\"2004-10-19 10:23:54\")");
+        assert_eq!(*db_foo, Value::BigInteger(1));
+    }
+}
+
+#[tokio::test]
 async fn test_sql_type() {
     #[cfg(feature = "rusqlite")]
     sql_type(":memory:").await;
@@ -3769,7 +3836,7 @@ async fn sql_type(url: &str) {
 
 // Built-in driver-specific pool tests:
 
-// Tokiop-postgres:
+// Tokio-postgres:
 
 #[cfg(feature = "tokio-postgres")]
 #[tokio::test]
@@ -4158,55 +4225,6 @@ async fn test_other_types() {
          }"
     );
 
-    // TIMESTAMP
-    pool.drop_table("test_other_types").await.unwrap();
-    pool.execute(
-        r#"CREATE TABLE test_other_types (bar TIMESTAMP, foo BOOL DEFAULT FALSE)"#,
-        (),
-    )
-    .await
-    .unwrap();
-    pool.execute(
-        r#"INSERT INTO test_other_types VALUES ('2004-10-19 10:23:54')"#,
-        (),
-    )
-    .await
-    .unwrap();
-
-    // Get the value that was just inserted and use it to edit the table and verify the result:
-    let mut db_rows = pool
-        .query(r#"SELECT * FROM test_other_types"#, ())
-        .await
-        .unwrap();
-    let db_row = db_rows.rows.pop().unwrap();
-    assert_eq!(
-        format!("{db_row:?}"),
-        "Row { \
-         map: {\"bar\": Other(\"timestamp\", [0, 0, 137, 201, 15, 13, 226, 128], None), \
-         \"foo\": Boolean(false)} \
-         }"
-    );
-    let db_value = db_row.get("bar").unwrap();
-    pool.execute(
-        r#"UPDATE test_other_types SET foo = TRUE WHERE bar = $1"#,
-        values![db_value],
-    )
-    .await
-    .unwrap();
-    let mut db_rows = pool
-        .query(r#"SELECT * FROM test_other_types"#, ())
-        .await
-        .unwrap();
-    let db_row = db_rows.rows.pop().unwrap();
-    assert_eq!(
-        format!("{db_row:?}"),
-        "Row { \
-         map: {\
-         \"bar\": Other(\"timestamp\", [0, 0, 137, 201, 15, 13, 226, 128], None), \
-         \"foo\": Boolean(true)} \
-         }"
-    );
-
     // DATE
     pool.drop_table("test_other_types").await.unwrap();
     pool.execute(
@@ -4586,7 +4604,7 @@ async fn test_other_types() {
     // Other types that are NULLs
     pool.drop_table("test_other_types").await.unwrap();
     pool.execute(
-        r#"CREATE TABLE test_other_types (bar TIMESTAMP, foo BOOL DEFAULT FALSE)"#,
+        r#"CREATE TABLE test_other_types (bar CIRCLE, foo BOOL DEFAULT FALSE)"#,
         (),
     )
     .await
@@ -4601,12 +4619,9 @@ async fn test_other_types() {
         .unwrap();
     assert_eq!(db_rows.len(), 0);
 
-    pool.execute(
-        r#"INSERT INTO test_other_types VALUES ('2004-10-19 10:23:54')"#,
-        (),
-    )
-    .await
-    .unwrap();
+    pool.execute(r#"INSERT INTO test_other_types VALUES ('<(0,0),1>')"#, ())
+        .await
+        .unwrap();
 
     pool.execute(
         r#"UPDATE test_other_types SET bar = $1"#,
