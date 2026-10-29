@@ -388,8 +388,8 @@ pub enum Value {
     /// Use with JSON or JSONB column types or equivalent.
     Json(JsonValue),
     // Note: This supports TIMESTAMP but not TIMESTAMP WITH TIME ZONE. The problem with the latter
-    // is that it uses DateTime, not NaiveDateTime, but DateTime is not (de)serializable directly
-    // to/from a database field, but creation of a custom type is required. See:
+    // is that it uses DateTime, not NaiveDateTime, and DateTime is not (de)serializable directly
+    // to/from a database field. Creation of a custom wrapper type is required. See:
     // https://stackoverflow.com/questions/77588919/rust-tokio-postgres-with-timestamp-column
     /// Use with TIMESTAMP columns (postgres only).
     Timestamp(NaiveDateTime),
