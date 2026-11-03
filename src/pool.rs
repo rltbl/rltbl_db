@@ -81,6 +81,38 @@ pub async fn connect(url: &str) -> Result<Box<dyn Pool>, Error> {
     }
 }
 
+/// Return the Syntax that will be used for this connection URL.
+pub fn connection_syntax(url: &str) -> Result<Box<dyn Syntax>, Error> {
+    if url.starts_with("postgresql://") {
+        #[cfg(feature = "tokio-postgres")]
+        {
+            Ok(Box::new(postgres::PostgresSyntax))
+        }
+        #[cfg(not(feature = "tokio-postgres"))]
+        {
+            Err(Error::ConnectError(format!("Unsupported URL: '{url}'")))
+        }
+    } else {
+        #[cfg(feature = "rusqlite")]
+        {
+            Ok(Box::new(sqlite::SqliteSyntax))
+        }
+        #[cfg(not(feature = "rusqlite"))]
+        {
+            #[cfg(feature = "libsql")]
+            {
+                Ok(Box::new(sqlite::SqliteSyntax))
+            }
+            #[cfg(not(feature = "libsql"))]
+            {
+                Err(Error::ConnectError(format!(
+                    "Unsupported connection type: '{url}'"
+                )))
+            }
+        }
+    }
+}
+
 /// A trait for implementing a database connection pool.
 #[async_trait]
 pub trait Pool: Query + std::fmt::Debug {
@@ -519,6 +551,11 @@ impl AnyPool {
     /// Determine whether the given table exists in the database.
     pub async fn table_exists(&self, table: &str) -> Result<bool, Error> {
         Ok(self.which_are_tables(&[table]).await?.len() == 1)
+    }
+
+    /// Determine whether the given view exists in the database.
+    pub async fn view_exists(&self, view: &str) -> Result<bool, Error> {
+        Ok(self.which_are_views(&[view]).await?.len() == 1)
     }
 
     /// Execute the given SQL command with the given parameters, returning a vector of rows.

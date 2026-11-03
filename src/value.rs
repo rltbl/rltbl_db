@@ -794,6 +794,12 @@ impl From<String> for Value {
     }
 }
 
+impl From<&String> for Value {
+    fn from(value: &String) -> Self {
+        Self::Text(value.clone())
+    }
+}
+
 // Other primitive type conversions.
 
 impl From<bool> for Value {

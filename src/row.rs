@@ -80,6 +80,17 @@ impl Row {
             None => Err(Error::DataError("No values returned".to_string())),
         }
     }
+
+    /// Remove keys for which the value is null.
+    /// This is useful when used with `serde` defaults.
+    pub fn remove_nulls(mut self) -> Self {
+        self.map = self
+            .map
+            .into_iter()
+            .filter(|(_key, value)| !value.is_null())
+            .collect();
+        self
+    }
 }
 
 // For dereferencing the inner map:
@@ -200,12 +211,50 @@ impl Rows {
         db_rows.map(|row| row.coerce(column_map))
     }
 
-    /// Try to get the first value from the first of these rows.
+    /// Returns the first value from the first row.
+    pub fn value(self) -> Result<Value, Error> {
+        self.row()?.value()
+    }
+
+    /// For each row, remove keys for which the value is null.
+    /// This is useful when used with `serde` defaults.
+    pub fn remove_nulls(mut self) -> Self {
+        self.rows = self
+            .rows
+            .into_iter()
+            .map(|row| row.remove_nulls())
+            .collect();
+        self
+    }
+
+    /// Try to get the first value from the first of these rows as type T.
     pub fn try_into_value<T: TryFrom<Value>>(self) -> Result<T, Error> {
         match self.row()?.value()?.try_into() {
             Ok(value) => Ok(value),
             Err(_) => Err(Error::ValueError(format!("Could not convert value"))),
         }
+    }
+
+    /// Try to get a vector of the first value of each row as type T.
+    pub fn try_into_values<T: TryFrom<Value>>(self) -> Result<Vec<T>, Error> {
+        self.rows
+            .iter()
+            .map(|r| match r.clone().value()?.try_into() {
+                Ok(value) => Ok(value),
+                Err(_) => Err(Error::ValueError(format!("Could not convert value"))),
+            })
+            .collect()
+    }
+
+    /// Try to get a vector of type T by converting each row to T.
+    pub fn try_into_vec<T>(&self) -> Result<Vec<T>, Error>
+    where
+        T: for<'de> Deserialize<'de>,
+    {
+        self.rows
+            .iter()
+            .map(|row| crate::serde::from_row(row))
+            .collect()
     }
 
     /// Returns the first value from each of these rows as a vector of Strings.
