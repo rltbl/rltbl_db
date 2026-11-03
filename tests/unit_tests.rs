@@ -9,6 +9,7 @@ use serde_json::json;
 use serde_unit_struct::{Deserialize_unit_struct, Serialize_unit_struct};
 use std::{
     collections::{HashMap, HashSet},
+    path::Path,
     str::FromStr,
 };
 
@@ -3101,6 +3102,11 @@ async fn save(url: &str) -> Result<(), Error> {
     let syntax = pool.syntax();
     let pp = syntax.param_prefix().to_string();
     let table = format!("test_save_{}", pool.syntax().name());
+
+    let dir = Path::new("tests/output/");
+    if !dir.exists() {
+        std::fs::create_dir_all(&dir)?;
+    }
 
     // Remove any previous test files:
     std::fs::remove_file(&format!("tests/output/{table}.tsv")).unwrap_or(());
