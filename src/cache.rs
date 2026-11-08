@@ -105,7 +105,9 @@ pub struct MemoryQueryCacheKey {
 /// Represents the results of a particular query in the in-memory query cache.
 #[derive(Clone, Debug)]
 pub struct MemoryQueryCacheValue {
+    /// The results of the query.
     pub content: Vec<Row>,
+    /// When the results were last verified, as epoch time.
     pub last_verified: u128,
 }
 
@@ -159,7 +161,7 @@ impl MemoryQueryCache {
     }
 }
 
-/// The in-memory table cache, mapping table names to their last modified times.
+/// The in-memory table cache, mapping table names to their last modified epoch times.
 #[derive(Debug, Default)]
 pub struct MemoryTableCache {
     pub cache: Mutex<HashMap<String, u128>>,

@@ -1,3 +1,5 @@
+//! Table columns.
+
 use csv::ReaderBuilder;
 use indexmap::{IndexMap, IndexSet};
 use std::{

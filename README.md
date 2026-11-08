@@ -61,7 +61,7 @@ fully support querying special floating point types such as "NaN", "-Infinity",
 the results will be returned as TEXT. It is, possible, however, to insert these
 special values into a table by hard coding them into the submitted query text
 (rather than by using dynammic query parameters), by single-quoting them. E.g.,
-`INSERT INTO foo VALUES ('NaN')`. Notet that sqlite is permissive enough to
+`INSERT INTO foo VALUES ('NaN')`. Note that SQLite is permissive enough to
 accept double-quotes for values instead.
 
 There are no such issues with PostgreSQL. The following will work irrespective
@@ -77,6 +77,9 @@ e.g.,
             )
             .await
             .unwrap();
+
+Note that, unlike SQLite, PostgreSQL cares about the distinction between double-quotes
+and single-quotes.
 
 # Incompatibility of `rusqlite` and `libsql`
 

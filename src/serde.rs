@@ -280,9 +280,9 @@ impl SerializeTupleVariant for JsonArraySerializer {
     }
 
     fn end(self) -> Result<Self::Ok, Self::Error> {
-        Ok(Value::Json(
-            json!({self.name.expect("TupleVariant name"): self.items}),
-        ))
+        Ok(Value::Json(json!({self.name.ok_or(Error::SerdeError(
+                "Invalid tuple variant".to_string()
+            ))?: self.items})))
     }
 }
 
@@ -321,10 +321,9 @@ impl SerializeMap for JsonObjectSerializer {
     where
         T: ?Sized + Serialize,
     {
-        let key = self
-            .next_key
-            .clone()
-            .expect("serialize_value called before serialize_key");
+        let key = self.next_key.clone().ok_or(Error::SerdeError(
+            "serialize_value called before serialize_key".to_string(),
+        ))?;
         self.next_key = None;
         self.map.insert(key, json!(value));
         Ok(())
@@ -360,7 +359,6 @@ impl<'de> Deserializer<'de> for Value {
     where
         V: Visitor<'de>,
     {
-        // println!("deserialize_any {self:?}");
         match self {
             Value::Null => visitor.visit_none(),
             Value::Boolean(v) => visitor.visit_bool(v),
@@ -369,12 +367,12 @@ impl<'de> Deserializer<'de> for Value {
             Value::BigInteger(v) => visitor.visit_i64(v),
             Value::Real(v) => visitor.visit_f32(v),
             Value::BigReal(v) => visitor.visit_f64(v),
-            Value::Numeric(_) => todo!(),
+            Value::Numeric(_) => unimplemented!(),
             Value::Text(v) => visitor.visit_string(v),
             Value::Json(value) => value
                 .deserialize_any(visitor)
                 .map_err(|e| Error::SerdeError(format!("Could not deserialize JSON value: {e}"))),
-            Value::Other(_, _, _) => todo!(),
+            Value::Other(_, _, _) => unimplemented!(),
         }
     }
 
@@ -404,7 +402,6 @@ impl<'de> Deserializer<'de> for Value {
     where
         V: Visitor<'de>,
     {
-        // println!("deserialize_enum {self:?}");
         match self {
             Value::Text(text) => match text.starts_with("{") {
                 true => {
@@ -424,7 +421,6 @@ impl<'de> Deserializer<'de> for Value {
     where
         V: Visitor<'de>,
     {
-        // println!("deserialize_seq");
         match self {
             Value::Text(text) => {
                 let json_value: JsonValue = serde_json::from_str(&text)?;
@@ -457,7 +453,6 @@ impl<'de> Deserializer<'de> for Value {
     where
         V: Visitor<'de>,
     {
-        // println!("deserialize_tuple_struct {name} {len}");
         match self {
             Value::Json(value) => Ok(value.deserialize_tuple_struct(name, len, visitor)?),
             _ => Err(Error::SerdeError(format!(
@@ -475,7 +470,6 @@ impl<'de> Deserializer<'de> for Value {
     where
         V: Visitor<'de>,
     {
-        // println!("deserialize_struct");
         match self {
             Value::Text(text) => {
                 let json_value: JsonValue = serde_json::from_str(&text)?;
@@ -545,78 +539,78 @@ impl<'a> Serializer for &'a mut RowSerializer {
     type SerializeStructVariant = Impossible<Self::Ok, Self::Error>;
 
     fn serialize_bool(self, _v: bool) -> Result<Self::Ok, Self::Error> {
-        todo!()
+        unimplemented!()
     }
 
     fn serialize_i8(self, _v: i8) -> Result<Self::Ok, Self::Error> {
-        todo!()
+        unimplemented!()
     }
 
     fn serialize_i16(self, _v: i16) -> Result<Self::Ok, Self::Error> {
-        todo!()
+        unimplemented!()
     }
 
     fn serialize_i32(self, _v: i32) -> Result<Self::Ok, Self::Error> {
-        todo!()
+        unimplemented!()
     }
 
     fn serialize_i64(self, _v: i64) -> Result<Self::Ok, Self::Error> {
-        todo!()
+        unimplemented!()
     }
 
     fn serialize_u8(self, _v: u8) -> Result<Self::Ok, Self::Error> {
-        todo!()
+        unimplemented!()
     }
 
     fn serialize_u16(self, _v: u16) -> Result<Self::Ok, Self::Error> {
-        todo!()
+        unimplemented!()
     }
 
     fn serialize_u32(self, _v: u32) -> Result<Self::Ok, Self::Error> {
-        todo!()
+        unimplemented!()
     }
 
     fn serialize_u64(self, _v: u64) -> Result<Self::Ok, Self::Error> {
-        todo!()
+        unimplemented!()
     }
 
     fn serialize_f32(self, _v: f32) -> Result<Self::Ok, Self::Error> {
-        todo!()
+        unimplemented!()
     }
 
     fn serialize_f64(self, _v: f64) -> Result<Self::Ok, Self::Error> {
-        todo!()
+        unimplemented!()
     }
 
     fn serialize_char(self, _v: char) -> Result<Self::Ok, Self::Error> {
-        todo!()
+        unimplemented!()
     }
 
     fn serialize_str(self, _v: &str) -> Result<Self::Ok, Self::Error> {
-        todo!()
+        unimplemented!()
     }
 
     fn serialize_bytes(self, _v: &[u8]) -> Result<Self::Ok, Self::Error> {
-        todo!()
+        unimplemented!()
     }
 
     fn serialize_none(self) -> Result<Self::Ok, Self::Error> {
-        todo!()
+        unimplemented!()
     }
 
     fn serialize_some<T>(self, _value: &T) -> Result<Self::Ok, Self::Error>
     where
         T: ?Sized + Serialize,
     {
-        todo!()
+        unimplemented!()
     }
 
     fn serialize_unit(self) -> Result<Self::Ok, Self::Error> {
-        todo!()
+        unimplemented!()
     }
 
     fn serialize_unit_struct(self, _name: &'static str) -> Result<Self::Ok, Self::Error> {
-        todo!()
+        unimplemented!()
     }
 
     fn serialize_unit_variant(
@@ -625,7 +619,7 @@ impl<'a> Serializer for &'a mut RowSerializer {
         _variant_index: u32,
         _variant: &'static str,
     ) -> Result<Self::Ok, Self::Error> {
-        todo!()
+        unimplemented!()
     }
 
     fn serialize_newtype_struct<T>(
@@ -636,7 +630,7 @@ impl<'a> Serializer for &'a mut RowSerializer {
     where
         T: ?Sized + Serialize,
     {
-        todo!()
+        unimplemented!()
     }
 
     fn serialize_newtype_variant<T>(
@@ -649,15 +643,15 @@ impl<'a> Serializer for &'a mut RowSerializer {
     where
         T: ?Sized + Serialize,
     {
-        todo!()
+        unimplemented!()
     }
 
     fn serialize_seq(self, _len: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> {
-        todo!()
+        unimplemented!()
     }
 
     fn serialize_tuple(self, _len: usize) -> Result<Self::SerializeTuple, Self::Error> {
-        todo!()
+        unimplemented!()
     }
 
     fn serialize_tuple_struct(
@@ -665,7 +659,7 @@ impl<'a> Serializer for &'a mut RowSerializer {
         _name: &'static str,
         _len: usize,
     ) -> Result<Self::SerializeTupleStruct, Self::Error> {
-        todo!()
+        unimplemented!()
     }
 
     fn serialize_tuple_variant(
@@ -675,7 +669,7 @@ impl<'a> Serializer for &'a mut RowSerializer {
         _variant: &'static str,
         _len: usize,
     ) -> Result<Self::SerializeTupleVariant, Self::Error> {
-        todo!()
+        unimplemented!()
     }
 
     fn serialize_map(self, _len: Option<usize>) -> Result<Self::SerializeMap, Self::Error> {
@@ -697,17 +691,15 @@ impl<'a> Serializer for &'a mut RowSerializer {
         _variant: &'static str,
         _len: usize,
     ) -> Result<Self::SerializeStructVariant, Self::Error> {
-        todo!()
+        unimplemented!()
     }
 
-    fn serialize_i128(self, v: i128) -> Result<Self::Ok, Self::Error> {
-        let _ = v;
-        Err(serde::ser::Error::custom("i128 is not supported"))
+    fn serialize_i128(self, _v: i128) -> Result<Self::Ok, Self::Error> {
+        unimplemented!()
     }
 
-    fn serialize_u128(self, v: u128) -> Result<Self::Ok, Self::Error> {
-        let _ = v;
-        Err(serde::ser::Error::custom("u128 is not supported"))
+    fn serialize_u128(self, _v: u128) -> Result<Self::Ok, Self::Error> {
+        unimplemented!()
     }
 
     fn collect_seq<I>(self, _iter: I) -> Result<Self::Ok, Self::Error>
@@ -715,11 +707,7 @@ impl<'a> Serializer for &'a mut RowSerializer {
         I: IntoIterator,
         <I as IntoIterator>::Item: Serialize,
     {
-        // let mut iter = iter.into_iter();
-        // let mut serializer = tri!(self.serialize_seq(iterator_len_hint(&iter)));
-        // tri!(iter.try_for_each(|item| serializer.serialize_element(&item)));
-        // serializer.end()
-        todo!()
+        unimplemented!()
     }
 
     fn collect_map<K, V, I>(self, _iter: I) -> Result<Self::Ok, Self::Error>
@@ -728,11 +716,7 @@ impl<'a> Serializer for &'a mut RowSerializer {
         V: Serialize,
         I: IntoIterator<Item = (K, V)>,
     {
-        // let mut iter = iter.into_iter();
-        // let mut serializer = tri!(self.serialize_map(iterator_len_hint(&iter)));
-        // tri!(iter.try_for_each(|(key, value)| serializer.serialize_entry(&key, &value)));
-        // serializer.end()
-        todo!()
+        unimplemented!()
     }
 
     fn collect_str<T>(self, value: &T) -> Result<Self::Ok, Self::Error>

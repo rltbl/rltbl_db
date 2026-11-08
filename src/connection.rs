@@ -1,5 +1,5 @@
 //! Provides the [Connection] trait for using database connections, and the [AnyTransaction]
-//! struct for handling transactions.
+//! struct for handling database transactions.
 
 use async_trait::async_trait;
 use std::mem::ManuallyDrop;
@@ -21,7 +21,7 @@ pub trait Connection: Query + std::fmt::Debug {
 // The AnyTransaction struct
 ////////////////////////////////////////////////////////////////////////////////
 
-/// An abstract representation of a transaction associated with any of the supported
+/// An abstract representation of a transaction associated with one of the supported
 /// [Connection] types.
 #[derive(Debug)]
 pub struct AnyTransaction {
@@ -56,12 +56,14 @@ impl AnyTransaction {
         Ok(())
     }
 
-    /// Executes a `ROLLBACK` statement using this connection.
+    /// Executes a `ROLLBACK` statement using this connection and marks the transaction as
+    /// completed.
     pub async fn rollback(&mut self) -> Result<(), Error> {
         self.conclude_with_command("ROLLBACK").await
     }
 
-    /// Executes a `COMMIT` statement using this connection.
+    /// Executes a `COMMIT` statement using this connection and marks the transaction as
+    /// completed.
     pub async fn commit(&mut self) -> Result<(), Error> {
         self.conclude_with_command("COMMIT").await
     }

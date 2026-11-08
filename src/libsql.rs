@@ -234,15 +234,18 @@ pub struct LibSQLConnection {
 
 #[async_trait]
 impl Query for LibSQLConnection {
+    /// Implements [Query::syntax()]
     fn syntax(&self) -> &dyn Syntax {
         &self.syntax
     }
 
+    /// Implements [Query::execute_batch()]
     async fn execute_batch(&self, sql: &str) -> Result<(), Error> {
         self.connection.execute_batch(sql).await?;
         Ok(())
     }
 
+    /// Implements [Query::query()]
     async fn query(&self, sql: &str, params: &[Value]) -> Result<Rows, Error> {
         let params = params.to_vec();
         let mut rows = self.connection.query(sql, params).await?;
@@ -262,10 +265,12 @@ impl Query for LibSQLConnection {
         Ok(Rows { rows: db_rows })
     }
 
+    /// Implements [Query::can_copy_in()]
     fn can_copy_in(&self, filename: &str) -> bool {
         can_copy_in(self.csv_extension_enabled, filename)
     }
 
+    /// Implements [Query::copy_in()]
     async fn copy_in(&self, table: &str, filename: &str) -> Result<(), Error> {
         if !self.can_copy_in(filename) {
             return Err(Error::InputError(format!(
@@ -287,6 +292,7 @@ impl Query for LibSQLConnection {
         Ok(())
     }
 
+    /// Implements [Query::drop_table()]
     async fn drop_table(&self, table: &str) -> Result<(), Error> {
         let table = validate_table_name(table)?;
 
@@ -297,6 +303,7 @@ impl Query for LibSQLConnection {
         Ok(())
     }
 
+    /// Implements [Query::drop_view()]
     async fn drop_view(&self, view: &str) -> Result<(), Error> {
         let view = validate_table_name(view)?;
 
