@@ -333,6 +333,9 @@ fn query_prepared(stmt: &mut Statement<'_>, params: &[Value]) -> Result<Vec<Row>
                 };
                 stmt.raw_bind_parameter(i + 1, value)?;
             }
+            Value::Timestamp(value) => {
+                stmt.raw_bind_parameter(i + 1, value.to_string())?;
+            }
             Value::Other(type_name, bytes, string_opt) => {
                 return Err(Error::InputError(format!(
                     "Not supported for SQLite: \

@@ -78,6 +78,7 @@ impl TryInto<libsql::Value> for Value {
                 };
                 Ok(libsql::Value::Text(val))
             }
+            Value::Timestamp(val) => Ok(libsql::Value::Text(val.to_string())),
             Value::Other(_, val, _) => Ok(libsql::Value::Blob(val)),
         }
     }

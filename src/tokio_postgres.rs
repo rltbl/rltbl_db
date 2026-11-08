@@ -2,6 +2,7 @@
 
 use async_trait::async_trait;
 use bytes::{BufMut, BytesMut};
+use chrono::NaiveDateTime;
 use deadpool_postgres::{
     Config, Runtime,
     tokio_postgres::{
@@ -323,6 +324,13 @@ impl Query for PostgresConnection {
                         return Err(Error::InputError(gen_err(&param, &pg_type.to_string())));
                     }
                 },
+                &Type::TIMESTAMP => match param {
+                    Value::Null => paramses.push(Box::new(None::<NaiveDateTime>)),
+                    Value::Timestamp(value) => paramses.push(Box::new(value.clone())),
+                    _ => {
+                        return Err(Error::InputError(gen_err(&param, &pg_type.to_string())));
+                    }
+                },
                 other => {
                     match param {
                         Value::Null => paramses.push(Box::new(GenericPostgresType { bytes: None })),
@@ -354,7 +362,10 @@ impl Query for PostgresConnection {
                     column.name().to_string(),
                     match extract_value(row, i) {
                         Err(err) => {
-                            eprintln!("WARNING: Got error: '{err}' while querying column.");
+                            eprintln!(
+                                "WARNING: Got error: '{err}' while querying column '{}'",
+                                column.name()
+                            );
                             Value::Null
                         }
                         Ok(val) => val,
@@ -565,6 +576,10 @@ fn extract_value(row: &PgRow, idx: usize) -> Result<Value, Error> {
         &Type::JSON | &Type::JSONB => {
             let value = row.try_get::<usize, JsonValue>(idx)?;
             Ok(Value::Json(value))
+        }
+        &Type::TIMESTAMP => {
+            let value: NaiveDateTime = row.try_get(idx)?;
+            Ok(Value::Timestamp(value))
         }
         other => {
             let value: Result<GenericPostgresType, Error> = row
