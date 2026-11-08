@@ -1,0 +1,10 @@
+study_name,sample_number,species,region,island,stage,individual_id,clutch_completion,date_egg,culmen_length,culmen_depth,flipper_length,body_mass,sex,delta_15_n,delta_13_c
+FAKE123,1,Adelie Penguin (Pygoscelis adeliae),Anvers,Dream,"Adult, 1 Egg Stage",N1A2,Yes,2008-03-14,46.0,17.6,230,3137,FEMALE,7.98102,-24.45908
+FAKE123,2,Adelie Penguin (Pygoscelis adeliae),Anvers,Dream,"Adult, 1 Egg Stage",N2A1,No,2009-11-17,49.5,15.4,186,1673,MALE,8.64808,-25.01368
+FAKE123,3,Adelie Penguin (Pygoscelis adeliae),Anvers,Torgersen,"Adult, 1 Egg Stage",N2A2,Yes,2008-03-06,36.7,17.0,181,4999,FEMALE,7.52365,-23.88672
+FAKE123,4 foo,Adelie Penguin (Pygoscelis adeliae),Anvers,Torgersen,"Adult, 1 Egg Stage",N3A1,Yes,2009-09-26,45.5,20.6,227,1444,MALE,8.96695,-25.46664
+FAKE123,5,Adelie Penguin (Pygoscelis adeliae),Anvers,Torgersen,"Adult, 1 Egg Stage",N3A2,Yes,2007-03-16,42.3,20.6,182,4122,MALE,7.90572,-23.30658
+FAKE123,6,Adelie Penguin (Pygoscelis adeliae),Anvers,Biscoe,"Adult, 1 Egg Stage",N4A1,Yes,2009-08-08,35.7,22.1,212,2924,FEMALE,7.94303,-26.76548
+FAKE123,7,Adelie Penguin (Pygoscelis adeliae),Anvers,Torgersen,"Adult, 1 Egg Stage",N4A2,Yes,2008-05-14,31.0,18.2,221,1173,FEMALE,9.47816,-23.03794
+FAKE123,8,Adelie Penguin (Pygoscelis adeliae),Anvers,Torgersen,"Adult, 1 Egg Stage",N5A1,Yes,2009-05-20,30.9,15.9,171,1934,MALE,8.43601,-23.63721
+FAKE123,9,Adelie Penguin (Pygoscelis adeliae),Anvers,Torgersen,"Adult, 1 Egg Stage",N5A2,Yes,2009-02-01,49.5,19.6,161,1737,MALE,9.4885,-26.68487
