@@ -35,7 +35,7 @@ use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use std::ops::{Deref, DerefMut};
 
-use crate::{Column, Error, StringRow, Value};
+use crate::{Column, Error, IntoValues, StringRow, Value};
 
 /// Represents a database row.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -106,6 +106,12 @@ impl Deref for Row {
 impl DerefMut for Row {
     fn deref_mut(&mut self) -> &mut IndexMap<String, Value> {
         &mut self.map
+    }
+}
+
+impl IntoValues for Row {
+    fn into_values(self) -> Result<impl Iterator<Item = Value>, Error> {
+        Ok(self.map.into_iter().map(|(_, v)| v))
     }
 }
 
